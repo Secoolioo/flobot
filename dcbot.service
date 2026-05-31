@@ -1,0 +1,15 @@
+[Unit]
+Description=Discord Server-Icon Bot (Tageszeit/Jahreszeit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Pfade ggf. an deinen Server anpassen:
+WorkingDirectory=/home/secoolio/Schreibtisch/dcbotFlo
+ExecStart=/home/secoolio/Schreibtisch/dcbotFlo/venv/bin/python /home/secoolio/Schreibtisch/dcbotFlo/bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
