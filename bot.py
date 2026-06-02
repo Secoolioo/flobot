@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ import discord
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import ai
 import schedule_logic
 
 load_dotenv()
@@ -34,8 +36,14 @@ APPLICATION_ID = os.getenv("APPLICATION_ID", "")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 IMAGE_DIR = Path(os.getenv("IMAGE_DIR", str(Path(__file__).resolve().parent)))
-CHECK_INTERVAL_MINUTES = float(os.getenv("CHECK_INTERVAL_MINUTES", "15"))
+CHECK_INTERVAL_SECONDS = float(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
 STATUS_INTERVAL_SECONDS = float(os.getenv("STATUS_INTERVAL_SECONDS", "10"))
+
+# KI-Feature ('Flo') initialisieren - liest ANTHROPIC_API_KEY etc. aus der .env.
+# Ohne API-Key bleibt das Feature aus und der Bot laeuft wie gehabt weiter.
+AI_ENABLED = ai.setup()
+# Trigger: das Wort "Flo" (Gross-/Kleinschreibung egal) irgendwo in der Nachricht.
+_TRIGGER_RE = re.compile(rf"\b{re.escape(ai.bot_name())}\b", re.IGNORECASE)
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -60,6 +68,13 @@ WEISHEITEN = [
 
 intents = discord.Intents.none()
 intents.guilds = True
+if AI_ENABLED:
+    # guild_messages: noetig, um Nachrichten-Events ueberhaupt zu EMPFANGEN
+    # (sonst feuert on_message nie). Ist KEIN privilegiertes Intent.
+    intents.guild_messages = True
+    # message_content: noetig, um den TEXT der Nachricht zu lesen. Privilegiert -
+    # muss zusaetzlich im Discord Developer Portal aktiviert sein.
+    intents.message_content = True
 client = discord.Client(
     intents=intents,
     status=discord.Status.idle,
@@ -70,6 +85,22 @@ client = discord.Client(
 # (Discord limitiert Server-Aenderungen).
 _current_filename: str | None = None
 _weisheit_index: int = 0
+
+
+def _split_message(text: str, limit: int = 1900) -> list[str]:
+    """Zerlegt lange KI-Antworten in Discord-taugliche Stuecke (<2000 Zeichen)."""
+    text = text.strip() or "..."
+    chunks: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut <= 0:
+            cut = text.rfind(" ", 0, limit)
+        if cut <= 0:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    chunks.append(text)
+    return chunks
 
 
 def invite_url() -> str:
@@ -106,11 +137,12 @@ async def update_icon(*, force: bool = False) -> bool:
         return False
 
     try:
+        data = path.read_bytes()
         await guild.edit(
-            icon=path.read_bytes(),
+            icon=data,
             reason="Automatische Tageszeit-/Jahreszeit-Anpassung",
         )
-    except discord.HTTPException as exc:
+    except (discord.HTTPException, OSError) as exc:
         log.error("Icon-Aenderung fehlgeschlagen: %s", exc)
         return False
 
@@ -149,9 +181,15 @@ async def run_check() -> None:
         log.info("   [%s] %s", "vorhanden" if exists else "  FEHLT  ", fn)
 
 
-@tasks.loop(minutes=CHECK_INTERVAL_MINUTES)
+@tasks.loop(seconds=CHECK_INTERVAL_SECONDS)
 async def icon_loop() -> None:
-    await update_icon()
+    # Prueft regelmaessig (Standard: jede Minute), ob ein anderes Bild faellig
+    # ist. Discord wird nur angesprochen, wenn sich das Bild wirklich aendert.
+    # try/except, damit eine einzelne Fehlrunde die Schleife NICHT stoppt.
+    try:
+        await update_icon()
+    except Exception:
+        log.exception("Fehler im Icon-Check - Loop laeuft weiter")
 
 
 @tasks.loop(seconds=STATUS_INTERVAL_SECONDS)
@@ -166,8 +204,53 @@ async def status_loop() -> None:
             activity=discord.CustomActivity(name=weisheit),
         )
         log.info("Status (idle): %s", weisheit)
-    except discord.HTTPException as exc:
+    except Exception as exc:
         log.error("Status-Update fehlgeschlagen: %s", exc)
+
+
+@client.event
+async def on_message(message: discord.Message) -> None:
+    """Antwortet wie eine KI, wenn jemand 'Flo' schreibt oder den Bot erwaehnt."""
+    if message.author.bot:
+        return
+    # DIAGNOSE: jede gesehene Nachricht protokollieren - zeigt, ob der Text
+    # ueberhaupt ankommt (Message-Content-Intent) und was getriggert wird.
+    log.info(
+        "Nachricht: ort=%s #%s von %s | inhalt=%r | mentions=%s",
+        message.guild.name if message.guild else "DM",
+        getattr(message.channel, "name", "?"),
+        message.author.display_name,
+        message.content,
+        [m.name for m in message.mentions],
+    )
+    if message.guild is None or not AI_ENABLED:
+        return
+
+    content = message.content or ""
+    angesprochen = bool(_TRIGGER_RE.search(content))
+    if not angesprochen and client.user in message.mentions:
+        angesprochen = True
+    if not angesprochen:
+        return
+
+    log.info("KI-Frage von %s: %s", message.author.display_name, content[:150])
+    async with message.channel.typing():
+        try:
+            antwort = await ai.ask_flo(content, author=message.author.display_name)
+        except Exception:
+            log.exception("KI-Antwort fehlgeschlagen")
+            antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
+    log.info("KI-Antwort an %s (%d Zeichen)", message.author.display_name, len(antwort))
+
+    for i, teil in enumerate(_split_message(antwort)):
+        try:
+            if i == 0:
+                await message.reply(teil, mention_author=False)
+            else:
+                await message.channel.send(teil)
+        except discord.HTTPException as exc:
+            log.error("Antwort konnte nicht gesendet werden: %s", exc)
+            break
 
 
 @client.event
@@ -181,12 +264,29 @@ async def on_ready() -> None:
                 await update_icon(force=True)
         finally:
             await client.close()
-    else:
-        await update_icon(force=True)
-        if not icon_loop.is_running():
-            icon_loop.start()
-        if not status_loop.is_running():
-            status_loop.start()
+        return
+
+    # Dauerbetrieb: Loops starten. tasks.loop fuehrt die erste Runde sofort
+    # aus, dadurch werden Icon und Status direkt beim Start gesetzt.
+    # Bei einem Reconnect feuert on_ready erneut - dank is_running() starten
+    # wir die Loops dann nicht doppelt.
+    if AI_ENABLED:
+        guild = client.get_guild(GUILD_ID)
+        if guild is not None:
+            lesbar = [
+                c.name
+                for c in guild.text_channels
+                if c.permissions_for(guild.me).view_channel
+            ]
+            log.info(
+                "KI aktiv - lesbare Text-Channels (%d/%d): %s",
+                len(lesbar), len(guild.text_channels),
+                ", ".join(lesbar) or "KEINE - Bot darf keine Channels lesen!",
+            )
+    if not icon_loop.is_running():
+        icon_loop.start()
+    if not status_loop.is_running():
+        status_loop.start()
 
 
 def main() -> None:

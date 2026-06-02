@@ -1,0 +1,15 @@
+[Unit]
+Description=Discord Server-Icon Bot (Tageszeit/Jahreszeit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/flobot
+ExecStart=/opt/flobot/venv/bin/python /opt/flobot/bot.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
