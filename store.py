@@ -1,4 +1,4 @@
-"""Kleiner, robuster JSON-Speicher fuer Bot-Daten (Level, SigmaCoins, Spielstaende).
+"""Kleiner, robuster JSON-Speicher fuer Bot-Daten (Level, Flo Coins, Spielstaende).
 
 Bewusst OHNE externe Abhaengigkeit - nur Standardbibliothek. Eigenschaften:
 - Atomar: schreibt erst in eine .tmp-Datei und benennt sie dann um (os.replace).

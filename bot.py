@@ -12,7 +12,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -21,9 +21,11 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 import ai
+import casino
 import economy
 import fun
 import games
+import moderation
 import music
 import schedule_logic
 import voicegags
@@ -57,6 +59,11 @@ AUTODELETE_CHANNEL_IDS = {
     )
     if part.isdigit()
 }
+# Sicherheitsnetz: Wie oft (Sekunden) ein Hintergrund-Sweep die Auto-Loesch-
+# Channels nach Altlasten durchforstet - Backlog, der vor dem Start lag, oder
+# Nachrichten, die einen Neustart im 60-s-Fenster ueberlebt haben. Geloescht wird
+# ALLES, was aelter als AUTODELETE_SECONDS ist (ausser Level-Ups + Angepinntes).
+AUTODELETE_SWEEP_SECONDS = float(os.getenv("AUTODELETE_SWEEP_SECONDS", "30"))
 
 # KI-Feature ('Flo') initialisieren - liest ANTHROPIC_API_KEY etc. aus der .env.
 # Ohne API-Key bleibt das Feature aus und der Bot laeuft wie gehabt weiter.
@@ -71,7 +78,7 @@ _TRIGGER_RE = ai.trigger_re()
 MUSIC_ENABLED = music.setup()
 
 # Spass-Features (jedes faellt einzeln aus, ohne den Rest zu stoeren):
-#   economy  = Level & SigmaCoins (XP fuers Schreiben/Voice, Shop, Daily)
+#   economy  = Level & Flo Coins (XP fuers Schreiben/Voice, Shop, Daily)
 #   games    = Mini-Games & Zufalls-Events (Quiz, Slot, Counting ...)
 #   fun      = Chaos & Persoenlichkeit (Roast/Hype/Spruch, Reactions) - braucht KI
 #   voicegags= Soundboard, TTS, Join-Sounds - braucht ffmpeg/PyNaCl wie die Musik
@@ -79,6 +86,12 @@ ECONOMY_ENABLED = economy.setup()
 GAMES_ENABLED = games.setup()
 FUN_ENABLED = fun.setup()
 VOICE_GAGS_ENABLED = voicegags.setup()
+# Casino (Blackjack, Crash, Keno, Roulette) - spielt mit den Flo Coins aus economy.
+# Faellt aus, wenn economy aus ist (dort liegt der Coin-Topf).
+CASINO_ENABLED = casino.setup()
+# Moderation (Nachrichten loeschen / Purge). Faellt nie technisch aus - das noetige
+# Recht 'Nachrichten verwalten' wird erst beim Befehl pro Nutzer/Bot geprueft.
+MOD_ENABLED = moderation.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -108,7 +121,7 @@ WEISHEITEN = [
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
-     VOICE_GAGS_ENABLED]
+     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -207,10 +220,15 @@ def _build_help() -> discord.Embed:
         description=f"Sprich mich mit {anrede} an. Das geht gerade:",
         color=discord.Color.blurple(),
     )
+    if client.user is not None:
+        try:
+            emb.set_thumbnail(url=client.user.display_avatar.url)
+        except Exception:  # noqa: BLE001 - Avatar ist nur Deko
+            pass
     if MUSIC_ENABLED:
         emb.add_field(
             name="🎵 Musik",
-            value=(f"`{name} spiel <link/suche>` · `{name} <youtube/spotify-link>` · "
+            value=(f"`{name} join` · `{name} spiel <link/suche>` · `{name} <youtube/spotify-link>` · "
                    f"skip · pause · weiter · stop · queue · `{name} lautstärke 50`"),
             inline=False,
         )
@@ -223,10 +241,17 @@ def _build_help() -> discord.Embed:
         )
     if ECONOMY_ENABLED:
         emb.add_field(
-            name="📈 Level & SigmaCoins",
+            name="📈 Level & Flo Coins",
             value=(f"`{name} level` · `{name} top` · `{name} coins` · `{name} daily` · "
                    f"`{name} pay @x 100` · `{name} shop` · `{name} kaufen sigma` · "
                    f"`{name} inventar` · `{name} titel sigma`"),
+            inline=False,
+        )
+    if CASINO_ENABLED:
+        emb.add_field(
+            name="🎰 Casino",
+            value=(f"`{name} casino` · `{name} blackjack 50` (dann `karte`/`stand`/`double`) · "
+                   f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · `{name} roulette 50 rot`"),
             inline=False,
         )
     if FUN_ENABLED:
@@ -240,6 +265,13 @@ def _build_help() -> discord.Embed:
         emb.add_field(
             name="🔊 Voice",
             value=(f"`{name} sounds` · `{name} sound <name>` · `{name} sprich <text>`"),
+            inline=False,
+        )
+    if MOD_ENABLED:
+        emb.add_field(
+            name="🧹 Aufräumen · nur Admins",
+            value=(f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} clear 20`\n"
+                   f"Braucht das Recht *Nachrichten verwalten* · angepinnte bleiben"),
             inline=False,
         )
     if AI_ENABLED:
@@ -257,12 +289,14 @@ def _build_help() -> discord.Embed:
 def invite_url() -> str:
     """OAuth2-Einladungslink mit den noetigen Rechten.
 
-    permissions=8224 = 'Server verwalten' (32, fuers Icon) + 'Nachrichten
-    verwalten' (8192, fuers Auto-Loeschen).
+    permissions=76832 = Kanal ansehen (1024) + Nachrichten senden (2048) +
+    'Server verwalten' (32, fuers Icon) + 'Nachrichten verwalten' (8192, fuers
+    Auto-Loeschen/Purge) + 'Nachrichtenverlauf anzeigen' (65536, noetig, damit
+    der Bot beim Loeschen den Verlauf lesen kann).
     """
     return (
         f"https://discord.com/oauth2/authorize?client_id={APPLICATION_ID}"
-        "&permissions=8224&scope=bot"
+        "&permissions=76832&scope=bot"
     )
 
 
@@ -387,6 +421,50 @@ async def event_loop() -> None:
         log.exception("Event-Loop Fehler - laeuft weiter")
 
 
+def _sweepable(m: discord.Message) -> bool:
+    """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen
+    des Bots und angepinnte Nachrichten bleiben (wie beim Einzel-Auto-Loeschen)."""
+    if m.pinned:
+        return False
+    if (client.user is not None and m.author.id == client.user.id
+            and m.embeds and m.embeds[0].title == economy.LEVELUP_EMBED_TITLE):
+        return False
+    return True
+
+
+@tasks.loop(seconds=AUTODELETE_SWEEP_SECONDS)
+async def autodelete_sweep_loop() -> None:
+    """Sicherheitsnetz fuers Auto-Loeschen: raeumt in den konfigurierten Channels
+    ALLES weg, was aelter als AUTODELETE_SECONDS ist - auch Altlasten von vor dem
+    Start oder Nachrichten, die einen Neustart ueberlebt haben. So bleibt der
+    Channel wirklich leer, nicht nur 'ab jetzt'. Erste Runde laeuft sofort beim
+    Start (raeumt den Backlog ab)."""
+    if not AUTODELETE_CHANNEL_IDS:
+        return
+    guild = client.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=AUTODELETE_SECONDS)
+    for cid in AUTODELETE_CHANNEL_IDS:
+        channel = guild.get_channel(cid)
+        if channel is None or not hasattr(channel, "purge"):
+            continue
+        perms = channel.permissions_for(guild.me)
+        if not (perms.view_channel and perms.manage_messages and perms.read_message_history):
+            log.warning(
+                "Auto-Loesch-Sweep: mir fehlen Rechte in #%s (Nachrichten verwalten / "
+                "Verlauf lesen).", getattr(channel, "name", cid),
+            )
+            continue
+        try:
+            await channel.purge(limit=None, check=_sweepable, before=cutoff)
+        except discord.HTTPException as exc:
+            log.warning("Auto-Loesch-Sweep in #%s fehlgeschlagen: %s",
+                        getattr(channel, "name", cid), exc)
+        except Exception:
+            log.exception("Auto-Loesch-Sweep Fehler - laeuft weiter")
+
+
 # Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
 # vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
 _bg_tasks: set[asyncio.Task] = set()
@@ -471,9 +549,11 @@ async def on_message(message: discord.Message) -> None:
     antwort: "str | discord.Embed | discord.File | None" = None
     async with message.channel.typing():
         for enabled, handler in (
+            (MOD_ENABLED, moderation.handle),
             (MUSIC_ENABLED, music.handle),
             (VOICE_GAGS_ENABLED, voicegags.handle),
             (GAMES_ENABLED, games.handle),
+            (CASINO_ENABLED, casino.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FUN_ENABLED, fun.handle),
         ):
@@ -490,6 +570,8 @@ async def on_message(message: discord.Message) -> None:
                 break
 
     if antwort is not None:
+        if antwort is moderation.HANDLED:
+            return  # Modul hat selbst geantwortet (z. B. Loesch-Bestaetigung).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):
@@ -568,6 +650,8 @@ async def on_ready() -> None:
         voice_xp_loop.start()
     if GAMES_ENABLED and not event_loop.is_running():
         event_loop.start()
+    if AUTODELETE_CHANNEL_IDS and not autodelete_sweep_loop.is_running():
+        autodelete_sweep_loop.start()
 
 
 def main() -> None:

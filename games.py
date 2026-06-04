@@ -7,7 +7,7 @@ Passiv:  Counting-Channel (optional via COUNTING_CHANNEL_ID), Antworten auf
          laufende Quiz-/Zahlenraten-Runden, und zufaellige 'Schnell-tippen'-Events
          (bot.py ruft dafuer maybe_event() periodisch auf).
 
-Gewinne werden als SigmaCoins ueber economy.add_coins() ausgezahlt (ein Topf).
+Gewinne werden als Flo Coins ueber economy.add_coins() ausgezahlt (ein Topf).
 Quiz nutzt die KI (ai.generate); faellt sie aus, greift ein kleiner fester
 Fragenkatalog. Alles andere laeuft auch ganz ohne KI.
 """
@@ -144,7 +144,7 @@ async def _ssp(message: discord.Message, args: list[str]) -> str:
         if economy.is_enabled():
             economy.add_coins(message.author.id, 10)
             await economy.flush()
-        return f"{ub} vs {bb} — **Du gewinnst!** 🎉 (+10 SigmaCoins)"
+        return f"{ub} vs {bb} — **Du gewinnst!** 🎉 (+10 Flo Coins)"
     return f"{ub} vs {bb} — **Ich gewinne!** 😎"
 
 
@@ -161,14 +161,14 @@ async def _coinflip(message: discord.Message, args: list[str]) -> str:
             return f"Auf was setzt du? `{_bot_name} coinflip {bet} kopf` (oder zahl)."
         tip = "kopf" if seite in ("kopf", "heads") else "zahl"
         if economy.get_coins(message.author.id) < bet:
-            return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} SigmaCoins."
+            return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} Flo Coins."
         if tip == ergebnis:
             economy.add_coins(message.author.id, bet)
             await economy.flush()
-            return f"{sym} **{ergebnis.upper()}** — gewonnen! +{bet} SigmaCoins. 🎉"
+            return f"{sym} **{ergebnis.upper()}** — gewonnen! +{bet} Flo Coins. 🎉"
         economy.add_coins(message.author.id, -bet)
         await economy.flush()
-        return f"{sym} **{ergebnis.upper()}** — verloren! -{bet} SigmaCoins. 😬"
+        return f"{sym} **{ergebnis.upper()}** — verloren! -{bet} Flo Coins. 😬"
     return f"{sym} Die Münze zeigt: **{ergebnis.upper()}**!"
 
 
@@ -183,7 +183,7 @@ async def _slot(message: discord.Message, args: list[str]) -> str:
     bet = _extract_int(args) or 0
     use_coins = bet > 0 and economy.is_enabled()
     if use_coins and economy.get_coins(message.author.id) < bet:
-        return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} SigmaCoins."
+        return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} Flo Coins."
 
     reels = [random.choice(_SLOT_REELS) for _ in range(3)]
     line = " | ".join(reels)
@@ -202,13 +202,13 @@ async def _slot(message: discord.Message, args: list[str]) -> str:
         economy.add_coins(message.author.id, net)
         await economy.flush()
         if net > 0:
-            text += f"\n+{net} SigmaCoins (Konto: {economy.get_coins(message.author.id)})"
+            text += f"\n+{net} Flo Coins (Konto: {economy.get_coins(message.author.id)})"
         else:
-            text += f"\n-{bet} SigmaCoins (Konto: {economy.get_coins(message.author.id)})"
+            text += f"\n-{bet} Flo Coins (Konto: {economy.get_coins(message.author.id)})"
     elif win and economy.is_enabled():
         economy.add_coins(message.author.id, win)
         await economy.flush()
-        text += f"\n+{win} SigmaCoins"
+        text += f"\n+{win} Flo Coins"
     return text
 
 
@@ -331,7 +331,7 @@ async def _check_quiz(message: discord.Message) -> bool:
         economy.add_coins(message.author.id, QUIZ_REWARD)
         await economy.add_xp(message.author, 30)
         await economy.flush()
-        reward = f" (+{QUIZ_REWARD} SigmaCoins)"
+        reward = f" (+{QUIZ_REWARD} Flo Coins)"
     try:
         await message.reply(
             f"✅ Richtig, **{message.author.display_name}**! "
@@ -375,7 +375,7 @@ async def _check_guess(message: discord.Message) -> bool:
         if economy.is_enabled():
             economy.add_coins(message.author.id, reward)
             await economy.flush()
-            extra = f" (+{reward} SigmaCoins)"
+            extra = f" (+{reward} Flo Coins)"
         try:
             await message.reply(
                 f"🎯 **{message.author.display_name}** hat's mit der {ziel} - "
@@ -452,7 +452,7 @@ async def maybe_event(guild: discord.Guild) -> None:
     try:
         await channel.send(
             f"⚡ **SCHNELL!** Erster, der `{wort}` tippt, kassiert "
-            f"**{EVENT_REWARD} SigmaCoins**! (du hast {EVENT_TIMEOUT}s)")
+            f"**{EVENT_REWARD} Flo Coins**! (du hast {EVENT_TIMEOUT}s)")
     except discord.HTTPException:
         _event.pop(channel.id, None)
 
@@ -485,7 +485,7 @@ async def _check_event(message: discord.Message) -> bool:
     if economy.is_enabled():
         economy.add_coins(message.author.id, runde["reward"])
         await economy.flush()
-        extra = f" **+{runde['reward']} SigmaCoins**"
+        extra = f" **+{runde['reward']} Flo Coins**"
     try:
         await message.reply(
             f"🏁 **{message.author.display_name}** war am schnellsten!{extra}",

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 import aiohttp
 import discord
 
+import ai
+
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
     import yt_dlp
 except ImportError:  # pragma: no cover - nur relevant ohne Paket
@@ -106,6 +108,7 @@ _CONTROL = [
     ("stop",   re.compile(r"^(stop|stopp|halt|aufhoer|aufhör|hoer auf|hör auf)", re.I)),
     ("leave",  re.compile(r"^(leave|verlass|geh raus|hau ab|raus|disconnect)", re.I)),
     ("queue",  re.compile(r"^(queue|warteschlange|liste)", re.I)),
+    ("join",   re.compile(r"^(?:join\w*|connect|verbinde\w*|komm)\b", re.I)),
 ]
 # "flo spiel <suchbegriff>" ohne Link -> YouTube-Suche. Nur Imperativ-Formen
 # (spiel/spiele/play), damit Fragen wie "spielst du..." NICHT als Befehl gelten.
@@ -510,10 +513,10 @@ async def _spotify_playlist_via_embed(url: str) -> list[str] | None:
 
 # --- Befehls-Erkennung ---------------------------------------------------
 def _clean_lead(text: str) -> str:
-    """Entfernt @-Mentions und den fuehrenden Botnamen ('Flo, spiel ...')."""
-    t = re.sub(r"<@!?\d+>", " ", text).strip()
-    t = re.sub(rf"^\s*{re.escape(_bot_name)}\b[\s,:!.\-]*", "", t, flags=re.IGNORECASE)
-    return t.strip()
+    """Entfernt @-Mentions und den fuehrenden Botnamen/Alias ('Florian, spiel ...'
+    -> 'spiel ...'). Zentral in ai.strip_lead, damit alle Module gleich reagieren
+    (so gehen Musik-Befehle auch mit dem Alias 'Florian', nicht nur 'Flo')."""
+    return ai.strip_lead(text)
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -679,6 +682,22 @@ async def handle(message: discord.Message) -> str | None:
         if len(player.queue) > 10:
             lines.append(f"... und {len(player.queue) - 10} weitere")
         return "\n".join(lines)
+
+    if action == "join":
+        # Nur in den Sprachkanal kommen (ohne etwas abzuspielen).
+        voice_state = getattr(message.author, "voice", None)
+        if voice_state is None or voice_state.channel is None:
+            return "Geh erst in einen Sprachkanal, dann komme ich dazu."
+        try:
+            await player.connect(voice_state.channel)
+        except RuntimeError as exc:  # discord.py >= 2.7 ohne davey
+            log.error("Voice nicht moeglich (join): %s", exc)
+            return ("Voice ist hier gerade nicht eingerichtet "
+                    "(auf dem Server fehlt vermutlich `davey`).")
+        except discord.ClientException as exc:
+            log.error("Voice-Connect (join) fehlgeschlagen: %s", exc)
+            return "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?)."
+        return f"👋 Bin da in **{voice_state.channel.name}**. Sag z. B. `{_bot_name} spiel <song>`."
 
     # --- Abspielen: Nutzer muss im Sprachkanal sein ---
     voice_state = getattr(message.author, "voice", None)

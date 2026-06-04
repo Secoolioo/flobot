@@ -1,8 +1,8 @@
-"""Level- & SigmaCoins-System fuer Flo (Pack 3).
+"""Level- & Flo-Coins-System fuer Flo (Pack 3).
 
 Was es kann:
 - XP fuers Schreiben (mit Cooldown gegen Spam) und fuer Zeit im Sprachkanal.
-- Automatische Level-Up-Ansage im Chat, dazu SigmaCoins als Belohnung.
+- Automatische Level-Up-Ansage im Chat, dazu Flo Coins als Belohnung.
 - Befehle: level/rank, top/bestenliste, coins/konto, daily, pay, shop, kaufen.
 - Speichert alles in data/economy.json (siehe store.py, ohne Extra-Abhaengigkeit).
 
@@ -42,7 +42,7 @@ XP_PER_VOICE_TICK = 10       # XP pro Voice-Runde (Bot-Loop ruft tick_voice auf)
 VOICE_TICK_SECONDS = 60      # nur Info fuer die Ansage; Takt steuert bot.py
 
 # Muenzeinheit
-COIN = "SigmaCoins"
+COIN = "Flo Coins"
 
 # Wohin Level-Up-Ansagen gehen. Standard: der Commands-Channel. 0 = im selben
 # Kanal ansagen, in dem die Nachricht kam. Per .env (LEVELUP_CHANNEL_ID) aenderbar.
@@ -343,18 +343,24 @@ def _card(member: discord.abc.User) -> discord.Embed:
     level, into, step = _level_for_xp(prof["xp"])
     place, total = _rank_of(member.id)
     title = prof.get("title") or "—"
-    emb = discord.Embed(title=f"📈 {member.display_name}", color=discord.Color.blurple())
+    pct = 100 if step <= 0 else round(into / step * 100)
+    emb = discord.Embed(
+        title=f"📈 Level {level}",
+        description=f"`{_bar(into, step)}`  **{pct}%**\n{into} / {step} XP bis Level {level + 1}",
+        color=discord.Color.blurple(),
+    )
+    emb.set_author(name=member.display_name, icon_url=member.display_avatar.url)
     try:
         emb.set_thumbnail(url=member.display_avatar.url)
     except Exception:  # noqa: BLE001
         pass
-    emb.add_field(name=f"Level {level}",
-                  value=f"`{_bar(into, step)}`  {into}/{step} XP", inline=False)
-    emb.add_field(name="Gesamt-XP", value=f"{prof['xp']}", inline=True)
+    emb.add_field(name="Gesamt-XP", value=f"✨ {prof['xp']}", inline=True)
     emb.add_field(name=COIN, value=f"💰 {prof['coins']}", inline=True)
-    emb.add_field(name="Platz", value=f"#{place}/{total}", inline=True)
+    emb.add_field(name="Platz", value=f"🏅 #{place} / {total}", inline=True)
     emb.add_field(name="Titel", value=title, inline=True)
     emb.add_field(name="Streak", value=f"🔥 {prof.get('streak', 0)} Tag(e)", inline=True)
+    emb.add_field(name="Nachrichten", value=f"💬 {prof.get('msgs', 0)}", inline=True)
+    emb.set_footer(text=f"{_bot_name} top   ·   {_bot_name} daily   ·   {_bot_name} shop")
     return emb
 
 
@@ -406,6 +412,7 @@ def _leaderboard_embed() -> discord.Embed:
             f"{marker} **{name}** — Lvl {_level_only(prof['xp'])} ({prof['xp']} XP){suffix}"
         )
     emb.description = "\n".join(lines)
+    emb.set_footer(text=f"Schreiben & Voice bringt XP   ·   {_bot_name} level für deine Karte")
     return emb
 
 
@@ -487,19 +494,22 @@ async def _pay(message: discord.Message) -> str:
 
 def _shop() -> discord.Embed:
     emb = discord.Embed(
-        title="🛒 Shop",
-        description="Titel sind Kosmetik (Level-Karte + Bestenliste) – und Flo "
-                    "spricht dich mit deinem Titel an!",
+        title="🛒 Flo Shop",
+        description=("Titel sind Kosmetik – sie stehen auf deiner Level-Karte und in "
+                     "der Bestenliste, und Flo spricht dich damit an."),
         color=discord.Color.blurple(),
     )
     for key, item in SHOP.items():
         emb.add_field(
-            name=f"{item['titel']} — `{key}`",
-            value=f"**{item['preis']} {COIN}** · {item['info']}",
-            inline=False,
+            name=item["titel"],
+            value=f"💰 **{item['preis']}** {COIN}\n`{key}` · {item['info']}",
+            inline=True,
         )
+    # Letzte Reihe auf ein sauberes 3er-Raster auffuellen (unsichtbare Felder).
+    while len(emb.fields) % 3 != 0:
+        emb.add_field(name="​", value="​", inline=True)
     emb.set_footer(
-        text=f"Kaufen: {_bot_name} kaufen <name>  ·  Wechseln: {_bot_name} titel <name>"
+        text=f"Kaufen: {_bot_name} kaufen <name>   ·   Tragen: {_bot_name} titel <name>"
     )
     return emb
 
