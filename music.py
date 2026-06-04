@@ -94,6 +94,9 @@ _SPOTIFY_LIST_RE = re.compile(
 _NEXT_DATA_RE = re.compile(
     r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
 )
+# YouTube-Playlist-ID aus dem Link ziehen. Echte Playlists: PL.../UU.../OLAK5uy_...;
+# RD... ist nur ein Auto-Mix/Radio (wird beim Teilen oft angehaengt) -> kein Playlist.
+_YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)", re.IGNORECASE)
 
 # Steuerbefehle: (Aktion, Regex am Satzanfang). Reihenfolge = Prioritaet.
 _CONTROL = [
@@ -527,8 +530,11 @@ def parse_command(text: str) -> tuple[str, str] | None:
             kind = (m.group(1) or m.group(2) or "").lower()
             return ("spotify_album" if kind == "album" else "spotify_playlist", url)
         if "youtube.com" in low or "youtu.be" in low:
-            # reiner Playlist-Link (list= ohne einzelnes Video) -> ganze Playlist
-            if "list=" in low and "v=" not in low:
+            # Echte Playlist abspielen - auch wenn ein einzelnes Video dabei steht
+            # (Teilen aus einer Playlist liefert watch?v=...&list=...). Nur Auto-Mixe
+            # (list=RD...) ignorieren wir und spielen das einzelne Video.
+            lm = _YT_LIST_RE.search(url)
+            if lm and not lm.group(1).upper().startswith("RD"):
                 return ("yt_playlist", url)
             return ("play", url)
         if _SPOTIFY_TRACK_RE.search(url):
