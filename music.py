@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
@@ -86,6 +87,12 @@ _SPOTIFY_LIST_RE = re.compile(
     r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?(playlist|album)/"
     r"|spotify:(playlist|album):)([A-Za-z0-9]+)",
     re.IGNORECASE,
+)
+# Das oeffentliche Embed liefert die Songliste im __NEXT_DATA__-JSON - das umgeht
+# die 403-Sperre der Web-API fuer Playlist-Tracks (Client-Credentials duerfen sie
+# nicht mehr lesen). Wir ziehen das JSON aus dem <script>-Tag.
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
 )
 
 # Steuerbefehle: (Aktion, Regex am Satzanfang). Reihenfolge = Prioritaet.
@@ -422,6 +429,82 @@ async def _spotify_list_tracks(url: str) -> list[str] | None:
     return queries
 
 
+def _deep_find(obj: object, key: str) -> object:
+    """Sucht rekursiv den ersten Wert zu 'key' in verschachtelten dict/list."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for value in obj.values():
+            found = _deep_find(value, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _deep_find(value, key)
+            if found is not None:
+                return found
+    return None
+
+
+async def _spotify_playlist_via_embed(url: str) -> list[str] | None:
+    """Spotify-Playlist -> Liste 'Kuenstler - Titel' ueber das oeffentliche Embed.
+
+    Die Web-API verbietet Client-Credentials-Apps den Playlist-Track-Zugriff
+    (HTTP 403). Das Embed (open.spotify.com/embed/playlist/<id>) liefert die
+    Songliste dagegen ohne Login im __NEXT_DATA__-JSON.
+    """
+    m = _SPOTIFY_LIST_RE.search(url)
+    if not m:
+        return None
+    list_id = m.group(3)
+    embed_url = f"https://open.spotify.com/embed/playlist/{list_id}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Accept-Language": "de,en;q=0.8",
+    }
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(embed_url, headers=headers) as r:
+                if r.status != 200:
+                    log.error(
+                        "Spotify-Playlist-Embed fehlgeschlagen (HTTP %s).", r.status
+                    )
+                    return None
+                html = await r.text()
+    except (aiohttp.ClientError, OSError) as exc:
+        log.error("Spotify-Embed nicht erreichbar: %s", exc)
+        return None
+
+    m2 = _NEXT_DATA_RE.search(html)
+    if not m2:
+        log.error("Spotify-Embed: __NEXT_DATA__ nicht gefunden (Struktur geaendert?).")
+        return None
+    try:
+        data = json.loads(m2.group(1))
+    except json.JSONDecodeError as exc:
+        log.error("Spotify-Embed: JSON nicht lesbar (%s).", exc)
+        return None
+
+    track_list = _deep_find(data, "trackList")
+    if not isinstance(track_list, list) or not track_list:
+        log.error("Spotify-Embed: keine Songliste im JSON gefunden.")
+        return None
+
+    queries: list[str] = []
+    for entry in track_list:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        artist = str(entry.get("subtitle") or "").strip()
+        query = f"{artist} - {title}".strip(" -")
+        if query:
+            queries.append(query)
+        if len(queries) >= MAX_QUEUE:
+            break
+    return queries or None
+
+
 # --- Befehls-Erkennung ---------------------------------------------------
 def _clean_lead(text: str) -> str:
     """Entfernt @-Mentions und den fuehrenden Botnamen ('Flo, spiel ...')."""
@@ -555,11 +638,6 @@ async def handle(message: discord.Message) -> str | None:
             player.voice.source.volume = player.volume  # live anwenden
         return f"🔊 Lautstärke: {new}%."
 
-    if action == "spotify_playlist":
-        return ("Spotify-**Playlists** kann ich leider nicht abspielen - Spotify sperrt "
-                "den Playlist-Zugriff fuer Bots. Was geht: ein Spotify-**Album**, ein "
-                "einzelner Song-Link oder eine **YouTube-Playlist**.")
-
     if action in ("stop", "leave"):
         if player.voice is None or not player.voice.is_connected():
             return "Ich bin gerade in keinem Sprachkanal."
@@ -610,6 +688,18 @@ async def handle(message: discord.Message) -> str | None:
         return await _play_many(
             player, voice_state.channel, items,
             message.author.display_name, "aus dem Album",
+        )
+
+    if action == "spotify_playlist":
+        queries = await _spotify_playlist_via_embed(arg)
+        if not queries:
+            return ("An diese Spotify-**Playlist** komme ich nicht ran - Spotify sperrt "
+                    "den Playlist-Zugriff fuer Bots. Was sicher geht: ein Spotify-"
+                    "**Album**, ein einzelner Song-Link oder eine **YouTube-Playlist**.")
+        items = [(f"ytsearch1:{q}", q) for q in queries]
+        return await _play_many(
+            player, voice_state.channel, items,
+            message.author.display_name, "aus der Playlist",
         )
 
     if action == "yt_playlist":
