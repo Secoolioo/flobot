@@ -277,16 +277,6 @@ async def on_message(message: discord.Message) -> None:
 
     if message.author.bot:
         return
-    # DIAGNOSE: jede gesehene Nachricht protokollieren - zeigt, ob der Text
-    # ueberhaupt ankommt (Message-Content-Intent) und was getriggert wird.
-    log.info(
-        "Nachricht: ort=%s #%s von %s | inhalt=%r | mentions=%s",
-        message.guild.name if message.guild else "DM",
-        getattr(message.channel, "name", "?"),
-        message.author.display_name,
-        message.content,
-        [m.name for m in message.mentions],
-    )
     if message.guild is None or not (AI_ENABLED or MUSIC_ENABLED):
         return
 
