@@ -7,6 +7,7 @@ Start:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -20,6 +21,7 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 import ai
+import music
 import schedule_logic
 
 load_dotenv()
@@ -39,11 +41,28 @@ IMAGE_DIR = Path(os.getenv("IMAGE_DIR", str(Path(__file__).resolve().parent)))
 CHECK_INTERVAL_SECONDS = float(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
 STATUS_INTERVAL_SECONDS = float(os.getenv("STATUS_INTERVAL_SECONDS", "10"))
 
+# Auto-Loeschen: In diesen Channels werden ALLE Nachrichten (auch die des Bots
+# selbst) nach AUTODELETE_SECONDS Sekunden geloescht. Mehrere IDs per Komma
+# trennen. Der Bot braucht dort das Recht 'Nachrichten verwalten' (Manage
+# Messages). Leerer Wert -> Funktion aus.
+AUTODELETE_SECONDS = float(os.getenv("AUTODELETE_SECONDS", "60"))
+AUTODELETE_CHANNEL_IDS = {
+    int(part)
+    for part in re.split(
+        r"[,\s]+", os.getenv("AUTODELETE_CHANNEL_IDS", "1512045750362837013").strip()
+    )
+    if part.isdigit()
+}
+
 # KI-Feature ('Flo') initialisieren - liest ANTHROPIC_API_KEY etc. aus der .env.
 # Ohne API-Key bleibt das Feature aus und der Bot laeuft wie gehabt weiter.
 AI_ENABLED = ai.setup()
 # Trigger: das Wort "Flo" (Gross-/Kleinschreibung egal) irgendwo in der Nachricht.
 _TRIGGER_RE = re.compile(rf"\b{re.escape(ai.bot_name())}\b", re.IGNORECASE)
+
+# Musik-Feature initialisieren (YouTube via yt-dlp, Spotify-Aufloesung ueber die
+# Spotify-API). Ohne yt-dlp/ffmpeg/PyNaCl bleibt es aus, der Bot laeuft weiter.
+MUSIC_ENABLED = music.setup()
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -68,13 +87,21 @@ WEISHEITEN = [
 
 intents = discord.Intents.none()
 intents.guilds = True
-if AI_ENABLED:
+if AI_ENABLED or MUSIC_ENABLED:
     # guild_messages: noetig, um Nachrichten-Events ueberhaupt zu EMPFANGEN
     # (sonst feuert on_message nie). Ist KEIN privilegiertes Intent.
     intents.guild_messages = True
     # message_content: noetig, um den TEXT der Nachricht zu lesen. Privilegiert -
     # muss zusaetzlich im Discord Developer Portal aktiviert sein.
     intents.message_content = True
+if MUSIC_ENABLED:
+    # voice_states: noetig, um zu sehen, in welchem Sprachkanal der Nutzer steckt.
+    # Nicht privilegiert.
+    intents.voice_states = True
+if AUTODELETE_CHANNEL_IDS:
+    # Auch ohne KI/Musik muessen wir die Nachrichten-Events empfangen, um sie
+    # spaeter loeschen zu koennen. guild_messages ist NICHT privilegiert.
+    intents.guild_messages = True
 client = discord.Client(
     intents=intents,
     status=discord.Status.idle,
@@ -104,10 +131,14 @@ def _split_message(text: str, limit: int = 1900) -> list[str]:
 
 
 def invite_url() -> str:
-    """OAuth2-Einladungslink mit der noetigen Berechtigung (Server verwalten)."""
+    """OAuth2-Einladungslink mit den noetigen Rechten.
+
+    permissions=8224 = 'Server verwalten' (32, fuers Icon) + 'Nachrichten
+    verwalten' (8192, fuers Auto-Loeschen).
+    """
     return (
         f"https://discord.com/oauth2/authorize?client_id={APPLICATION_ID}"
-        "&permissions=32&scope=bot"
+        "&permissions=8224&scope=bot"
     )
 
 
@@ -208,9 +239,42 @@ async def status_loop() -> None:
         log.error("Status-Update fehlgeschlagen: %s", exc)
 
 
+# Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
+# vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
+_bg_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+async def _delete_after(message: discord.Message, delay: float) -> None:
+    """Loescht eine Nachricht nach 'delay' Sekunden (best effort)."""
+    try:
+        await asyncio.sleep(delay)
+        await message.delete()
+    except discord.NotFound:
+        pass  # schon weg (manuell geloescht o. Ae.)
+    except discord.Forbidden:
+        log.warning(
+            "Auto-Loeschen: mir fehlt das Recht 'Nachrichten verwalten' in #%s.",
+            getattr(message.channel, "name", message.channel.id),
+        )
+    except discord.HTTPException as exc:
+        log.warning("Auto-Loeschen fehlgeschlagen: %s", exc)
+
+
 @client.event
 async def on_message(message: discord.Message) -> None:
     """Antwortet wie eine KI, wenn jemand 'Flo' schreibt oder den Bot erwaehnt."""
+    # Auto-Loeschen: in konfigurierten Channels ALLE Nachrichten nach kurzer Zeit
+    # entfernen. Bewusst GANZ oben (vor dem Bot-Check), damit auch die eigenen
+    # Antworten des Bots dort wieder verschwinden.
+    if message.channel.id in AUTODELETE_CHANNEL_IDS:
+        _spawn(_delete_after(message, AUTODELETE_SECONDS))
+
     if message.author.bot:
         return
     # DIAGNOSE: jede gesehene Nachricht protokollieren - zeigt, ob der Text
@@ -223,7 +287,7 @@ async def on_message(message: discord.Message) -> None:
         message.content,
         [m.name for m in message.mentions],
     )
-    if message.guild is None or not AI_ENABLED:
+    if message.guild is None or not (AI_ENABLED or MUSIC_ENABLED):
         return
 
     content = message.content or ""
@@ -231,6 +295,30 @@ async def on_message(message: discord.Message) -> None:
     if not angesprochen and client.user in message.mentions:
         angesprochen = True
     if not angesprochen:
+        return
+
+    # Erst Musik-Befehle pruefen (z. B. "Flo spiel <link>", "Flo <link>", skip,
+    # pause, stop). Gibt music.handle einen Text zurueck, war es ein Musik-Befehl
+    # und wir sind fertig. Gibt es None zurueck, uebernimmt die KI.
+    if MUSIC_ENABLED:
+        async with message.channel.typing():
+            try:
+                musik_antwort = await music.handle(message)
+            except Exception:
+                log.exception("Musik-Befehl fehlgeschlagen")
+                musik_antwort = "Beim Abspielen ist gerade etwas schiefgelaufen."
+        if musik_antwort is not None:
+            log.info(
+                "Musik-Befehl von %s: %s",
+                message.author.display_name, musik_antwort[:80],
+            )
+            try:
+                await message.reply(musik_antwort, mention_author=False)
+            except discord.HTTPException as exc:
+                log.error("Antwort konnte nicht gesendet werden: %s", exc)
+            return
+
+    if not AI_ENABLED:
         return
 
     log.info("KI-Frage von %s: %s", message.author.display_name, content[:150])
@@ -283,6 +371,12 @@ async def on_ready() -> None:
                 len(lesbar), len(guild.text_channels),
                 ", ".join(lesbar) or "KEINE - Bot darf keine Channels lesen!",
             )
+    if AUTODELETE_CHANNEL_IDS:
+        log.info(
+            "Auto-Loeschen aktiv: Channel(s) %s, jeweils nach %.0f s.",
+            ", ".join(str(c) for c in sorted(AUTODELETE_CHANNEL_IDS)),
+            AUTODELETE_SECONDS,
+        )
     if not icon_loop.is_running():
         icon_loop.start()
     if not status_loop.is_running():

@@ -1,3 +1,12 @@
 discord.py>=2.3
 python-dotenv>=1.0
 openai>=1.40
+# Musik-Feature (Voice):
+#   davey  = Discord-Voice-Verschluesselung (DAVE-Protokoll). Bei discord.py >= 2.7
+#            ZWINGEND fuer Voice - ohne davey: "RuntimeError: davey library needed".
+#   PyNaCl = aeltere Voice-Verschluesselung (Fallback, schadet nicht).
+#   yt-dlp = YouTube-Audio.
+# Zusaetzlich noetig (System-Paket, NICHT pip): ffmpeg  ->  z. B.  apt install ffmpeg
+davey>=0.1.5
+PyNaCl>=1.5
+yt-dlp>=2024.8
