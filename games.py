@@ -62,16 +62,17 @@ def _spawn(coro) -> None:
 
 
 def setup() -> bool:
-    global _enabled, _bot_name, _store
+    global _enabled, _bot_name, _store, _event_words
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
     if os.getenv("GAMES_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
         log.info("Spiele-Feature aus (GAMES_ENABLED=0).")
         return False
     _store = JsonStore("games.json", default={"counting": {}})
+    _event_words = _load_event_words()
     _enabled = True
     log.info(
-        "Spiele-Feature aktiv (Counting: %s, Events: %.0f%%).",
-        "an" if COUNTING_CHANNEL_ID else "aus", EVENT_CHANCE * 100,
+        "Spiele-Feature aktiv (Counting: %s, Events: %.0f%%, %d Event-Woerter).",
+        "an" if COUNTING_CHANNEL_ID else "aus", EVENT_CHANCE * 100, len(_event_words),
     )
     return True
 
@@ -432,7 +433,100 @@ async def _check_counting(message: discord.Message) -> bool:
 
 
 # --- Zufalls-Event: 'Erster der X tippt, gewinnt' ------------------------
-_EVENT_WORDS = ["GG", "SIGMA", "FLOW", "BOOM", "RUSH", "POG", "WIN", "GAS"]
+# Echte deutsche Woerter statt Meme-Kuerzeln. Beim Start versuchen wir, eine
+# System-Wortliste zu laden (Ubuntu/Debian: `apt install wngerman` legt
+# /usr/share/dict/ngerman an -> ~300k echte deutsche Woerter). Fehlt sie,
+# greift die eingebaute Liste unten - so funktioniert es immer.
+_EVENT_WORD_MIN = 4   # nicht zu kurz (sonst zu leicht zufaellig getippt)
+_EVENT_WORD_MAX = 10  # nicht zu lang (sonst nervig schnell zu tippen)
+_EVENT_DICT_PATHS = (
+    "/usr/share/dict/ngerman",
+    "/usr/share/dict/ogerman",
+    "/usr/share/dict/german",
+    "/usr/share/dict/deutsch",
+)
+_EVENT_FALLBACK_WORDS = [
+    # Obst & Essen
+    "Apfel", "Banane", "Kirsche", "Erdbeere", "Zitrone", "Pflaume", "Birne",
+    "Traube", "Melone", "Orange", "Brot", "Käse", "Butter", "Honig", "Kuchen",
+    "Nudel", "Suppe", "Salat", "Pizza", "Wurst", "Joghurt", "Kaffee", "Wasser",
+    "Milch", "Schokolade", "Bonbon", "Keks", "Waffel", "Brezel", "Knödel",
+    "Gemüse", "Karotte", "Gurke", "Tomate", "Zwiebel", "Paprika", "Pilz",
+    # Tiere
+    "Hund", "Katze", "Maus", "Pferd", "Esel", "Tiger", "Löwe", "Affe", "Hase",
+    "Fuchs", "Wolf", "Adler", "Eule", "Robbe", "Delfin", "Otter", "Igel",
+    "Biber", "Dachs", "Schwein", "Schaf", "Ziege", "Huhn", "Ente", "Biene",
+    "Wespe", "Käfer", "Spinne", "Raupe", "Libelle", "Elefant", "Giraffe",
+    "Zebra", "Kamel", "Pinguin", "Papagei", "Schnecke", "Frosch", "Schlange",
+    # Natur
+    "Wolke", "Regen", "Sonne", "Mond", "Stern", "Himmel", "Donner", "Blitz",
+    "Nebel", "Schnee", "Sturm", "Wind", "Berg", "Fluss", "Meer", "Strand",
+    "Insel", "Wald", "Wiese", "Höhle", "Wüste", "Blume", "Rose", "Tulpe",
+    "Tanne", "Eiche", "Birke", "Welle", "Regenbogen", "Vulkan", "Quelle",
+    # Stadt & Gebaeude
+    "Garten", "Fenster", "Brücke", "Bahnhof", "Hafen", "Turm", "Kirche",
+    "Schloss", "Burg", "Markt", "Brunnen", "Mauer", "Treppe", "Keller",
+    "Leuchtturm", "Tunnel", "Fabrik", "Mühle", "Scheune",
+    # Fahrzeuge
+    "Auto", "Fahrrad", "Schiff", "Flugzeug", "Rakete", "Traktor", "Roller",
+    "Kutsche", "Schlitten", "Ballon", "Segelboot",
+    # Fantasie
+    "Drache", "Ritter", "Zauberer", "Hexe", "Riese", "Zwerg", "Kobold",
+    "Geist", "Vampir", "Pirat", "König", "Königin", "Prinz", "Held", "Schatz",
+    "Krone", "Schwert", "Schild", "Zauber", "Wunder", "Einhorn", "Phönix",
+    # Musik & Schule
+    "Gitarre", "Klavier", "Trommel", "Flöte", "Geige", "Trompete", "Harfe",
+    "Melodie", "Buch", "Stift", "Papier", "Schere", "Pinsel", "Kreide",
+    "Tafel", "Schlüssel", "Lampe", "Spiegel", "Schrank", "Kerze", "Laterne",
+    "Brille", "Koffer",
+    # Zeit & Gefuehl
+    "Sommer", "Winter", "Frühling", "Herbst", "Morgen", "Abend", "Stunde",
+    "Minute", "Freude", "Glück", "Frieden", "Hoffnung", "Traum", "Geheimnis",
+    "Abenteuer", "Rätsel",
+    # Verben
+    "laufen", "springen", "lachen", "singen", "tanzen", "malen", "fliegen",
+    "schwimmen", "klettern", "rennen", "zaubern", "träumen", "staunen",
+    # Eigenschaften
+    "schnell", "riesig", "winzig", "mutig", "lustig", "golden", "bunt",
+    "glücklich", "neugierig", "freundlich",
+]
+_event_words: list[str] = []  # in setup() befuellt (System-Liste oder Fallback)
+
+
+def _fold(text: str) -> str:
+    """Vereinheitlicht fuer den Vergleich: alles klein, Umlaute -> ae/oe/ue/ss,
+    nur noch Buchstaben. So gewinnt 'Loewe' auch, wenn jemand 'löwe!' tippt
+    (und umgekehrt) - Gross-/Kleinschreibung und Satzzeichen sind egal."""
+    text = text.lower()
+    text = (text.replace("ä", "ae").replace("ö", "oe")
+                .replace("ü", "ue").replace("ß", "ss"))
+    return re.sub(r"[^a-z]", "", text)
+
+
+def _load_event_words() -> list[str]:
+    """Echte deutsche Woerter laden: erst eine System-Wortliste, sonst die
+    eingebaute Fallback-Liste. Gefiltert auf reine Buchstaben-Woerter mit
+    sinnvoller Laenge."""
+    for path in _EVENT_DICT_PATHS:
+        woerter: list[str] = []
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    w = line.strip()
+                    if (_EVENT_WORD_MIN <= len(w) <= _EVENT_WORD_MAX
+                            and re.fullmatch(r"[A-Za-zÄÖÜäöüß]+", w)):
+                        woerter.append(w)
+        except OSError:
+            continue
+        if len(woerter) >= 50:
+            uniq = sorted(set(woerter))
+            log.info("Event-Woerter: %d echte deutsche Woerter aus %s.",
+                     len(uniq), path)
+            return uniq
+    log.info("Event-Woerter: keine System-Wortliste gefunden, nutze eingebaute "
+             "Liste (%d Woerter). Tipp: `apt install wngerman` fuer viel mehr.",
+             len(_EVENT_FALLBACK_WORDS))
+    return list(_EVENT_FALLBACK_WORDS)
 
 
 async def maybe_event(guild: discord.Guild) -> None:
@@ -445,14 +539,14 @@ async def maybe_event(guild: discord.Guild) -> None:
         return
     if channel.id in _event and _event[channel.id]["expires"] > time.monotonic():
         return
-    wort = random.choice(_EVENT_WORDS)
+    wort = random.choice(_event_words or _EVENT_FALLBACK_WORDS)
     tok = _new_token(channel.id)
-    _event[channel.id] = {"word": wort.lower(), "reward": EVENT_REWARD,
+    _event[channel.id] = {"word": _fold(wort), "display": wort, "reward": EVENT_REWARD,
                           "expires": time.monotonic() + EVENT_TIMEOUT, "token": tok}
     try:
         await channel.send(
-            f"⚡ **SCHNELL!** Erster, der `{wort}` tippt, kassiert "
-            f"**{EVENT_REWARD} Flo Coins**! (du hast {EVENT_TIMEOUT}s)")
+            f"⚡ **SCHNELL!** Wer als Erster `{wort}` in den Chat schreibt, "
+            f"schnappt sich **{EVENT_REWARD} Flo Coins**! (du hast {EVENT_TIMEOUT}s)")
     except discord.HTTPException:
         _event.pop(channel.id, None)
 
@@ -478,20 +572,30 @@ async def _check_event(message: discord.Message) -> bool:
     if runde["expires"] < time.monotonic():
         _event.pop(cid, None)
         return False
-    if (message.content or "").strip().lower() != runde["word"]:
+    # Treffer, wenn die Nachricht genau das gesuchte Wort ist - Gross/Klein,
+    # Satzzeichen und Umlaut-Schreibweise (ae/oe/ue/ss) sind egal.
+    if _fold(message.content or "") != runde["word"]:
         return False
-    _event.pop(cid, None)
-    extra = ""
+    _event.pop(cid, None)  # erster Treffer gewinnt -> Runde sofort schliessen
+    belohnung = ""
     if economy.is_enabled():
         economy.add_coins(message.author.id, runde["reward"])
+        await economy.add_xp(message.author, 20)
         await economy.flush()
-        extra = f" **+{runde['reward']} Flo Coins**"
+        belohnung = f" und schnappt sich **+{runde['reward']} Flo Coins** 💰"
+    wort = runde.get("display", runde["word"])
+    text = (f"🏁 {message.author.mention} war am schnellsten mit **{wort}**"
+            f"{belohnung}!")
     try:
-        await message.reply(
-            f"🏁 **{message.author.display_name}** war am schnellsten!{extra}",
-            mention_author=False)
+        # Direkt im Chat ansagen + Gewinner anpingen. Bewusst channel.send
+        # (kein Reply), damit es auch klappt, wenn die Tipp-Nachricht im
+        # Auto-Loesch-Channel schon wieder weg ist.
+        await message.channel.send(text)
     except discord.HTTPException:
-        pass
+        try:
+            await message.reply(text, mention_author=True)
+        except discord.HTTPException:
+            pass
     return True
 
 
