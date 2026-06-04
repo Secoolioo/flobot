@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 import aiohttp
 
@@ -140,8 +141,50 @@ def bot_name() -> str:
     return _bot_name
 
 
-def _system_prompt() -> str:
-    return (
+def names() -> list[str]:
+    """Alle Namen, auf die der Bot hoert: Hauptname + Aliasse aus BOT_ALIASES
+    (Standard: 'Florian'). Dadurch reagiert Flo auch auf 'Florian ...' wie eine
+    Alexa. Mehrere Aliasse per Komma/Leerzeichen trennen; BOT_ALIASES='' = nur Flo."""
+    raw = os.getenv("BOT_ALIASES", "Florian")
+    out = [_bot_name]
+    for a in re.split(r"[,\s]+", raw):
+        a = a.strip()
+        if a and a.lower() != _bot_name.lower() and a not in out:
+            out.append(a)
+    return out
+
+
+def _names_alt() -> str:
+    """Regex-Alternation der Namen, laengster zuerst ('Florian|Flo')."""
+    return "|".join(re.escape(n) for n in sorted(names(), key=len, reverse=True))
+
+
+def trigger_re() -> "re.Pattern[str]":
+    """Erkennt, ob der Bot angesprochen wird (Name/Alias als ganzes Wort)."""
+    return re.compile(rf"\b(?:{_names_alt()})\b", re.IGNORECASE)
+
+
+def lead_re() -> "re.Pattern[str]":
+    """Matcht einen fuehrenden Namen/Alias samt Satzzeichen am Zeilenanfang."""
+    return re.compile(rf"^\s*(?:{_names_alt()})\b[\s,:!.\-]*", re.IGNORECASE)
+
+
+def strip_lead(text: str) -> str:
+    """Entfernt @-Mentions und einen fuehrenden Botnamen/Alias.
+    'Florian, level' -> 'level'. Die Feature-Module nutzen das fuer ihre
+    Befehlserkennung, damit Befehle auch mit 'Florian' davor funktionieren."""
+    t = re.sub(r"<@!?\d+>", " ", text or "")
+    t = lead_re().sub("", t)
+    return t.strip()
+
+
+def _clean_title(title: str) -> str:
+    """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🤖 NPC' -> 'NPC')."""
+    return re.sub(r"^\W+", "", title or "").strip()
+
+
+def _system_prompt(author: str = "", title: str = "") -> str:
+    base = (
         f"Du bist {_bot_name}, ein freundlicher, lockerer KI-Assistent in einem "
         "deutschen Discord-Server. Du antwortest immer auf Deutsch, kurz und "
         "natuerlich, so wie man in einem Chat schreibt. Lange Vortraege vermeidest "
@@ -151,6 +194,16 @@ def _system_prompt() -> str:
         f"keinen Ort, nimm '{_default_city}' als Standard. Erfinde niemals "
         "Wetterdaten - wenn das Werkzeug einen Fehler liefert, sag das ehrlich."
     )
+    clean = _clean_title(title)
+    if clean:
+        wer = author or "Der Nutzer"
+        base += (
+            f" {wer} hat sich im Server den Titel '{clean}' verdient. Sprich {wer} "
+            f"in deiner Antwort mindestens einmal mit diesem Titel an (als Anrede, "
+            f"z. B. 'Klar, {clean}.' oder bau ihn locker ein). Mach es natuerlich, "
+            "nicht in jedem Satz, und niemals mit Emoji."
+        )
+    return base
 
 
 async def get_weather(city: str) -> dict:
@@ -240,8 +293,43 @@ async def _run_tool(name: str, arguments: str) -> dict:
     return {"error": f"Unbekanntes Werkzeug: {name}"}
 
 
-async def ask_flo(user_message: str, *, author: str = "") -> str:
-    """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus."""
+async def generate(
+    prompt: str,
+    *,
+    system: str | None = None,
+    temperature: float = 0.8,
+    max_tokens: int = 300,
+) -> str | None:
+    """Einzelne LLM-Antwort OHNE Werkzeuge/Persona (fuer Spass-Module wie Roast,
+    Hype, Bewertung, Spruch, Quiz). Gibt den Text zurueck oder None bei Fehler/aus.
+
+    Bewusst getrennt von ask_flo(): kein Wetter-Werkzeug, frei einstellbare
+    Temperatur (hoeher = kreativer) und Laenge.
+    """
+    if _client is None:
+        return None
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    try:
+        response = await _client.chat.completions.create(
+            model=_model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return (response.choices[0].message.content or "").strip() or None
+    except Exception:  # noqa: BLE001 - Bot soll nie wegen LLM-Fehler crashen
+        log.exception("LLM generate() fehlgeschlagen")
+        return None
+
+
+async def ask_flo(user_message: str, *, author: str = "", title: str = "") -> str:
+    """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
+
+    Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
+    mit diesem Titel anzusprechen."""
     if _client is None:
         return "Mein KI-Modus ist gerade nicht eingerichtet."
 
@@ -250,7 +338,7 @@ async def ask_flo(user_message: str, *, author: str = "") -> str:
         text = f"{author} schreibt: {text}"
 
     messages: list[dict] = [
-        {"role": "system", "content": _system_prompt()},
+        {"role": "system", "content": _system_prompt(author, title)},
         {"role": "user", "content": text},
     ]
 

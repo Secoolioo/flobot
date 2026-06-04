@@ -3,3 +3,5 @@ venv/
 .claude/
 __pycache__/
 *.pyc
+# Laufzeitdaten der Spass-Features (Level/Coins/Spielstaende) - nicht committen:
+data/

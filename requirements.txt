@@ -10,3 +10,14 @@ openai>=1.40
 davey>=0.1.5
 PyNaCl>=1.5
 yt-dlp>=2024.8
+# Spass-Features (Level/Coins, Mini-Games, Chaos): brauchen KEINE neuen Pakete
+#   - Level & SigmaCoins speichern in data/economy.json (Standardbibliothek)
+#   - Mini-Games & Chaos nutzen die schon vorhandene KI (openai) bzw. nur stdlib
+#   - Soundboard: Audiodateien selbst in den Ordner sounds/ legen (mp3/wav/ogg)
+# Leaderboard-Bild ('Flo top') im Grafana-Stil: braucht Pillow. Fehlt es, faellt
+# der Bot automatisch auf die Text-/Embed-Bestenliste zurueck (kein Fehler).
+Pillow>=10.0
+# Voice-Gags TTS ('Flo sprich <text>') - eines von beiden, sonst ist nur TTS aus:
+#   - espeak-ng = offline, System-Paket (NICHT pip):  apt install espeak-ng
+#   - gTTS      = bessere Stimme, aber online + pip (optional, hier auskommentiert)
+# gTTS>=2.5

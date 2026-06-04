@@ -21,8 +21,12 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 import ai
+import economy
+import fun
+import games
 import music
 import schedule_logic
+import voicegags
 
 load_dotenv()
 
@@ -57,12 +61,28 @@ AUTODELETE_CHANNEL_IDS = {
 # KI-Feature ('Flo') initialisieren - liest ANTHROPIC_API_KEY etc. aus der .env.
 # Ohne API-Key bleibt das Feature aus und der Bot laeuft wie gehabt weiter.
 AI_ENABLED = ai.setup()
-# Trigger: das Wort "Flo" (Gross-/Kleinschreibung egal) irgendwo in der Nachricht.
-_TRIGGER_RE = re.compile(rf"\b{re.escape(ai.bot_name())}\b", re.IGNORECASE)
+# Trigger: der Name "Flo" ODER ein Alias ("Florian", per BOT_ALIASES anpassbar) -
+# als ganzes Wort irgendwo in der Nachricht. So reagiert Flo wie eine Alexa,
+# sobald jemand "Flo" oder "Florian" schreibt.
+_TRIGGER_RE = ai.trigger_re()
 
 # Musik-Feature initialisieren (YouTube via yt-dlp, Spotify-Aufloesung ueber die
 # Spotify-API). Ohne yt-dlp/ffmpeg/PyNaCl bleibt es aus, der Bot laeuft weiter.
 MUSIC_ENABLED = music.setup()
+
+# Spass-Features (jedes faellt einzeln aus, ohne den Rest zu stoeren):
+#   economy  = Level & SigmaCoins (XP fuers Schreiben/Voice, Shop, Daily)
+#   games    = Mini-Games & Zufalls-Events (Quiz, Slot, Counting ...)
+#   fun      = Chaos & Persoenlichkeit (Roast/Hype/Spruch, Reactions) - braucht KI
+#   voicegags= Soundboard, TTS, Join-Sounds - braucht ffmpeg/PyNaCl wie die Musik
+ECONOMY_ENABLED = economy.setup()
+GAMES_ENABLED = games.setup()
+FUN_ENABLED = fun.setup()
+VOICE_GAGS_ENABLED = voicegags.setup()
+
+# Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
+# kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
+EVENT_INTERVAL_SECONDS = float(os.getenv("GAMES_EVENT_INTERVAL", "300"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -85,23 +105,25 @@ WEISHEITEN = [
     "Heute ist der jüngste Tag deines Lebens.",
 ]
 
+# Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
+_NEED_MESSAGES = any(
+    [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
+     VOICE_GAGS_ENABLED]
+)
 intents = discord.Intents.none()
 intents.guilds = True
-if AI_ENABLED or MUSIC_ENABLED:
+if _NEED_MESSAGES or AUTODELETE_CHANNEL_IDS:
     # guild_messages: noetig, um Nachrichten-Events ueberhaupt zu EMPFANGEN
     # (sonst feuert on_message nie). Ist KEIN privilegiertes Intent.
     intents.guild_messages = True
+if _NEED_MESSAGES:
     # message_content: noetig, um den TEXT der Nachricht zu lesen. Privilegiert -
     # muss zusaetzlich im Discord Developer Portal aktiviert sein.
     intents.message_content = True
-if MUSIC_ENABLED:
-    # voice_states: noetig, um zu sehen, in welchem Sprachkanal der Nutzer steckt.
-    # Nicht privilegiert.
+if MUSIC_ENABLED or VOICE_GAGS_ENABLED or ECONOMY_ENABLED:
+    # voice_states: noetig, um zu sehen, wer in welchem Sprachkanal steckt
+    # (Musik, Soundboard/Join-Sounds, Voice-XP). Nicht privilegiert.
     intents.voice_states = True
-if AUTODELETE_CHANNEL_IDS:
-    # Auch ohne KI/Musik muessen wir die Nachrichten-Events empfangen, um sie
-    # spaeter loeschen zu koennen. guild_messages ist NICHT privilegiert.
-    intents.guild_messages = True
 client = discord.Client(
     intents=intents,
     status=discord.Status.idle,
@@ -128,6 +150,108 @@ def _split_message(text: str, limit: int = 1900) -> list[str]:
         text = text[cut:].lstrip()
     chunks.append(text)
     return chunks
+
+
+async def _reply_chunks(message: discord.Message, text: str) -> None:
+    """Schickt eine (ggf. lange) Antwort: erstes Stueck als Reply, Rest normal."""
+    for i, teil in enumerate(_split_message(text)):
+        try:
+            if i == 0:
+                await message.reply(teil, mention_author=False)
+            else:
+                await message.channel.send(teil)
+        except discord.HTTPException as exc:
+            log.error("Antwort konnte nicht gesendet werden: %s", exc)
+            break
+
+
+async def _send_reply(
+    message: discord.Message, payload: "str | discord.Embed | discord.File"
+) -> None:
+    """Sendet eine Antwort - Bilder (File) als Anhang, Menues (Embed) als Embed,
+    normale Antworten als Text."""
+    if isinstance(payload, discord.File):
+        try:
+            await message.reply(file=payload, mention_author=False)
+        except discord.HTTPException as exc:
+            log.error("Bild-Antwort konnte nicht gesendet werden: %s", exc)
+        return
+    if isinstance(payload, discord.Embed):
+        try:
+            await message.reply(embed=payload, mention_author=False)
+        except discord.HTTPException as exc:
+            log.error("Embed-Antwort konnte nicht gesendet werden: %s", exc)
+        return
+    await _reply_chunks(message, payload)
+
+
+_HELP_RE = re.compile(
+    r"^(hilfe|help|befehle|commands?|men[uü]|was kannst du)\b", re.IGNORECASE
+)
+
+
+def _is_help(content: str) -> bool:
+    """True, wenn jemand 'Flo hilfe' / 'Florian befehle' o. Ae. schreibt."""
+    return bool(_HELP_RE.match(ai.strip_lead(content)))
+
+
+def _build_help() -> discord.Embed:
+    """Baut die Hilfe (als Embed) aus den AKTUELL aktiven Features zusammen."""
+    name = ai.bot_name()
+    aliases = [n for n in ai.names() if n.lower() != name.lower()]
+    anrede = f"`{name} ...`"
+    if aliases:
+        anrede += " oder " + " / ".join(f"`{a} ...`" for a in aliases)
+    emb = discord.Embed(
+        title=f"🤖 {name} – Befehle",
+        description=f"Sprich mich mit {anrede} an. Das geht gerade:",
+        color=discord.Color.blurple(),
+    )
+    if MUSIC_ENABLED:
+        emb.add_field(
+            name="🎵 Musik",
+            value=(f"`{name} spiel <link/suche>` · `{name} <youtube/spotify-link>` · "
+                   f"skip · pause · weiter · stop · queue · `{name} lautstärke 50`"),
+            inline=False,
+        )
+    if GAMES_ENABLED:
+        emb.add_field(
+            name="🎮 Spiele",
+            value=(f"`{name} quiz` · `{name} zahlenraten` · `{name} ssp schere` · "
+                   f"`{name} coinflip 50 kopf` · `{name} slot 20` · `{name} würfel 2d6`"),
+            inline=False,
+        )
+    if ECONOMY_ENABLED:
+        emb.add_field(
+            name="📈 Level & SigmaCoins",
+            value=(f"`{name} level` · `{name} top` · `{name} coins` · `{name} daily` · "
+                   f"`{name} pay @x 100` · `{name} shop` · `{name} kaufen sigma` · "
+                   f"`{name} inventar` · `{name} titel sigma`"),
+            inline=False,
+        )
+    if FUN_ENABLED:
+        emb.add_field(
+            name="😈 Chaos",
+            value=(f"`{name} roast @x` · `{name} hype @x` · `{name} rate @x` · "
+                   f"`{name} rizz @x` · `{name} spruch` · `{name} horoskop`"),
+            inline=False,
+        )
+    if VOICE_GAGS_ENABLED:
+        emb.add_field(
+            name="🔊 Voice",
+            value=(f"`{name} sounds` · `{name} sound <name>` · `{name} sprich <text>`"),
+            inline=False,
+        )
+    if AI_ENABLED:
+        emb.add_field(
+            name="💬 KI",
+            value=f"Stell mir einfach eine Frage (`{name} wie wird das Wetter?`).",
+            inline=False,
+        )
+    if not emb.fields:
+        emb.add_field(name="—", value="Gerade sind keine Spaß-Features aktiv.", inline=False)
+    emb.set_footer(text="Tipp: Kauf dir im Shop einen Titel – dann spricht Flo dich damit an!")
+    return emb
 
 
 def invite_url() -> str:
@@ -239,6 +363,30 @@ async def status_loop() -> None:
         log.error("Status-Update fehlgeschlagen: %s", exc)
 
 
+@tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
+async def voice_xp_loop() -> None:
+    """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit)."""
+    guild = client.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    try:
+        await economy.tick_voice(guild)
+    except Exception:
+        log.exception("Voice-XP-Loop Fehler - laeuft weiter")
+
+
+@tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
+async def event_loop() -> None:
+    """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
+    guild = client.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    try:
+        await games.maybe_event(guild)
+    except Exception:
+        log.exception("Event-Loop Fehler - laeuft weiter")
+
+
 # Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
 # vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
 _bg_tasks: set[asyncio.Task] = set()
@@ -268,67 +416,112 @@ async def _delete_after(message: discord.Message, delay: float) -> None:
 
 @client.event
 async def on_message(message: discord.Message) -> None:
-    """Antwortet wie eine KI, wenn jemand 'Flo' schreibt oder den Bot erwaehnt."""
+    """Zentrale Nachrichten-Verarbeitung: Auto-Loeschen, passive Spass-Hooks
+    (XP, Spiele, Reactions) und - wenn 'Flo' angesprochen wird - Befehle + KI."""
     # Auto-Loeschen: in konfigurierten Channels ALLE Nachrichten nach kurzer Zeit
     # entfernen. Bewusst GANZ oben (vor dem Bot-Check), damit auch die eigenen
-    # Antworten des Bots dort wieder verschwinden.
+    # Antworten des Bots dort wieder verschwinden. AUSNAHME: Level-Up-Ansagen des
+    # Bots bleiben stehen (Erfolge sollen sichtbar bleiben).
     if message.channel.id in AUTODELETE_CHANNEL_IDS:
-        _spawn(_delete_after(message, AUTODELETE_SECONDS))
+        is_levelup = (
+            message.author.id == client.user.id
+            and message.embeds
+            and message.embeds[0].title == economy.LEVELUP_EMBED_TITLE
+        )
+        if not is_levelup:
+            _spawn(_delete_after(message, AUTODELETE_SECONDS))
 
     if message.author.bot:
         return
-    if message.guild is None or not (AI_ENABLED or MUSIC_ENABLED):
+    if message.guild is None:
         return
 
     content = message.content or ""
+
+    # --- Passive Hooks: sehen JEDE Nachricht (vor dem Flo-Trigger) ---
+    # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
+    if ECONOMY_ENABLED:
+        _spawn(economy.on_message(message))
+    # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
+    # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
+    if GAMES_ENABLED:
+        try:
+            if await games.on_message_passive(message):
+                return
+        except Exception:
+            log.exception("Spiele-Hook fehlgeschlagen")
+    # Seltene Zufalls-Einwuerfe / Auto-Reactions (laeuft nebenher).
+    if FUN_ENABLED:
+        _spawn(fun.on_message_passive(message))
+
+    # --- Ab hier nur, wenn Flo angesprochen wird ---
     angesprochen = bool(_TRIGGER_RE.search(content))
     if not angesprochen and client.user in message.mentions:
         angesprochen = True
     if not angesprochen:
         return
 
-    # Erst Musik-Befehle pruefen (z. B. "Flo spiel <link>", "Flo <link>", skip,
-    # pause, stop). Gibt music.handle einen Text zurueck, war es ein Musik-Befehl
-    # und wir sind fertig. Gibt es None zurueck, uebernimmt die KI.
-    if MUSIC_ENABLED:
-        async with message.channel.typing():
-            try:
-                musik_antwort = await music.handle(message)
-            except Exception:
-                log.exception("Musik-Befehl fehlgeschlagen")
-                musik_antwort = "Beim Abspielen ist gerade etwas schiefgelaufen."
-        if musik_antwort is not None:
-            log.info(
-                "Musik-Befehl von %s: %s",
-                message.author.display_name, musik_antwort[:80],
-            )
-            try:
-                await message.reply(musik_antwort, mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Antwort konnte nicht gesendet werden: %s", exc)
-            return
-
-    if not AI_ENABLED:
+    # 'Flo hilfe' / 'Flo befehle' -> Uebersicht der aktiven Features (Embed).
+    if _is_help(content):
+        await _send_reply(message, _build_help())
         return
 
+    # Befehls-Handler der Reihe nach durchgehen. Jeder gibt entweder eine Antwort
+    # (Text ODER Embed = Befehl erkannt, fertig) oder None (= naechster ist dran).
+    antwort: "str | discord.Embed | discord.File | None" = None
+    async with message.channel.typing():
+        for enabled, handler in (
+            (MUSIC_ENABLED, music.handle),
+            (VOICE_GAGS_ENABLED, voicegags.handle),
+            (GAMES_ENABLED, games.handle),
+            (ECONOMY_ENABLED, economy.handle),
+            (FUN_ENABLED, fun.handle),
+        ):
+            if not enabled:
+                continue
+            try:
+                antwort = await handler(message)
+            except Exception:
+                log.exception(
+                    "Befehl fehlgeschlagen (%s)", getattr(handler, "__module__", "?")
+                )
+                antwort = "Da ist gerade etwas schiefgelaufen."
+            if antwort is not None:
+                break
+
+    if antwort is not None:
+        if isinstance(antwort, discord.File):
+            log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
+        elif isinstance(antwort, discord.Embed):
+            log.info("Befehl von %s: [Embed] %s", message.author.display_name, antwort.title or "")
+        else:
+            log.info("Befehl von %s: %s", message.author.display_name, antwort[:80])
+        await _send_reply(message, antwort)
+        return
+
+    # --- KI-Fallback: kein Befehl erkannt -> Flo antwortet wie eine KI ---
+    if not AI_ENABLED:
+        return
+    # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an.
+    title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
     log.info("KI-Frage von %s: %s", message.author.display_name, content[:150])
     async with message.channel.typing():
         try:
-            antwort = await ai.ask_flo(content, author=message.author.display_name)
+            antwort = await ai.ask_flo(
+                content, author=message.author.display_name, title=title
+            )
         except Exception:
             log.exception("KI-Antwort fehlgeschlagen")
             antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
     log.info("KI-Antwort an %s (%d Zeichen)", message.author.display_name, len(antwort))
+    await _reply_chunks(message, antwort)
 
-    for i, teil in enumerate(_split_message(antwort)):
-        try:
-            if i == 0:
-                await message.reply(teil, mention_author=False)
-            else:
-                await message.channel.send(teil)
-        except discord.HTTPException as exc:
-            log.error("Antwort konnte nicht gesendet werden: %s", exc)
-            break
+
+@client.event
+async def on_voice_state_update(member: discord.Member, before, after) -> None:
+    """Join-Sounds: spielt einen Sound, wenn jemand einen Sprachkanal betritt."""
+    if VOICE_GAGS_ENABLED:
+        _spawn(voicegags.on_voice_state_update(member, before, after))
 
 
 @client.event
@@ -371,6 +564,10 @@ async def on_ready() -> None:
         icon_loop.start()
     if not status_loop.is_running():
         status_loop.start()
+    if ECONOMY_ENABLED and not voice_xp_loop.is_running():
+        voice_xp_loop.start()
+    if GAMES_ENABLED and not event_loop.is_running():
+        event_loop.start()
 
 
 def main() -> None:
