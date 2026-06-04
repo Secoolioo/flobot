@@ -70,15 +70,21 @@ _FFMPEG_OPTS = "-vn"
 
 # --- URL-Erkennung -------------------------------------------------------
 _URL_RE = re.compile(r"(https?://\S+|spotify:[a-z]+:\S+)", re.IGNORECASE)
+# Hinweis: Die Spotify-App schiebt bei geteilten Links ein Sprach-Praefix ein,
+# z. B. open.spotify.com/intl-de/track/...  ->  '(?:intl-[a-z]{2}/)?' faengt das ab.
 _SPOTIFY_TRACK_RE = re.compile(
-    r"(?:open\.spotify\.com/track/|spotify:track:)([A-Za-z0-9]+)", re.IGNORECASE
+    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?track/|spotify:track:)([A-Za-z0-9]+)",
+    re.IGNORECASE,
 )
 _SPOTIFY_PLAYLIST_RE = re.compile(
-    r"open\.spotify\.com/(?:playlist|album)/|spotify:(?:playlist|album):", re.IGNORECASE
+    r"open\.spotify\.com/(?:intl-[a-z]{2}/)?(?:playlist|album)/"
+    r"|spotify:(?:playlist|album):",
+    re.IGNORECASE,
 )
 # Wie oben, aber mit Typ (playlist/album) und ID als Gruppen fuer den API-Abruf.
 _SPOTIFY_LIST_RE = re.compile(
-    r"(?:open\.spotify\.com/(playlist|album)/|spotify:(playlist|album):)([A-Za-z0-9]+)",
+    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?(playlist|album)/"
+    r"|spotify:(playlist|album):)([A-Za-z0-9]+)",
     re.IGNORECASE,
 )
 
