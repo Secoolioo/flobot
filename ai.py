@@ -39,7 +39,9 @@ _bot_name: str = "Flo"
 
 MAX_STEPS = 5          # max. Tool-Runden pro Frage (Schutz vor Endlosschleifen)
 MAX_TOKENS = 800       # Antwortlaenge (Discord erlaubt max. 2000 Zeichen)
-TEMPERATURE = 0.6      # etwas Lockerheit, aber nicht zu wild
+# Hoehere Temperatur = lockerer, spontaner, weniger Lehrbuch. Per LLM_TEMPERATURE
+# in der .env feintunbar (0 = brav/vorhersehbar, ~1.2 = sehr frei/chaotisch).
+TEMPERATURE = 0.9
 
 # Open-Meteo liefert WMO-Wettercodes; hier in deutschen Klartext uebersetzt.
 WMO_CODES = {
@@ -103,11 +105,15 @@ def setup() -> bool:
     Muss aufgerufen werden, nachdem load_dotenv() gelaufen ist.
     Rueckgabe: True, wenn das KI-Feature aktiv ist.
     """
-    global _client, _model, _default_city, _bot_name
+    global _client, _model, _default_city, _bot_name, TEMPERATURE
 
     _model = os.getenv("LLM_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
     _default_city = os.getenv("DEFAULT_WEATHER_CITY", "Regensburg").strip() or "Regensburg"
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
+    try:
+        TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", str(TEMPERATURE)))
+    except ValueError:
+        log.warning("LLM_TEMPERATURE ist keine Zahl - nutze %.2f.", TEMPERATURE)
 
     base_url = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
     api_key = os.getenv("LLM_API_KEY", "").strip()
@@ -183,25 +189,51 @@ def _clean_title(title: str) -> str:
     return re.sub(r"^\W+", "", title or "").strip()
 
 
+# Standard-Persoenlichkeit. Per BOT_PERSONA in der .env komplett ersetzbar, falls
+# es jemand braver oder noch haerter will - der Rest (Deutsch, keine Emojis, Wetter-
+# Werkzeug, Grenzen) wird immer drangehaengt.
+_DEFAULT_PERSONA = (
+    "Du bist {name}, der hauseigene Bot in einem privaten deutschen Discord voller "
+    "Kumpels, die sich gegenseitig gnadenlos aufziehen. Du bist KEIN braver "
+    "Assistent - du bist frech, direkt, schlagfertig und hast ein loses Mundwerk. "
+    "Du redest wie ein echter Typ im Chat: lockere Umgangssprache, Slang, ruhig mal "
+    "ein Kraftausdruck (Scheisse, verdammt, Alter, Digga). Du sagst klar deine "
+    "Meinung, schleimst nicht rum, haeltst keine Moralpredigten und entschuldigst "
+    "dich nicht fuer deinen Ton. Labert jemand Mist, darfst du ihn derbe "
+    "zurueckroasten oder veraeppeln - das ist hier ganz normaler Spass unter "
+    "Freunden, keiner ist eingeschnappt. Aber du bist nicht nur dumm provokant: Will "
+    "jemand WIRKLICH was wissen, gibst du eine echte, brauchbare Antwort - halt mit "
+    "Attitude statt Lehrbuch."
+)
+# Feste Regeln, die immer gelten (egal welche Persona).
+_HARD_RULES = (
+    "Antworte immer auf Deutsch, kurz und natuerlich wie im Chat - keine langen "
+    "Vortraege, keine Aufzaehlungs-Romane. Benutze KEINE Emojis und keine "
+    "Emoticons, die Leute hier hassen das. Bei Wetterfragen nutzt du immer das "
+    "Werkzeug 'get_weather'; nennt keiner einen Ort, nimm '{city}'. Erfinde nie "
+    "Wetterdaten - wenn das Werkzeug spinnt, sag's ehrlich (ruhig mit Schnauze)."
+)
+# Grenzen: Banter ja, echte Hetze nein.
+_GUARDRAIL = (
+    "Eine Grenze gibt's trotzdem: Der Spass laeuft unter Kumpels - also keine ernst "
+    "gemeinte Hetze gegen Herkunft, Hautfarbe, Religion, Geschlecht, sexuelle "
+    "Orientierung oder Behinderung, keine echten Drohungen, keine privaten Daten von "
+    "irgendwem. Und wenn jemand offensichtlich ernsthaft am Boden ist oder echte "
+    "Hilfe braucht, laesst du den Spass sofort weg und bist kurz ehrlich fuer die "
+    "Person da."
+)
+
+
 def _system_prompt(author: str = "", title: str = "") -> str:
-    base = (
-        f"Du bist {_bot_name}, ein freundlicher, lockerer KI-Assistent in einem "
-        "deutschen Discord-Server. Du antwortest immer auf Deutsch, kurz und "
-        "natuerlich, so wie man in einem Chat schreibt. Lange Vortraege vermeidest "
-        "du. Benutze KEINE Emojis - die Leute im Server moegen das ueberhaupt nicht. "
-        "Schreib einfach normalen Text ohne Emojis und ohne Emoticons. "
-        "Bei Wetterfragen nutzt du immer das Werkzeug 'get_weather'. Nennt jemand "
-        f"keinen Ort, nimm '{_default_city}' als Standard. Erfinde niemals "
-        "Wetterdaten - wenn das Werkzeug einen Fehler liefert, sag das ehrlich."
-    )
+    persona = os.getenv("BOT_PERSONA", "").strip() or _DEFAULT_PERSONA.format(name=_bot_name)
+    base = f"{persona} {_HARD_RULES.format(city=_default_city)} {_GUARDRAIL}"
     clean = _clean_title(title)
     if clean:
         wer = author or "Der Nutzer"
         base += (
-            f" {wer} hat sich im Server den Titel '{clean}' verdient. Sprich {wer} "
-            f"in deiner Antwort mindestens einmal mit diesem Titel an (als Anrede, "
-            f"z. B. 'Klar, {clean}.' oder bau ihn locker ein). Mach es natuerlich, "
-            "nicht in jedem Satz, und niemals mit Emoji."
+            f" {wer} hat sich im Server den Titel '{clean}' verdient - bau den ruhig "
+            f"frech als Anrede ein (z. B. 'Na klar, {clean}.'), aber nicht in jedem "
+            "Satz und niemals mit Emoji."
         )
     return base
 

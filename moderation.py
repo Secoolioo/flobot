@@ -216,7 +216,9 @@ def _clean_reason(rest: str) -> str:
     r = _MENTION_RE.sub("", rest or "").strip()
     r = re.sub(r"^(?:wegen|weil|f(?:ü|ue)r|for|grund|reason)\b[:\s]*", "", r,
                flags=re.IGNORECASE).strip()
-    return r.strip(" :–-")
+    # Auf 500 deckeln: Discords Audit-Log-Grund erlaubt max. 512 Zeichen, und das
+    # Embed-Feld max. 1024 - so kann ein Mega-Grund den Kick/Ban nicht crashen.
+    return r.strip(" :–-")[:500]
 
 
 def _parse_duration(text: str):

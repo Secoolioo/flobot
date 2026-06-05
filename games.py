@@ -603,10 +603,11 @@ async def _check_event(message: discord.Message) -> bool:
     content = message.content or ""
     folded = _fold(content)
     if folded != runde["word"]:
-        # Kein Treffer. War es ein knapper Fehlversuch? (Ein einzelnes Wort, das
-        # dem gesuchten sehr aehnlich ist - also vertippt.) Dann kurz 'falsch
-        # geschrieben' melden. Normale Chat-Saetze (mehrere Woerter) ignorieren wir.
-        if (folded and len(content.split()) == 1
+        # Kein Treffer. War es ein knapper Fehlversuch? (Ein einzelnes Wort ab 4
+        # Buchstaben, das dem gesuchten sehr aehnlich ist - also vertippt.) Dann
+        # kurz 'falsch geschrieben' melden. Normale Chat-Saetze (mehrere Woerter)
+        # und kurze Allerweltswoerter ('und', 'ist', ...) ignorieren wir bewusst.
+        if (len(folded) >= 4 and len(content.split()) == 1
                 and difflib.SequenceMatcher(None, folded, runde["word"]).ratio() >= 0.6):
             try:
                 await message.channel.send(
