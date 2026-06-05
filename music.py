@@ -45,8 +45,45 @@ _bot_name: str = "Flo"
 _spotify_id: str = ""
 _spotify_secret: str = ""
 
+# Sentinel: das Modul hat selbst geantwortet (Embed + Buttons direkt gesendet).
+# bot.py erkennt das und schickt KEINE zusaetzliche Antwort.
+HANDLED = object()
+
 MAX_QUEUE = 50          # Schutz: maximale Laenge der Warteschlange pro Server
 DEFAULT_VOLUME = 0.5    # 0.0 - 1.0
+
+# --- Optik: Farben + Embed-Helfer ----------------------------------------
+_COL_PLAY = 0x1DB954     # Gruen  - laeuft / spielt
+_COL_QUEUE = 0x5865F2    # Blurple - Warteschlange / hinzugefuegt
+_COL_CTRL = 0xFEE75C     # Gelb   - Steuerung (Pause/Skip/Lautstaerke)
+_COL_INFO = 0x95A5A6     # Grau   - neutrale Info
+_COL_ERR = 0xED4245      # Rot    - geht gerade nicht
+
+
+def _fmt_dur(secs: int | None) -> str:
+    """Sekunden -> 'm:ss' bzw. 'h:mm:ss' (leer, wenn unbekannt)."""
+    if not secs or secs <= 0:
+        return ""
+    secs = int(secs)
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _short(text: str, limit: int = 60) -> str:
+    """Kuerzt lange Titel fuer Listen (haelt Embed-Felder unter dem 1024er-Limit)."""
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _embed(desc: str = "", *, title: str | None = None, color: int = _COL_INFO) -> discord.Embed:
+    """Kleiner Embed-Baukasten fuer einzeilige Antworten."""
+    e = discord.Embed(color=color)
+    if title:
+        e.title = title
+    if desc:
+        e.description = desc
+    return e
 
 # Audio-Optionen fuer yt-dlp und FFmpeg (bewaehrte Standardwerte).
 _YDL_OPTS = {
@@ -171,6 +208,7 @@ class Track:
     duration: int | None = None
     requested_by: str = ""
     query: str = ""            # YouTube-Suchbegriff fuer spaetes Aufloesen (Playlist)
+    thumbnail: str = ""        # Cover/Vorschaubild fuer das Embed (sofern bekannt)
 
 
 @dataclass
@@ -221,7 +259,10 @@ class GuildPlayer:
                 track = await _resolve_track(track)  # Playlist-Track erst jetzt aufloesen
             self.start(track)
             if self.text_channel is not None:
-                await self.text_channel.send(f"▶️ Jetzt: **{track.title}**")
+                try:
+                    await self.text_channel.send(embed=_now_playing_embed(track, len(self.queue)))
+                except discord.HTTPException:
+                    pass
         except Exception:
             log.exception("Konnte naechsten Track nicht starten: %s", track.title)
             await self._advance()  # einen weiter
@@ -272,6 +313,7 @@ async def _extract(query_or_url: str) -> Track:
         stream_url=stream_url,
         webpage_url=info.get("webpage_url", ""),
         duration=info.get("duration"),
+        thumbnail=info.get("thumbnail") or "",
     )
 
 
@@ -575,7 +617,7 @@ async def _play_many(
     items: list[tuple[str, str]],
     requested_by: str,
     label: str,
-) -> str:
+) -> discord.Embed:
     """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
 
     items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
@@ -584,17 +626,22 @@ async def _play_many(
         await player.connect(channel)
     except discord.ClientException as exc:
         log.error("Voice-Connect fehlgeschlagen: %s", exc)
-        return "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?)."
+        return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                      color=_COL_ERR)
 
     space = MAX_QUEUE - len(player.queue)
     if space <= 0:
-        return f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz."
+        return _embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
     items = items[:space]
 
     if player.is_active():
         for inp, title in items:
             player.queue.append(_lazy_track(inp, title, requested_by))
-        return f"➕ {len(items)} Songs {label} in die Warteschlange."
+        return _embed(
+            f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
+            f"in der Warteschlange.",
+            title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE,
+        )
 
     first_inp, _first_title = items[0]
     rest = items[1:]
@@ -602,24 +649,202 @@ async def _play_many(
         track = await _extract(first_inp)
     except Exception:  # noqa: BLE001
         log.exception("Erster Track nicht ladbar: %s", first_inp)
-        return "Den ersten Song konnte ich nicht laden."
+        return _embed("Den ersten Song konnte ich nicht laden.", color=_COL_ERR)
     track.requested_by = requested_by
     track.query = first_inp
     for inp, title in rest:
         player.queue.append(_lazy_track(inp, title, requested_by))
     player.start(track)
-    if rest:
-        return f"▶️ Spiele: **{track.title}** (+{len(rest)} weitere {label})"
-    return f"▶️ Spiele: **{track.title}**"
+    extra = f"+{len(rest)} weitere {label}" if rest else ""
+    return _now_playing_embed(track, len(player.queue), extra=extra)
+
+
+# --- Optik: groessere Embeds ---------------------------------------------
+def _title_value(track: "Track") -> str:
+    """Titel als Link (falls webpage_url bekannt), sonst fett."""
+    if track.webpage_url:
+        return f"**[{_short(track.title, 90)}]({track.webpage_url})**"
+    return f"**{_short(track.title, 90)}**"
+
+
+def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "") -> discord.Embed:
+    """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
+    e = discord.Embed(title="▶️  Jetzt läuft", description=_title_value(track),
+                      color=_COL_PLAY)
+    dur = _fmt_dur(track.duration)
+    if dur:
+        e.add_field(name="Länge", value=f"`{dur}`", inline=True)
+    if track.requested_by:
+        e.add_field(name="Gewünscht von", value=track.requested_by, inline=True)
+    if queue_len > 0:
+        e.add_field(name="In der Schlange", value=f"{queue_len} Song(s)", inline=True)
+    if extra:
+        e.set_footer(text=extra)
+    if track.thumbnail:
+        e.set_thumbnail(url=track.thumbnail)
+    return e
+
+
+def _added_embed(track: "Track", position: int, total: int, *,
+                title: str = "➕  Zur Warteschlange hinzugefügt",
+                footer: str | None = None) -> discord.Embed:
+    """Embed fuer einen frisch eingereihten Song."""
+    e = discord.Embed(title=title, description=_title_value(track), color=_COL_QUEUE)
+    e.add_field(name="Position", value=f"**#{position}** von {total}", inline=True)
+    dur = _fmt_dur(track.duration)
+    if dur:
+        e.add_field(name="Länge", value=f"`{dur}`", inline=True)
+    if track.requested_by:
+        e.add_field(name="Von", value=track.requested_by, inline=True)
+    if footer:
+        e.set_footer(text=footer)
+    if track.thumbnail:
+        e.set_thumbnail(url=track.thumbnail)
+    return e
+
+
+def _gone_embed(track: "Track") -> discord.Embed:
+    return _embed(f"**{_short(track.title, 90)}** ist nicht mehr in der Warteschlange.",
+                  title="⌛  Schon durch", color=_COL_INFO)
+
+
+def _queue_embed(player: "GuildPlayer") -> discord.Embed:
+    """Uebersichtliche Warteschlange: aktueller Song + naechste 10."""
+    e = discord.Embed(title="🎶  Warteschlange", color=_COL_QUEUE)
+    if player.current:
+        dur = _fmt_dur(player.current.duration)
+        cur = f"**{_short(player.current.title, 80)}**"
+        if dur:
+            cur += f"  ·  `{dur}`"
+        e.add_field(name="▶️  Jetzt", value=cur, inline=False)
+    if player.queue:
+        lines = []
+        for i, t in enumerate(player.queue[:10], start=1):
+            dur = _fmt_dur(t.duration)
+            line = f"`{i:>2}.`  {_short(t.title, 55)}"
+            if dur:
+                line += f"  ·  `{dur}`"
+            lines.append(line)
+        more = len(player.queue) - 10
+        if more > 0:
+            lines.append(f"…und **{more}** weitere")
+        e.add_field(name=f"⬆️  Als Nächstes  ({len(player.queue)})",
+                    value="\n".join(lines), inline=False)
+    else:
+        e.set_footer(text="Keine weiteren Songs – wirf was rein!")
+    if player.current and player.current.thumbnail:
+        e.set_thumbnail(url=player.current.thumbnail)
+    return e
+
+
+# --- Interaktiv: Position in der Warteschlange aendern --------------------
+class _PositionModal(discord.ui.Modal):
+    """Tippfeld fuer eine konkrete Wunsch-Position."""
+
+    def __init__(self, view: "QueuePositionView") -> None:
+        super().__init__(title="Position in der Warteschlange")
+        self._view = view
+        self.feld = discord.ui.TextInput(
+            label="Position (1 = als Nächstes)",
+            placeholder=f"1 – {max(1, len(view.player.queue))}",
+            required=True, max_length=3,
+        )
+        self.add_item(self.feld)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = (self.feld.value or "").strip()
+        if not raw.lstrip("+").isdigit():
+            await interaction.response.send_message(
+                "Gib bitte eine Zahl ein (z. B. `1` für als Nächstes).", ephemeral=True)
+            return
+        emb = self._view.apply_move(int(raw) - 1)
+        if emb is None:
+            await interaction.response.edit_message(
+                embed=_gone_embed(self._view.track), view=None)
+            self._view.stop()
+            return
+        await interaction.response.edit_message(embed=emb, view=self._view)
+
+
+class QueuePositionView(discord.ui.View):
+    """Buttons unter einem frisch hinzugefuegten Song: an Position vorziehen."""
+
+    def __init__(self, player: "GuildPlayer", track: "Track", owner_id: int,
+                *, timeout: float = 120.0) -> None:
+        super().__init__(timeout=timeout)
+        self.player = player
+        self.track = track
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if interaction.user.id == self.owner_id or (perms and perms.manage_messages):
+            return True
+        await interaction.response.send_message(
+            "Nur wer den Song hinzugefügt hat (oder das Team) darf die Position ändern.",
+            ephemeral=True)
+        return False
+
+    def _index(self) -> int | None:
+        """Aktuelle Stelle des Tracks (per Identitaet, da er weiterrueckt)."""
+        for i, t in enumerate(self.player.queue):
+            if t is self.track:
+                return i
+        return None
+
+    def apply_move(self, target_index: int) -> discord.Embed | None:
+        """Verschiebt den Track an target_index (0-basiert). None = nicht mehr da."""
+        idx = self._index()
+        if idx is None:
+            return None
+        total = len(self.player.queue)
+        target_index = max(0, min(target_index, total - 1))
+        if target_index != idx:
+            t = self.player.queue.pop(idx)
+            self.player.queue.insert(target_index, t)
+        return _added_embed(
+            self.track, target_index + 1, len(self.player.queue),
+            title="📍  Position aktualisiert",
+            footer="Passt? Sonst nochmal verschieben.",
+        )
+
+    @discord.ui.button(label="Als Nächstes", emoji="⏭️", style=discord.ButtonStyle.primary)
+    async def _next(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        emb = self.apply_move(0)
+        if emb is None:
+            await interaction.response.edit_message(embed=_gone_embed(self.track), view=None)
+            self.stop()
+            return
+        await interaction.response.edit_message(embed=emb, view=self)
+
+    @discord.ui.button(label="Position wählen", emoji="📍", style=discord.ButtonStyle.secondary)
+    async def _choose(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self._index() is None:
+            await interaction.response.edit_message(embed=_gone_embed(self.track), view=None)
+            self.stop()
+            return
+        await interaction.response.send_modal(_PositionModal(self))
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 # --- Oeffentlicher Einstieg ----------------------------------------------
-async def handle(message: discord.Message) -> str | None:
+async def handle(message: discord.Message) -> "str | discord.Embed | object | None":
     """Prueft, ob die Nachricht ein Musik-Befehl ist, und fuehrt ihn aus.
 
     Rueckgabe:
-    - str  -> es war ein Musik-Befehl; der String ist die Antwort an den Chat.
-    - None -> kein Musik-Befehl; die KI soll uebernehmen.
+    - discord.Embed -> es war ein Musik-Befehl; bot.py schickt das Embed.
+    - HANDLED        -> das Modul hat selbst geantwortet (Embed + Buttons).
+    - None           -> kein Musik-Befehl; die KI soll uebernehmen.
     """
     if not _enabled or message.guild is None:
         return None
@@ -645,70 +870,74 @@ async def handle(message: discord.Message) -> str | None:
             player.voice.source, discord.PCMVolumeTransformer
         ):
             player.voice.source.volume = player.volume  # live anwenden
-        return f"🔊 Lautstärke: {new}%."
+        bar = "🔉" if new < 50 else ("🔊" if new <= 100 else "📢")
+        return _embed(f"Lautstärke steht jetzt auf **{new}%**.",
+                      title=f"{bar}  Lautstärke", color=_COL_CTRL)
 
     if action in ("stop", "leave"):
         if player.voice is None or not player.voice.is_connected():
-            return "Ich bin gerade in keinem Sprachkanal."
+            return _embed("Ich bin gerade in keinem Sprachkanal.", color=_COL_ERR)
         await player.disconnect()
-        return "⏹️ Gestoppt und raus aus dem Sprachkanal."
+        return _embed("Musik gestoppt, Warteschlange geleert und raus aus dem Sprachkanal.",
+                      title="⏹️  Gestoppt", color=_COL_INFO)
 
     if action == "skip":
         if not player.is_active():
-            return "Ich spiele gerade nichts."
+            return _embed("Ich spiele gerade nichts.", color=_COL_ERR)
+        skipped = player.current.title if player.current else ""
         player.voice.stop()  # type: ignore[union-attr]  -> loest _after -> naechster Track
-        return "⏭️ Übersprungen."
+        desc = f"**{_short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
+        return _embed(desc, title="⏭️  Skip", color=_COL_CTRL)
 
     if action == "pause":
         if player.voice is None or not player.voice.is_playing():
-            return "Ich spiele gerade nichts."
+            return _embed("Ich spiele gerade nichts.", color=_COL_ERR)
         player.voice.pause()
-        return "⏸️ Pausiert. (`Flo weiter` zum Fortsetzen)"
+        return _embed(f"Pausiert. Sag `{_bot_name} weiter`, wenn's weitergehen soll.",
+                      title="⏸️  Pause", color=_COL_CTRL)
 
     if action == "resume":
         if player.voice is None or not player.voice.is_paused():
-            return "Da ist nichts pausiert."
+            return _embed("Da ist nichts pausiert.", color=_COL_ERR)
         player.voice.resume()
-        return "▶️ Weiter geht's."
+        return _embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
 
     if action == "queue":
         if not player.current and not player.queue:
-            return "Die Warteschlange ist leer."
-        lines = []
-        if player.current:
-            lines.append(f"▶️ Jetzt: **{player.current.title}**")
-        for i, t in enumerate(player.queue[:10], start=1):
-            lines.append(f"{i}. {t.title}")
-        if len(player.queue) > 10:
-            lines.append(f"... und {len(player.queue) - 10} weitere")
-        return "\n".join(lines)
+            return _embed("Die Warteschlange ist leer – wirf was rein!",
+                          title="🎶  Warteschlange", color=_COL_INFO)
+        return _queue_embed(player)
 
     if action == "join":
         # Nur in den Sprachkanal kommen (ohne etwas abzuspielen).
         voice_state = getattr(message.author, "voice", None)
         if voice_state is None or voice_state.channel is None:
-            return "Geh erst in einen Sprachkanal, dann komme ich dazu."
+            return _embed("Geh erst in einen Sprachkanal, dann komme ich dazu.", color=_COL_ERR)
         try:
             await player.connect(voice_state.channel)
         except RuntimeError as exc:  # discord.py >= 2.7 ohne davey
             log.error("Voice nicht moeglich (join): %s", exc)
-            return ("Voice ist hier gerade nicht eingerichtet "
-                    "(auf dem Server fehlt vermutlich `davey`).")
+            return _embed("Voice ist hier gerade nicht eingerichtet "
+                          "(auf dem Server fehlt vermutlich `davey`).", color=_COL_ERR)
         except discord.ClientException as exc:
             log.error("Voice-Connect (join) fehlgeschlagen: %s", exc)
-            return "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?)."
-        return f"👋 Bin da in **{voice_state.channel.name}**. Sag z. B. `{_bot_name} spiel <song>`."
+            return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                          color=_COL_ERR)
+        return _embed(f"Bin da in **{voice_state.channel.name}**. "
+                      f"Sag z. B. `{_bot_name} spiel <song>`.",
+                      title="👋  Eingeklinkt", color=_COL_PLAY)
 
     # --- Abspielen: Nutzer muss im Sprachkanal sein ---
     voice_state = getattr(message.author, "voice", None)
     if voice_state is None or voice_state.channel is None:
-        return "Geh erst in einen Sprachkanal, dann spiele ich dort."
+        return _embed("Geh erst in einen Sprachkanal, dann spiele ich dort.", color=_COL_ERR)
 
     # --- Mehrere Songs auf einmal (Spotify-Album / YouTube-Playlist) ---
     if action == "spotify_album":
         queries = await _spotify_list_tracks(arg)
         if not queries:
-            return "Das Spotify-Album konnte ich nicht laden (Token, privat oder leer?)."
+            return _embed("Das Spotify-Album konnte ich nicht laden (Token, privat oder leer?).",
+                          color=_COL_ERR)
         items = [(f"ytsearch1:{q}", q) for q in queries]
         return await _play_many(
             player, voice_state.channel, items,
@@ -718,9 +947,11 @@ async def handle(message: discord.Message) -> str | None:
     if action == "spotify_playlist":
         queries = await _spotify_playlist_via_embed(arg)
         if not queries:
-            return ("An diese Spotify-**Playlist** komme ich nicht ran - Spotify sperrt "
-                    "den Playlist-Zugriff fuer Bots. Was sicher geht: ein Spotify-"
-                    "**Album**, ein einzelner Song-Link oder eine **YouTube-Playlist**.")
+            return _embed(
+                "An diese Spotify-**Playlist** komme ich nicht ran – Spotify sperrt den "
+                "Playlist-Zugriff für Bots. Was sicher geht: ein Spotify-**Album**, ein "
+                "einzelner Song-Link oder eine **YouTube-Playlist**.",
+                title="🚫  Playlist gesperrt", color=_COL_ERR)
         items = [(f"ytsearch1:{q}", q) for q in queries]
         return await _play_many(
             player, voice_state.channel, items,
@@ -730,21 +961,23 @@ async def handle(message: discord.Message) -> str | None:
     if action == "yt_playlist":
         entries = await _youtube_playlist(arg)
         if not entries:
-            return "Die YouTube-Playlist konnte ich nicht laden (leer oder privat?)."
+            return _embed("Die YouTube-Playlist konnte ich nicht laden (leer oder privat?).",
+                          color=_COL_ERR)
         return await _play_many(
             player, voice_state.channel, entries,
             message.author.display_name, "aus der Playlist",
         )
 
     if len(player.queue) >= MAX_QUEUE:
-        return f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz."
+        return _embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
 
     # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
     try:
         if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
             query = await _spotify_to_query(arg)
             if not query:
-                return "Den Spotify-Link konnte ich nicht auflesen (Keys/Token?)."
+                return _embed("Den Spotify-Link konnte ich nicht auflösen (Keys/Token?).",
+                              color=_COL_ERR)
             track = await _extract(f"ytsearch1:{query}")
         elif action == "play":
             track = await _extract(arg)
@@ -752,7 +985,8 @@ async def handle(message: discord.Message) -> str | None:
             track = await _extract(f"ytsearch1:{arg}")
     except Exception:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
         log.exception("Track konnte nicht aufgeloest werden: %s", arg)
-        return "Den Song konnte ich nicht laden. Probier einen anderen Link oder Suchbegriff."
+        return _embed("Den Song konnte ich nicht laden. Probier einen anderen Link "
+                      "oder Suchbegriff.", color=_COL_ERR)
 
     track.requested_by = message.author.display_name
 
@@ -760,10 +994,26 @@ async def handle(message: discord.Message) -> str | None:
         await player.connect(voice_state.channel)
     except discord.ClientException as exc:
         log.error("Voice-Connect fehlgeschlagen: %s", exc)
-        return "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?)."
+        return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                      color=_COL_ERR)
 
+    # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
+    # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
     if player.is_active():
         player.queue.append(track)
-        return f"➕ In die Warteschlange (#{len(player.queue)}): **{track.title}**"
+        pos = len(player.queue)
+        if pos >= 2:
+            view = QueuePositionView(player, track, message.author.id)
+            emb = _added_embed(track, pos, pos,
+                               footer="⏭️ = als Nächstes · 📍 = Position wählen")
+            try:
+                view.message = await message.reply(embed=emb, view=view, mention_author=False)
+            except discord.HTTPException as exc:
+                log.error("Queue-Embed mit Buttons fehlgeschlagen: %s", exc)
+                return emb  # Notfall: wenigstens das Embed ohne Buttons
+            log.info("In Warteschlange (#%d) + Position-Buttons: %s", pos, track.title)
+            return HANDLED
+        return _added_embed(track, pos, pos)
+
     player.start(track)
-    return f"▶️ Spiele: **{track.title}**"
+    return _now_playing_embed(track, len(player.queue))
