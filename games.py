@@ -14,6 +14,7 @@ Fragenkatalog. Alles andere laeuft auch ganz ohne KI.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -38,7 +39,9 @@ COUNTING_CHANNEL_ID = int(os.getenv("COUNTING_CHANNEL_ID", "0") or "0")
 
 # Zufalls-Events: bot.py ruft maybe_event() im Takt; das ist die Chance pro Aufruf.
 EVENT_CHANCE = float(os.getenv("GAMES_EVENT_CHANCE", "0.15"))
-EVENT_CHANNEL_ID = int(os.getenv("GAMES_EVENT_CHANNEL_ID", "0") or "0")
+# Default: der Commands-Channel (wird eh automatisch aufgeraeumt, da gehoeren die
+# kurzlebigen Tipp-Events hin). Per ENV ueberschreibbar.
+EVENT_CHANNEL_ID = int(os.getenv("GAMES_EVENT_CHANNEL_ID", "1512045750362837013") or "0")
 
 QUIZ_REWARD = 50
 QUIZ_TIMEOUT = 30           # Sekunden bis zur Aufloesung
@@ -549,6 +552,29 @@ async def maybe_event(guild: discord.Guild) -> None:
             f"schnappt sich **{EVENT_REWARD} Flo Coins**! (du hast {EVENT_TIMEOUT}s)")
     except discord.HTTPException:
         _event.pop(channel.id, None)
+        return
+    # Watchdog: meldet 'Zeit vorbei', falls bis zum Ablauf niemand getroffen hat.
+    _spawn(_event_timeout(channel, tok))
+
+
+async def _event_timeout(channel: discord.abc.Messageable, token: int) -> None:
+    """Wartet die Event-Dauer ab. Ist die Runde dann noch offen (niemand hat das
+    Wort getippt) und gehoert sie noch zu diesem Aufruf (gleicher Token), wird sie
+    geschlossen und 'Zeit vorbei' angesagt. Ein zwischenzeitlicher Gewinner hat das
+    Event laengst aus _event entfernt -> dann passiert hier nichts."""
+    await asyncio.sleep(EVENT_TIMEOUT)
+    cid = getattr(channel, "id", None)
+    runde = _event.get(cid)
+    if not runde or runde.get("token") != token:
+        return  # schon gewonnen oder durch eine neue Runde ersetzt
+    _event.pop(cid, None)
+    wort = runde.get("display", runde["word"])
+    try:
+        await channel.send(
+            f"⏰ **Zeit vorbei!** Niemand hat **{wort}** rechtzeitig getippt. "
+            f"Die {runde['reward']} Flo Coins bleiben im Topf.")
+    except discord.HTTPException:
+        pass
 
 
 def _pick_event_channel(guild: discord.Guild):
@@ -574,7 +600,22 @@ async def _check_event(message: discord.Message) -> bool:
         return False
     # Treffer, wenn die Nachricht genau das gesuchte Wort ist - Gross/Klein,
     # Satzzeichen und Umlaut-Schreibweise (ae/oe/ue/ss) sind egal.
-    if _fold(message.content or "") != runde["word"]:
+    content = message.content or ""
+    folded = _fold(content)
+    if folded != runde["word"]:
+        # Kein Treffer. War es ein knapper Fehlversuch? (Ein einzelnes Wort, das
+        # dem gesuchten sehr aehnlich ist - also vertippt.) Dann kurz 'falsch
+        # geschrieben' melden. Normale Chat-Saetze (mehrere Woerter) ignorieren wir.
+        if (folded and len(content.split()) == 1
+                and difflib.SequenceMatcher(None, folded, runde["word"]).ratio() >= 0.6):
+            try:
+                await message.channel.send(
+                    f"❌ {message.author.mention} – fast! **{content.strip()}** ist "
+                    f"falsch geschrieben. Tipp das Wort nochmal *genau* richtig! ⏳",
+                    delete_after=8)
+            except discord.HTTPException:
+                pass
+            return True  # Fehlversuch 'verbraucht' -> nicht an die KI weiterreichen
         return False
     _event.pop(cid, None)  # erster Treffer gewinnt -> Runde sofort schliessen
     belohnung = ""

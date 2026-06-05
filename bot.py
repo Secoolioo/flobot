@@ -269,9 +269,12 @@ def _build_help() -> discord.Embed:
         )
     if MOD_ENABLED:
         emb.add_field(
-            name="🧹 Aufräumen · nur Admins",
-            value=(f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} clear 20`\n"
-                   f"Braucht das Recht *Nachrichten verwalten* · angepinnte bleiben"),
+            name="🛡️ Moderation · nur Team",
+            value=(f"`{name} warn @x Grund` · `{name} warns @x` · `{name} unwarn @x`\n"
+                   f"`{name} timeout @x 10m Grund` · `{name} untimeout @x` (auch *mute*)\n"
+                   f"`{name} kick @x Grund` · `{name} ban @x Grund` · `{name} unban <ID>`\n"
+                   f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} nuke`\n"
+                   f"Jede Aktion prüft deine **und** Flos Rechte · angepinnte bleiben beim Löschen"),
             inline=False,
         )
     if AI_ENABLED:
@@ -289,14 +292,15 @@ def _build_help() -> discord.Embed:
 def invite_url() -> str:
     """OAuth2-Einladungslink mit den noetigen Rechten.
 
-    permissions=76832 = Kanal ansehen (1024) + Nachrichten senden (2048) +
-    'Server verwalten' (32, fuers Icon) + 'Nachrichten verwalten' (8192, fuers
-    Auto-Loeschen/Purge) + 'Nachrichtenverlauf anzeigen' (65536, noetig, damit
-    der Bot beim Loeschen den Verlauf lesen kann).
+    permissions=1099511704614 = Kanal ansehen (1024) + Nachrichten senden (2048)
+    + 'Server verwalten' (32, fuers Icon) + 'Nachrichten verwalten' (8192, fuers
+    Auto-Loeschen/Purge) + 'Nachrichtenverlauf anzeigen' (65536, fuers Loeschen)
+    + 'Mitglieder kicken' (2) + 'Mitglieder bannen' (4) + 'Mitglieder im Timeout'
+    (1099511627776, fuer Timeout/Mute). Summe = 1099511704614.
     """
     return (
         f"https://discord.com/oauth2/authorize?client_id={APPLICATION_ID}"
-        "&permissions=76832&scope=bot"
+        "&permissions=1099511704614&scope=bot"
     )
 
 
