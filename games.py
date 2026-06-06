@@ -26,9 +26,13 @@ import discord
 
 import ai
 import economy
+import render
 from store import JsonStore
 
 log = logging.getLogger("dcbot.games")
+
+# Sentinel: games hat selbst geantwortet (Bild/Embed) -> bot.py schweigt.
+HANDLED = object()
 
 _enabled: bool = False
 _bot_name: str = "Flo"
@@ -64,6 +68,54 @@ def _spawn(coro) -> None:
     task.add_done_callback(_bg.discard)
 
 
+# --- Auto-Loesch-Schutz + Bild-/Text-Versand ----------------------------
+def _protect(msg) -> None:
+    """Meldet eine laufende Spiel-Nachricht (Quiz/Zahlenraten) beim Auto-Loesch-
+    Schutz an, damit sie im #commands-Channel nicht mitten in der Runde
+    verschwindet. Lazy-Import von bot wegen Zirkel-Import."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.protect_message(msg)
+    except Exception:
+        pass
+
+
+def _release(msg) -> None:
+    """Gibt eine geschuetzte Spiel-Nachricht wieder frei (Runde vorbei / keine
+    Reaktion mehr) -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:
+        pass
+
+
+async def _say(message: discord.Message, text: str):
+    """Schickt eine Text-Antwort als Reply und gibt die Nachricht zurueck."""
+    try:
+        return await message.reply(text, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Spiel-Nachricht konnte nicht gesendet werden")
+        return None
+
+
+async def _send_image(message: discord.Message, emb: discord.Embed,
+                      buf, fname: str) -> object:
+    """Schickt ein Spiel-Bild als Reply (Embed mit Anhang). Gibt HANDLED zurueck,
+    damit bot.py nicht zusaetzlich antwortet."""
+    emb.set_image(url=f"attachment://{fname}")
+    try:
+        await message.reply(embed=emb, file=discord.File(buf, filename=fname),
+                            mention_author=False)
+    except discord.HTTPException:
+        log.exception("Spiel-Bild konnte nicht gesendet werden")
+    return HANDLED
+
+
 def setup() -> bool:
     global _enabled, _bot_name, _store, _event_words
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
@@ -97,7 +149,7 @@ def _new_token(channel_id: int) -> int:
 
 
 # --- Befehle -------------------------------------------------------------
-async def handle(message: discord.Message) -> str | None:
+async def handle(message: discord.Message) -> "str | object | None":
     if not _enabled or message.guild is None:
         return None
     cmd = _clean_lead(message.content or "")
@@ -110,7 +162,7 @@ async def handle(message: discord.Message) -> str | None:
     if first in ("quiz", "trivia", "quizzz"):
         return await _start_quiz(message)
     if first in ("zahlenraten", "raten", "errate"):
-        return _start_guess(message)
+        return await _start_guess(message)
     if first in ("ssp", "schnickschnack", "rps", "sss"):
         return await _ssp(message, args)
     if first in ("coinflip", "münzwurf", "muenzwurf", "flip", "münze", "muenze"):
@@ -118,7 +170,7 @@ async def handle(message: discord.Message) -> str | None:
     if first in ("slot", "slots", "spielautomat", "automat"):
         return await _slot(message, args)
     if first in ("würfel", "wuerfel", "würfeln", "wuerfeln", "dice", "roll", "w6"):
-        return _dice(args)
+        return await _dice(message, args)
     return None
 
 
@@ -153,71 +205,95 @@ async def _ssp(message: discord.Message, args: list[str]) -> str:
 
 
 # --- Coinflip ------------------------------------------------------------
-async def _coinflip(message: discord.Message, args: list[str]) -> str:
+async def _coinflip(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
     bet = _extract_int(args)
     seite = next((a.lower() for a in args
                   if a.lower() in ("kopf", "zahl", "heads", "tails")), None)
     ergebnis = random.choice(["kopf", "zahl"])
-    sym = "👑" if ergebnis == "kopf" else "🔢"
 
-    if bet and economy.is_enabled():
+    note, color = "", discord.Color.blurple()
+    spielt_um_coins = bool(bet) and economy.is_enabled()
+    if spielt_um_coins:
         if not seite:
             return f"Auf was setzt du? `{_bot_name} coinflip {bet} kopf` (oder zahl)."
+        if economy.get_coins(uid) < bet:
+            return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
         tip = "kopf" if seite in ("kopf", "heads") else "zahl"
-        if economy.get_coins(message.author.id) < bet:
-            return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} Flo Coins."
         if tip == ergebnis:
-            economy.add_coins(message.author.id, bet)
+            economy.add_coins(uid, bet)
             await economy.flush()
-            return f"{sym} **{ergebnis.upper()}** — gewonnen! +{bet} Flo Coins. 🎉"
-        economy.add_coins(message.author.id, -bet)
-        await economy.flush()
-        return f"{sym} **{ergebnis.upper()}** — verloren! -{bet} Flo Coins. 😬"
-    return f"{sym} Die Münze zeigt: **{ergebnis.upper()}**!"
+            note, color = f"Gewonnen! **+{bet}** Flo Coins 🎉", discord.Color.green()
+        else:
+            economy.add_coins(uid, -bet)
+            await economy.flush()
+            note, color = f"Verloren! **-{bet}** Flo Coins 😬", discord.Color.red()
+
+    emb = discord.Embed(
+        title="🪙 Münzwurf",
+        description=f"Die Münze zeigt: **{ergebnis.upper()}**!" + (f"\n{note}" if note else ""),
+        color=color)
+    if spielt_um_coins:
+        emb.set_footer(text=f"Konto: {economy.get_coins(uid)} Flo Coins")
+    fn = f"coin_{uid}_{random.randint(1000, 9999)}.png"
+    return await _send_image(message, emb, render.coin_flip(ergebnis), fn)
 
 
 # --- Slot-Machine --------------------------------------------------------
-_SLOT_REELS = ["🍒", "🍋", "🔔", "🍉", "⭐", "💎", "🗿"]
-_SLOT_PAYOUT = {  # drei Gleiche -> Faktor auf den Einsatz
-    "🗿": 25, "💎": 15, "⭐": 10, "🔔": 7, "🍉": 5, "🍋": 4, "🍒": 3,
+# Symbol-Schluessel kommen aus render.SLOT_KEYS (werden dort gezeichnet).
+_SLOT_PAYOUT = {  # drei Gleiche -> Faktor auf den Einsatz (fallend wie SLOT_KEYS)
+    "seven": 25, "diamond": 15, "star": 10, "bar": 7,
+    "grape": 5, "lemon": 4, "cherry": 3,
 }
 
 
-async def _slot(message: discord.Message, args: list[str]) -> str:
+async def _slot(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
     bet = _extract_int(args) or 0
     use_coins = bet > 0 and economy.is_enabled()
-    if use_coins and economy.get_coins(message.author.id) < bet:
-        return f"Du hast nicht genug. Konto: {economy.get_coins(message.author.id)} Flo Coins."
+    if use_coins and economy.get_coins(uid) < bet:
+        return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
 
-    reels = [random.choice(_SLOT_REELS) for _ in range(3)]
-    line = " | ".join(reels)
-    win = 0
-    if reels[0] == reels[1] == reels[2]:
-        win = (bet or 10) * _SLOT_PAYOUT[reels[0]]
-        text = f"🎰 [ {line} ]\n**JACKPOT!** {reels[0]*3}"
-    elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-        win = (bet or 10) * 2
-        text = f"🎰 [ {line} ]\nZwei Gleiche — kleiner Gewinn!"
+    keys = [random.choice(render.SLOT_KEYS) for _ in range(3)]
+    jackpot = keys[0] == keys[1] == keys[2]
+    zwei = (not jackpot) and (keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2])
+    basis = bet if bet > 0 else 10
+    if jackpot:
+        win = basis * _SLOT_PAYOUT[keys[0]]
+    elif zwei:
+        win = basis * 2
     else:
-        text = f"🎰 [ {line} ]\nNix. Versuch's nochmal!"
+        win = 0
 
+    # Coins verbuchen: mit Einsatz wird netto verrechnet; ohne Einsatz gibt es den
+    # Gewinn (falls economy an) geschenkt - wie bisher.
+    if use_coins:
+        economy.add_coins(uid, win - bet)
+        await economy.flush()
+    elif win and economy.is_enabled():
+        economy.add_coins(uid, win)
+        await economy.flush()
+
+    if jackpot:
+        desc, color = "🎉 **JACKPOT!** Drei Gleiche!", discord.Color.gold()
+    elif zwei:
+        desc, color = "Zwei Gleiche — kleiner Gewinn!", discord.Color.green()
+    else:
+        desc, color = "Leider nichts. Versuch's nochmal!", discord.Color.greyple()
+    emb = discord.Embed(title="🎰 Slot-Machine", description=desc, color=color)
     if use_coins:
         net = win - bet
-        economy.add_coins(message.author.id, net)
-        await economy.flush()
-        if net > 0:
-            text += f"\n+{net} Flo Coins (Konto: {economy.get_coins(message.author.id)})"
-        else:
-            text += f"\n-{bet} Flo Coins (Konto: {economy.get_coins(message.author.id)})"
+        emb.set_footer(text=f"{'+' if net >= 0 else ''}{net} Flo Coins  ·  "
+                            f"Konto: {economy.get_coins(uid)}")
     elif win and economy.is_enabled():
-        economy.add_coins(message.author.id, win)
-        await economy.flush()
-        text += f"\n+{win} Flo Coins"
-    return text
+        emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {economy.get_coins(uid)}")
+    fn = f"slot_{uid}_{random.randint(1000, 9999)}.png"
+    return await _send_image(message, emb,
+                             render.slot_machine(keys, win=win, jackpot=jackpot), fn)
 
 
 # --- Wuerfel -------------------------------------------------------------
-def _dice(args: list[str]) -> str:
+async def _dice(message: discord.Message, args: list[str]) -> object:
     count, sides = 1, 6
     if args:
         m = re.fullmatch(r"(\d*)d(\d+)", args[0].lower())
@@ -230,8 +306,12 @@ def _dice(args: list[str]) -> str:
     sides = max(2, min(sides, 1000))
     rolls = [random.randint(1, sides) for _ in range(count)]
     if count == 1:
-        return f"🎲 Du würfelst eine **{rolls[0]}** (W{sides})."
-    return f"🎲 {count}×W{sides}: {' + '.join(map(str, rolls))} = **{sum(rolls)}**"
+        desc = f"Du würfelst eine **{rolls[0]}**  (W{sides})."
+    else:
+        desc = f"{count}×W{sides}:  {' + '.join(map(str, rolls))}  =  **{sum(rolls)}**"
+    emb = discord.Embed(title="🎲 Würfel", description=desc, color=discord.Color.blurple())
+    fn = f"dice_{message.author.id}_{random.randint(1000, 9999)}.png"
+    return await _send_image(message, emb, render.dice_roll(rolls, sides), fn)
 
 
 def _extract_int(args: list[str]) -> int | None:
@@ -256,7 +336,7 @@ _QUIZ_BANK = [
 ]
 
 
-async def _start_quiz(message: discord.Message) -> str:
+async def _start_quiz(message: discord.Message) -> object:
     cid = message.channel.id
     if cid in _quiz and _quiz[cid]["expires"] > time.monotonic():
         return "Hier läuft schon ein Quiz - erst antworten! 🤓"
@@ -277,10 +357,12 @@ async def _start_quiz(message: discord.Message) -> str:
         frage, antwort = random.choice(_QUIZ_BANK)
 
     tok = _new_token(cid)
+    msg = await _say(message, f"🧠 **Quiz!** (du hast {QUIZ_TIMEOUT}s)\n{frage}")
     _quiz[cid] = {"answer": antwort, "frage": frage,
-                  "expires": time.monotonic() + QUIZ_TIMEOUT, "token": tok}
+                  "expires": time.monotonic() + QUIZ_TIMEOUT, "token": tok, "msg": msg}
+    _protect(msg)   # laeuft -> nicht vom Auto-Loeschen wegraeumen lassen
     _spawn(_quiz_timeout(message.channel, tok))
-    return f"🧠 **Quiz!** (du hast {QUIZ_TIMEOUT}s)\n{frage}"
+    return HANDLED
 
 
 def _parse_quiz_json(raw: str | None) -> tuple[str, str]:
@@ -310,6 +392,7 @@ async def _quiz_timeout(channel, token: int) -> None:
     if not runde or runde.get("token") != token:
         return
     _quiz.pop(cid, None)
+    _release(runde.get("msg"))   # keine Antwort gekommen -> Frage freigeben
     try:
         await channel.send(f"⏰ Zeit um! Die Antwort war: **{runde['answer']}**")
     except discord.HTTPException:
@@ -330,6 +413,7 @@ async def _check_quiz(message: discord.Message) -> bool:
         return False
     _quiz.pop(cid, None)
     _new_token(cid)  # evtl. laufenden Timeout entwerten
+    _release(runde.get("msg"))   # richtig beantwortet -> Frage freigeben
     reward = ""
     if economy.is_enabled():
         economy.add_coins(message.author.id, QUIZ_REWARD)
@@ -346,15 +430,35 @@ async def _check_quiz(message: discord.Message) -> bool:
 
 
 # --- Zahlenraten ---------------------------------------------------------
-def _start_guess(message: discord.Message) -> str:
+async def _start_guess(message: discord.Message) -> object:
     cid = message.channel.id
     if cid in _guess and _guess[cid]["expires"] > time.monotonic():
         return "Hier läuft schon eine Raterunde - rate weiter! 🔢"
     number = random.randint(1, 100)
+    tok = _new_token(cid)
+    msg = await _say(message, "🔢 Ich denke an eine Zahl zwischen **1 und 100**. "
+                              "Schreib deine Tipps einfach in den Chat!")
     _guess[cid] = {"number": number, "tries": 0,
-                   "expires": time.monotonic() + GUESS_TIMEOUT}
-    return ("🔢 Ich denke an eine Zahl zwischen **1 und 100**. "
-            "Schreib deine Tipps einfach in den Chat!")
+                   "expires": time.monotonic() + GUESS_TIMEOUT, "token": tok, "msg": msg}
+    _protect(msg)   # laeuft (bis zu 90s) -> nicht wegraeumen lassen
+    _spawn(_guess_timeout(message.channel, tok))
+    return HANDLED
+
+
+async def _guess_timeout(channel, token: int) -> None:
+    """Beendet eine Raterunde nach GUESS_TIMEOUT, falls niemand getroffen hat:
+    sagt die Zahl an und gibt die geschuetzte Start-Nachricht wieder frei."""
+    await asyncio.sleep(GUESS_TIMEOUT)
+    cid = getattr(channel, "id", None)
+    runde = _guess.get(cid)
+    if not runde or runde.get("token") != token:
+        return  # schon erraten oder neue Runde
+    _guess.pop(cid, None)
+    _release(runde.get("msg"))
+    try:
+        await channel.send(f"⏰ Zeit um! Die Zahl war **{runde['number']}**.")
+    except discord.HTTPException:
+        pass
 
 
 async def _check_guess(message: discord.Message) -> bool:
@@ -367,12 +471,15 @@ async def _check_guess(message: discord.Message) -> bool:
         return False
     if runde["expires"] < time.monotonic():
         _guess.pop(cid, None)
+        _release(runde.get("msg"))
         return False
     tip = int(text)
     runde["tries"] += 1
     ziel = runde["number"]
     if tip == ziel:
         _guess.pop(cid, None)
+        _new_token(cid)              # Watchdog entwerten
+        _release(runde.get("msg"))   # erraten -> Start-Nachricht freigeben
         tries = runde["tries"]
         reward = max(10, 120 - tries * 10)
         extra = ""

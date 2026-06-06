@@ -68,6 +68,17 @@ AUTODELETE_CHANNEL_IDS = {
 # ALLES, was aelter als AUTODELETE_SECONDS ist (ausser Level-Ups + Angepinntes).
 AUTODELETE_SWEEP_SECONDS = float(os.getenv("AUTODELETE_SWEEP_SECONDS", "30"))
 
+# Schutz aktiver Spiele vorm Auto-Loeschen: Solange ein Spiel laeuft (Blackjack,
+# Crash/Keno/Roulette mit 'Nochmal'-Buttons, Casino-Menue, Quiz, Zahlenraten),
+# darf seine Nachricht NICHT weggeraeumt werden - erst wenn keine Reaktion mehr
+# kommt (View-Timeout / Runde vorbei). Die Spiel-Module melden ihre Nachrichten
+# ueber protect_message() an und mit release_message() wieder ab. Nach dem
+# Abmelden bleibt die Nachricht noch eine kurze Gnadenfrist sichtbar und wird
+# dann geloescht.
+PROTECT_RELEASE_GRACE = float(os.getenv("PROTECT_RELEASE_GRACE", "12"))
+PROTECTED_MSG_IDS: set[int] = set()   # IDs aktiver Spiel-Nachrichten (nicht loeschen)
+_releasing_ids: set[int] = set()      # laufen gerade durch ihre Gnadenfrist
+
 # KI-Feature ('Flo') initialisieren - liest ANTHROPIC_API_KEY etc. aus der .env.
 # Ohne API-Key bleibt das Feature aus und der Bot laeuft wie gehabt weiter.
 AI_ENABLED = ai.setup()
@@ -631,9 +642,12 @@ async def event_loop() -> None:
 
 def _sweepable(m: discord.Message) -> bool:
     """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen
-    des Bots und angepinnte Nachrichten bleiben (wie beim Einzel-Auto-Loeschen)."""
+    des Bots, angepinnte Nachrichten und aktive Spiele bleiben (wie beim
+    Einzel-Auto-Loeschen)."""
     if m.pinned:
         return False
+    if m.id in PROTECTED_MSG_IDS:
+        return False    # laeuft noch (oder in der Gnadenfrist) -> nicht wegraeumen
     if (client.user is not None and m.author.id == client.user.id
             and m.embeds and m.embeds[0].title == economy.LEVELUP_EMBED_TITLE):
         return False
@@ -685,9 +699,13 @@ def _spawn(coro) -> None:
 
 
 async def _delete_after(message: discord.Message, delay: float) -> None:
-    """Loescht eine Nachricht nach 'delay' Sekunden (best effort)."""
+    """Loescht eine Nachricht nach 'delay' Sekunden (best effort). Steht die
+    Nachricht zu diesem Zeitpunkt noch unter Schutz (aktives Spiel), wird sie
+    NICHT geloescht - release_message() raeumt sie spaeter selbst auf."""
     try:
         await asyncio.sleep(delay)
+        if message.id in PROTECTED_MSG_IDS:
+            return  # aktives Spiel -> in Ruhe lassen
         await message.delete()
     except discord.NotFound:
         pass  # schon weg (manuell geloescht o. Ae.)
@@ -698,6 +716,49 @@ async def _delete_after(message: discord.Message, delay: float) -> None:
         )
     except discord.HTTPException as exc:
         log.warning("Auto-Loeschen fehlgeschlagen: %s", exc)
+
+
+def protect_message(message: "discord.Message | None") -> None:
+    """Meldet eine aktive Spiel-Nachricht beim Auto-Loesch-Schutz an. Nur in den
+    Auto-Loesch-Channels noetig (woanders wird ohnehin nichts geloescht). Von den
+    Spiel-Modulen (casino, games) aufgerufen, sobald eine Runde startet."""
+    if message is None or message.channel.id not in AUTODELETE_CHANNEL_IDS:
+        return
+    PROTECTED_MSG_IDS.add(message.id)
+
+
+def release_message(message: "discord.Message | None", *, delay: float | None = None) -> None:
+    """Spiel vorbei / keine Reaktion mehr -> Schutz nach kurzer Gnadenfrist
+    aufheben und die Nachricht dann wegraeumen. Bis dahin bleibt sie geschuetzt
+    (kein Sweep, kein vorzeitiges Loeschen). Mehrfachaufruf ist ungefaehrlich."""
+    if message is None or message.id not in PROTECTED_MSG_IDS:
+        return
+    if message.id in _releasing_ids:
+        return  # laeuft schon durch die Gnadenfrist
+    _releasing_ids.add(message.id)
+    grace = PROTECT_RELEASE_GRACE if delay is None else delay
+    _spawn(_release_after(message, grace))
+
+
+async def _release_after(message: discord.Message, delay: float) -> None:
+    """Wartet die Gnadenfrist ab, hebt dann den Schutz auf und loescht die
+    Nachricht (best effort)."""
+    try:
+        await asyncio.sleep(max(0.0, delay))
+    finally:
+        PROTECTED_MSG_IDS.discard(message.id)
+        _releasing_ids.discard(message.id)
+    try:
+        await message.delete()
+    except discord.NotFound:
+        pass
+    except discord.Forbidden:
+        log.warning(
+            "Auto-Loeschen (Spielende): mir fehlt 'Nachrichten verwalten' in #%s.",
+            getattr(message.channel, "name", message.channel.id),
+        )
+    except discord.HTTPException as exc:
+        log.warning("Auto-Loeschen (Spielende) fehlgeschlagen: %s", exc)
 
 
 @client.event
@@ -802,8 +863,9 @@ async def on_message(message: discord.Message) -> None:
                 break
 
     if antwort is not None:
-        if antwort is moderation.HANDLED or antwort is music.HANDLED or antwort is casino.HANDLED:
-            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik- / Casino-Buttons).
+        if (antwort is moderation.HANDLED or antwort is music.HANDLED
+                or antwort is casino.HANDLED or antwort is games.HANDLED):
+            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):

@@ -31,6 +31,31 @@ log = logging.getLogger("dcbot.casino")
 # Sentinel: Casino hat selbst geantwortet (Embed/Bild/Buttons) -> bot.py schweigt.
 HANDLED = object()
 
+
+def _protect(msg) -> None:
+    """Meldet eine laufende Spiel-Nachricht beim Auto-Loesch-Schutz an (damit sie
+    im #commands-Channel nicht mitten im Spiel verschwindet). Lazy-Import von bot,
+    um Zirkel-Importe zu vermeiden; faellt der Bot weg (Tests), passiert nichts."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.protect_message(msg)
+    except Exception:
+        pass
+
+
+def _release(msg) -> None:
+    """Gibt eine Spiel-Nachricht wieder frei (Runde vorbei / kein Reagieren mehr)
+    -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:
+        pass
+
 _enabled: bool = False
 _bot_name: str = "Flo"
 
@@ -135,10 +160,13 @@ async def _send(message: discord.Message, *, embed=None, file=None, view=None):
     if view is not None:
         kwargs["view"] = view
     try:
-        return await message.reply(**kwargs)
+        msg = await message.reply(**kwargs)
     except discord.HTTPException:
         log.exception("Casino-Antwort konnte nicht gesendet werden")
         return None
+    if view is not None:
+        _protect(msg)   # aktives Spiel -> vorm Auto-Loeschen schuetzen
+    return msg
 
 
 # --- Spielkarten ---------------------------------------------------------
@@ -395,6 +423,7 @@ class BlackjackView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+            _release(self.message)   # keine Reaktion mehr -> Nachricht freigeben
 
 
 async def _bj_deal(channel_id: int, uid: int, bet: int
@@ -550,7 +579,7 @@ def _parse_picks(s: str) -> list[int]:
 
 
 async def _play_keno(uid: int, bet: int, picks: list[int]
-                     ) -> tuple[discord.Embed, None]:
+                     ) -> tuple[discord.Embed, discord.File]:
     draw = random.sample(range(1, 41), 10)
     hits = sorted(set(picks) & set(draw))
     mult = _KENO_TABLE.get((len(picks), len(hits)), 0)
@@ -558,16 +587,18 @@ async def _play_keno(uid: int, bet: int, picks: list[int]
     if payout:
         economy.add_coins(uid, payout)
     await economy.flush()
-    color, fname, fval = _outcome(bet, payout)
-    drawn = " ".join(f"**__{n}__**" if n in hits else f"{n}" for n in sorted(draw))
-    pk = " ".join(f"**{n}**" if n in hits else f"~~{n}~~" for n in sorted(picks))
-    emb = discord.Embed(title="🎱 Keno", description=f"Gezogen: {drawn}", color=color)
+    color, res_name, res_val = _outcome(bet, payout)
+    fn = f"keno_{uid}_{random.randint(1000, 9999)}.png"
+    file = discord.File(render.keno_grid(picks, draw, hits), filename=fn)
+    emb = discord.Embed(
+        title="🎱 Keno",
+        description=f"**{len(hits)}** von **{len(picks)}** getroffen  →  Faktor **×{mult}**",
+        color=color)
     emb.set_author(name="🎰 Flo Casino")
-    emb.add_field(name="Deine Zahlen", value=pk, inline=False)
-    emb.add_field(name="Treffer", value=f"{len(hits)}/{len(picks)}  →  ×{mult}", inline=True)
-    emb.add_field(name=fname, value=fval, inline=True)
+    emb.add_field(name=res_name, value=res_val, inline=True)
+    emb.set_image(url=f"attachment://{fn}")
     emb.set_footer(text=_bal_footer(uid))
-    return emb, None
+    return emb, file
 
 
 async def _keno_command(message: discord.Message, args: list[str]) -> object:
@@ -588,9 +619,9 @@ async def _keno_command(message: discord.Message, args: list[str]) -> object:
             f"Tippe 1–8 Zahlen von 1 bis 40. z. B. `{_bot_name} keno {bet0} 3 7 12 21`"))
         return HANDLED
     economy.add_coins(uid, -bet0)
-    emb, _ = await _play_keno(uid, bet0, picks)
+    emb, file = await _play_keno(uid, bet0, picks)
     again = _AgainView(uid, "keno", {"bet": bet0, "picks": picks})
-    msg = await _send(message, embed=emb, view=again)
+    msg = await _send(message, embed=emb, file=file, view=again)
     if msg:
         again.message = msg
     return HANDLED
@@ -632,13 +663,15 @@ def _roulette_payout(target: str, bet: int, spin: int) -> tuple[int | None, str]
 
 
 async def _play_roulette(uid: int, bet: int, target: str
-                         ) -> tuple[discord.Embed, None]:
+                         ) -> tuple[discord.Embed, discord.File]:
     spin = random.randint(0, 36)
     payout, label = _roulette_payout(target, bet, spin)
     if payout:
         economy.add_coins(uid, payout)
     await economy.flush()
-    color, fname, fval = _outcome(bet, payout)
+    color, res_name, res_val = _outcome(bet, payout)
+    fn = f"roul_{uid}_{random.randint(1000, 9999)}.png"
+    file = discord.File(render.roulette_wheel(spin, payout > 0), filename=fn)
     spin_color = "🟢" if spin == 0 else ("🔴" if spin in _RED else "⚫")
     emb = discord.Embed(
         title="🎡 Roulette",
@@ -646,9 +679,10 @@ async def _play_roulette(uid: int, bet: int, target: str
         color=color,
     )
     emb.set_author(name="🎰 Flo Casino")
-    emb.add_field(name=fname, value=fval, inline=True)
+    emb.add_field(name=res_name, value=res_val, inline=True)
+    emb.set_image(url=f"attachment://{fn}")
     emb.set_footer(text=_bal_footer(uid))
-    return emb, None
+    return emb, file
 
 
 async def _roulette_command(message: discord.Message, args: list[str]) -> object:
@@ -671,9 +705,9 @@ async def _roulette_command(message: discord.Message, args: list[str]) -> object
             f"z. B. `{_bot_name} roulette {bet0} rot`"))
         return HANDLED
     economy.add_coins(uid, -bet0)
-    emb, _ = await _play_roulette(uid, bet0, target)
+    emb, file = await _play_roulette(uid, bet0, target)
     again = _AgainView(uid, "roulette", {"bet": bet0, "target": target})
-    msg = await _send(message, embed=emb, view=again)
+    msg = await _send(message, embed=emb, file=file, view=again)
     if msg:
         again.message = msg
     return HANDLED
@@ -732,6 +766,7 @@ class _BetModal(discord.ui.Modal):
             await interaction.response.send_message(embed=emb, file=file, view=view)
             msg = await interaction.original_response()
             view.message = msg
+            _protect(msg)
             if not ended:
                 _bj_views[(interaction.channel_id, uid)] = view
             return
@@ -748,6 +783,7 @@ class _BetModal(discord.ui.Modal):
             again = _AgainView(uid, "crash", {"bet": bet, "target": target})
             await interaction.response.send_message(embed=emb, file=file, view=again)
             again.message = await interaction.original_response()
+            _protect(again.message)
             return
 
         if self.kind == "keno":
@@ -757,10 +793,11 @@ class _BetModal(discord.ui.Modal):
                     "Tippe 1–8 Zahlen von 1 bis 40 (mit Leerzeichen).", ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
-            emb, _ = await _play_keno(uid, bet, picks)
+            emb, file = await _play_keno(uid, bet, picks)
             again = _AgainView(uid, "keno", {"bet": bet, "picks": picks})
-            await interaction.response.send_message(embed=emb, view=again)
+            await interaction.response.send_message(embed=emb, file=file, view=again)
             again.message = await interaction.original_response()
+            _protect(again.message)
             return
 
         if self.kind == "roulette":
@@ -772,10 +809,11 @@ class _BetModal(discord.ui.Modal):
                     ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
-            emb, _ = await _play_roulette(uid, bet, target)
+            emb, file = await _play_roulette(uid, bet, target)
             again = _AgainView(uid, "roulette", {"bet": bet, "target": target})
-            await interaction.response.send_message(embed=emb, view=again)
+            await interaction.response.send_message(embed=emb, file=file, view=again)
             again.message = await interaction.original_response()
+            _protect(again.message)
             return
 
 
@@ -820,8 +858,10 @@ class _AgainView(discord.ui.View):
             emb, file, view, ended = await _bj_deal(ch, uid, bet)
             await interaction.response.edit_message(embed=emb, view=view, attachments=[file])
             view.message = interaction.message
+            _protect(interaction.message)
             if not ended:
                 _bj_views[(ch, uid)] = view
+            self.stop()   # diese Nochmal-View ist abgeloest -> kein spaeterer Timeout/Release
             return
 
         emb, file = await _replay(uid, self.kind, params)
@@ -829,6 +869,8 @@ class _AgainView(discord.ui.View):
         attachments = [file] if file is not None else []
         await interaction.response.edit_message(embed=emb, view=again, attachments=attachments)
         again.message = interaction.message
+        _protect(interaction.message)
+        self.stop()   # alte View abloesen; die neue uebernimmt Timeout/Release
 
     @discord.ui.button(label="Einsatz ändern", emoji="✏️", style=discord.ButtonStyle.secondary)
     async def _change(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -845,6 +887,7 @@ class _AgainView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+            _release(self.message)   # keine Reaktion mehr -> Nachricht freigeben
 
 
 class CasinoHubView(discord.ui.View):
@@ -891,3 +934,4 @@ class CasinoHubView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
+            _release(self.message)   # keine Reaktion mehr -> Nachricht freigeben
