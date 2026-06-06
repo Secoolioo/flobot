@@ -42,6 +42,9 @@ log = logging.getLogger("dcbot")
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPLICATION_ID = os.getenv("APPLICATION_ID", "")
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+# Bot-Besitzer: nur diese Person darf den ganzen Bot per 'Flo restart' neu starten.
+# Standard = Secoolio; per .env (OWNER_ID) ueberschreibbar.
+OWNER_ID = int(os.getenv("OWNER_ID", "1040135855710404659") or "0")
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 IMAGE_DIR = Path(os.getenv("IMAGE_DIR", str(Path(__file__).resolve().parent)))
 CHECK_INTERVAL_SECONDS = float(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
@@ -208,16 +211,116 @@ def _is_help(content: str) -> bool:
     return bool(_HELP_RE.match(ai.strip_lead(content)))
 
 
-def _build_help() -> discord.Embed:
-    """Baut die Hilfe (als Embed) aus den AKTUELL aktiven Features zusammen."""
+# --- Neustart (nur Bot-Besitzer) -----------------------------------------
+_RESTART_RE = re.compile(
+    r"^(?:restart|reboot|neustart\w*|neu\s*starten?|neue?\s*starten?|starte?\s+neu)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_restart(content: str) -> bool:
+    """True bei 'Flo restart' / 'Flo neustarten' / 'Flo neu starten' usw."""
+    return bool(_RESTART_RE.match(ai.strip_lead(content)))
+
+
+async def _restart_bot() -> None:
+    """Startet den GANZEN Prozess neu (re-exec) - funktioniert lokal und unter
+    systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
+    schliessen, damit ffmpeg-Subprozesse nicht verwaisen."""
+    await asyncio.sleep(0.4)  # der Interaktions-Antwort Zeit zum Rausgehen geben
+    try:
+        await client.close()
+    except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
+        log.exception("Schliessen vor dem Neustart fehlgeschlagen")
+    argv = list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+    log.warning("Neustart per Re-exec: %s", " ".join(argv))
+    try:
+        os.execv(argv[0], argv)
+    except OSError:
+        # Fallback: sauber beenden (systemd 'Restart=' bringt ihn wieder hoch).
+        log.exception("Re-exec fehlgeschlagen - beende stattdessen mit Code 42.")
+        os._exit(42)
+
+
+class RestartConfirmView(discord.ui.View):
+    """Sicherheitsabfrage vor dem Neustart - nur der Bot-Besitzer darf klicken."""
+
+    def __init__(self, owner_id: int) -> None:
+        super().__init__(timeout=30)
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Nur mein Besitzer darf mich neu starten.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Ja, neu starten", emoji="🔄", style=discord.ButtonStyle.danger)
+    async def _yes(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="🔄 Neustart läuft …",
+                description="Bin gleich wieder da. Moment …",
+                color=discord.Color.orange()),
+            view=self)
+        log.warning("Neustart angefordert von %s (%s).",
+                    interaction.user, interaction.user.id)
+        self.stop()
+        _spawn(_restart_bot())
+
+    @discord.ui.button(label="Abbrechen", emoji="✖️", style=discord.ButtonStyle.secondary)
+    async def _no(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="Abgebrochen",
+                description="Kein Neustart – alles bleibt, wie es ist.",
+                color=discord.Color.greyple()),
+            view=None)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+# --- Interaktives Hilfe-Menue --------------------------------------------
+def _help_categories() -> "list[tuple[str, str, str]]":
+    """Liefert (key, emoji, label) je AKTIVEM Bereich - Reihenfolge = Button-Reihenfolge."""
+    cats = [
+        ("musik", "🎵", "Musik", MUSIC_ENABLED),
+        ("spiele", "🎮", "Spiele", GAMES_ENABLED),
+        ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
+        ("casino", "🎰", "Casino", CASINO_ENABLED),
+        ("chaos", "😈", "Chaos", FUN_ENABLED),
+        ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
+        ("mod", "🛡️", "Moderation", MOD_ENABLED),
+        ("ki", "💬", "KI", AI_ENABLED),
+    ]
+    return [(k, e, l) for k, e, l, on in cats if on]
+
+
+def _help_overview_embed() -> discord.Embed:
+    """Startansicht des Hilfe-Menues - darunter ein Button je Kategorie."""
     name = ai.bot_name()
     aliases = [n for n in ai.names() if n.lower() != name.lower()]
     anrede = f"`{name} ...`"
     if aliases:
         anrede += " oder " + " / ".join(f"`{a} ...`" for a in aliases)
     emb = discord.Embed(
-        title=f"🤖 {name} – Befehle",
-        description=f"Sprich mich mit {anrede} an. Das geht gerade:",
+        title=f"🤖 {name} – Hilfe",
+        description=(f"Sprich mich mit {anrede} an.\n"
+                     "Tippe unten auf eine **Kategorie** für die passenden Befehle. 👇"),
         color=discord.Color.blurple(),
     )
     if client.user is not None:
@@ -225,68 +328,169 @@ def _build_help() -> discord.Embed:
             emb.set_thumbnail(url=client.user.display_avatar.url)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
             pass
-    if MUSIC_ENABLED:
+    cats = _help_categories()
+    if cats:
         emb.add_field(
-            name="🎵 Musik",
-            value=(f"`{name} join` · `{name} spiel <link/suche>` · `{name} <youtube/spotify-link>` · "
-                   f"skip · pause · weiter · stop · queue · `{name} lautstärke 50`"),
+            name="Aktive Bereiche",
+            value="\n".join(f"{e}  **{l}**" for _k, e, l in cats),
             inline=False,
         )
-    if GAMES_ENABLED:
-        emb.add_field(
-            name="🎮 Spiele",
-            value=(f"`{name} quiz` · `{name} zahlenraten` · `{name} ssp schere` · "
-                   f"`{name} coinflip 50 kopf` · `{name} slot 20` · `{name} würfel 2d6`"),
-            inline=False,
-        )
-    if ECONOMY_ENABLED:
-        emb.add_field(
-            name="📈 Level & Flo Coins",
-            value=(f"`{name} level` · `{name} top` · `{name} coins` · `{name} daily` · "
-                   f"`{name} pay @x 100` · `{name} shop` · `{name} kaufen sigma` · "
-                   f"`{name} inventar` · `{name} titel sigma`"),
-            inline=False,
-        )
-    if CASINO_ENABLED:
-        emb.add_field(
-            name="🎰 Casino",
-            value=(f"`{name} casino` · `{name} blackjack 50` (dann `karte`/`stand`/`double`) · "
-                   f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · `{name} roulette 50 rot`"),
-            inline=False,
-        )
-    if FUN_ENABLED:
-        emb.add_field(
-            name="😈 Chaos",
-            value=(f"`{name} roast @x` · `{name} hype @x` · `{name} rate @x` · "
-                   f"`{name} rizz @x` · `{name} spruch` · `{name} horoskop`"),
-            inline=False,
-        )
-    if VOICE_GAGS_ENABLED:
-        emb.add_field(
-            name="🔊 Voice",
-            value=(f"`{name} sounds` · `{name} sound <name>` · `{name} sprich <text>`"),
-            inline=False,
-        )
-    if MOD_ENABLED:
-        emb.add_field(
-            name="🛡️ Moderation · nur Team",
-            value=(f"`{name} warn @x Grund` · `{name} warns @x` · `{name} unwarn @x`\n"
-                   f"`{name} timeout @x 10m Grund` · `{name} untimeout @x` (auch *mute*)\n"
-                   f"`{name} kick @x Grund` · `{name} ban @x Grund` · `{name} unban <ID>`\n"
-                   f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} nuke`\n"
-                   f"Jede Aktion prüft deine **und** Flos Rechte · angepinnte bleiben beim Löschen"),
-            inline=False,
-        )
-    if AI_ENABLED:
-        emb.add_field(
-            name="💬 KI",
-            value=f"Stell mir einfach eine Frage (`{name} wie wird das Wetter?`).",
-            inline=False,
-        )
-    if not emb.fields:
+    else:
         emb.add_field(name="—", value="Gerade sind keine Spaß-Features aktiv.", inline=False)
     emb.set_footer(text="Tipp: Kauf dir im Shop einen Titel – dann spricht Flo dich damit an!")
     return emb
+
+
+def _help_detail_embed(key: str) -> discord.Embed:
+    """Detail-Ansicht einer Kategorie (wird beim Button-Klick eingeblendet)."""
+    name = ai.bot_name()
+    if key == "musik":
+        emb = discord.Embed(title="🎵 Musik",
+                            description="YouTube & Spotify direkt im Sprachkanal.",
+                            color=0x1DB954)
+        emb.add_field(name="Abspielen",
+            value=(f"`{name} spiel <link/suche>`\n`{name} <youtube/spotify-link>`\n"
+                   f"`{name} join` · `{name} leave`"), inline=False)
+        emb.add_field(name="Steuerung",
+            value=(f"`{name} skip` · `{name} pause` · `{name} weiter` · `{name} stop`\n"
+                   "… oder einfach die **Buttons** unter dem laufenden Lied. 😉"), inline=False)
+        emb.add_field(name="Warteschlange",
+            value=(f"`{name} queue` · `{name} lautstärke 50`\n"
+                   "Neues Lied bei laufender Musik? Du bekommst einen Button für die **Position**!"),
+            inline=False)
+        return emb
+    if key == "spiele":
+        emb = discord.Embed(title="🎮 Spiele",
+                            description="Kleine Spiele für zwischendurch.",
+                            color=0xE67E22)
+        emb.add_field(name="Raten & Quiz",
+            value=f"`{name} quiz` · `{name} zahlenraten`", inline=False)
+        emb.add_field(name="Schnelle Runden",
+            value=(f"`{name} ssp schere/stein/papier`\n"
+                   f"`{name} coinflip 50 kopf` · `{name} slot 20` · `{name} würfel 2d6`"),
+            inline=False)
+        return emb
+    if key == "economy":
+        emb = discord.Embed(title="📈 Level & Flo Coins",
+                            description="Sammle XP und Coins, gib in den Shop.",
+                            color=0xF1C40F)
+        emb.add_field(name="Level",
+            value=f"`{name} level` · `{name} top`", inline=False)
+        emb.add_field(name="Coins",
+            value=f"`{name} coins` · `{name} daily` · `{name} pay @x 100`", inline=False)
+        emb.add_field(name="Shop",
+            value=(f"`{name} shop` · `{name} kaufen sigma` · `{name} inventar` · "
+                   f"`{name} titel sigma`"), inline=False)
+        return emb
+    if key == "casino":
+        emb = discord.Embed(title="🎰 Casino",
+                            description="Setz deine Flo Coins – mit Köpfchen. 😏",
+                            color=0xE91E63)
+        emb.add_field(name="Übersicht", value=f"`{name} casino`", inline=False)
+        emb.add_field(name="Blackjack",
+            value=(f"`{name} blackjack 50` – danach per **Button** "
+                   "`Karte` / `Stand` / `Double`."), inline=False)
+        emb.add_field(name="Weitere Spiele",
+            value=(f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · "
+                   f"`{name} roulette 50 rot`"), inline=False)
+        return emb
+    if key == "chaos":
+        emb = discord.Embed(title="😈 Chaos",
+                            description="Für die ganz feinen Sprüche.",
+                            color=0x9B59B6)
+        emb.add_field(name="Auf Personen",
+            value=(f"`{name} roast @x` · `{name} hype @x` · `{name} rate @x` · "
+                   f"`{name} rizz @x`"), inline=False)
+        emb.add_field(name="Einfach so",
+            value=f"`{name} spruch` · `{name} horoskop`", inline=False)
+        return emb
+    if key == "voice":
+        emb = discord.Embed(title="🔊 Voice",
+                            description="Sounds & Sprachausgabe im Sprachkanal.",
+                            color=0x1ABC9C)
+        emb.add_field(name="Befehle",
+            value=(f"`{name} sounds` · `{name} sound <name>` · `{name} sprich <text>`"),
+            inline=False)
+        return emb
+    if key == "mod":
+        emb = discord.Embed(title="🛡️ Moderation",
+                            description="Nur fürs Team – jede Aktion prüft Rechte.",
+                            color=0xED4245)
+        emb.add_field(name="Verwarnen",
+            value=f"`{name} warn @x Grund` · `{name} warns @x` · `{name} unwarn @x`",
+            inline=False)
+        emb.add_field(name="Timeout / Mute",
+            value=f"`{name} timeout @x 10m Grund` · `{name} untimeout @x`", inline=False)
+        emb.add_field(name="Kick / Bann",
+            value=f"`{name} kick @x Grund` · `{name} ban @x Grund` · `{name} unban <ID>`",
+            inline=False)
+        emb.add_field(name="Aufräumen",
+            value=(f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} nuke`\n"
+                   "Angepinnte Nachrichten bleiben beim Löschen erhalten."), inline=False)
+        return emb
+    if key == "ki":
+        emb = discord.Embed(title="💬 KI",
+                            description="Kein Befehl erkannt? Dann antworte ich wie eine KI.",
+                            color=0x5865F2)
+        emb.add_field(name="So gehts",
+            value=(f"Stell mir einfach eine Frage:\n`{name} wie wird das Wetter?`"),
+            inline=False)
+        return emb
+    return _help_overview_embed()
+
+
+class _HelpNavButton(discord.ui.Button):
+    """Ein Navigations-Button im Hilfe-Menue. key=None => Übersicht."""
+
+    def __init__(self, key: "str | None", emoji: str, label: str, *,
+                 style: discord.ButtonStyle) -> None:
+        super().__init__(label=label, emoji=emoji, style=style)
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: "HelpView" = self.view  # type: ignore[assignment]
+        await view.show(interaction, self.key)
+
+
+class HelpView(discord.ui.View):
+    """Interaktives Hilfe-Menue: Kategorie-Buttons wechseln das Embed in-place."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=180)
+        self.message: discord.Message | None = None
+        self.active: str | None = None
+        self.add_item(_HelpNavButton(None, "🏠", "Übersicht",
+                                     style=discord.ButtonStyle.primary))
+        for key, emoji, label in _help_categories():
+            self.add_item(_HelpNavButton(key, emoji, label,
+                                         style=discord.ButtonStyle.secondary))
+        self._sync()
+
+    def _sync(self) -> None:
+        """Hebt den aktiven Bereich hervor (grün + deaktiviert)."""
+        for child in self.children:
+            if isinstance(child, _HelpNavButton):
+                here = (child.key == self.active)
+                child.disabled = here
+                child.style = (discord.ButtonStyle.success if here else
+                               (discord.ButtonStyle.primary if child.key is None
+                                else discord.ButtonStyle.secondary))
+
+    async def show(self, interaction: discord.Interaction, key: "str | None") -> None:
+        self.active = key
+        self._sync()
+        emb = _help_overview_embed() if key is None else _help_detail_embed(key)
+        await interaction.response.edit_message(embed=emb, view=self)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 def invite_url() -> str:
@@ -543,9 +747,33 @@ async def on_message(message: discord.Message) -> None:
     if not angesprochen:
         return
 
-    # 'Flo hilfe' / 'Flo befehle' -> Uebersicht der aktiven Features (Embed).
+    # 'Flo restart' / 'Flo neustarten' -> kompletter Neustart, NUR fuer den Besitzer.
+    if _is_restart(content):
+        if message.author.id != OWNER_ID:
+            await _send_reply(message, discord.Embed(
+                description="Nur mein Besitzer darf mich neu starten. 😉",
+                color=discord.Color.red()))
+            return
+        view = RestartConfirmView(OWNER_ID)
+        emb = discord.Embed(
+            title="🔄 Kompletten Neustart?",
+            description=("Soll ich den **ganzen Bot** neu starten? "
+                         "Laufende Musik/Voice wird dabei getrennt."),
+            color=discord.Color.orange())
+        try:
+            view.message = await message.reply(embed=emb, view=view, mention_author=False)
+        except discord.HTTPException:
+            log.exception("Restart-Abfrage konnte nicht gesendet werden")
+        return
+
+    # 'Flo hilfe' / 'Flo befehle' -> interaktives Menue mit Kategorie-Buttons.
     if _is_help(content):
-        await _send_reply(message, _build_help())
+        view = HelpView()
+        try:
+            view.message = await message.reply(
+                embed=_help_overview_embed(), view=view, mention_author=False)
+        except discord.HTTPException:
+            log.exception("Hilfe konnte nicht gesendet werden")
         return
 
     # Befehls-Handler der Reihe nach durchgehen. Jeder gibt entweder eine Antwort

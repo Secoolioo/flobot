@@ -220,6 +220,7 @@ class GuildPlayer:
     current: Track | None = None
     text_channel: discord.abc.Messageable | None = None
     volume: float = DEFAULT_VOLUME   # 0.0 - 2.0, per Befehl aenderbar
+    panel_message: "discord.Message | None" = None  # aktuelles Steuer-Panel
 
     async def connect(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
         if self.voice and self.voice.is_connected():
@@ -258,11 +259,7 @@ class GuildPlayer:
             if not track.stream_url and track.query:
                 track = await _resolve_track(track)  # Playlist-Track erst jetzt aufloesen
             self.start(track)
-            if self.text_channel is not None:
-                try:
-                    await self.text_channel.send(embed=_now_playing_embed(track, len(self.queue)))
-                except discord.HTTPException:
-                    pass
+            await _send_panel(self, track)
         except Exception:
             log.exception("Konnte naechsten Track nicht starten: %s", track.title)
             await self._advance()  # einen weiter
@@ -270,6 +267,7 @@ class GuildPlayer:
     async def disconnect(self) -> None:
         self.queue.clear()
         self.current = None
+        await _retire_panel(self)
         if self.voice is not None:
             try:
                 await self.voice.disconnect(force=True)
@@ -617,10 +615,12 @@ async def _play_many(
     items: list[tuple[str, str]],
     requested_by: str,
     label: str,
-) -> discord.Embed:
+    reply_to: "discord.Message | None" = None,
+) -> "discord.Embed | object":
     """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
 
     items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
+    Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
     """
     try:
         await player.connect(channel)
@@ -656,7 +656,8 @@ async def _play_many(
         player.queue.append(_lazy_track(inp, title, requested_by))
     player.start(track)
     extra = f"+{len(rest)} weitere {label}" if rest else ""
-    return _now_playing_embed(track, len(player.queue), extra=extra)
+    await _send_panel(player, track, reply_to=reply_to, extra=extra)
+    return HANDLED
 
 
 # --- Optik: groessere Embeds ---------------------------------------------
@@ -837,6 +838,102 @@ class QueuePositionView(discord.ui.View):
                 pass
 
 
+class PlaybackControlView(discord.ui.View):
+    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue.
+
+    timeout=None: bleibt fuer die ganze (ggf. lange) Songdauer aktiv. Beim Posten
+    eines neuen Panels wird das alte ueber _send_panel sauber entschaerft.
+    """
+
+    def __init__(self, player: "GuildPlayer") -> None:
+        super().__init__(timeout=None)
+        self.player = player
+        self.message: discord.Message | None = None
+        self._sync_pause()
+
+    def _sync_pause(self) -> None:
+        """Pause-Button passend zum aktuellen Zustand beschriften."""
+        v = self.player.voice
+        paused = bool(v and v.is_paused())
+        self._pause.label = "Weiter" if paused else "Pause"
+        self._pause.emoji = "▶️" if paused else "⏸️"
+        self._pause.style = (discord.ButtonStyle.success if paused
+                             else discord.ButtonStyle.secondary)
+
+    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.secondary)
+    async def _pause(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        v = self.player.voice
+        if v is None or not (v.is_playing() or v.is_paused()):
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        if v.is_paused():
+            v.resume()
+        else:
+            v.pause()
+        self._sync_pause()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary)
+    async def _skip(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not self.player.is_active():
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        # stop() loest _after -> _advance aus; _advance postet ein frisches Panel
+        # und entschaerft dabei dieses hier. Darum nur kurz bestaetigen.
+        self.player.voice.stop()  # type: ignore[union-attr]
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
+    async def _stop(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if self.player.voice is None or not self.player.voice.is_connected():
+            await interaction.response.send_message("Ich bin in keinem Sprachkanal.", ephemeral=True)
+            return
+        await self.player.disconnect()
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(
+            embed=_embed("Musik gestoppt und raus aus dem Sprachkanal.",
+                         title="⏹️  Gestoppt", color=_COL_INFO),
+            view=self)
+        self.stop()
+
+    @discord.ui.button(label="Queue", emoji="🎶", style=discord.ButtonStyle.secondary)
+    async def _queue(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
+
+
+async def _retire_panel(player: "GuildPlayer") -> None:
+    """Entfernt die Buttons unter dem zuletzt geposteten Steuer-Panel."""
+    msg = player.panel_message
+    player.panel_message = None
+    if msg is not None:
+        try:
+            await msg.edit(view=None)
+        except discord.HTTPException:
+            pass
+
+
+async def _send_panel(player: "GuildPlayer", track: "Track", *,
+                     reply_to: "discord.Message | None" = None, extra: str = "") -> None:
+    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird entschaerft)."""
+    await _retire_panel(player)
+    emb = _now_playing_embed(track, len(player.queue), extra=extra)
+    view = PlaybackControlView(player)
+    try:
+        if reply_to is not None:
+            msg = await reply_to.reply(embed=emb, view=view, mention_author=False)
+        elif player.text_channel is not None:
+            msg = await player.text_channel.send(embed=emb, view=view)
+        else:
+            return
+    except discord.HTTPException as exc:
+        log.error("Now-Playing-Panel fehlgeschlagen: %s", exc)
+        return
+    view.message = msg
+    player.panel_message = msg
+
+
 # --- Oeffentlicher Einstieg ----------------------------------------------
 async def handle(message: discord.Message) -> "str | discord.Embed | object | None":
     """Prueft, ob die Nachricht ein Musik-Befehl ist, und fuehrt ihn aus.
@@ -941,7 +1038,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
         items = [(f"ytsearch1:{q}", q) for q in queries]
         return await _play_many(
             player, voice_state.channel, items,
-            message.author.display_name, "aus dem Album",
+            message.author.display_name, "aus dem Album", reply_to=message,
         )
 
     if action == "spotify_playlist":
@@ -955,7 +1052,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
         items = [(f"ytsearch1:{q}", q) for q in queries]
         return await _play_many(
             player, voice_state.channel, items,
-            message.author.display_name, "aus der Playlist",
+            message.author.display_name, "aus der Playlist", reply_to=message,
         )
 
     if action == "yt_playlist":
@@ -965,7 +1062,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
                           color=_COL_ERR)
         return await _play_many(
             player, voice_state.channel, entries,
-            message.author.display_name, "aus der Playlist",
+            message.author.display_name, "aus der Playlist", reply_to=message,
         )
 
     if len(player.queue) >= MAX_QUEUE:
@@ -1016,4 +1113,5 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
         return _added_embed(track, pos, pos)
 
     player.start(track)
-    return _now_playing_embed(track, len(player.queue))
+    await _send_panel(player, track, reply_to=message)
+    return HANDLED
