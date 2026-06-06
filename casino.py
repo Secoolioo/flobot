@@ -1,20 +1,17 @@
-"""Casino-Feature fuer Flo (Pack 5): spielen mit Flo Coins.
+"""Casino-Feature fuer Flo (Pack 5): spielen mit Flo Coins – jetzt mit Buttons,
+Formularen (Modals) und echter Grafik.
 
 Spiele (nach 'Flo'):
-- casino                      Uebersicht aller Spiele
-- blackjack <einsatz>         17-und-4 gegen den Dealer
-    -> danach: karte (ziehen) / stand (halten) / double (verdoppeln)
-- crash <einsatz> <ziel>      Rakete steigt - cash vor dem Absturz aus (z. B. 2.0)
+- casino                      Uebersicht mit Buttons je Spiel (oeffnet ein Formular)
+- blackjack <einsatz>         17-und-4 gegen den Dealer, gesteuert per Buttons
+                              (Karte / Stand / Double) – Karten als Bild
+- crash <einsatz> <ziel>      Rakete steigt – grafische Kurve, cash vor dem Absturz
 - keno <einsatz> <1-8 zahlen> tippe Zahlen 1-40, 10 werden gezogen
 - roulette <einsatz> <auf>    rot/schwarz, gerade/ungerade, 1-18/19-36 oder Zahl 0-36
 
-Alles laeuft ueber EINEN Coin-Topf: economy.py. Dieses Modul aendert Kontostaende
-nur ueber economy.add_coins() und liest sie ueber economy.get_coins(). Ohne ein
-aktives economy-Feature bleibt das Casino aus.
-
-Bewusst rein textbasiert (keine Buttons): jeder Zug ist ein kurzer Befehl. So ist
-es robust, auch wenn der Bot kurz neu startet (offene Blackjack-Runden leben nur
-im Speicher und verfallen nach BJ_TIMEOUT).
+Alles laeuft ueber EINEN Coin-Topf: economy.py. Tippen funktioniert weiter als
+Fallback (gut bei Neustarts) – die Buttons sind nur der bequeme Weg. Offene
+Blackjack-Runden leben im Speicher und verfallen nach BJ_TIMEOUT.
 """
 from __future__ import annotations
 
@@ -27,8 +24,12 @@ import discord
 
 import ai
 import economy
+import render
 
 log = logging.getLogger("dcbot.casino")
+
+# Sentinel: Casino hat selbst geantwortet (Embed/Bild/Buttons) -> bot.py schweigt.
+HANDLED = object()
 
 _enabled: bool = False
 _bot_name: str = "Flo"
@@ -37,8 +38,15 @@ MIN_BET = 1
 MAX_BET = int(os.getenv("CASINO_MAX_BET", "100000") or "100000")
 BJ_TIMEOUT = 180        # Sekunden, bis eine offene Blackjack-Runde verfaellt
 
-# Offene Blackjack-Runden, je (channel_id, user_id). Nur im Speicher.
-_bj: dict[tuple[int, int], dict] = {}
+# Aktive Blackjack-Runden je (channel_id, user_id) -> BlackjackView. Nur im Speicher.
+_bj_views: "dict[tuple[int, int], BlackjackView]" = {}
+
+# Farben
+_C_PLAY = discord.Color.blurple()
+_C_WIN = discord.Color.green()
+_C_LOSE = discord.Color.red()
+_C_PUSH = discord.Color.greyple()
+_C_BJ = discord.Color.gold()
 
 
 def setup() -> bool:
@@ -52,7 +60,8 @@ def setup() -> bool:
         log.info("Casino-Feature aus: economy (Flo Coins) ist nicht aktiv.")
         return False
     _enabled = True
-    log.info("Casino-Feature aktiv (Einsatz %d–%d %s).", MIN_BET, MAX_BET, economy.COIN)
+    log.info("Casino-Feature aktiv (Einsatz %d–%d %s, mit Buttons & Grafik).",
+             MIN_BET, MAX_BET, economy.COIN)
     return True
 
 
@@ -60,10 +69,10 @@ def is_enabled() -> bool:
     return _enabled
 
 
-# --- Einsatz-Helfer ------------------------------------------------------
+# --- Einsatz- & Embed-Helfer ---------------------------------------------
 def _resolve_bet(token: str, uid: int) -> int | None:
     """Wandelt ein Einsatz-Token in eine Zahl. 'alles'/'max' = ganzer Kontostand."""
-    token = (token or "").lower()
+    token = (token or "").strip().lower()
     if token in ("all", "alles", "max", "allin", "all-in"):
         return min(economy.get_coins(uid), MAX_BET)
     if token.isdigit():
@@ -74,7 +83,7 @@ def _resolve_bet(token: str, uid: int) -> int | None:
 def _check_bet(uid: int, bet: int | None) -> tuple[int, str | None]:
     """Prueft einen Einsatz. Rueckgabe: (gepruefter Einsatz, Fehlertext oder None)."""
     if bet is None:
-        return 0, f"Wie viel setzt du? z. B. `50` oder `alles`."
+        return 0, "Wie viel setzt du? z. B. `50` oder `alles`."
     if bet < MIN_BET:
         return 0, f"Mindesteinsatz ist {MIN_BET} {economy.COIN}."
     if bet > MAX_BET:
@@ -82,6 +91,15 @@ def _check_bet(uid: int, bet: int | None) -> tuple[int, str | None]:
     bal = economy.get_coins(uid)
     if bet > bal:
         return 0, f"Dafuer reicht's nicht – du hast {bal} {economy.COIN}."
+    return bet, None
+
+
+def _take(uid: int, raw_bet: int | None) -> tuple[int, str | None]:
+    """Prueft den Einsatz und zieht ihn sofort ein. (bet, fehler)."""
+    bet, err = _check_bet(uid, raw_bet)
+    if err:
+        return 0, err
+    economy.add_coins(uid, -bet)
     return bet, None
 
 
@@ -93,13 +111,37 @@ def _outcome(bet: int, payout: int) -> tuple[discord.Color, str, str]:
     """Farbe + Ergebnis-Feld aus Einsatz und Auszahlung (Auszahlung inkl. Einsatz)."""
     net = payout - bet
     if net > 0:
-        return discord.Color.green(), "Gewinn", f"+{net} {economy.COIN}"
+        return _C_WIN, "Gewinn", f"+{net} {economy.COIN}"
     if net == 0:
-        return discord.Color.greyple(), "Ergebnis", f"±0 – Einsatz zurueck"
-    return discord.Color.red(), "Verlust", f"-{bet} {economy.COIN}"
+        return _C_PUSH, "Ergebnis", "±0 – Einsatz zurueck"
+    return _C_LOSE, "Verlust", f"-{bet} {economy.COIN}"
 
 
-# --- Spielkarten (Blackjack) ---------------------------------------------
+def _err(text: str) -> discord.Embed:
+    return discord.Embed(description=f"⚠️ {text}", color=_C_LOSE)
+
+
+def _info(text: str) -> discord.Embed:
+    return discord.Embed(description=text, color=_C_BJ)
+
+
+async def _send(message: discord.Message, *, embed=None, file=None, view=None):
+    """Sendet eine Casino-Antwort als Reply. Gibt die Nachricht zurueck (oder None)."""
+    kwargs = {"mention_author": False}
+    if embed is not None:
+        kwargs["embed"] = embed
+    if file is not None:
+        kwargs["file"] = file
+    if view is not None:
+        kwargs["view"] = view
+    try:
+        return await message.reply(**kwargs)
+    except discord.HTTPException:
+        log.exception("Casino-Antwort konnte nicht gesendet werden")
+        return None
+
+
+# --- Spielkarten ---------------------------------------------------------
 _RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 _SUITS = ["♠", "♥", "♦", "♣"]
 
@@ -127,12 +169,8 @@ def _hand_value(hand: list[tuple[str, str]]) -> int:
     return total
 
 
-def _fmt_hand(hand: list[tuple[str, str]]) -> str:
-    return "  ".join(f"`{r}{s}`" for r, s in hand)
-
-
 # --- Befehls-Einstieg ----------------------------------------------------
-async def handle(message: discord.Message) -> "str | discord.Embed | None":
+async def handle(message: discord.Message) -> "object | None":
     if not _enabled or message.guild is None:
         return None
     cmd = ai.strip_lead(message.content or "")
@@ -143,202 +181,281 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
     args = parts[1:]
 
     if first in ("casino", "spielbank", "kasino", "glücksspiel", "gluecksspiel", "gambling"):
-        return _menu(message.author.id)
+        view = CasinoHubView(message.author.id)
+        msg = await _send(message, embed=_menu(message.author.id), view=view)
+        if msg:
+            view.message = msg
+        return HANDLED
     if first in ("blackjack", "bj", "17und4", "siebzehnundvier"):
-        return await _bj_start(message, args)
+        return await _bj_command(message, args)
     if first in ("hit", "karte", "ziehen", "zieh"):
-        return await _bj_action(message, "hit")
+        return await _bj_text_action(message, "hit")
     if first in ("stand", "stehen", "bleiben", "bleib", "pass", "genug", "fertig"):
-        return await _bj_action(message, "stand")
+        return await _bj_text_action(message, "stand")
     if first in ("double", "doppeln", "verdoppeln", "dd"):
-        return await _bj_action(message, "double")
+        return await _bj_text_action(message, "double")
     if first in ("crash", "absturz", "rakete", "rocket"):
-        return await _crash(message, args)
+        return await _crash_command(message, args)
     if first == "keno":
-        return await _keno(message, args)
+        return await _keno_command(message, args)
     if first in ("roulette", "roul", "kessel"):
-        return await _roulette(message, args)
+        return await _roulette_command(message, args)
     return None
 
 
 def _menu(uid: int) -> discord.Embed:
     c = economy.COIN
-    n = _bot_name
     emb = discord.Embed(
         title="🎰 Flo Casino",
         description=(f"Setze deine **{c}** und versuch dein Glück.\n"
-                     f"Einsatz ist eine Zahl oder `alles`."),
-        color=discord.Color.gold(),
+                     "Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇"),
+        color=_C_BJ,
     )
-    emb.add_field(name="🂡 Blackjack",
-                  value=f"`{n} blackjack 50`\ndann `karte` · `stand` · `double`", inline=True)
-    emb.add_field(name="🚀 Crash",
-                  value=f"`{n} crash 50 2.0`\nsteig vor dem Absturz aus", inline=True)
-    emb.add_field(name="🎱 Keno",
-                  value=f"`{n} keno 50 3 7 12`\ntippe 1–8 Zahlen (1–40)", inline=True)
-    emb.add_field(name="🎡 Roulette",
-                  value=f"`{n} roulette 50 rot`\nFarbe · gerade · Zahl 0–36", inline=True)
-    emb.add_field(name="🎰 Slots",
-                  value=f"`{n} slot 20`\ndrei Gleiche gewinnen", inline=True)
-    emb.add_field(name="🪙 Coinflip",
-                  value=f"`{n} coinflip 50 kopf`\nKopf oder Zahl", inline=True)
+    emb.add_field(name="🂡 Blackjack", value="17 & 4 gegen den Dealer", inline=True)
+    emb.add_field(name="🚀 Crash", value="steig vor dem Absturz aus", inline=True)
+    emb.add_field(name="🎱 Keno", value="tippe 1–8 Zahlen (1–40)", inline=True)
+    emb.add_field(name="🎡 Roulette", value="Farbe · gerade · Zahl 0–36", inline=True)
     emb.set_footer(text=_bal_footer(uid))
     return emb
 
 
 # --- Blackjack -----------------------------------------------------------
-def _bj_prompt(game: dict, uid: int) -> str:
-    hint = f"`{_bot_name} karte` (ziehen) · `{_bot_name} stand` (halten)"
-    if len(game["player"]) == 2 and economy.get_coins(uid) >= game["bet"]:
-        hint += f" · `{_bot_name} double` (verdoppeln)"
-    return hint
+class BlackjackView(discord.ui.View):
+    """Eine laufende Blackjack-Runde mit Buttons. State lebt im View."""
 
+    def __init__(self, channel_id: int, uid: int, bet: int) -> None:
+        super().__init__(timeout=BJ_TIMEOUT)
+        self.channel_id = channel_id
+        self.uid = uid
+        self.bet = bet
+        self.deck = _new_deck()
+        self.player = [self.deck.pop(), self.deck.pop()]
+        self.dealer = [self.deck.pop(), self.deck.pop()]
+        self.doubled = False
+        self.message: discord.Message | None = None
+        self._n = 0
+        self._sync_buttons()
 
-def _bj_embed(game: dict, uid: int, *, reveal: bool, title: str,
-              color: discord.Color, note: str) -> discord.Embed:
-    player = game["player"]
-    dealer = game["dealer"]
-    pv = _hand_value(player)
-    emb = discord.Embed(title=title, color=color)
-    emb.set_author(name="🎰 Flo Casino")
-    if reveal:
-        emb.add_field(name=f"🤖 Dealer ({_hand_value(dealer)})",
-                      value=_fmt_hand(dealer), inline=False)
-    else:
-        emb.add_field(name="🤖 Dealer",
-                      value=f"{_fmt_hand(dealer[:1])}  `🂠`", inline=False)
-    emb.add_field(name=f"🧑 Du ({pv})", value=_fmt_hand(player), inline=False)
-    if note:
-        emb.add_field(name="​", value=note, inline=False)
-    emb.set_footer(text=f"{_bal_footer(uid)}  ·  Einsatz: {game['bet']} {economy.COIN}")
-    return emb
+    # -- Hilfen --
+    def _sync_buttons(self) -> None:
+        can_double = (len(self.player) == 2 and economy.get_coins(self.uid) >= self.bet)
+        self._double.disabled = not can_double
 
+    def _disable_all(self) -> None:
+        for ch in self.children:
+            if isinstance(ch, discord.ui.Button):
+                ch.disabled = True
 
-async def _bj_start(message: discord.Message, args: list[str]) -> "str | discord.Embed":
-    uid = message.author.id
-    key = (message.channel.id, uid)
-    game = _bj.get(key)
-    if game and (time.monotonic() - game["ts"] < BJ_TIMEOUT):
-        return (f"Du hast schon eine Blackjack-Runde offen – "
-                f"`{_bot_name} karte` oder `{_bot_name} stand`.")
+    def _unregister(self) -> None:
+        if _bj_views.get((self.channel_id, self.uid)) is self:
+            _bj_views.pop((self.channel_id, self.uid), None)
 
-    bet = _resolve_bet(args[0], uid) if args else None
-    bet, err = _check_bet(uid, bet)
-    if err:
-        return err
+    def _prompt(self) -> str:
+        return "Drück **Karte**, **Stand** oder **Double**. 👇"
 
-    economy.add_coins(uid, -bet)   # Einsatz sofort einziehen
-    deck = _new_deck()
-    player = [deck.pop(), deck.pop()]
-    dealer = [deck.pop(), deck.pop()]
-    game = {"bet": bet, "deck": deck, "player": player, "dealer": dealer,
-            "ts": time.monotonic(), "doubled": False}
+    def _payload(self, *, reveal: bool, title: str, color: discord.Color,
+                 note: str, state: str = "") -> tuple[discord.Embed, discord.File]:
+        self._n += 1
+        fname = f"bj_{self.uid}_{self._n}.png"
+        buf = render.blackjack_table(
+            self.dealer, self.player, hide_hole=not reveal,
+            dealer_value=_hand_value(self.dealer), player_value=_hand_value(self.player),
+            player_state=state)
+        file = discord.File(buf, filename=fname)
+        emb = discord.Embed(title=title, description=note or None, color=color)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.set_image(url=f"attachment://{fname}")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet} {economy.COIN}")
+        return emb, file
 
-    pv, dv = _hand_value(player), _hand_value(dealer)
-    if pv == 21 or dv == 21:        # Natural -> sofort entscheiden
+    async def natural_payload(self) -> tuple[discord.Embed, discord.File]:
+        """Sofort-Entscheidung bei Natural (21 auf der Hand). Zahlt aus + flush."""
+        pv, dv = _hand_value(self.player), _hand_value(self.dealer)
         if pv == 21 and dv == 21:
-            economy.add_coins(uid, bet)
+            economy.add_coins(self.uid, self.bet)
             await economy.flush()
-            return _bj_embed(game, uid, reveal=True, title="🂡 Blackjack – Push",
-                             color=discord.Color.greyple(),
-                             note=f"Beide haben 21 – Einsatz ({bet} {economy.COIN}) zurueck.")
+            return self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
+                                 note=f"Beide haben 21 – Einsatz ({self.bet} {economy.COIN}) zurück.",
+                                 state="push")
         if pv == 21:
-            payout = bet + (bet * 3) // 2     # 3:2
-            economy.add_coins(uid, payout)
+            payout = self.bet + (self.bet * 3) // 2     # 3:2
+            economy.add_coins(self.uid, payout)
             await economy.flush()
-            return _bj_embed(game, uid, reveal=True, title="🂡 BLACKJACK! 🎉",
-                             color=discord.Color.green(),
-                             note=f"Natürlicher Blackjack! +{payout - bet} {economy.COIN} (3:2).")
+            return self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
+                                 note=f"Natürlicher Blackjack! +{payout - self.bet} {economy.COIN} (3:2).",
+                                 state="blackjack")
         await economy.flush()
-        return _bj_embed(game, uid, reveal=True, title="🂡 Dealer-Blackjack 😬",
-                         color=discord.Color.red(),
-                         note=f"Der Dealer hat Blackjack. -{bet} {economy.COIN}.")
+        return self._payload(reveal=True, title="🂡 Dealer-Blackjack 😬", color=_C_LOSE,
+                             note=f"Der Dealer hat Blackjack. -{self.bet} {economy.COIN}.",
+                             state="lose")
 
-    _bj[key] = game
+    async def _settle(self) -> tuple[str, str, str, discord.Color]:
+        """Dealer spielt aus, Ergebnis bestimmen, auszahlen + flush.
+        Rueckgabe: (state, note, title, color)."""
+        pv = _hand_value(self.player)
+        if pv > 21:     # nur nach Double moeglich
+            await economy.flush()
+            return ("bust", f"Über 21 – verloren. -{self.bet} {economy.COIN}.",
+                    "🂡 Bust! 💥", _C_LOSE)
+        while _hand_value(self.dealer) < 17:
+            self.dealer.append(self.deck.pop())
+        dv = _hand_value(self.dealer)
+        if dv > 21 or pv > dv:
+            economy.add_coins(self.uid, self.bet * 2)
+            await economy.flush()
+            grund = "Dealer überkauft sich!" if dv > 21 else f"Deine {pv} schlägt {dv}."
+            return ("win", f"{grund} +{self.bet} {economy.COIN}.", "🂡 Gewonnen! 🎉", _C_WIN)
+        if pv < dv:
+            await economy.flush()
+            return ("lose", f"Dealer {dv} schlägt deine {pv}. -{self.bet} {economy.COIN}.",
+                    "🂡 Verloren 😬", _C_LOSE)
+        economy.add_coins(self.uid, self.bet)
+        await economy.flush()
+        return ("push", f"Beide {pv} – Einsatz ({self.bet} {economy.COIN}) zurück.",
+                "🂡 Push", _C_PUSH)
+
+    async def _mutate(self, action: str) -> tuple:
+        """Fuehrt eine Aktion aus. Rueckgabe:
+        (finished, state, title, color, note, reveal)."""
+        if action == "double":
+            if len(self.player) != 2:
+                return (False, "", "🂡 Blackjack", _C_PLAY,
+                        "Verdoppeln geht nur als allererste Aktion.", False)
+            if economy.get_coins(self.uid) < self.bet:
+                return (False, "", "🂡 Blackjack", _C_PLAY,
+                        f"Zum Verdoppeln fehlen dir {self.bet} {economy.COIN}.", False)
+            economy.add_coins(self.uid, -self.bet)
+            self.bet += self.bet
+            self.doubled = True
+            self.player.append(self.deck.pop())
+            state, note, title, color = await self._settle()
+            return (True, state, title, color, note, True)
+        if action == "hit":
+            self.player.append(self.deck.pop())
+            if _hand_value(self.player) > 21:
+                await economy.flush()
+                return (True, "bust", "🂡 Bust! 💥", _C_LOSE,
+                        f"Über 21 – verloren. -{self.bet} {economy.COIN}.", True)
+            self._sync_buttons()
+            return (False, "", "🂡 Blackjack", _C_PLAY, self._prompt(), False)
+        # stand
+        state, note, title, color = await self._settle()
+        return (True, state, title, color, note, True)
+
+    async def _step(self, action: str) -> tuple[discord.Embed, discord.File, discord.ui.View, bool]:
+        finished, state, title, color, note, reveal = await self._mutate(action)
+        emb, file = self._payload(reveal=reveal, title=title, color=color, note=note, state=state)
+        if finished:
+            self._unregister()
+            self._disable_all()
+            again = _AgainView(self.uid, "blackjack",
+                               {"bet": self._original_bet()}, channel_id=self.channel_id)
+            return emb, file, again, True
+        return emb, file, self, False
+
+    def _original_bet(self) -> int:
+        # Nach einem Double ist self.bet verdoppelt – fuer 'Nochmal' den Grundeinsatz.
+        return self.bet // 2 if self.doubled else self.bet
+
+    # -- Buttons --
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.uid:
+            return True
+        await interaction.response.send_message(
+            "Das ist nicht deine Blackjack-Runde. 🃏", ephemeral=True)
+        return False
+
+    async def _do(self, interaction: discord.Interaction, action: str) -> None:
+        if self.is_finished():
+            await interaction.response.defer()
+            return
+        emb, file, view, ended = await self._step(action)
+        await interaction.response.edit_message(embed=emb, view=view, attachments=[file])
+        if ended:
+            view.message = interaction.message
+            self.stop()
+
+    @discord.ui.button(label="Karte", emoji="🃏", style=discord.ButtonStyle.primary)
+    async def _karte(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._do(interaction, "hit")
+
+    @discord.ui.button(label="Stand", emoji="✋", style=discord.ButtonStyle.secondary)
+    async def _stand(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._do(interaction, "stand")
+
+    @discord.ui.button(label="Double", emoji="💰", style=discord.ButtonStyle.success)
+    async def _double(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._do(interaction, "double")
+
+    async def on_timeout(self) -> None:
+        self._unregister()
+        self._disable_all()
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+async def _bj_deal(channel_id: int, uid: int, bet: int
+                   ) -> tuple[discord.Embed, discord.File, discord.ui.View, bool]:
+    """Teilt eine neue Runde aus (Einsatz ist bereits eingezogen).
+    Rueckgabe: (embed, file, view, ended)."""
+    view = BlackjackView(channel_id, uid, bet)
+    pv, dv = _hand_value(view.player), _hand_value(view.dealer)
+    if pv == 21 or dv == 21:
+        emb, file = await view.natural_payload()
+        again = _AgainView(uid, "blackjack", {"bet": bet}, channel_id=channel_id)
+        return emb, file, again, True
     await economy.flush()
-    return _bj_embed(game, uid, reveal=False, title="🂡 Blackjack",
-                     color=discord.Color.blurple(), note=_bj_prompt(game, uid))
+    view._sync_buttons()
+    emb, file = view._payload(reveal=False, title="🂡 Blackjack",
+                              color=_C_PLAY, note=view._prompt())
+    return emb, file, view, False
 
 
-async def _bj_action(message: discord.Message, kind: str) -> "str | discord.Embed | None":
+async def _bj_command(message: discord.Message, args: list[str]) -> object:
     uid = message.author.id
-    key = (message.channel.id, uid)
-    game = _bj.get(key)
-    if not game:
+    ch = message.channel.id
+    existing = _bj_views.get((ch, uid))
+    if existing and not existing.is_finished():
+        await _send(message, embed=_info(
+            "Du hast schon eine Blackjack-Runde offen – nutz die **Buttons** drunter. 👇"))
+        return HANDLED
+    bet, err = _take(uid, _resolve_bet(args[0], uid) if args else None)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    emb, file, view, ended = await _bj_deal(ch, uid, bet)
+    msg = await _send(message, embed=emb, file=file, view=view)
+    if msg:
+        view.message = msg
+        if not ended:
+            _bj_views[(ch, uid)] = view
+    return HANDLED
+
+
+async def _bj_text_action(message: discord.Message, action: str) -> object | None:
+    uid = message.author.id
+    ch = message.channel.id
+    view = _bj_views.get((ch, uid))
+    if not view or view.is_finished():
         return None     # keine offene Runde -> nicht kapern, andere duerfen ran
-    if time.monotonic() - game["ts"] >= BJ_TIMEOUT:
-        _bj.pop(key, None)
-        return None
-    game["ts"] = time.monotonic()
-
-    if kind == "double":
-        if len(game["player"]) != 2:
-            return "Verdoppeln geht nur als allererste Aktion."
-        extra = game["bet"]
-        if economy.get_coins(uid) < extra:
-            return f"Zum Verdoppeln brauchst du nochmal {extra} {economy.COIN}."
-        economy.add_coins(uid, -extra)
-        game["bet"] += extra
-        game["doubled"] = True
-        game["player"].append(game["deck"].pop())   # genau eine Karte
-        return await _bj_finish(message, key, game)
-
-    if kind == "hit":
-        game["player"].append(game["deck"].pop())
-        if _hand_value(game["player"]) > 21:
-            _bj.pop(key, None)
-            await economy.flush()
-            return _bj_embed(game, uid, reveal=True, title="🂡 Bust! 💥",
-                             color=discord.Color.red(),
-                             note=f"Über 21 – verloren. -{game['bet']} {economy.COIN}.")
-        return _bj_embed(game, uid, reveal=False, title="🂡 Blackjack",
-                         color=discord.Color.blurple(), note=_bj_prompt(game, uid))
-
-    return await _bj_finish(message, key, game)   # stand
-
-
-async def _bj_finish(message: discord.Message, key: tuple[int, int],
-                     game: dict) -> "str | discord.Embed":
-    uid = message.author.id
-    player, dealer, deck = game["player"], game["dealer"], game["deck"]
-    bet = game["bet"]
-    pv = _hand_value(player)
-
-    if pv > 21:     # nur nach Double moeglich
-        _bj.pop(key, None)
-        await economy.flush()
-        return _bj_embed(game, uid, reveal=True, title="🂡 Bust! 💥",
-                         color=discord.Color.red(),
-                         note=f"Über 21 – verloren. -{bet} {economy.COIN}.")
-
-    while _hand_value(dealer) < 17:     # Dealer zieht bis 17
-        dealer.append(deck.pop())
-    dv = _hand_value(dealer)
-    _bj.pop(key, None)
-
-    if dv > 21 or pv > dv:
-        payout = bet * 2
-        economy.add_coins(uid, payout)
-        await economy.flush()
-        grund = "Dealer überkauft sich!" if dv > 21 else f"Deine {pv} schlägt {dv}."
-        return _bj_embed(game, uid, reveal=True, title="🂡 Gewonnen! 🎉",
-                         color=discord.Color.green(),
-                         note=f"{grund} +{payout - bet} {economy.COIN}.")
-    if pv < dv:
-        await economy.flush()
-        return _bj_embed(game, uid, reveal=True, title="🂡 Verloren 😬",
-                         color=discord.Color.red(),
-                         note=f"Dealer {dv} schlägt deine {pv}. -{bet} {economy.COIN}.")
-    economy.add_coins(uid, bet)
-    await economy.flush()
-    return _bj_embed(game, uid, reveal=True, title="🂡 Push",
-                     color=discord.Color.greyple(),
-                     note=f"Beide {pv} – Einsatz ({bet} {economy.COIN}) zurueck.")
+    emb, file, nview, ended = await view._step(action)
+    if view.message is not None:
+        try:
+            await view.message.edit(embed=emb, view=nview, attachments=[file])
+            if ended:
+                nview.message = view.message
+                view.stop()
+        except discord.HTTPException:
+            log.exception("Blackjack-Text-Aktion fehlgeschlagen")
+    return HANDLED
 
 
 # --- Crash ---------------------------------------------------------------
 def _parse_mult(token: str) -> float | None:
-    token = (token or "").lower().rstrip("x").replace(",", ".")
+    token = (token or "").lower().rstrip("x").replace(",", ".").strip()
     try:
         v = float(token)
     except ValueError:
@@ -355,41 +472,61 @@ def _crash_point() -> float:
     return max(1.00, min(round(cp, 2), 1000.0))
 
 
-async def _crash(message: discord.Message, args: list[str]) -> "str | discord.Embed":
-    uid = message.author.id
-    bet = _resolve_bet(args[0], uid) if args else None
-    bet, err = _check_bet(uid, bet)
-    if err:
-        return err
-    target = _parse_mult(args[1]) if len(args) > 1 else None
-    if target is None:
-        return f"Bei welchem Faktor steigst du aus? z. B. `{_bot_name} crash {bet} 2.0`"
-    if target < 1.01:
-        return "Das Ziel muss über 1.0 liegen (z. B. 1.5, 2.0, 5.0)."
-    target = min(target, 100.0)
-
-    economy.add_coins(uid, -bet)
+async def _play_crash(uid: int, bet: int, target: float
+                      ) -> tuple[discord.Embed, discord.File]:
+    """Spielt eine Crash-Runde (Einsatz bereits eingezogen)."""
     cp = _crash_point()
     payout = int(bet * target) if cp >= target else 0
+    cashed = payout > 0
     if payout:
         economy.add_coins(uid, payout)
     await economy.flush()
-
-    color, fname, fval = _outcome(bet, payout)
-    if payout:
+    color, fname_field, fval = _outcome(bet, payout)
+    fn = f"crash_{uid}_{random.randint(1000, 9999)}.png"
+    file = discord.File(render.crash_chart(cp, target, cashed), filename=fn)
+    if cashed:
         desc = (f"🚀 Die Rakete fliegt bis **{cp:.2f}×** – du bist bei "
                 f"**{target:.2f}×** ausgestiegen! 🎉")
     else:
-        desc = (f"💥 Bei **{cp:.2f}×** zerschellt – dein Ziel war **{target:.2f}×**. 😬")
+        desc = f"💥 Bei **{cp:.2f}×** zerschellt – dein Ziel war **{target:.2f}×**. 😬"
     emb = discord.Embed(title="🚀 Crash", description=desc, color=color)
     emb.set_author(name="🎰 Flo Casino")
-    emb.add_field(name=fname, value=fval, inline=True)
+    emb.add_field(name=fname_field, value=fval, inline=True)
+    emb.set_image(url=f"attachment://{fn}")
     emb.set_footer(text=_bal_footer(uid))
-    return emb
+    return emb, file
+
+
+def _crash_target(args: list[str], bet: int) -> tuple[float | None, str | None]:
+    target = _parse_mult(args[1]) if len(args) > 1 else None
+    if target is None:
+        return None, f"Bei welchem Faktor steigst du aus? z. B. `{_bot_name} crash {bet} 2.0`"
+    if target < 1.01:
+        return None, "Das Ziel muss über 1.0 liegen (z. B. 1.5, 2.0, 5.0)."
+    return min(target, 100.0), None
+
+
+async def _crash_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    raw = _resolve_bet(args[0], uid) if args else None
+    bet0, err = _check_bet(uid, raw)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    target, terr = _crash_target(args, bet0)
+    if terr:
+        await _send(message, embed=_info(terr))
+        return HANDLED
+    economy.add_coins(uid, -bet0)
+    emb, file = await _play_crash(uid, bet0, target)
+    again = _AgainView(uid, "crash", {"bet": bet0, "target": target})
+    msg = await _send(message, embed=emb, file=file, view=again)
+    if msg:
+        again.message = msg
+    return HANDLED
 
 
 # --- Keno ----------------------------------------------------------------
-# Auszahlungs-Faktor je (getippte Zahlen, Treffer) - bezogen auf den Einsatz.
 _KENO_TABLE: dict[tuple[int, int], int] = {
     (1, 1): 3,
     (2, 1): 1, (2, 2): 9,
@@ -402,27 +539,18 @@ _KENO_TABLE: dict[tuple[int, int], int] = {
 }
 
 
-async def _keno(message: discord.Message, args: list[str]) -> "str | discord.Embed":
-    uid = message.author.id
-    if not args:
-        return (f"So geht's: `{_bot_name} keno <einsatz> <1-8 Zahlen 1-40>` "
-                f"– z. B. `{_bot_name} keno 50 3 7 12 21`")
-    bet = _resolve_bet(args[0], uid)
-    bet, err = _check_bet(uid, bet)
-    if err:
-        return err
-
+def _parse_picks(s: str) -> list[int]:
     picks: list[int] = []
-    for t in args[1:]:
+    for t in (s or "").replace(",", " ").split():
         if t.isdigit():
             n = int(t)
             if 1 <= n <= 40 and n not in picks:
                 picks.append(n)
-    if not picks:
-        return f"Tippe 1–8 Zahlen von 1 bis 40. z. B. `{_bot_name} keno {bet} 3 7 12 21`"
-    picks = picks[:8]
+    return picks[:8]
 
-    economy.add_coins(uid, -bet)
+
+async def _play_keno(uid: int, bet: int, picks: list[int]
+                     ) -> tuple[discord.Embed, None]:
     draw = random.sample(range(1, 41), 10)
     hits = sorted(set(picks) & set(draw))
     mult = _KENO_TABLE.get((len(picks), len(hits)), 0)
@@ -430,17 +558,42 @@ async def _keno(message: discord.Message, args: list[str]) -> "str | discord.Emb
     if payout:
         economy.add_coins(uid, payout)
     await economy.flush()
-
     color, fname, fval = _outcome(bet, payout)
-    drawn_str = " ".join(f"**__{n}__**" if n in hits else f"{n}" for n in sorted(draw))
-    picks_str = " ".join(f"**{n}**" if n in hits else f"~~{n}~~" for n in sorted(picks))
-    emb = discord.Embed(title="🎱 Keno", description=f"Gezogen: {drawn_str}", color=color)
+    drawn = " ".join(f"**__{n}__**" if n in hits else f"{n}" for n in sorted(draw))
+    pk = " ".join(f"**{n}**" if n in hits else f"~~{n}~~" for n in sorted(picks))
+    emb = discord.Embed(title="🎱 Keno", description=f"Gezogen: {drawn}", color=color)
     emb.set_author(name="🎰 Flo Casino")
-    emb.add_field(name="Deine Zahlen", value=picks_str, inline=False)
+    emb.add_field(name="Deine Zahlen", value=pk, inline=False)
     emb.add_field(name="Treffer", value=f"{len(hits)}/{len(picks)}  →  ×{mult}", inline=True)
     emb.add_field(name=fname, value=fval, inline=True)
     emb.set_footer(text=_bal_footer(uid))
-    return emb
+    return emb, None
+
+
+async def _keno_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    if not args:
+        await _send(message, embed=_info(
+            f"So geht's: `{_bot_name} keno <einsatz> <1-8 Zahlen 1-40>` "
+            f"– z. B. `{_bot_name} keno 50 3 7 12 21`"))
+        return HANDLED
+    raw = _resolve_bet(args[0], uid)
+    bet0, err = _check_bet(uid, raw)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    picks = _parse_picks(" ".join(args[1:]))
+    if not picks:
+        await _send(message, embed=_info(
+            f"Tippe 1–8 Zahlen von 1 bis 40. z. B. `{_bot_name} keno {bet0} 3 7 12 21`"))
+        return HANDLED
+    economy.add_coins(uid, -bet0)
+    emb, _ = await _play_keno(uid, bet0, picks)
+    again = _AgainView(uid, "keno", {"bet": bet0, "picks": picks})
+    msg = await _send(message, embed=emb, view=again)
+    if msg:
+        again.message = msg
+    return HANDLED
 
 
 # --- Roulette ------------------------------------------------------------
@@ -478,28 +631,13 @@ def _roulette_payout(target: str, bet: int, spin: int) -> tuple[int | None, str]
     return None, target
 
 
-async def _roulette(message: discord.Message, args: list[str]) -> "str | discord.Embed":
-    uid = message.author.id
-    if len(args) < 2:
-        return (f"So geht's: `{_bot_name} roulette <einsatz> <auf>` – auf: rot/schwarz, "
-                f"gerade/ungerade, 1-18/19-36 oder eine Zahl 0-36.")
-    bet = _resolve_bet(args[0], uid)
-    bet, err = _check_bet(uid, bet)
-    if err:
-        return err
-    target = " ".join(args[1:]).lower().strip()
-
+async def _play_roulette(uid: int, bet: int, target: str
+                         ) -> tuple[discord.Embed, None]:
     spin = random.randint(0, 36)
     payout, label = _roulette_payout(target, bet, spin)
-    if payout is None:
-        return (f"Worauf? rot/schwarz, gerade/ungerade, 1-18/19-36 oder eine Zahl 0-36. "
-                f"z. B. `{_bot_name} roulette {bet} rot`")
-
-    economy.add_coins(uid, -bet)
     if payout:
         economy.add_coins(uid, payout)
     await economy.flush()
-
     color, fname, fval = _outcome(bet, payout)
     spin_color = "🟢" if spin == 0 else ("🔴" if spin in _RED else "⚫")
     emb = discord.Embed(
@@ -510,4 +648,246 @@ async def _roulette(message: discord.Message, args: list[str]) -> "str | discord
     emb.set_author(name="🎰 Flo Casino")
     emb.add_field(name=fname, value=fval, inline=True)
     emb.set_footer(text=_bal_footer(uid))
-    return emb
+    return emb, None
+
+
+async def _roulette_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    if len(args) < 2:
+        await _send(message, embed=_info(
+            f"So geht's: `{_bot_name} roulette <einsatz> <auf>` – auf: rot/schwarz, "
+            f"gerade/ungerade, 1-18/19-36 oder eine Zahl 0-36."))
+        return HANDLED
+    raw = _resolve_bet(args[0], uid)
+    bet0, err = _check_bet(uid, raw)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    target = " ".join(args[1:]).lower().strip()
+    test, _ = _roulette_payout(target, 1, 0)
+    if test is None:
+        await _send(message, embed=_info(
+            f"Worauf? rot/schwarz, gerade/ungerade, 1-18/19-36 oder eine Zahl 0-36. "
+            f"z. B. `{_bot_name} roulette {bet0} rot`"))
+        return HANDLED
+    economy.add_coins(uid, -bet0)
+    emb, _ = await _play_roulette(uid, bet0, target)
+    again = _AgainView(uid, "roulette", {"bet": bet0, "target": target})
+    msg = await _send(message, embed=emb, view=again)
+    if msg:
+        again.message = msg
+    return HANDLED
+
+
+# --- Wiederholen / Formulare (Buttons & Modals) --------------------------
+async def _replay(uid: int, kind: str, params: dict
+                  ) -> tuple[discord.Embed, discord.File | None]:
+    if kind == "crash":
+        return await _play_crash(uid, params["bet"], params["target"])
+    if kind == "keno":
+        return await _play_keno(uid, params["bet"], params["picks"])
+    if kind == "roulette":
+        return await _play_roulette(uid, params["bet"], params["target"])
+    raise ValueError(kind)
+
+
+class _BetModal(discord.ui.Modal):
+    """Formular fuer Einsatz (+ Spiel-Extra). Startet das jeweilige Spiel."""
+
+    def __init__(self, kind: str, uid: int, *, title: str, params: dict | None = None) -> None:
+        super().__init__(title=title)
+        self.kind = kind
+        self.uid = uid
+        params = params or {}
+        self.bet = discord.ui.TextInput(
+            label="Einsatz", placeholder="z. B. 50 oder alles",
+            default=str(params["bet"]) if params.get("bet") else None, max_length=12)
+        self.add_item(self.bet)
+        self.extra: discord.ui.TextInput | None = None
+        if kind == "crash":
+            self.extra = discord.ui.TextInput(
+                label="Ziel-Faktor", placeholder="z. B. 2.0",
+                default=str(params.get("target", "2.0")), max_length=8)
+        elif kind == "keno":
+            self.extra = discord.ui.TextInput(
+                label="Zahlen (1–40, mit Leerzeichen)", placeholder="z. B. 3 7 12 21",
+                default=" ".join(map(str, params.get("picks", []))) or None, max_length=60)
+        elif kind == "roulette":
+            self.extra = discord.ui.TextInput(
+                label="Tipp", placeholder="rot / schwarz / gerade / 17",
+                default=str(params.get("target", "rot")), max_length=20)
+        if self.extra is not None:
+            self.add_item(self.extra)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        uid = self.uid
+        bet, err = _check_bet(uid, _resolve_bet(self.bet.value, uid))
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+
+        if self.kind == "blackjack":
+            economy.add_coins(uid, -bet)
+            emb, file, view, ended = await _bj_deal(interaction.channel_id, uid, bet)
+            await interaction.response.send_message(embed=emb, file=file, view=view)
+            msg = await interaction.original_response()
+            view.message = msg
+            if not ended:
+                _bj_views[(interaction.channel_id, uid)] = view
+            return
+
+        if self.kind == "crash":
+            target = _parse_mult(self.extra.value)
+            if target is None or target < 1.01:
+                await interaction.response.send_message(
+                    "Ziel muss eine Zahl über 1.0 sein (z. B. 2.0).", ephemeral=True)
+                return
+            target = min(target, 100.0)
+            economy.add_coins(uid, -bet)
+            emb, file = await _play_crash(uid, bet, target)
+            again = _AgainView(uid, "crash", {"bet": bet, "target": target})
+            await interaction.response.send_message(embed=emb, file=file, view=again)
+            again.message = await interaction.original_response()
+            return
+
+        if self.kind == "keno":
+            picks = _parse_picks(self.extra.value)
+            if not picks:
+                await interaction.response.send_message(
+                    "Tippe 1–8 Zahlen von 1 bis 40 (mit Leerzeichen).", ephemeral=True)
+                return
+            economy.add_coins(uid, -bet)
+            emb, _ = await _play_keno(uid, bet, picks)
+            again = _AgainView(uid, "keno", {"bet": bet, "picks": picks})
+            await interaction.response.send_message(embed=emb, view=again)
+            again.message = await interaction.original_response()
+            return
+
+        if self.kind == "roulette":
+            target = self.extra.value.strip().lower()
+            test, _ = _roulette_payout(target, 1, 0)
+            if test is None:
+                await interaction.response.send_message(
+                    "Worauf? rot/schwarz, gerade/ungerade, 1-18/19-36 oder Zahl 0–36.",
+                    ephemeral=True)
+                return
+            economy.add_coins(uid, -bet)
+            emb, _ = await _play_roulette(uid, bet, target)
+            again = _AgainView(uid, "roulette", {"bet": bet, "target": target})
+            await interaction.response.send_message(embed=emb, view=again)
+            again.message = await interaction.original_response()
+            return
+
+
+_MODAL_TITLES = {
+    "blackjack": "Blackjack – Einsatz",
+    "crash": "Crash – Einsatz & Ziel",
+    "keno": "Keno – Einsatz & Zahlen",
+    "roulette": "Roulette – Einsatz & Tipp",
+}
+
+
+class _AgainView(discord.ui.View):
+    """'Nochmal'-Buttons unter einem Ergebnis. Nur der Spieler darf klicken."""
+
+    def __init__(self, uid: int, kind: str, params: dict, *, channel_id: int | None = None) -> None:
+        super().__init__(timeout=120)
+        self.uid = uid
+        self.kind = kind
+        self.params = params
+        self.channel_id = channel_id
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.uid:
+            return True
+        await interaction.response.send_message(
+            "Spiel doch deine eigene Runde. 😉", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Nochmal", emoji="🔁", style=discord.ButtonStyle.success)
+    async def _again(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        uid = self.uid
+        bet, err = _check_bet(uid, self.params.get("bet"))
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        economy.add_coins(uid, -bet)
+        params = {**self.params, "bet": bet}
+
+        if self.kind == "blackjack":
+            ch = self.channel_id or interaction.channel_id
+            emb, file, view, ended = await _bj_deal(ch, uid, bet)
+            await interaction.response.edit_message(embed=emb, view=view, attachments=[file])
+            view.message = interaction.message
+            if not ended:
+                _bj_views[(ch, uid)] = view
+            return
+
+        emb, file = await _replay(uid, self.kind, params)
+        again = _AgainView(uid, self.kind, params, channel_id=self.channel_id)
+        attachments = [file] if file is not None else []
+        await interaction.response.edit_message(embed=emb, view=again, attachments=attachments)
+        again.message = interaction.message
+
+    @discord.ui.button(label="Einsatz ändern", emoji="✏️", style=discord.ButtonStyle.secondary)
+    async def _change(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_modal(
+            _BetModal(self.kind, self.uid, title=_MODAL_TITLES.get(self.kind, "Einsatz"),
+                      params=self.params))
+
+    async def on_timeout(self) -> None:
+        for ch in self.children:
+            if isinstance(ch, discord.ui.Button):
+                ch.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+class CasinoHubView(discord.ui.View):
+    """Casino-Uebersicht: ein Button je Spiel, der ein Formular oeffnet."""
+
+    def __init__(self, uid: int) -> None:
+        super().__init__(timeout=180)
+        self.uid = uid
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.uid:
+            return True
+        await interaction.response.send_message(
+            f"Öffne dir dein eigenes Casino mit `{_bot_name} casino`. 🎰", ephemeral=True)
+        return False
+
+    async def _open(self, interaction: discord.Interaction, kind: str, params=None) -> None:
+        await interaction.response.send_modal(
+            _BetModal(kind, self.uid, title=_MODAL_TITLES[kind], params=params))
+
+    @discord.ui.button(label="Blackjack", emoji="🂡", style=discord.ButtonStyle.primary)
+    async def _bj(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "blackjack")
+
+    @discord.ui.button(label="Crash", emoji="🚀", style=discord.ButtonStyle.primary)
+    async def _crash(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "crash", {"target": "2.0"})
+
+    @discord.ui.button(label="Keno", emoji="🎱", style=discord.ButtonStyle.secondary)
+    async def _keno(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "keno")
+
+    @discord.ui.button(label="Roulette", emoji="🎡", style=discord.ButtonStyle.secondary)
+    async def _roulette(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "roulette", {"target": "rot"})
+
+    async def on_timeout(self) -> None:
+        for ch in self.children:
+            if isinstance(ch, discord.ui.Button):
+                ch.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass

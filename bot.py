@@ -802,8 +802,8 @@ async def on_message(message: discord.Message) -> None:
                 break
 
     if antwort is not None:
-        if antwort is moderation.HANDLED or antwort is music.HANDLED:
-            return  # Modul hat selbst geantwortet (z. B. Loesch-Bestaetigung / Musik-Buttons).
+        if antwort is moderation.HANDLED or antwort is music.HANDLED or antwort is casino.HANDLED:
+            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik- / Casino-Buttons).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):
