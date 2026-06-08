@@ -965,6 +965,16 @@ async def on_ready() -> None:
             ", ".join(str(c) for c in sorted(AUTODELETE_CHANNEL_IDS)),
             AUTODELETE_SECONDS,
         )
+    # Rarity-Farb-Rollen direkt beim Start im Server anlegen (idempotent), damit
+    # die vier Farben (gruen/blau/lila/gold) sofort existieren - nicht erst beim
+    # ersten Kauf. Fehlertolerant: fehlende Rechte sprengen den Start nie.
+    if ECONOMY_ENABLED:
+        for guild in client.guilds:
+            try:
+                await economy.ensure_roles(guild)
+            except Exception:
+                log.exception("Rarity-Rollen-Setup fehlgeschlagen in '%s'",
+                              getattr(guild, "name", "?"))
     if not icon_loop.is_running():
         icon_loop.start()
     if not status_loop.is_running():

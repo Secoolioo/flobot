@@ -333,6 +333,31 @@ async def _find_or_create_role(guild: discord.Guild, rarity: str):
         return None
 
 
+async def ensure_roles(guild: discord.Guild) -> dict:
+    """Legt beim Start ALLE vier Rarity-Rollen (in ihren Farben) im Server an,
+    falls sie noch fehlen. Idempotent: vorhandene Rollen bleiben unangetastet.
+    Fehlertolerant – fehlende Rechte sprengen nie den Start. Gibt eine Statistik
+    {'created'|'existed'|'failed': [Rollennamen]} zurueck."""
+    stats: dict[str, list[str]] = {"created": [], "existed": [], "failed": []}
+    if not _enabled or guild is None:
+        return stats
+    for rarity in titles.RARITY_ORDER:
+        name = titles.RARITY[rarity]["role"]
+        if discord.utils.get(guild.roles, name=name) is not None:
+            stats["existed"].append(name)
+            continue
+        role = await _find_or_create_role(guild, rarity)
+        (stats["created"] if role is not None else stats["failed"]).append(name)
+    if stats["created"]:
+        log.info("Rarity-Rollen angelegt in '%s': %s",
+                 guild.name, ", ".join(stats["created"]))
+    if stats["failed"]:
+        log.warning("Rarity-Rollen NICHT anlegbar in '%s' (fehlt 'Rollen verwalten' "
+                    "oder Bot-Rolle zu weit unten?): %s",
+                    guild.name, ", ".join(stats["failed"]))
+    return stats
+
+
 async def _sync_role(member) -> None:
     """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
     besessenen Seltenheit (die anderen werden entfernt). Alles fehlertolerant –
