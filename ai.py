@@ -224,7 +224,7 @@ _GUARDRAIL = (
 )
 
 
-def _system_prompt(author: str = "", title: str = "") -> str:
+def _system_prompt(author: str = "", title: str = "", tone: str = "") -> str:
     persona = os.getenv("BOT_PERSONA", "").strip() or _DEFAULT_PERSONA.format(name=_bot_name)
     base = f"{persona} {_HARD_RULES.format(city=_default_city)} {_GUARDRAIL}"
     clean = _clean_title(title)
@@ -235,6 +235,9 @@ def _system_prompt(author: str = "", title: str = "") -> str:
             f"frech als Anrede ein (z. B. 'Na klar, {clean}.'), aber nicht in jedem "
             "Satz und niemals mit Emoji."
         )
+    # Tonfall nach Seltenheit des Titels: je seltener, desto entspannter spricht Flo.
+    if tone:
+        base += f" {tone.strip()}"
     return base
 
 
@@ -357,11 +360,13 @@ async def generate(
         return None
 
 
-async def ask_flo(user_message: str, *, author: str = "", title: str = "") -> str:
+async def ask_flo(user_message: str, *, author: str = "", title: str = "",
+                  tone: str = "") -> str:
     """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
     Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
-    mit diesem Titel anzusprechen."""
+    mit diesem Titel anzusprechen. 'tone' steuert die Gelassenheit: je seltener
+    der Titel, desto entspannter/chilliger spricht Flo (kommt aus economy)."""
     if _client is None:
         return "Mein KI-Modus ist gerade nicht eingerichtet."
 
@@ -370,7 +375,7 @@ async def ask_flo(user_message: str, *, author: str = "", title: str = "") -> st
         text = f"{author} schreibt: {text}"
 
     messages: list[dict] = [
-        {"role": "system", "content": _system_prompt(author, title)},
+        {"role": "system", "content": _system_prompt(author, title, tone)},
         {"role": "user", "content": text},
     ]
 

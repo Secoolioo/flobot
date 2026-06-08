@@ -25,9 +25,15 @@ import discord
 
 import ai
 import leaderboard_img
+import render
+import titles
 from store import JsonStore
 
 log = logging.getLogger("dcbot.economy")
+
+# Sentinel: economy hat selbst geantwortet (interaktive Shop-/Inventar-View)
+# -> bot.py schweigt (wie bei games/casino).
+HANDLED = object()
 
 # --- Konfiguration -------------------------------------------------------
 _enabled: bool = False
@@ -51,14 +57,27 @@ LEVELUP_CHANNEL_ID = int(os.getenv("LEVELUP_CHANNEL_ID", "1512045750362837013") 
 # aus, damit Erfolge im Commands-Channel sichtbar bleiben.
 LEVELUP_EMBED_TITLE = "🎉 Level Up!"
 
-# Shop: Titel sind reine Kosmetik (erscheinen auf der Level-Karte).
-SHOP: dict[str, dict] = {
+# --- Shop v1.2 -----------------------------------------------------------
+# Der Shop zeigt taeglich eine zufaellige, seltenheits-gewichtete Auswahl aus
+# zehntausenden Titeln (siehe titles.py). Um 2 Uhr morgens wird neu gewuerfelt
+# (bot.py ruft refresh_shop). Gekaufte Titel geben dem Nutzer eine farbige Rolle
+# in der Seltenheits-Farbe (gruen/blau/lila/gold).
+SHOP_SIZE = int(os.getenv("SHOP_SIZE", "8") or "8")
+
+# Alte, fest verdrahtete Titel von vor v1.2 - nur noch fuer die Migration alter
+# Profile (wer sie schon besitzt, behaelt sie). Werden nicht mehr verkauft.
+LEGACY_SHOP: dict[str, dict] = {
     "sigma":    {"preis": 1000, "titel": "🗿 Sigma",      "info": "Der Klassiker."},
     "gigachad": {"preis": 2500, "titel": "💪 Gigachad",   "info": "Maximale Aura."},
     "rizzler":  {"preis": 1500, "titel": "😏 Rizzler",    "info": "Unwiderstehlich."},
     "goblin":   {"preis":  500, "titel": "👺 Goblin",     "info": "Chaos-Energie."},
     "npc":      {"preis":  100, "titel": "🤖 NPC",        "info": "Lebt im Hintergrund."},
     "king":     {"preis": 5000, "titel": "👑 Server-King", "info": "Ganz oben."},
+}
+# Welche Seltenheit bekommen alte Titel bei der Migration?
+LEGACY_RARITY = {
+    "sigma": "mythisch", "gigachad": "legendary", "rizzler": "selten",
+    "goblin": "normal", "npc": "normal", "king": "legendary",
 }
 
 # Cooldowns nur im Speicher (gehen bei Neustart verloren - egal, sind kurz).
@@ -90,6 +109,46 @@ def _users() -> dict:
     return _store.data.setdefault("users", {})
 
 
+def _strip_emoji(label: str) -> str:
+    """'👑 Goldener König' -> 'Goldener König' (fuehrendes Emoji/Symbol weg)."""
+    return re.sub(r"^\W+\s*", "", label or "").strip()
+
+
+def _owned_entry_from_legacy(key: str) -> dict:
+    it = LEGACY_SHOP.get(key)
+    if it:
+        return {"text": _strip_emoji(it["titel"]), "label": it["titel"],
+                "rarity": LEGACY_RARITY.get(key, "selten")}
+    # Unbekannter String -> als generierter Titel-Text behandeln.
+    return {"text": key, "label": titles.label_of(key), "rarity": titles.rarity_of(key)}
+
+
+def _migrate_profile(prof: dict) -> None:
+    """Bringt ein Profil auf das v1.2-Schema (owned = Liste von Dicts mit
+    text/label/rarity, plus title_rarity). Idempotent."""
+    prof.setdefault("owned", [])
+    prof.setdefault("msgs", 0)
+    prof.setdefault("title", "")
+    prof.setdefault("title_rarity", "")
+    owned = prof["owned"]
+    # Altprofil (vor Inventar): wer einen Titel TRAEGT, bekommt ihn ins Inventar.
+    if prof.get("title") and not owned:
+        for k, it in LEGACY_SHOP.items():
+            if it["titel"] == prof["title"]:
+                owned.append(k)
+                break
+    # owned von Liste[str] (alte Keys) -> Liste[dict] migrieren.
+    if owned and isinstance(owned[0], str):
+        prof["owned"] = [_owned_entry_from_legacy(k) for k in owned]
+        owned = prof["owned"]
+    # Getragene Seltenheit nachziehen, falls Titel da, aber Rarity leer.
+    if prof.get("title") and not prof.get("title_rarity"):
+        for o in owned:
+            if o.get("label") == prof["title"]:
+                prof["title_rarity"] = o.get("rarity", "")
+                break
+
+
 def _profile(user_id: int) -> dict:
     """Holt (oder erstellt) das Profil eines Nutzers."""
     users = _users()
@@ -97,18 +156,37 @@ def _profile(user_id: int) -> dict:
     prof = users.get(key)
     if prof is None:
         prof = {"xp": 0, "coins": 0, "last_daily": "", "streak": 0,
-                "voice_secs": 0, "msgs": 0, "title": "", "owned": [], "name": ""}
+                "voice_secs": 0, "msgs": 0, "title": "", "title_rarity": "",
+                "owned": [], "name": ""}
         users[key] = prof
-    prof.setdefault("owned", [])  # Altprofile nachruesten
-    prof.setdefault("msgs", 0)    # Nachrichtenzaehler (fuer das Leaderboard-Bild)
-    # Migration: wer schon einen Titel TRAEGT (Altprofil vor dem Inventar),
-    # bekommt diesen Titel rueckwirkend ins Inventar.
-    if prof.get("title") and not prof["owned"]:
-        for k, it in SHOP.items():
-            if it["titel"] == prof["title"]:
-                prof["owned"].append(k)
-                break
+    _migrate_profile(prof)
     return prof
+
+
+def _owned_list(prof: dict) -> list[dict]:
+    """Inventar als Liste von Dicts (text/label/rarity)."""
+    return prof.setdefault("owned", [])
+
+
+# --- Auto-Loesch-Schutz (fuer die Shop-/Inventar-Views) ------------------
+def _protect(msg) -> None:
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.protect_message(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _release(msg) -> None:
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def _flush() -> None:
@@ -182,6 +260,136 @@ def get_title(user_id: int) -> str:
     if not _enabled:
         return ""
     return _profile(user_id).get("title", "") or ""
+
+
+def get_user_rarity(user_id: int) -> str | None:
+    """Hoechste Seltenheit, die der Nutzer BESITZT (fuer die Rollen-Farbe)."""
+    if not _enabled:
+        return None
+    best: str | None = None
+    best_rank = -1
+    for o in _owned_list(_profile(user_id)):
+        rank = titles.RANK.get(o.get("rarity", "normal"), 0)
+        if rank > best_rank:
+            best_rank, best = rank, o.get("rarity", "normal")
+    return best
+
+
+def get_tone(user_id: int) -> str:
+    """Tonfall-Hinweis fuer die KI: je seltener der GETRAGENE Titel, desto
+    entspannter spricht Flo. Leerer String = normaler Ton."""
+    if not _enabled:
+        return ""
+    rar = _profile(user_id).get("title_rarity") or ""
+    return titles.RARITY.get(rar, {}).get("tone", "") if rar else ""
+
+
+# --- Taeglicher Shop -----------------------------------------------------
+def _shop_state() -> dict:
+    assert _store is not None
+    return _store.data.setdefault("shop", {"date": "", "items": []})
+
+
+def refresh_shop(force: bool = False) -> dict:
+    """Wuerfelt die Tagesauswahl neu, falls noetig (neuer Tag, leer oder force).
+    Speichert NICHT selbst – Aufrufer ruft danach flush()."""
+    st = _shop_state()
+    if not force and st.get("date") == _today() and st.get("items"):
+        return st
+    items = titles.random_titles(SHOP_SIZE)
+    for i, e in enumerate(items, 1):
+        e["n"] = i
+    st["date"] = _today()
+    st["items"] = items
+    log.info("Flo Shop neu gewuerfelt (%d Titel, %s).", len(items), st["date"])
+    return st
+
+
+async def refresh_shop_async(force: bool = False) -> dict:
+    st = refresh_shop(force=force)
+    await _flush()
+    return st
+
+
+def get_shop_items() -> list[dict]:
+    return _shop_state().get("items", [])
+
+
+# --- Seltenheits-Rollen --------------------------------------------------
+async def _find_or_create_role(guild: discord.Guild, rarity: str):
+    """Sucht die Rarity-Rolle oder legt sie in der passenden Farbe an.
+    Gibt None zurueck, wenn das nicht klappt (fehlende Rechte o. Ae.)."""
+    meta = titles.RARITY[rarity]
+    name = meta["role"]
+    role = discord.utils.get(guild.roles, name=name)
+    if role is not None:
+        return role
+    try:
+        return await guild.create_role(
+            name=name, colour=discord.Colour(meta["color"]),
+            mentionable=False, reason="Flo Titel-Seltenheit (v1.2)")
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning("Konnte Rolle '%s' nicht anlegen (Rechte?).", name)
+        return None
+
+
+async def _sync_role(member) -> None:
+    """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
+    besessenen Seltenheit (die anderen werden entfernt). Alles fehlertolerant –
+    ein Rechteproblem darf den Kauf nie sprengen."""
+    guild = getattr(member, "guild", None)
+    if guild is None:
+        return
+    best = get_user_rarity(member.id)
+    want = titles.RARITY[best]["role"] if best else None
+    flo_roles = {titles.RARITY[r]["role"] for r in titles.RARITY_ORDER}
+    have = list(getattr(member, "roles", []))
+    to_remove = [r for r in have if r.name in flo_roles and r.name != want]
+    try:
+        if to_remove:
+            await member.remove_roles(*to_remove, reason="Flo Titel-Update")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    if want and not any(r.name == want for r in have):
+        role = await _find_or_create_role(guild, best)
+        if role is not None:
+            try:
+                await member.add_roles(role, reason="Flo Titel gekauft")
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+
+async def _do_buy(member, item: dict) -> str:
+    """Kauft (oder legt an) den Titel 'item' fuer 'member', vergibt die Rolle und
+    gibt eine Antwort als Text zurueck."""
+    prof = _profile(member.id)
+    owned = _owned_list(prof)
+    meta = titles.RARITY[item["rarity"]]
+    already = next((o for o in owned if o.get("text") == item["text"]), None)
+    if already:
+        if prof.get("title") == item["label"]:
+            return f"Den Titel **{item['label']}** trägst du schon. 😎"
+        prof["title"] = item["label"]
+        prof["title_rarity"] = item["rarity"]
+        await _sync_role(member)
+        await _flush()
+        return f"Den hast du schon – ich hab dir **{item['label']}** angelegt. 😎"
+    if prof["coins"] < item["price"]:
+        fehlt = item["price"] - prof["coins"]
+        return f"Zu teuer – dir fehlen noch {fehlt} {COIN}."
+    prof["coins"] -= item["price"]
+    owned.append({"text": item["text"], "label": item["label"],
+                  "rarity": item["rarity"]})
+    prof["title"] = item["label"]
+    prof["title_rarity"] = item["rarity"]
+    await _sync_role(member)
+    await _flush()
+    chill = ("ab jetzt redet Flo richtig entspannt mit dir 😌"
+             if item["rarity"] in ("mythisch", "legendary")
+             else "Flo spricht dich ab jetzt damit an")
+    return (f"🎉 Gekauft! Du trägst jetzt **{item['label']}** "
+            f"({meta['emoji']} {meta['label']}) und hast die Rolle "
+            f"**{meta['role']}** bekommen – {chill}.")
 
 
 # --- Passiver Hook: XP pro Nachricht -------------------------------------
@@ -325,14 +533,14 @@ async def handle(message: discord.Message) -> "str | discord.Embed | discord.Fil
     if first in ("pay", "zahl", "zahle", "überweis", "ueberweis", "überweise"):
         return await _pay(message)
     if first in ("shop", "laden", "store"):
-        return _shop()
+        return await _shop(message)
     if first in ("kaufen", "buy", "kauf"):
-        return await _buy(message.author, low)
+        return await _buy_text(message.author, parts)
     if first in ("inventar", "inventory", "inv", "titel", "titles", "title"):
-        # 'titel <name>' legt einen besessenen Titel an; sonst Inventar zeigen.
+        # 'titel ab/<name>' aendert den getragenen Titel; sonst Inventar zeigen.
         if first in ("titel", "title", "titles") and len(parts) > 1:
             return await _equip(message.author, low)
-        return _inventory(message.author)
+        return await _inventory(message)
     if first in ("equip", "anlegen", "trage", "tragen", "anziehen", "setze"):
         return await _equip(message.author, low)
     return None
@@ -416,36 +624,61 @@ def _leaderboard_embed() -> discord.Embed:
     return emb
 
 
-def _inventory(member: discord.abc.User) -> discord.Embed:
-    prof = _profile(member.id)
-    owned = prof.get("owned", [])
+def _inventory_embed(member, prof: dict, owned: list[dict]) -> discord.Embed:
     current = prof.get("title") or "—"
+    color = discord.Color.blurple()
+    if owned:
+        best = max(owned, key=lambda o: titles.RANK.get(o.get("rarity", "normal"), 0))
+        color = discord.Color(titles.RARITY[best.get("rarity", "normal")]["color"])
     emb = discord.Embed(
         title=f"🎒 Inventar von {member.display_name}",
         description=f"Getragener Titel: **{current}**",
-        color=discord.Color.blurple(),
+        color=color,
     )
     try:
         emb.set_thumbnail(url=member.display_avatar.url)
     except Exception:  # noqa: BLE001
         pass
-    if owned:
+    if not owned:
+        emb.add_field(name="Noch leer",
+                      value=f"Kauf dir einen Titel im `{_bot_name} shop`!", inline=False)
+        return emb
+    by: dict[str, list[dict]] = {r: [] for r in titles.RARITY_ORDER}
+    for o in owned:
+        by.setdefault(o.get("rarity", "normal"), []).append(o)
+    for r in reversed(titles.RARITY_ORDER):   # legendaer zuerst
+        bucket = by.get(r) or []
+        if not bucket:
+            continue
+        meta = titles.RARITY[r]
         lines = []
-        for key in owned:
-            item = SHOP.get(key)
-            label = item["titel"] if item else key
-            worn = " ✅" if item and prof.get("title") == item["titel"] else ""
-            lines.append(f"• `{key}` — {label}{worn}")
-        emb.add_field(name="Deine Titel", value="\n".join(lines), inline=False)
-        emb.set_footer(
-            text=f"Anlegen: {_bot_name} titel <name>  ·  Ablegen: {_bot_name} titel ab"
-        )
-    else:
-        emb.add_field(
-            name="Noch leer",
-            value=f"Kauf dir einen Titel im `{_bot_name} shop`!", inline=False,
-        )
+        for o in bucket[:12]:
+            worn = " ✅" if o.get("label") == prof.get("title") else ""
+            lines.append(f"{o.get('label', o.get('text', '?'))}{worn}")
+        if len(bucket) > 12:
+            lines.append(f"…und {len(bucket) - 12} weitere")
+        emb.add_field(name=f"{meta['emoji']} {meta['label']} ({len(bucket)})",
+                      value="\n".join(lines), inline=False)
+    emb.set_footer(text=f"Titel wechseln: Dropdown unten  ·  Ablegen: {_bot_name} titel ab")
     return emb
+
+
+async def _inventory(message: discord.Message) -> object:
+    member = message.author
+    prof = _profile(member.id)
+    owned = _owned_list(prof)
+    emb = _inventory_embed(member, prof, owned)
+    if not owned:
+        return emb
+    view = _InventoryView(member.id, owned)
+    try:
+        msg = await message.reply(embed=emb, view=view, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Inventar konnte nicht gesendet werden")
+        return HANDLED
+    view.message = msg
+    _protect(msg)
+    return HANDLED
 
 
 async def _daily(member: discord.abc.User) -> str:
@@ -492,73 +725,242 @@ async def _pay(message: discord.Message) -> str:
     return f"✅ {message.author.display_name} → {ziel.display_name}: **{betrag} {COIN}**."
 
 
-def _shop() -> discord.Embed:
+async def _ensure_shop() -> dict:
+    """Sorgt dafuer, dass der heutige Shop existiert (sonst neu wuerfeln+speichern)."""
+    st = _shop_state()
+    if st.get("date") != _today() or not st.get("items"):
+        return await refresh_shop_async(force=False)
+    return st
+
+
+def _shop_embed(items: list[dict]) -> discord.Embed:
+    rar_best = max(items, key=lambda e: titles.RANK.get(e["rarity"], 0))["rarity"]
     emb = discord.Embed(
-        title="🛒 Flo Shop",
-        description=("Titel sind Kosmetik – sie stehen auf deiner Level-Karte und in "
-                     "der Bestenliste, und Flo spricht dich damit an."),
-        color=discord.Color.blurple(),
+        title="🛒 Flo Shop — Titel des Tages",
+        description=("Jeden Tag um **2 Uhr** gibt's frische Titel! Je seltener, desto "
+                     "edler die Farbe – und desto **entspannter quatscht Flo** mit dir.\n"
+                     f"Kaufen: **Dropdown unten** oder `{_bot_name} kaufen <Nr>`."),
+        color=discord.Color(titles.RARITY[rar_best]["color"]),
     )
-    for key, item in SHOP.items():
+    for e in items:
+        meta = titles.RARITY[e["rarity"]]
         emb.add_field(
-            name=item["titel"],
-            value=f"💰 **{item['preis']}** {COIN}\n`{key}` · {item['info']}",
+            name=f"{e['n']}. {e['label']}",
+            value=f"{meta['emoji']} **{meta['label']}** · 💰 {e['price']} {COIN}",
             inline=True,
         )
-    # Letzte Reihe auf ein sauberes 3er-Raster auffuellen (unsichtbare Felder).
     while len(emb.fields) % 3 != 0:
         emb.add_field(name="​", value="​", inline=True)
-    emb.set_footer(
-        text=f"Kaufen: {_bot_name} kaufen <name>   ·   Tragen: {_bot_name} titel <name>"
-    )
+    emb.set_footer(text=f"{len(items)} Titel heute · beim Kauf gibt's die farbige Rarity-Rolle")
     return emb
 
 
-async def _buy(member: discord.abc.User, low: str) -> str:
-    parts = low.split()
-    name = parts[1] if len(parts) > 1 else ""
-    item = SHOP.get(name)
-    if not item:
-        return f"Das gibt's nicht. Schau in den `{_bot_name} shop`."
-    prof = _profile(member.id)
-    owned = prof.setdefault("owned", [])
-    if name in owned:
-        # Schon gekauft -> direkt anlegen, statt nochmal zu kassieren.
-        if prof.get("title") == item["titel"]:
-            return f"Den Titel **{item['titel']}** trägst du schon. 😎"
-        prof["title"] = item["titel"]
-        await _flush()
-        return f"Den hast du schon – ich hab dir **{item['titel']}** angelegt. 😎"
-    if prof["coins"] < item["preis"]:
-        fehlt = item["preis"] - prof["coins"]
-        return f"Zu teuer - dir fehlen noch {fehlt} {COIN}."
-    prof["coins"] -= item["preis"]
-    owned.append(name)
-    prof["title"] = item["titel"]
-    await _flush()
-    return (f"🎉 Gekauft! Du trägst jetzt den Titel **{item['titel']}**. "
-            f"Ab jetzt spricht Flo dich damit an.")
+def _shop_banner_file(items: list[dict], date: str):
+    """Optionales Shop-Banner (render.shop_banner). Faellt sauber aus, wenn der
+    Renderer (noch) nicht da ist."""
+    fn = getattr(render, "shop_banner", None)
+    if not callable(fn):
+        return None
+    try:
+        buf = fn(items, date=date)
+    except Exception:  # noqa: BLE001 - Bild ist nice-to-have, nie fatal
+        log.exception("Shop-Banner fehlgeschlagen - nutze Embed ohne Bild")
+        return None
+    if buf is None:
+        return None
+    return discord.File(buf, filename="shop.png")
 
 
-async def _equip(member: discord.abc.User, low: str) -> str:
+async def _shop(message: discord.Message) -> object:
+    st = await _ensure_shop()
+    items = st.get("items", [])
+    if not items:
+        return discord.Embed(
+            title="🛒 Flo Shop",
+            description="Der Shop ist gerade leer – schau gleich nochmal rein.",
+            color=discord.Color.blurple())
+    emb = _shop_embed(items)
+    file = _shop_banner_file(items, st.get("date", ""))
+    if file is not None:
+        emb.set_image(url="attachment://shop.png")
+    view = _ShopView(items)
+    try:
+        kwargs = {"embed": emb, "view": view, "mention_author": False}
+        if file is not None:
+            kwargs["file"] = file
+        msg = await message.reply(**kwargs)
+    except discord.HTTPException:
+        log.exception("Shop konnte nicht gesendet werden")
+        return HANDLED
+    view.message = msg
+    _protect(msg)
+    return HANDLED
+
+
+async def _buy_text(member, parts: list[str]) -> str:
+    st = await _ensure_shop()
+    items = st.get("items", [])
+    arg = parts[1] if len(parts) > 1 else ""
+    if not arg.isdigit():
+        return (f"Welche Nummer? z. B. `{_bot_name} kaufen 1` – oder öffne den "
+                f"`{_bot_name} shop` und nimm das Dropdown.")
+    n = int(arg)
+    e = next((x for x in items if x.get("n") == n), None)
+    if not e:
+        return f"Nummer {n} gibt's heute nicht. Schau in den `{_bot_name} shop`."
+    return await _do_buy(member, e)
+
+
+async def _equip(member, low: str) -> str:
     parts = low.split()
-    name = parts[1] if len(parts) > 1 else ""
+    name = " ".join(parts[1:]).strip()
     prof = _profile(member.id)
     if name in ("ab", "aus", "weg", "kein", "keinen", "none", "off"):
         prof["title"] = ""
+        prof["title_rarity"] = ""
+        await _sync_role(member)
         await _flush()
         return "Titel abgelegt – du trägst jetzt keinen. 🫥"
     if not name:
-        return (f"Welchen Titel? `{_bot_name} titel <name>` "
-                f"(deine Titel: `{_bot_name} inventar`).")
-    item = SHOP.get(name)
-    if not item:
-        return f"Den Titel `{name}` gibt's nicht. Schau in den `{_bot_name} shop`."
-    if name not in prof.get("owned", []):
-        return (f"Den Titel **{item['titel']}** besitzt du nicht. "
-                f"Kaufen: `{_bot_name} kaufen {name}`.")
-    if prof.get("title") == item["titel"]:
-        return f"Du trägst **{item['titel']}** bereits. 😎"
-    prof["title"] = item["titel"]
+        return (f"Welchen Titel? Öffne `{_bot_name} inventar` und wähl ihn im "
+                f"Dropdown (oder `{_bot_name} titel ab` zum Ablegen).")
+    owned = _owned_list(prof)
+    o = (next((x for x in owned if x.get("text", "").lower() == name), None)
+         or next((x for x in owned if name in x.get("text", "").lower()), None))
+    if not o:
+        return (f"Den Titel **{name}** besitzt du nicht. Öffne `{_bot_name} inventar` "
+                f"und wähl im Dropdown.")
+    if prof.get("title") == o.get("label"):
+        return f"Du trägst **{o.get('label')}** bereits. 😎"
+    prof["title"] = o.get("label")
+    prof["title_rarity"] = o.get("rarity", "")
+    await _sync_role(member)
     await _flush()
-    return f"✅ Titel gewechselt: Du trägst jetzt **{item['titel']}**."
+    return f"✅ Titel gewechselt: Du trägst jetzt **{o.get('label')}**."
+
+
+# --- Interaktive Shop-/Inventar-Views ------------------------------------
+class _ShopBuySelect(discord.ui.Select):
+    def __init__(self, items: list[dict]) -> None:
+        opts = []
+        for e in items:
+            meta = titles.RARITY[e["rarity"]]
+            opts.append(discord.SelectOption(
+                label=f"{e['n']}. {e['text']}"[:100],
+                value=str(e["n"]),
+                description=f"{meta['label']} · {e['price']} {COIN}"[:100],
+            ))
+        super().__init__(placeholder="Titel kaufen…", min_values=1, max_values=1,
+                         options=opts, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.view._buy(interaction, int(self.values[0]))
+
+
+class _ShopView(discord.ui.View):
+    """Geteilter Tages-Shop: jeder kann fuer sich selbst kaufen."""
+
+    def __init__(self, items: list[dict]) -> None:
+        super().__init__(timeout=180)
+        self.message = None
+        self.items = {e["n"]: e for e in items}
+        self.add_item(_ShopBuySelect(items))
+
+    async def _buy(self, interaction: discord.Interaction, n: int) -> None:
+        e = self.items.get(n)
+        if not e:
+            await interaction.response.send_message(
+                "Diesen Titel gibt's nicht mehr.", ephemeral=True)
+            return
+        try:
+            text = await _do_buy(interaction.user, e)
+        except Exception:  # noqa: BLE001
+            log.exception("Kauf fehlgeschlagen")
+            text = "Da ist beim Kauf etwas schiefgelaufen. Versuch's gleich nochmal."
+        await interaction.response.send_message(text, ephemeral=True)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            _release(self.message)
+
+
+class _EquipSelect(discord.ui.Select):
+    def __init__(self, owned: list[dict]) -> None:
+        opts = []
+        seen: set[str] = set()
+        for o in owned:
+            t = o.get("text", "")
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            meta = titles.RARITY.get(o.get("rarity", "normal"), titles.RARITY["normal"])
+            opts.append(discord.SelectOption(
+                label=t[:100], value=t[:100], description=meta["label"]))
+            if len(opts) >= 25:
+                break
+        super().__init__(placeholder="Titel anlegen…", min_values=1, max_values=1,
+                         options=opts, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.view._equip(interaction, self.values[0])
+
+
+class _InventoryView(discord.ui.View):
+    def __init__(self, uid: int, owned: list[dict]) -> None:
+        super().__init__(timeout=180)
+        self.uid = uid
+        self.message = None
+        self._owned = {o.get("text"): o for o in owned}
+        self.add_item(_EquipSelect(owned))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.uid:
+            await interaction.response.send_message(
+                "Das ist nicht dein Inventar. 🙂", ephemeral=True)
+            return False
+        return True
+
+    async def _refresh(self, interaction: discord.Interaction) -> None:
+        prof = _profile(self.uid)
+        emb = _inventory_embed(interaction.user, prof, _owned_list(prof))
+        await interaction.response.edit_message(embed=emb, view=self)
+
+    async def _equip(self, interaction: discord.Interaction, text: str) -> None:
+        prof = _profile(self.uid)
+        o = self._owned.get(text)
+        if not o:
+            await interaction.response.send_message(
+                "Den Titel hast du nicht.", ephemeral=True)
+            return
+        prof["title"] = o.get("label")
+        prof["title_rarity"] = o.get("rarity", "")
+        await _sync_role(interaction.user)
+        await _flush()
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Titel ablegen", emoji="🫥",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def _unequip(self, interaction: discord.Interaction,
+                       button: discord.ui.Button) -> None:
+        prof = _profile(self.uid)
+        prof["title"] = ""
+        prof["title_rarity"] = ""
+        await _sync_role(interaction.user)
+        await _flush()
+        await self._refresh(interaction)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            _release(self.message)

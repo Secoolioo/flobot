@@ -235,34 +235,53 @@ class GuildPlayer:
 
     def start(self, track: Track) -> None:
         """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL)."""
+        if self.voice is None or not self.voice.is_connected():
+            raise RuntimeError("keine Voice-Verbindung")
         source = discord.FFmpegPCMAudio(
             track.stream_url, before_options=_FFMPEG_BEFORE, options=_FFMPEG_OPTS
         )
         self.current = track
-        self.voice.play(  # type: ignore[union-attr]
+        self.voice.play(
             discord.PCMVolumeTransformer(source, self.volume),
             after=self._after,
         )
 
     def _after(self, error: Exception | None) -> None:
         # Laeuft in einem FFmpeg-Thread -> Arbeit zurueck in den Event-Loop schieben.
+        # Alles abfangen: ein Fehler hier darf den Player-Thread NICHT mitreissen.
         if error:
             log.error("FFmpeg/Player-Fehler: %s", error)
-        asyncio.run_coroutine_threadsafe(self._advance(), self.loop)
+        try:
+            asyncio.run_coroutine_threadsafe(self._advance(), self.loop)
+        except Exception:
+            log.exception("Konnte naechsten Track nach Songende nicht einplanen")
 
     async def _advance(self) -> None:
-        if not self.voice or not self.voice.is_connected() or not self.queue:
-            self.current = None
+        """Spielt den naechsten abspielbaren Track. Kaputte/altersbeschraenkte
+        Eintraege (yt-dlp DownloadError, 'keine Treffer', tote Links) werden
+        UEBERSPRUNGEN statt den Player anzuhalten - so bleibt die Musik bei einem
+        faulen Song nicht stehen. Schleife statt Rekursion, damit auch eine ganze
+        Reihe toter Songs sauber uebersprungen wird."""
+        while True:
+            if not self.voice or not self.voice.is_connected() or not self.queue:
+                self.current = None
+                await _retire_panel(self)
+                return
+            track = self.queue.pop(0)
+            try:
+                if not track.stream_url and track.query:
+                    track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
+                self.start(track)
+            except Exception:
+                log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
+                continue  # naechsten Song versuchen, nicht stoppen
+            # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
+            # aus, darf das den laufenden Song NICHT abbrechen.
+            try:
+                await _send_panel(self, track)
+            except Exception:
+                log.exception("Now-Playing-Panel nach Advance fehlgeschlagen (egal)")
             return
-        track = self.queue.pop(0)
-        try:
-            if not track.stream_url and track.query:
-                track = await _resolve_track(track)  # Playlist-Track erst jetzt aufloesen
-            self.start(track)
-            await _send_panel(self, track)
-        except Exception:
-            log.exception("Konnte naechsten Track nicht starten: %s", track.title)
-            await self._advance()  # einen weiter
 
     async def disconnect(self) -> None:
         self.queue.clear()
@@ -654,7 +673,11 @@ async def _play_many(
     track.query = first_inp
     for inp, title in rest:
         player.queue.append(_lazy_track(inp, title, requested_by))
-    player.start(track)
+    try:
+        player.start(track)
+    except Exception:
+        log.exception("Erster Track (Mehrfach) nicht abspielbar: %s", track.title)
+        return _embed("Den ersten Song konnte ich gerade nicht abspielen.", color=_COL_ERR)
     extra = f"+{len(rest)} weitere {label}" if rest else ""
     await _send_panel(player, track, reply_to=reply_to, extra=extra)
     return HANDLED
@@ -1112,6 +1135,11 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
             return HANDLED
         return _added_embed(track, pos, pos)
 
-    player.start(track)
+    try:
+        player.start(track)
+    except Exception:
+        log.exception("Track nicht abspielbar: %s", track.title)
+        return _embed("Den Song konnte ich gerade nicht abspielen. Probier einen anderen.",
+                      color=_COL_ERR)
     await _send_panel(player, track, reply_to=message)
     return HANDLED

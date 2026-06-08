@@ -623,3 +623,74 @@ def keno_grid(picks: list, draw: list, hits: list) -> io.BytesIO:
     lx += _legend(d, lx, ly, (41, 55, 90), "dein Tipp")
     _legend(d, lx, ly, (66, 70, 88), "gezogen")
     return _png(img)
+
+
+# --- Shop-Banner (v1.2) --------------------------------------------------
+def _hex(value: int) -> tuple[int, int, int]:
+    return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
+
+
+def _mix(a: tuple, b: tuple, f: float) -> tuple:
+    return tuple(round(a[i] + (b[i] - a[i]) * f) for i in range(3))
+
+
+def shop_banner(items: list[dict], *, date: str = "") -> io.BytesIO | None:
+    """Schoenes Banner fuer den Tages-Shop: je Titel eine Zeile, eingefaerbt in
+    der Seltenheits-Farbe (gruen/blau/lila/gold). Erwartet je Item ein Dict mit
+    'n', 'text', 'price', 'color', 'rarity_label'. Gibt PNG (BytesIO) zurueck.
+
+    Bewusst OHNE Emoji (die Pillow-Schrift kann keine Farb-Emojis) – die
+    Seltenheit wird ueber Farbe + Label transportiert."""
+    if not items:
+        return None
+    pad = 28
+    row_h = 76
+    gap = 14
+    head = 104
+    W = 920
+    H = head + len(items) * (row_h + gap) + pad
+    img = _vgrad(W, H, (26, 30, 46), (12, 14, 24)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # Kopfzeile
+    d.text((pad, 20), "FLO SHOP", font=_font(46), fill=_WHITE)
+    sub = "TITEL DES TAGES"
+    if date:
+        sub += f"  ·  Stand {date}  ·  taeglich 2 Uhr neu"
+    d.text((pad + 2, 74), sub, font=_font(19), fill=(150, 158, 180))
+    d.line([(pad, head - 12), (W - pad, head - 12)], fill=(60, 66, 90), width=2)
+
+    y = head
+    for e in items:
+        col = _hex(int(e.get("color", 0x57F287)))
+        panel_bg = _mix((22, 26, 40), col, 0.16)
+        # Panel mit farbigem Rahmen
+        d.rounded_rectangle([pad, y, W - pad, y + row_h], radius=16,
+                            fill=panel_bg, outline=col, width=2)
+        # Akzent-Balken links
+        d.rounded_rectangle([pad, y, pad + 10, y + row_h], radius=5, fill=col)
+        # Nummern-Badge
+        bx = pad + 30
+        d.rounded_rectangle([bx, y + 18, bx + 40, y + 58], radius=12, fill=col)
+        d.text((bx + 20, y + 38), str(e.get("n", "?")), font=_font(26),
+               fill=(16, 18, 26), anchor="mm")
+        # Titel-Text
+        title = str(e.get("text", "?"))
+        tx = bx + 62
+        d.text((tx, y + 14), title, font=_font(28), fill=_WHITE)
+        # Seltenheits-Label
+        d.text((tx, y + 47), str(e.get("rarity_label", "")).upper(),
+               font=_font(17), fill=col)
+        # Preis rechts (kleine Muenze + Zahl)
+        price = f"{e.get('price', 0)}"
+        pf = _font(26)
+        pw = d.textlength(price, font=pf)
+        coin_x = W - pad - 22 - pw - 34
+        d.ellipse([coin_x, y + 24, coin_x + 28, y + 52], fill=_GOLD,
+                  outline=(180, 140, 10), width=2)
+        d.text((coin_x + 14, y + 38), "C", font=_font(18), fill=(120, 90, 0),
+               anchor="mm")
+        d.text((W - pad - 22, y + 38), price, font=pf, fill=_GOLD, anchor="rm")
+        y += row_h + gap
+
+    return _png(img)

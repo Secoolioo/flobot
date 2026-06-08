@@ -12,7 +12,8 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
+import time
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -383,15 +384,22 @@ def _help_detail_embed(key: str) -> discord.Embed:
         return emb
     if key == "economy":
         emb = discord.Embed(title="📈 Level & Flo Coins",
-                            description="Sammle XP und Coins, gib in den Shop.",
+                            description="Sammle XP und Coins, gib sie im Shop für Titel aus.",
                             color=0xF1C40F)
         emb.add_field(name="Level",
             value=f"`{name} level` · `{name} top`", inline=False)
         emb.add_field(name="Coins",
             value=f"`{name} coins` · `{name} daily` · `{name} pay @x 100`", inline=False)
-        emb.add_field(name="Shop",
-            value=(f"`{name} shop` · `{name} kaufen sigma` · `{name} inventar` · "
-                   f"`{name} titel sigma`"), inline=False)
+        emb.add_field(name="Shop & Titel",
+            value=(f"`{name} shop` – jeden Tag um 2 Uhr **neue** Titel, einfach per "
+                   "**Button** kaufen.\n"
+                   f"`{name} inventar` · `{name} titel <name>` · `{name} titel ab`"),
+            inline=False)
+        emb.add_field(name="Seltenheit & Rollen",
+            value=("🟢 Normal · 🔵 Selten · 🟣 Mythisch · 🟡 Legendär\n"
+                   "Beim Kauf bekommst du die **farbige Rolle** dazu – und je seltener "
+                   "dein Titel, desto entspannter redet Flo mit dir. 😎"),
+            inline=False)
         return emb
     if key == "casino":
         emb = discord.Embed(title="🎰 Casino",
@@ -611,7 +619,7 @@ async def status_loop() -> None:
             status=discord.Status.idle,
             activity=discord.CustomActivity(name=weisheit),
         )
-        log.info("Status (idle): %s", weisheit)
+        log.debug("Status (idle): %s", weisheit)
     except Exception as exc:
         log.error("Status-Update fehlgeschlagen: %s", exc)
 
@@ -638,6 +646,24 @@ async def event_loop() -> None:
         await games.maybe_event(guild)
     except Exception:
         log.exception("Event-Loop Fehler - laeuft weiter")
+
+
+# Taeglich um 02:00 (Europe/Berlin) wuerfelt der Flo Shop seine Titelauswahl neu.
+# tasks.loop(time=...) feuert exakt zur angegebenen Ortszeit; bei mehreren
+# Reconnects schuetzt is_running() vor doppeltem Start.
+SHOP_REFRESH_TIME = dtime(hour=2, minute=0, tzinfo=TIMEZONE)
+
+
+@tasks.loop(time=SHOP_REFRESH_TIME)
+async def shop_refresh_loop() -> None:
+    """Wuerfelt jede Nacht um 2 Uhr die Tagesauswahl des Flo Shops neu (random,
+    seltenheits-gewichtet). Faengt alle Fehler ab, damit der Bot weiterlaeuft."""
+    try:
+        st = await economy.refresh_shop_async(force=True)
+        log.info("Flo Shop (2 Uhr) aktualisiert: %d Titel fuer %s.",
+                 len(st.get("items", [])), st.get("date", "?"))
+    except Exception:
+        log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
 
 
 def _sweepable(m: discord.Message) -> bool:
@@ -864,8 +890,9 @@ async def on_message(message: discord.Message) -> None:
 
     if antwort is not None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
-                or antwort is casino.HANDLED or antwort is games.HANDLED):
-            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele).
+                or antwort is casino.HANDLED or antwort is games.HANDLED
+                or antwort is economy.HANDLED):
+            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele / Economy).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):
@@ -878,13 +905,15 @@ async def on_message(message: discord.Message) -> None:
     # --- KI-Fallback: kein Befehl erkannt -> Flo antwortet wie eine KI ---
     if not AI_ENABLED:
         return
-    # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an.
+    # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je seltener der
+    # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
     title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
+    tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
     log.info("KI-Frage von %s: %s", message.author.display_name, content[:150])
     async with message.channel.typing():
         try:
             antwort = await ai.ask_flo(
-                content, author=message.author.display_name, title=title
+                content, author=message.author.display_name, title=title, tone=tone
             )
         except Exception:
             log.exception("KI-Antwort fehlgeschlagen")
@@ -946,6 +975,55 @@ async def on_ready() -> None:
         event_loop.start()
     if AUTODELETE_CHANNEL_IDS and not autodelete_sweep_loop.is_running():
         autodelete_sweep_loop.start()
+    if ECONOMY_ENABLED and not shop_refresh_loop.is_running():
+        # Beim Start einmal sicherstellen, dass der Shop fuer HEUTE gewuerfelt ist
+        # (falls der Bot ueber den 2-Uhr-Termin hinweg offline war), dann den
+        # naechtlichen 2-Uhr-Task starten.
+        try:
+            await economy.refresh_shop_async(force=False)
+        except Exception:
+            log.exception("Shop-Start-Refresh fehlgeschlagen - egal, Loop folgt")
+        shop_refresh_loop.start()
+
+
+@client.event
+async def on_disconnect() -> None:
+    """Gateway-Verbindung weg (Internet-Hickup o. Ae.). discord.py versucht
+    automatisch, sich wieder zu verbinden - wir loggen es nur leise."""
+    log.debug("Discord-Verbindung getrennt - versuche automatisch erneut.")
+
+
+@client.event
+async def on_resumed() -> None:
+    """Sitzung nach einem Verbindungsabbruch wieder aufgenommen - Flo ist zurueck,
+    ohne dass der Prozess neu starten musste."""
+    log.info("Discord-Sitzung wieder aufgenommen - Flo ist zurueck online.")
+
+
+@client.event
+async def on_error(event_method: str, *args, **kwargs) -> None:
+    """Faengt JEDE unbehandelte Ausnahme aus einem Event-Handler ab und loggt sie,
+    statt den Bot abstuerzen zu lassen. So bleibt Flo bei einem einzelnen Fehler
+    online."""
+    log.exception("Unbehandelter Fehler im Event %s - Bot laeuft weiter.", event_method)
+
+
+# Nach einem Verbindungsproblem wartet der Prozess so lange, bevor er sich frisch
+# neu startet (per .env RECONNECT_REEXEC_DELAY anpassbar).
+RECONNECT_REEXEC_DELAY = float(os.getenv("RECONNECT_REEXEC_DELAY", "15"))
+
+
+def _reexec_self() -> None:
+    """Startet den GANZEN Prozess frisch neu (frischer Client, frische Event-Loop) -
+    der robusteste Weg zurueck online, falls discord.py die Verbindung gar nicht
+    erst aufbauen konnte (z. B. kein Internet beim Start)."""
+    argv = list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+    log.warning("Prozess-Neustart per Re-exec nach Verbindungsproblem: %s", " ".join(argv))
+    try:
+        os.execv(argv[0], argv)
+    except OSError:
+        log.exception("Re-exec fehlgeschlagen - beende mit Code 42 (systemd startet neu).")
+        os._exit(42)
 
 
 def main() -> None:
@@ -956,7 +1034,25 @@ def main() -> None:
         log.error("GUILD_ID fehlt in der .env-Datei.")
         sys.exit(1)
     log.info("Starte Bot im Modus: %s", MODE)
-    client.run(TOKEN, log_handler=None)
+    try:
+        # reconnect=True (Standard): discord.py faengt Verbindungsabbrueche im
+        # laufenden Betrieb selbst ab und verbindet sich mit Backoff neu.
+        client.run(TOKEN, reconnect=True, log_handler=None)
+    except (discord.LoginFailure, discord.PrivilegedIntentsRequired):
+        # Falscher Token / fehlende Intents -> KEIN Auto-Neustart, das muss der
+        # Betreiber beheben (sonst Endlosschleife).
+        log.exception("Fataler Konfigurationsfehler - bitte Token/Intents pruefen.")
+        sys.exit(1)
+    except (OSError, discord.GatewayNotFound, discord.ConnectionClosed,
+            discord.HTTPException) as exc:
+        # Reines Verbindungs-/Netzwerkproblem (kein Internet beim Start, Gateway
+        # weg). Im Dauerbetrieb frisch neu starten, statt offline zu bleiben.
+        if MODE != "loop":
+            log.error("Verbindungsproblem im Modus %s: %s", MODE, exc)
+            sys.exit(1)
+        log.warning("Verbindungsproblem (%s) - Neustart in %.0fs.", exc, RECONNECT_REEXEC_DELAY)
+        time.sleep(RECONNECT_REEXEC_DELAY)
+        _reexec_self()
 
 
 if __name__ == "__main__":
