@@ -166,9 +166,10 @@ async def handle(message: discord.Message) -> "str | object | None":
     if first in ("ssp", "schnickschnack", "rps", "sss"):
         return await _ssp(message, args)
     if first in ("coinflip", "münzwurf", "muenzwurf", "flip", "münze", "muenze"):
-        return await _coinflip(message, args)
+        return await (_open_game(message, "coinflip") if not args
+                      else _coinflip(message, args))
     if first in ("slot", "slots", "spielautomat", "automat"):
-        return await _slot(message, args)
+        return await (_open_game(message, "slot") if not args else _slot(message, args))
     if first in ("würfel", "wuerfel", "würfeln", "wuerfeln", "dice", "roll", "w6"):
         return await _dice(message, args)
     return None
@@ -205,21 +206,14 @@ async def _ssp(message: discord.Message, args: list[str]) -> str:
 
 
 # --- Coinflip ------------------------------------------------------------
-async def _coinflip(message: discord.Message, args: list[str]) -> object:
-    uid = message.author.id
-    bet = _extract_int(args)
-    seite = next((a.lower() for a in args
-                  if a.lower() in ("kopf", "zahl", "heads", "tails")), None)
+async def _flip_result(uid: int, bet: int, tip: "str | None"):
+    """Wirft die Muenze, verrechnet (bei Einsatz + Tipp) Coins und baut Embed +
+    Bild. tip: 'kopf'/'zahl' oder None (freier Wurf). Gibt (embed, buffer, name)
+    zurueck – wird vom Text-Befehl UND vom Button-Menue genutzt."""
     ergebnis = random.choice(["kopf", "zahl"])
-
     note, color = "", discord.Color.blurple()
-    spielt_um_coins = bool(bet) and economy.is_enabled()
+    spielt_um_coins = bet > 0 and economy.is_enabled() and tip in ("kopf", "zahl")
     if spielt_um_coins:
-        if not seite:
-            return f"Auf was setzt du? `{_bot_name} coinflip {bet} kopf` (oder zahl)."
-        if economy.get_coins(uid) < bet:
-            return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
-        tip = "kopf" if seite in ("kopf", "heads") else "zahl"
         if tip == ergebnis:
             economy.add_coins(uid, bet)
             await economy.flush()
@@ -228,7 +222,6 @@ async def _coinflip(message: discord.Message, args: list[str]) -> object:
             economy.add_coins(uid, -bet)
             await economy.flush()
             note, color = f"Verloren! **-{bet}** Flo Coins 😬", discord.Color.red()
-
     emb = discord.Embed(
         title="🪙 Münzwurf",
         description=f"Die Münze zeigt: **{ergebnis.upper()}**!" + (f"\n{note}" if note else ""),
@@ -236,7 +229,22 @@ async def _coinflip(message: discord.Message, args: list[str]) -> object:
     if spielt_um_coins:
         emb.set_footer(text=f"Konto: {economy.get_coins(uid)} Flo Coins")
     fn = f"coin_{uid}_{random.randint(1000, 9999)}.png"
-    return await _send_image(message, emb, render.coin_flip(ergebnis), fn)
+    return emb, render.coin_flip(ergebnis), fn
+
+
+async def _coinflip(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    bet = _extract_int(args) or 0
+    seite = next((a.lower() for a in args
+                  if a.lower() in ("kopf", "zahl", "heads", "tails")), None)
+    if bet and economy.is_enabled():
+        if not seite:
+            return f"Auf was setzt du? `{_bot_name} coinflip {bet} kopf` (oder zahl)."
+        if economy.get_coins(uid) < bet:
+            return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
+    tip = ("kopf" if seite in ("kopf", "heads") else "zahl") if seite else None
+    emb, buf, fn = await _flip_result(uid, bet, tip)
+    return await _send_image(message, emb, buf, fn)
 
 
 # --- Slot-Machine --------------------------------------------------------
@@ -247,13 +255,11 @@ _SLOT_PAYOUT = {  # drei Gleiche -> Faktor auf den Einsatz (fallend wie SLOT_KEY
 }
 
 
-async def _slot(message: discord.Message, args: list[str]) -> object:
-    uid = message.author.id
-    bet = _extract_int(args) or 0
+async def _spin_slot(uid: int, bet: int):
+    """Dreht die Walzen, verrechnet (bei Einsatz) Coins und baut Embed + Bild.
+    Gibt (embed, buffer, name) zurueck – wird vom Text-Befehl UND vom
+    Button-Menue genutzt. Das Bild ist noch OHNE set_image (macht der Aufrufer)."""
     use_coins = bet > 0 and economy.is_enabled()
-    if use_coins and economy.get_coins(uid) < bet:
-        return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
-
     keys = [random.choice(render.SLOT_KEYS) for _ in range(3)]
     jackpot = keys[0] == keys[1] == keys[2]
     zwei = (not jackpot) and (keys[0] == keys[1] or keys[1] == keys[2] or keys[0] == keys[2])
@@ -288,8 +294,16 @@ async def _slot(message: discord.Message, args: list[str]) -> object:
     elif win and economy.is_enabled():
         emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {economy.get_coins(uid)}")
     fn = f"slot_{uid}_{random.randint(1000, 9999)}.png"
-    return await _send_image(message, emb,
-                             render.slot_machine(keys, win=win, jackpot=jackpot), fn)
+    return emb, render.slot_machine(keys, win=win, jackpot=jackpot), fn
+
+
+async def _slot(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    bet = _extract_int(args) or 0
+    if bet > 0 and economy.is_enabled() and economy.get_coins(uid) < bet:
+        return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
+    emb, buf, fn = await _spin_slot(uid, bet)
+    return await _send_image(message, emb, buf, fn)
 
 
 # --- Wuerfel -------------------------------------------------------------
@@ -319,6 +333,159 @@ def _extract_int(args: list[str]) -> int | None:
         if a.isdigit():
             return int(a)
     return None
+
+
+# --- Interaktive Spiel-Menues (Buttons/Dropdown) -------------------------
+# Statt 'flo slot 100' tippen zu muessen: 'flo slot' oeffnet ein Menue mit
+# Einsatz-Dropdown + Spiel-Buttons. Ein und dieselbe View bleibt stehen, man
+# kann immer wieder klicken (Nachricht wird in-place aktualisiert).
+_BET_CHOICES = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
+
+
+class _GameBetSelect(discord.ui.Select):
+    """Dropdown zum Einsatz waehlen (inkl. 'ohne Einsatz')."""
+
+    def __init__(self) -> None:
+        options = [discord.SelectOption(label="Ohne Einsatz (nur Spaß)", value="0",
+                                        emoji="🎈", default=True)]
+        options += [discord.SelectOption(label=f"{b} Flo Coins", value=str(b))
+                    for b in _BET_CHOICES]
+        super().__init__(placeholder="Einsatz wählen…", min_values=1, max_values=1,
+                         options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.view._set_bet(interaction, self.values[0])
+
+
+class _GameView(discord.ui.View):
+    """Basis fuer Slot/Coinflip-Menues: Einsatz-Dropdown, Besitzer-Check,
+    In-place-Update nach jedem Spiel, Freigabe beim Timeout."""
+
+    def __init__(self, uid: int, *, channel_id: int | None = None) -> None:
+        super().__init__(timeout=180)
+        self.uid = uid
+        self.channel_id = channel_id
+        self.bet = 0
+        self.message = None
+        self._bet_select = _GameBetSelect()
+        self.add_item(self._bet_select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.uid:
+            await interaction.response.send_message(
+                "Das ist nicht dein Spiel — schreib selbst z. B. `Flo slot` 🙂",
+                ephemeral=True)
+            return False
+        return True
+
+    async def _set_bet(self, interaction: discord.Interaction, raw: str) -> None:
+        self.bet = int(raw)
+        for opt in self._bet_select.options:
+            opt.default = (opt.value == raw)
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    def _has_funds(self) -> bool:
+        return not (self.bet > 0 and economy.is_enabled()
+                    and economy.get_coins(self.uid) < self.bet)
+
+    def _bet_txt(self) -> str:
+        return f"**{self.bet}** Flo Coins" if self.bet > 0 else "ohne Einsatz (nur Spaß)"
+
+    async def _show(self, interaction: discord.Interaction, emb: discord.Embed,
+                    buf, fn: str) -> None:
+        """Aktualisiert die Menue-Nachricht mit Ergebnis-Embed + neuem Bild und
+        laesst die View stehen (man kann gleich nochmal klicken)."""
+        emb.set_image(url=f"attachment://{fn}")
+        await interaction.response.edit_message(
+            embed=emb, attachments=[discord.File(buf, filename=fn)], view=self)
+        self.message = interaction.message or self.message
+        _protect(self.message)
+
+    async def _warn_funds(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            f"Du hast nicht genug. Konto: {economy.get_coins(self.uid)} Flo Coins.",
+            ephemeral=True)
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            _release(self.message)
+
+
+class _SlotView(_GameView):
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🎰 Slot-Machine",
+            description=("Wähle deinen Einsatz und drück **Drehen**!\n"
+                         f"Aktueller Einsatz: {self._bet_txt()}"),
+            color=discord.Color.gold())
+        if economy.is_enabled():
+            emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
+        return emb
+
+    @discord.ui.button(label="Drehen", emoji="🎰",
+                       style=discord.ButtonStyle.success, row=1)
+    async def _spin(self, interaction: discord.Interaction,
+                    button: discord.ui.Button) -> None:
+        if not self._has_funds():
+            await self._warn_funds(interaction)
+            return
+        emb, buf, fn = await _spin_slot(self.uid, self.bet)
+        await self._show(interaction, emb, buf, fn)
+
+
+class _CoinView(_GameView):
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🪙 Münzwurf",
+            description=("Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**.\n"
+                         f"Aktueller Einsatz: {self._bet_txt()}"),
+            color=discord.Color.blurple())
+        if self.bet > 0 and economy.is_enabled():
+            emb.set_footer(text="Bei Einsatz ist dein Klick (Kopf/Zahl) die Wette.")
+        elif economy.is_enabled():
+            emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
+        return emb
+
+    async def _toss(self, interaction: discord.Interaction, tip: str) -> None:
+        if not self._has_funds():
+            await self._warn_funds(interaction)
+            return
+        emb, buf, fn = await _flip_result(self.uid, self.bet, tip)
+        await self._show(interaction, emb, buf, fn)
+
+    @discord.ui.button(label="Kopf", emoji="🙂",
+                       style=discord.ButtonStyle.primary, row=1)
+    async def _kopf(self, interaction: discord.Interaction,
+                    button: discord.ui.Button) -> None:
+        await self._toss(interaction, "kopf")
+
+    @discord.ui.button(label="Zahl", emoji="🔢",
+                       style=discord.ButtonStyle.primary, row=1)
+    async def _zahl(self, interaction: discord.Interaction,
+                    button: discord.ui.Button) -> None:
+        await self._toss(interaction, "zahl")
+
+
+_GAME_VIEWS = {"slot": _SlotView, "coinflip": _CoinView}
+
+
+async def _open_game(message: discord.Message, kind: str) -> object:
+    """Oeffnet das interaktive Menue (Einsatz-Dropdown + Buttons) fuer 'kind'."""
+    view = _GAME_VIEWS[kind](message.author.id, channel_id=message.channel.id)
+    try:
+        msg = await message.reply(embed=view._embed(), view=view, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Spiel-Menue konnte nicht gesendet werden")
+        return HANDLED
+    view.message = msg
+    _protect(msg)
+    return HANDLED
 
 
 # --- Quiz ----------------------------------------------------------------

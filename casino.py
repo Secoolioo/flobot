@@ -215,7 +215,9 @@ async def handle(message: discord.Message) -> "object | None":
             view.message = msg
         return HANDLED
     if first in ("blackjack", "bj", "17und4", "siebzehnundvier"):
-        return await _bj_command(message, args)
+        # Ohne Einsatz im Text -> bequemes Formular (Buttons) statt Tipp-Aufforderung.
+        return await (_open_setup(message, "blackjack") if not args
+                      else _bj_command(message, args))
     if first in ("hit", "karte", "ziehen", "zieh"):
         return await _bj_text_action(message, "hit")
     if first in ("stand", "stehen", "bleiben", "bleib", "pass", "genug", "fertig"):
@@ -223,11 +225,14 @@ async def handle(message: discord.Message) -> "object | None":
     if first in ("double", "doppeln", "verdoppeln", "dd"):
         return await _bj_text_action(message, "double")
     if first in ("crash", "absturz", "rakete", "rocket"):
-        return await _crash_command(message, args)
+        return await (_open_setup(message, "crash") if not args
+                      else _crash_command(message, args))
     if first == "keno":
-        return await _keno_command(message, args)
+        return await (_open_setup(message, "keno") if not args
+                      else _keno_command(message, args))
     if first in ("roulette", "roul", "kessel"):
-        return await _roulette_command(message, args)
+        return await (_open_setup(message, "roulette") if not args
+                      else _roulette_command(message, args))
     return None
 
 
@@ -905,9 +910,16 @@ class CasinoHubView(discord.ui.View):
             f"Öffne dir dein eigenes Casino mit `{_bot_name} casino`. 🎰", ephemeral=True)
         return False
 
-    async def _open(self, interaction: discord.Interaction, kind: str, params=None) -> None:
-        await interaction.response.send_modal(
-            _BetModal(kind, self.uid, title=_MODAL_TITLES[kind], params=params))
+    async def _open(self, interaction: discord.Interaction, kind: str) -> None:
+        """Oeffnet den interaktiven Aufbau (Einsatz-Auswahl + Spiel-Buttons) als
+        eigene Nachricht – kein Tippen noetig."""
+        view = _SETUPS[kind](self.uid, channel_id=interaction.channel_id)
+        await interaction.response.send_message(embed=view._embed(), view=view)
+        try:
+            view.message = await interaction.original_response()
+            _protect(view.message)
+        except discord.HTTPException:
+            log.exception("Casino-Hub: Spielaufbau konnte nicht geoeffnet werden")
 
     @discord.ui.button(label="Blackjack", emoji="🂡", style=discord.ButtonStyle.primary)
     async def _bj(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -915,7 +927,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(label="Crash", emoji="🚀", style=discord.ButtonStyle.primary)
     async def _crash(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
-        await self._open(interaction, "crash", {"target": "2.0"})
+        await self._open(interaction, "crash")
 
     @discord.ui.button(label="Keno", emoji="🎱", style=discord.ButtonStyle.secondary)
     async def _keno(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -923,7 +935,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(label="Roulette", emoji="🎡", style=discord.ButtonStyle.secondary)
     async def _roulette(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
-        await self._open(interaction, "roulette", {"target": "rot"})
+        await self._open(interaction, "roulette")
 
     async def on_timeout(self) -> None:
         for ch in self.children:
@@ -935,3 +947,399 @@ class CasinoHubView(discord.ui.View):
             except discord.HTTPException:
                 pass
             _release(self.message)   # keine Reaktion mehr -> Nachricht freigeben
+
+
+# =========================================================================
+#  Interaktiver Spielaufbau: Einsatz per Dropdown, Spielzug per Button.
+#  So muss man im Chat NICHTS mehr tippen – `Flo keno` oeffnet direkt das
+#  Menue. (Discord laesst Formulare/Modals nur nach einem Klick zu, darum
+#  ist der Einstieg ein Button-Menue statt eines Pop-ups.)
+# =========================================================================
+_BET_CHOICES = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
+
+
+class _BetSelect(discord.ui.Select):
+    """Dropdown fuer den Einsatz (feste Stufen + 'Alles')."""
+
+    def __init__(self) -> None:
+        options = [discord.SelectOption(label=f"{v} {economy.COIN}", value=str(v), emoji="🪙")
+                   for v in _BET_CHOICES]
+        options.append(discord.SelectOption(
+            label="Alles", value="all", emoji="💰", description="Dein ganzer Kontostand"))
+        super().__init__(placeholder="💰 Einsatz wählen …", min_values=1, max_values=1,
+                         options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.view._set_bet(interaction, self.values[0])
+
+
+class _Setup(discord.ui.View):
+    """Basis fuer den interaktiven Aufbau einer Runde. Haelt den gewaehlten
+    Einsatz, baut das Erklaer-Embed und raeumt sich beim Timeout selbst weg."""
+
+    kind = ""
+
+    def __init__(self, uid: int, *, channel_id: int | None = None,
+                 bet: int | None = None) -> None:
+        super().__init__(timeout=120)
+        self.uid = uid
+        self.channel_id = channel_id
+        self.bet = bet
+        self.message: discord.Message | None = None
+        self.add_item(_BetSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.uid:
+            return True
+        await interaction.response.send_message(
+            f"Mach dir deine eigene Runde mit `{_bot_name} {self.kind}`. 😉", ephemeral=True)
+        return False
+
+    async def _set_bet(self, interaction: discord.Interaction, token: str) -> None:
+        self.bet = _resolve_bet(token, self.uid)
+        await interaction.response.edit_message(embed=self._embed())
+
+    async def _ensure_bet(self, interaction: discord.Interaction) -> "int | None":
+        """Prueft den gewaehlten Einsatz. Bei Problem: kurzer ephemerer Hinweis."""
+        bet, err = _check_bet(self.uid, self.bet)
+        if err:
+            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
+            return None
+        return bet
+
+    async def _finish(self, interaction: discord.Interaction, emb: discord.Embed,
+                      file: "discord.File | None", again: "_AgainView") -> None:
+        """Ersetzt das Aufbau-Menue durch das Ergebnis (+ Nochmal-Buttons)."""
+        attachments = [file] if file is not None else []
+        await interaction.response.edit_message(embed=emb, attachments=attachments, view=again)
+        again.message = interaction.message or self.message
+        _protect(again.message)
+        self.stop()
+
+    def _bet_txt(self) -> str:
+        return f"**{self.bet} {economy.COIN}**" if self.bet else "_noch nichts gewählt_"
+
+    def _embed(self) -> discord.Embed:    # von den Unterklassen gefuellt
+        raise NotImplementedError
+
+    async def on_timeout(self) -> None:
+        for ch in self.children:
+            if isinstance(ch, (discord.ui.Button, discord.ui.Select)):
+                ch.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            _release(self.message)
+
+
+# --- Keno: Zahlen per Auswahlmenue, kein Tippen --------------------------
+class _NumberSelect(discord.ui.Select):
+    """Mehrfach-Auswahl fuer einen Zahlenblock (z. B. 1–20)."""
+
+    def __init__(self, lo: int, hi: int, label: str, *, row: int) -> None:
+        self.chosen: list[int] = []
+        options = [discord.SelectOption(label=str(n), value=str(n)) for n in range(lo, hi + 1)]
+        super().__init__(placeholder=f"🔢 {label}", min_values=0, max_values=8,
+                         options=options, row=row)
+
+    def set_chosen(self, nums: list[int]) -> None:
+        self.chosen = list(nums)
+        for opt in self.options:
+            opt.default = int(opt.value) in self.chosen
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        self.set_chosen([int(v) for v in self.values])
+        self.view._recalc()
+        await interaction.response.edit_message(embed=self.view._embed())
+
+
+class _KenoSetup(_Setup):
+    kind = "keno"
+
+    def __init__(self, uid: int, *, channel_id: int | None = None,
+                 bet: int | None = None) -> None:
+        super().__init__(uid, channel_id=channel_id, bet=bet)
+        self.picks: list[int] = []
+        self._lo = _NumberSelect(1, 20, "Zahlen 1–20", row=1)
+        self._hi = _NumberSelect(21, 40, "Zahlen 21–40", row=2)
+        self.add_item(self._lo)
+        self.add_item(self._hi)
+
+    def _recalc(self) -> None:
+        self.picks = sorted(set(self._lo.chosen) | set(self._hi.chosen))[:8]
+
+    def _embed(self) -> discord.Embed:
+        nums = "  ".join(f"`{n}`" for n in self.picks) if self.picks else "_keine_"
+        emb = discord.Embed(
+            title="🎱 Keno",
+            description=("Wähle **Einsatz** und **1–8 Zahlen** (1–40), dann **Spielen**.\n"
+                         "Es werden 10 Zahlen gezogen – je mehr Treffer, desto mehr Gewinn."),
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.add_field(name=f"Deine Zahlen ({len(self.picks)}/8)", value=nums, inline=False)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    @discord.ui.button(label="Zufall", emoji="🎲", style=discord.ButtonStyle.secondary, row=3)
+    async def _rng(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        pick = random.sample(range(1, 41), 5)
+        self._lo.set_chosen([n for n in pick if n <= 20])
+        self._hi.set_chosen([n for n in pick if n > 20])
+        self._recalc()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    @discord.ui.button(label="Spielen", emoji="▶️", style=discord.ButtonStyle.success, row=3)
+    async def _go(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        self._recalc()
+        if not self.picks:
+            await interaction.response.send_message(
+                "Wähle erst 1–8 Zahlen (oder 🎲 Zufall).", ephemeral=True)
+            return
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file = await _play_keno(self.uid, bet, self.picks)
+        again = _AgainView(self.uid, "keno", {"bet": bet, "picks": self.picks},
+                           channel_id=self.channel_id)
+        await self._finish(interaction, emb, file, again)
+
+
+# --- Roulette: ein Klick = sofort drehen ---------------------------------
+class _NumberBetModal(discord.ui.Modal):
+    """Kleines Formular fuer eine exakte Roulette-Zahl (0–36)."""
+
+    def __init__(self, setup: "_RouletteSetup") -> None:
+        super().__init__(title="Roulette – Zahl 0–36")
+        self.setup = setup
+        self.num = discord.ui.TextInput(label="Zahl", placeholder="0–36", max_length=2)
+        self.add_item(self.num)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        s = self.setup
+        raw = (self.num.value or "").strip()
+        if not raw.isdigit() or not (0 <= int(raw) <= 36):
+            await interaction.response.send_message("Bitte eine Zahl von 0 bis 36.", ephemeral=True)
+            return
+        bet, err = _check_bet(s.uid, s.bet)
+        if err:
+            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
+            return
+        economy.add_coins(s.uid, -bet)
+        emb, file = await _play_roulette(s.uid, bet, raw)
+        again = _AgainView(s.uid, "roulette", {"bet": bet, "target": raw},
+                           channel_id=s.channel_id)
+        if s.message is not None:
+            try:
+                await s.message.edit(embed=emb, attachments=[file], view=again)
+                again.message = s.message
+                _protect(s.message)
+            except discord.HTTPException:
+                log.exception("Roulette-Zahl: Ergebnis konnte nicht angezeigt werden")
+        s.stop()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
+
+
+class _RouletteSetup(_Setup):
+    kind = "roulette"
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🎡 Roulette",
+            description=("**Einsatz** wählen, dann **worauf** du tippst – die Kugel rollt sofort.\n"
+                         "Außenwetten (Rot/Schwarz/…): ×2 · eine exakte Zahl: ×36."),
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    async def _spin(self, interaction: discord.Interaction, target: str) -> None:
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file = await _play_roulette(self.uid, bet, target)
+        again = _AgainView(self.uid, "roulette", {"bet": bet, "target": target},
+                           channel_id=self.channel_id)
+        await self._finish(interaction, emb, file, again)
+
+    @discord.ui.button(label="Rot", emoji="🔴", style=discord.ButtonStyle.danger, row=1)
+    async def _red(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "rot")
+
+    @discord.ui.button(label="Schwarz", emoji="⚫", style=discord.ButtonStyle.secondary, row=1)
+    async def _black(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "schwarz")
+
+    @discord.ui.button(label="Gerade", style=discord.ButtonStyle.primary, row=1)
+    async def _even(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "gerade")
+
+    @discord.ui.button(label="Ungerade", style=discord.ButtonStyle.primary, row=1)
+    async def _odd(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "ungerade")
+
+    @discord.ui.button(label="Zahl", emoji="🔢", style=discord.ButtonStyle.success, row=1)
+    async def _number(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await i.response.send_modal(_NumberBetModal(self))
+
+    @discord.ui.button(label="1–18", style=discord.ButtonStyle.secondary, row=2)
+    async def _low(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "1-18")
+
+    @discord.ui.button(label="19–36", style=discord.ButtonStyle.secondary, row=2)
+    async def _high(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._spin(i, "19-36")
+
+
+# --- Crash: Ziel-Faktor per Button ---------------------------------------
+_CRASH_TARGETS = (1.5, 2.0, 3.0, 5.0, 10.0)
+
+
+class _CrashTargetModal(discord.ui.Modal):
+    """Formular fuer einen eigenen Crash-Ziel-Faktor."""
+
+    def __init__(self, setup: "_CrashSetup") -> None:
+        super().__init__(title="Crash – eigenes Ziel")
+        self.setup = setup
+        self.target = discord.ui.TextInput(label="Ziel-Faktor", placeholder="z. B. 2.5", max_length=8)
+        self.add_item(self.target)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        s = self.setup
+        target = _parse_mult(self.target.value)
+        if target is None or target < 1.01:
+            await interaction.response.send_message(
+                "Ziel muss eine Zahl über 1.0 sein (z. B. 2.5).", ephemeral=True)
+            return
+        target = min(target, 100.0)
+        bet, err = _check_bet(s.uid, s.bet)
+        if err:
+            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
+            return
+        economy.add_coins(s.uid, -bet)
+        emb, file = await _play_crash(s.uid, bet, target)
+        again = _AgainView(s.uid, "crash", {"bet": bet, "target": target},
+                           channel_id=s.channel_id)
+        if s.message is not None:
+            try:
+                await s.message.edit(embed=emb, attachments=[file], view=again)
+                again.message = s.message
+                _protect(s.message)
+            except discord.HTTPException:
+                log.exception("Crash: Ergebnis konnte nicht angezeigt werden")
+        s.stop()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
+
+
+class _CrashSetup(_Setup):
+    kind = "crash"
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🚀 Crash",
+            description=("**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort.\n"
+                         "Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥"),
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    async def _launch(self, interaction: discord.Interaction, target: float) -> None:
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file = await _play_crash(self.uid, bet, target)
+        again = _AgainView(self.uid, "crash", {"bet": bet, "target": target},
+                           channel_id=self.channel_id)
+        await self._finish(interaction, emb, file, again)
+
+    @discord.ui.button(label="1.5×", style=discord.ButtonStyle.primary, row=1)
+    async def _t15(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._launch(i, 1.5)
+
+    @discord.ui.button(label="2×", style=discord.ButtonStyle.primary, row=1)
+    async def _t2(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._launch(i, 2.0)
+
+    @discord.ui.button(label="3×", style=discord.ButtonStyle.primary, row=1)
+    async def _t3(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._launch(i, 3.0)
+
+    @discord.ui.button(label="5×", style=discord.ButtonStyle.primary, row=1)
+    async def _t5(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._launch(i, 5.0)
+
+    @discord.ui.button(label="10×", style=discord.ButtonStyle.primary, row=1)
+    async def _t10(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._launch(i, 10.0)
+
+    @discord.ui.button(label="Eigenes Ziel", emoji="✏️", style=discord.ButtonStyle.secondary, row=2)
+    async def _custom(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await i.response.send_modal(_CrashTargetModal(self))
+
+
+# --- Blackjack: Einsatz waehlen, dann Deal -------------------------------
+class _BlackjackSetup(_Setup):
+    kind = "blackjack"
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🂡 Blackjack",
+            description=("**Einsatz** wählen, dann **Deal**. Danach steuerst du mit "
+                         "**Karte / Stand / Double** – so nah wie möglich an 21."),
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    @discord.ui.button(label="Deal", emoji="🂡", style=discord.ButtonStyle.success, row=1)
+    async def _deal(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        ch = self.channel_id or interaction.channel_id
+        existing = _bj_views.get((ch, self.uid))
+        if existing and not existing.is_finished():
+            await interaction.response.send_message(
+                "Du hast schon eine Blackjack-Runde offen – nutz die Buttons drunter. 👇",
+                ephemeral=True)
+            return
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file, view, ended = await _bj_deal(ch, self.uid, bet)
+        await interaction.response.edit_message(embed=emb, attachments=[file], view=view)
+        view.message = interaction.message
+        _protect(interaction.message)
+        if not ended:
+            _bj_views[(ch, self.uid)] = view
+        self.stop()
+
+
+_SETUPS = {
+    "keno": _KenoSetup,
+    "roulette": _RouletteSetup,
+    "crash": _CrashSetup,
+    "blackjack": _BlackjackSetup,
+}
+
+
+async def _open_setup(message: discord.Message, kind: str) -> object:
+    """Antwortet auf `Flo <spiel>` mit dem interaktiven Aufbau-Menue."""
+    view = _SETUPS[kind](message.author.id, channel_id=message.channel.id)
+    msg = await _send(message, embed=view._embed(), view=view)
+    if msg:
+        view.message = msg
+    return HANDLED
