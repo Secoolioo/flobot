@@ -30,29 +30,36 @@ RARITY: dict[str, dict] = {
         "label": "Normal", "emoji": "🟢", "color": 0x57F287,
         "role": "Flo · Normal", "price": (150, 600),
         "pool_pct": 62, "shop_weight": 55,
-        "tone": ("Sprich ganz normal mit ihm – locker und frech wie immer."),
+        "tone": ("Der Typ hat nur einen normalen Titel – also null Sonderbehandlung. "
+                 "Gib ihm die volle ungefilterte Packung, roaste ihn gnadenlos und "
+                 "frech wie jeden anderen Pleitegeier auch."),
     },
     "selten": {
         "label": "Selten", "emoji": "🔵", "color": 0x3498DB,
         "role": "Flo · Selten", "price": (700, 1800),
         "pool_pct": 26, "shop_weight": 30,
-        "tone": ("Er traegt einen seltenen Titel – sei einen Tick freundlicher "
-                 "und entspannter zu ihm."),
+        "tone": ("Er traegt einen seltenen Titel – fahr die Aggression einen Tick "
+                 "runter. Roaste ruhig noch, aber mit Augenzwinkern statt voller "
+                 "Breitseite, einen Hauch freundlicher und entspannter."),
     },
     "mythisch": {
         "label": "Mythisch", "emoji": "🟣", "color": 0x9B59B6,
         "role": "Flo · Mythisch", "price": (2200, 5000),
         "pool_pct": 9, "shop_weight": 12,
-        "tone": ("Er traegt einen MYTHISCHEN Titel – sprich deutlich relaxter, "
-                 "respektvoll und chillig mit ihm, fast wie mit einem Kumpel."),
+        "tone": ("Er traegt einen MYTHISCHEN Titel – jetzt wird's deutlich "
+                 "freundlicher. Behandle ihn wie einen guten Kumpel: noch frech und "
+                 "locker, aber warm, respektvoll und chillig, das fiese Roasten "
+                 "laesst du grossteils weg."),
     },
     "legendary": {
         "label": "Legendär", "emoji": "🟡", "color": 0xF1C40F,
         "role": "Flo · Legendär", "price": (6000, 15000),
         "pool_pct": 3, "shop_weight": 3,
-        "tone": ("Er traegt einen LEGENDAEREN Titel – sprich super entspannt, "
-                 "ehrfuerchtig-chillig und herzlich, als waere er eine lebende "
-                 "Legende und ein alter Freund. Keine Hektik, volle Gelassenheit."),
+        "tone": ("Er traegt einen LEGENDAEREN Titel – das ist quasi dein bester "
+                 "Freund. Leg den ganzen Aggro-Modus komplett ab und sei richtig "
+                 "herzlich, entspannt, geduldig und unterstuetzend. Kein Roasten, "
+                 "keine fiesen Sprueche – rede liebevoll und chillig mit ihm wie mit "
+                 "einem alten Freund, den du ueber alles schaetzt."),
     },
 }
 
