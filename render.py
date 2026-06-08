@@ -634,63 +634,126 @@ def _mix(a: tuple, b: tuple, f: float) -> tuple:
     return tuple(round(a[i] + (b[i] - a[i]) * f) for i in range(3))
 
 
+def _round_grad(w: int, h: int, radius: int, top: tuple, bot: tuple) -> Image.Image:
+    """RGBA-Kachel mit vertikalem Verlauf (top->bot) und abgerundeten Ecken."""
+    grad = _vgrad(w, h, top, bot).convert("RGBA")
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=255)
+    grad.putalpha(mask)
+    return grad
+
+
+def _fit_font(d: ImageDraw.ImageDraw, text: str, max_w: int,
+              start: int, floor: int) -> tuple[ImageFont.FreeTypeFont, str]:
+    """Groesste Schrift <= start, bei der 'text' in max_w passt; sonst kuerzen mit '…'."""
+    size = start
+    while size > floor and d.textlength(text, font=_font(size)) > max_w:
+        size -= 2
+    f = _font(size)
+    if d.textlength(text, font=f) > max_w:
+        while text and d.textlength(text + "…", font=f) > max_w:
+            text = text[:-1]
+        text += "…"
+    return f, text
+
+
 def shop_banner(items: list[dict], *, date: str = "") -> io.BytesIO | None:
     """Schoenes Banner fuer den Tages-Shop: je Titel eine Zeile, eingefaerbt in
     der Seltenheits-Farbe (gruen/blau/lila/gold). Erwartet je Item ein Dict mit
     'n', 'text', 'price', 'color', 'rarity_label'. Gibt PNG (BytesIO) zurueck.
 
     Bewusst OHNE Emoji (die Pillow-Schrift kann keine Farb-Emojis) – die
-    Seltenheit wird ueber Farbe + Label transportiert."""
+    Seltenheit wird ueber Farbe + gefuellte Pills transportiert."""
     if not items:
         return None
-    pad = 28
-    row_h = 76
-    gap = 14
-    head = 104
-    W = 920
-    H = head + len(items) * (row_h + gap) + pad
-    img = _vgrad(W, H, (26, 30, 46), (12, 14, 24)).convert("RGBA")
+    W = 1000
+    pad = 36
+    head = 150
+    row_h = 96
+    gap = 18
+    n = len(items)
+    H = head + n * row_h + (n - 1) * gap + pad
+
+    # Hintergrund: tiefer Verlauf + zwei weiche, farbige Lichthoefe (Glow).
+    img = _vgrad(W, H, (24, 27, 42), (10, 12, 20)).convert("RGBA")
+    gw, gh = W // 2, H // 2
+    glow = Image.new("RGBA", (gw, gh), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse([-110, -150, 250, 130], fill=(70, 96, 210, 70))        # blau, links oben
+    gd.ellipse([gw - 240, -160, gw + 120, 110], fill=(150, 70, 185, 55))  # lila, rechts oben
+    glow = glow.filter(ImageFilter.GaussianBlur(46)).resize((W, H))
+    img = Image.alpha_composite(img, glow)
     d = ImageDraw.Draw(img, "RGBA")
 
-    # Kopfzeile
-    d.text((pad, 20), "FLO SHOP", font=_font(46), fill=_WHITE)
-    sub = "TITEL DES TAGES"
+    # --- Kopfzeile: "FLO" weiss + "SHOP" gold, Untertitel-Pill, Datum rechts ---
+    hf = _font(56)
+    d.text((pad, 30), "FLO", font=hf, fill=_WHITE)
+    flo_w = d.textlength("FLO ", font=hf)
+    d.text((pad + flo_w, 30), "SHOP", font=hf, fill=_GOLD)
+    _pill(d, pad + 3, 102, "TÄGLICH 2 UHR NEU", 16, (44, 50, 76), (188, 198, 222))
     if date:
-        sub += f"  ·  Stand {date}  ·  taeglich 2 Uhr neu"
-    d.text((pad + 2, 74), sub, font=_font(19), fill=(150, 158, 180))
-    d.line([(pad, head - 12), (W - pad, head - 12)], fill=(60, 66, 90), width=2)
+        d.text((W - pad, 112), f"Stand {date}", font=_font(18),
+               fill=(150, 158, 188), anchor="rm")
+    d.line([(pad, head - 14), (W - pad, head - 14)], fill=(54, 60, 86), width=2)
 
+    # --- Karten-Schatten (eine geblurrte Ebene unter allen Karten) ---
+    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    y = head
+    for _ in items:
+        sd.rounded_rectangle([pad, y + 7, W - pad, y + row_h + 7], radius=22,
+                             fill=(0, 0, 0, 120))
+        y += row_h + gap
+    img = Image.alpha_composite(img, shadow.filter(ImageFilter.GaussianBlur(9)))
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # --- Karten ---
+    cw = W - 2 * pad
     y = head
     for e in items:
         col = _hex(int(e.get("color", 0x57F287)))
-        panel_bg = _mix((22, 26, 40), col, 0.16)
-        # Panel mit farbigem Rahmen
-        d.rounded_rectangle([pad, y, W - pad, y + row_h], radius=16,
-                            fill=panel_bg, outline=col, width=2)
-        # Akzent-Balken links
-        d.rounded_rectangle([pad, y, pad + 10, y + row_h], radius=5, fill=col)
-        # Nummern-Badge
-        bx = pad + 30
-        d.rounded_rectangle([bx, y + 18, bx + 40, y + 58], radius=12, fill=col)
-        d.text((bx + 20, y + 38), str(e.get("n", "?")), font=_font(26),
-               fill=(16, 18, 26), anchor="mm")
-        # Titel-Text
-        title = str(e.get("text", "?"))
-        tx = bx + 62
-        d.text((tx, y + 14), title, font=_font(28), fill=_WHITE)
-        # Seltenheits-Label
-        d.text((tx, y + 47), str(e.get("rarity_label", "")).upper(),
-               font=_font(17), fill=col)
-        # Preis rechts (kleine Muenze + Zahl)
+        # Karte: dezenter Verlauf, in der Seltenheitsfarbe getoent + farbiger Rand
+        card = _round_grad(cw, row_h, 22, _mix((32, 36, 54), col, 0.20),
+                           _mix((17, 19, 30), col, 0.06))
+        img.paste(card, (pad, y), card)
+        d.rounded_rectangle([pad, y, W - pad, y + row_h], radius=22,
+                            outline=col, width=2)
+
+        # Nummern-Kachel (gerundetes Quadrat, Seltenheitsfarbe + Glanz)
+        ks = 66
+        kx, ky = pad + 16, y + (row_h - ks) // 2
+        tile = _round_grad(ks, ks, 16, _mix(col, _WHITE, 0.30),
+                           _mix(col, (0, 0, 0), 0.20))
+        img.paste(tile, (kx, ky), tile)
+        d.rounded_rectangle([kx, ky, kx + ks, ky + ks], radius=16,
+                            outline=_mix(col, _WHITE, 0.45), width=1)
+        d.text((kx + ks / 2, ky + ks / 2 - 1), str(e.get("n", "?")),
+               font=_font(34), fill=(14, 16, 24), anchor="mm")
+
+        # Preis-Pill rechts (dunkel, Goldmuenze + Betrag) – zuerst, fuer Titelbreite
         price = f"{e.get('price', 0)}"
-        pf = _font(26)
+        pf = _font(27)
         pw = d.textlength(price, font=pf)
-        coin_x = W - pad - 22 - pw - 34
-        d.ellipse([coin_x, y + 24, coin_x + 28, y + 52], fill=_GOLD,
-                  outline=(180, 140, 10), width=2)
-        d.text((coin_x + 14, y + 38), "C", font=_font(18), fill=(120, 90, 0),
-               anchor="mm")
-        d.text((W - pad - 22, y + 38), price, font=pf, fill=_GOLD, anchor="rm")
+        pill_w = int(pw + 30 + 28)
+        pill_h = 46
+        px1 = W - pad - 18 - pill_w
+        py = y + (row_h - pill_h) // 2
+        d.rounded_rectangle([px1, py, px1 + pill_w, py + pill_h], radius=pill_h // 2,
+                            fill=(13, 15, 24), outline=_mix((13, 15, 24), _GOLD, 0.45),
+                            width=1)
+        cx0, cy0 = px1 + 14, py + (pill_h - 28) // 2
+        d.ellipse([cx0, cy0, cx0 + 28, cy0 + 28], fill=_GOLD, outline=(176, 136, 8), width=2)
+        d.text((cx0 + 14, cy0 + 14), "C", font=_font(18), fill=(120, 90, 0), anchor="mm")
+        d.text((px1 + pill_w - 16, y + row_h / 2), price, font=pf, fill=_GOLD, anchor="rm")
+
+        # Titel (adaptiv) + gefuellter Seltenheits-Pill
+        tx = kx + ks + 24
+        max_tw = px1 - tx - 20
+        tf, title = _fit_font(d, str(e.get("text", "?")), max_tw, 31, 21)
+        d.text((tx, y + 19), title, font=tf, fill=_WHITE)
+        _pill(d, tx, y + row_h - 38, str(e.get("rarity_label", "")).upper(), 15,
+              col, (15, 17, 25))
+
         y += row_h + gap
 
     return _png(img)

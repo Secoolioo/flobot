@@ -733,24 +733,28 @@ async def _ensure_shop() -> dict:
     return st
 
 
-def _shop_embed(items: list[dict]) -> discord.Embed:
+def _shop_embed(items: list[dict], *, with_fields: bool = False) -> discord.Embed:
+    """Shop-Embed. Normalfall: schlank – die Titel zeigt das Banner-BILD. Nur als
+    Notfall (Bild liess sich nicht rendern) werden die Titel als Textfelder
+    nachgereicht (with_fields=True)."""
     rar_best = max(items, key=lambda e: titles.RANK.get(e["rarity"], 0))["rarity"]
     emb = discord.Embed(
         title="🛒 Flo Shop — Titel des Tages",
-        description=("Jeden Tag um **2 Uhr** gibt's frische Titel! Je seltener, desto "
-                     "edler die Farbe – und desto **entspannter quatscht Flo** mit dir.\n"
-                     f"Kaufen: **Dropdown unten** oder `{_bot_name} kaufen <Nr>`."),
+        description=("Jeden Tag um **2 Uhr** frische Titel. Je seltener, desto edler "
+                     "die Farbe – und desto **entspannter quatscht Flo** mit dir.\n"
+                     "**Kaufen:** unten im Dropdown auswählen. 👇"),
         color=discord.Color(titles.RARITY[rar_best]["color"]),
     )
-    for e in items:
-        meta = titles.RARITY[e["rarity"]]
-        emb.add_field(
-            name=f"{e['n']}. {e['label']}",
-            value=f"{meta['emoji']} **{meta['label']}** · 💰 {e['price']} {COIN}",
-            inline=True,
-        )
-    while len(emb.fields) % 3 != 0:
-        emb.add_field(name="​", value="​", inline=True)
+    if with_fields:
+        for e in items:
+            meta = titles.RARITY[e["rarity"]]
+            emb.add_field(
+                name=f"{e['n']}. {e['label']}",
+                value=f"{meta['emoji']} **{meta['label']}** · 💰 {e['price']} {COIN}",
+                inline=True,
+            )
+        while len(emb.fields) % 3 != 0:
+            emb.add_field(name="​", value="​", inline=True)
     emb.set_footer(text=f"{len(items)} Titel heute · beim Kauf gibt's die farbige Rarity-Rolle")
     return emb
 
@@ -779,8 +783,8 @@ async def _shop(message: discord.Message) -> object:
             title="🛒 Flo Shop",
             description="Der Shop ist gerade leer – schau gleich nochmal rein.",
             color=discord.Color.blurple())
-    emb = _shop_embed(items)
     file = _shop_banner_file(items, st.get("date", ""))
+    emb = _shop_embed(items, with_fields=(file is None))
     if file is not None:
         emb.set_image(url="attachment://shop.png")
     view = _ShopView(items)
