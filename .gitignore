@@ -5,5 +5,3 @@ __pycache__/
 *.pyc
 # Laufzeitdaten der Spass-Features (Level/Coins/Spielstaende) - nicht committen:
 data/
-# Kompilat-Zwischenordner der Flo MC Bridge (die fertige .jar wird committet):
-mcbridge/build/
