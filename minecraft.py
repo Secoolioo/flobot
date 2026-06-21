@@ -22,6 +22,7 @@ import glob
 import json
 import logging
 import os
+import time
 
 import discord
 
@@ -63,6 +64,12 @@ _exclude_exact: "set[str]" = set(_BOT_EXACT_DEFAULT)
 _exclude_suffix: "tuple[str, ...]" = _BOT_SUFFIX_DEFAULT
 _exclude_substr: "tuple[str, ...]" = _BOT_SUBSTR_DEFAULT
 _exclude_heuristic = True
+
+# Cache: letzter erfolgreich geholter + aufbereiteter Stand. Bei einem Netz-
+# Aussetzer zeigt Flo lieber diesen Stand (mit Hinweis) statt "nicht erreichbar".
+_CACHE_TTL = 1800.0   # so lange (Sekunden) wird ein Cache-Stand noch ausgespielt
+_cache = None
+_cache_at = 0.0
 
 
 def setup() -> bool:
@@ -540,14 +547,19 @@ def _render_file(data: dict, category: str):
     return discord.File(buf, filename="mcstats.png")
 
 
-def _embed(data: dict, category: str, *, with_image: bool, with_fields: bool) -> discord.Embed:
+def _embed(data: dict, category: str, *, with_image: bool, with_fields: bool,
+           stale: bool = False, age_min: int = 0) -> discord.Embed:
     t = data["totals"]
     ver = f" · {data['version']}" if data.get("version") else ""
+    desc = f"**{data['server']}**{ver} · {data['player_count']} Spieler\n"
+    if stale:
+        desc += (f"⚠️ Server gerade nicht erreichbar – zeige **letzten Stand** "
+                 f"(vor {age_min} Min).\n")
+    desc += "Vergleicht euch – Kategorie unten mit den **Buttons** wechseln. 👇"
     emb = discord.Embed(
         title=f"⛏️ Minecraft Statistik — {_CAT_LABEL.get(category, '')}",
-        description=(f"**{data['server']}**{ver} · {data['player_count']} Spieler\n"
-                     f"Vergleicht euch – Kategorie unten mit den **Buttons** wechseln. 👇"),
-        color=0x5E9B33,  # Gras-Gruen
+        description=desc,
+        color=0xE6A23C if stale else 0x5E9B33,  # orange wenn veraltet, sonst Gras-Gruen
     )
     if with_image:
         emb.set_image(url="attachment://mcstats.png")
@@ -592,10 +604,13 @@ class MCStatsView(discord.ui.View):
     """Wie das Ingame-Statistik-Menue: Buttons wechseln die Kategorie; jede
     Kategorie ist eine Spieler-Rangliste mit echtem Skin-Kopf."""
 
-    def __init__(self, data: dict, *, timeout: float = 300):
+    def __init__(self, data: dict, *, timeout: float = 300, stale: bool = False,
+                 age_min: int = 0):
         super().__init__(timeout=timeout)
         self.data = data
         self.message = None
+        self.stale = stale
+        self.age_min = age_min
         self.category = data.get("default_cat", _DEFAULT_CAT)
         for key, emoji, label, *_rest in _CATS:
             rows = (data.get("cats") or {}).get(key, {}).get("rows") or []
@@ -618,7 +633,8 @@ class MCStatsView(discord.ui.View):
                 child.style = (discord.ButtonStyle.primary
                                if cid == f"mc:{key}" else discord.ButtonStyle.secondary)
         file = _render_file(self.data, key)
-        emb = _embed(self.data, key, with_image=file is not None, with_fields=file is None)
+        emb = _embed(self.data, key, with_image=file is not None, with_fields=file is None,
+                     stale=self.stale, age_min=self.age_min)
         try:
             await interaction.response.edit_message(
                 embed=emb, attachments=[file] if file is not None else [], view=self)
@@ -666,32 +682,53 @@ async def handle(message: discord.Message) -> object:
     if not _is_lb_command(parts):
         return None
 
+    global _cache, _cache_at
+    # 1) Live versuchen (mit Retry in _fetch_players). 'fresh' = fertige Daten,
+    #    "empty" = erreichbar aber keine Daten, None = nicht erreichbar.
+    fresh = None
+    reachable = True
     try:
         players = await _fetch_players()
+        data = _aggregate(players, _limit)
+        if players and _has_any_rows(data):
+            if _avatars:
+                try:
+                    await _attach_heads(data)
+                except Exception as exc:  # noqa: BLE001 - Avatare optional
+                    log.warning("MC-Avatare nicht ladbar (%s)", type(exc).__name__)
+            fresh = data
+        else:
+            fresh = "empty"
     except Exception as exc:  # noqa: BLE001 - Verbindungsfehler nie als Crash
         log.warning("MC-Stats nicht erreichbar (%s): %s", type(exc).__name__, exc)
-        await _reply_error(message)
-        return HANDLED
+        reachable = False
 
-    data = _aggregate(players, _limit)
-    if not players or not _has_any_rows(data):
+    # 2) Daten waehlen: frisch > (bei Aussetzer) letzter Stand > Fehler/leer.
+    now = time.monotonic()
+    stale, age_min = False, 0
+    if isinstance(fresh, dict):
+        _cache, _cache_at = fresh, now
+        data = fresh
+    elif not reachable and _cache is not None and (now - _cache_at) <= _CACHE_TTL:
+        data = _cache
+        stale, age_min = True, int((now - _cache_at) / 60)
+    elif fresh == "empty":
         emb = discord.Embed(
             title="⛏️ Minecraft Statistik",
             description="Es gibt noch keine Statistiken – spielt erst mal ein bisschen! 🙂",
             color=0x5E9B33)
         await _safe_reply(message, embed=emb)
         return HANDLED
+    else:
+        await _reply_error(message)
+        return HANDLED
 
-    if _avatars:
-        try:
-            await _attach_heads(data)
-        except Exception as exc:  # noqa: BLE001 - Avatare optional
-            log.warning("MC-Avatare nicht ladbar (%s)", type(exc).__name__)
-
+    # 3) Rendern + senden.
     cat = data.get("default_cat", _DEFAULT_CAT)
     file = _render_file(data, cat)
-    emb = _embed(data, cat, with_image=file is not None, with_fields=file is None)
-    view = MCStatsView(data)
+    emb = _embed(data, cat, with_image=file is not None, with_fields=file is None,
+                 stale=stale, age_min=age_min)
+    view = MCStatsView(data, stale=stale, age_min=age_min)
     kwargs = {"embed": emb, "view": view, "mention_author": False}
     if file is not None:
         kwargs["file"] = file
