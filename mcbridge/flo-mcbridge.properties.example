@@ -24,6 +24,12 @@ level_name = world
 # Optional: usercache.json (sonst automatisch neben dem Server gesucht).
 # usercache = /opt/minecraft/usercache.json
 
+# Nur Spieler aus der Whitelist anzeigen (Standard: true). Auf 'false' setzen,
+# um ALLE Spieler zu zeigen. Fehlt/leer die whitelist.json, wird nicht gefiltert.
+whitelist_only = true
+# Optional: Pfad zur whitelist.json (sonst automatisch neben dem Server gesucht).
+# whitelist = /opt/minecraft/whitelist.json
+
 # Anzeige im Discord-Embed:
 server_name = SUPA SIGMA SERVA
 mc_version = 1.21.10

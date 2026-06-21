@@ -51,6 +51,8 @@ public final class FloMcBridge {
     private static String worldName = "world";
     private static Path statsDir;
     private static Path usercache;
+    private static Path whitelist;
+    private static boolean whitelistOnly = true;
 
     private FloMcBridge() {
     }
@@ -65,6 +67,9 @@ public final class FloMcBridge {
         token = prop(cfg, "token", "MC_STATS_TOKEN", "");
         statsDir = resolveStatsDir(cfg);
         usercache = resolveUsercache(cfg, statsDir);
+        whitelist = resolveSibling(cfg, "whitelist", "MC_WHITELIST", statsDir, "whitelist.json");
+        whitelistOnly = !prop(cfg, "whitelist_only", "MC_WHITELIST_ONLY", "true")
+                .equalsIgnoreCase("false");
 
         if (token.isEmpty()) {
             System.err.println("FEHLER: Kein 'token' gesetzt. Trage in flo-mcbridge.properties "
@@ -82,8 +87,12 @@ public final class FloMcBridge {
         server.createContext("/leaderboard", FloMcBridge::handleLeaderboard);
         server.setExecutor(Executors.newFixedThreadPool(4));
         server.start();
+        String wlInfo = whitelistOnly
+                ? "nur Whitelist (" + whitelist + ")"
+                : "alle Spieler";
         System.out.println("Flo MC Bridge laeuft auf http://" + bind + ":" + port
-                + "  (stats: " + statsDir + ", usercache: " + usercache + ")");
+                + "  (stats: " + statsDir + ", usercache: " + usercache
+                + ", Filter: " + wlInfo + ")");
     }
 
     // ---------------------------------------------------------------- HTTP --
@@ -106,11 +115,17 @@ public final class FloMcBridge {
                 return;
             }
             Map<String, String> names = loadNames();
+            // Nur Whitelist-Spieler? (leere/fehlende Whitelist -> kein Filter)
+            java.util.Set<String> wl = whitelistOnly ? loadWhitelist() : null;
+            boolean filterWl = wl != null && !wl.isEmpty();
             List<Object> players = new ArrayList<>();
             try (DirectoryStream<Path> ds = Files.newDirectoryStream(statsDir, "*.json")) {
                 for (Path p : ds) {
                     String fn = p.getFileName().toString();
                     String uuid = fn.substring(0, fn.length() - 5); // ohne ".json"
+                    if (filterWl && !wl.contains(normalize(uuid))) {
+                        continue;   // nicht auf der Whitelist -> raus
+                    }
                     String content;
                     try {
                         content = Files.readString(p, StandardCharsets.UTF_8);
@@ -280,6 +295,54 @@ public final class FloMcBridge {
             return world.getParent() != null ? world.getParent().resolve("usercache.json") : g2;
         }
         return null;
+    }
+
+    /** Findet eine Datei neben dem Server (Server-Wurzel = <welt>/.., sonst <welt>). */
+    private static Path resolveSibling(Properties cfg, String key, String envKey,
+                                       Path stats, String fileName) {
+        String explicit = prop(cfg, key, envKey, "");
+        if (!explicit.isEmpty()) {
+            return Paths.get(explicit);
+        }
+        if (stats != null && stats.getParent() != null) {
+            Path world = stats.getParent();
+            if (world.getParent() != null) {
+                Path g1 = world.getParent().resolve(fileName);
+                if (Files.isRegularFile(g1)) {
+                    return g1;
+                }
+            }
+            Path g2 = world.resolve(fileName);
+            if (Files.isRegularFile(g2)) {
+                return g2;
+            }
+            return world.getParent() != null ? world.getParent().resolve(fileName) : g2;
+        }
+        return null;
+    }
+
+    /** Liest whitelist.json -> Set normalisierter UUIDs (leer = keine Whitelist). */
+    private static java.util.Set<String> loadWhitelist() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (whitelist == null || !Files.isRegularFile(whitelist)) {
+            return out;
+        }
+        try {
+            Object arr = Json.parse(Files.readString(whitelist, StandardCharsets.UTF_8));
+            if (arr instanceof List) {
+                for (Object o : (List<?>) arr) {
+                    if (o instanceof Map) {
+                        Object u = ((Map<?, ?>) o).get("uuid");
+                        if (u != null) {
+                            out.add(normalize(u.toString()));
+                        }
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // keine/kaputte Whitelist -> wie "keine Whitelist" (kein Filter)
+        }
+        return out;
     }
 
     private static String prop(Properties cfg, String key, String envKey, String def) {

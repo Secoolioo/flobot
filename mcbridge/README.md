@@ -51,6 +51,7 @@ Wichtige Felder in `flo-mcbridge.properties`:
 | `token` | **Pflicht.** Langes Zufalls-Geheimnis. Erzeugen: `openssl rand -hex 24` |
 | `port` | HTTP-Port (Standard `4918`) |
 | `server_dir` + `level_name` | Server-Ordner + Welt-Name (aus `server.properties`). Alternativ `world_dir` oder direkt `stats_dir`. |
+| `whitelist_only` | `true` (Standard) = nur Spieler aus `whitelist.json` zeigen; `false` = alle. Fehlt die Whitelist, wird nicht gefiltert. |
 | `server_name`, `mc_version` | Anzeige im Discord-Embed |
 
 Als Dienst starten (läuft als der **Minecraft-User**, damit die Stat-Dateien
