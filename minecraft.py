@@ -51,12 +51,26 @@ _avatars = True
 _HTTP_RETRIES = 4
 _HTTP_RETRY_DELAY = 1.2
 
+# Bots/Farm-Spieler aus dem Leaderboard raushalten.
+#  - feste Namen (genaue Treffer, klein geschrieben) - per MC_EXCLUDE erweiterbar
+#  - Heuristik: Name endet auf eine Bot-Endung (farm/bot/afk) oder enthaelt sie
+#    (per MC_EXCLUDE_PATTERNS erweiterbar; per MC_EXCLUDE_BOTS=0 abschaltbar).
+_BOT_EXACT_DEFAULT = {"ominousfarm", "hoglinfarm", "froglightfarm",
+                      "creeperfarm", "scvb", "goid"}
+_BOT_SUFFIX_DEFAULT = ("farm", "bot", "afk")     # Name endet so -> Bot
+_BOT_SUBSTR_DEFAULT = ("afkbot", "_bot", "_farm")  # Name enthaelt so -> Bot
+_exclude_exact: "set[str]" = set(_BOT_EXACT_DEFAULT)
+_exclude_suffix: "tuple[str, ...]" = _BOT_SUFFIX_DEFAULT
+_exclude_substr: "tuple[str, ...]" = _BOT_SUBSTR_DEFAULT
+_exclude_heuristic = True
+
 
 def setup() -> bool:
     """Aktiviert das Feature, wenn es nicht abgeschaltet ist UND eine Quelle
     (HTTP-URL oder lokaler stats-Ordner) konfiguriert wurde."""
     global _enabled, _bot_name, _url, _token, _dir, _usercache
     global _server_name, _version, _limit, _timeout, _avatars
+    global _exclude_exact, _exclude_substr, _exclude_heuristic
 
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
     if os.getenv("MINECRAFT_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -78,6 +92,13 @@ def setup() -> bool:
     except ValueError:
         _timeout = 8.0
     _avatars = os.getenv("MC_AVATARS", "1").strip().lower() not in ("0", "false", "no", "off")
+    # Ausschluss-Liste (Bots/Farmen): Defaults + per .env erweiterbar.
+    extra = {n.lower() for n in os.getenv("MC_EXCLUDE", "").replace(",", " ").split()}
+    _exclude_exact = set(_BOT_EXACT_DEFAULT) | extra
+    pats = [p.lower() for p in os.getenv("MC_EXCLUDE_PATTERNS", "").replace(",", " ").split()]
+    _exclude_substr = tuple(_BOT_SUBSTR_DEFAULT) + tuple(pats)
+    _exclude_heuristic = os.getenv("MC_EXCLUDE_BOTS", "1").strip().lower() not in (
+        "0", "false", "no", "off")
 
     if not _url and not _dir:
         log.info("Minecraft-Feature aus: weder MC_STATS_URL noch MC_STATS_DIR gesetzt.")
@@ -343,6 +364,22 @@ def _display_name(p: dict) -> str:
     return f"Spieler {uid[:8]}" if uid else "Unbekannt"
 
 
+def _is_bot(name: str) -> bool:
+    """True, wenn der Spielername ausgeschlossen werden soll: fester Listen-
+    Treffer ODER (Heuristik) endet auf farm/bot/afk bzw. enthaelt _farm/_bot/afkbot.
+    So fliegen genannte Bots raus UND kuenftige '<x>farm'/'afk...'-Bots automatisch."""
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    if n in _exclude_exact:
+        return True
+    if not _exclude_heuristic:
+        return False
+    if n.endswith(_exclude_suffix):
+        return True
+    return any(s in n for s in _exclude_substr)
+
+
 def _fmt(n) -> str:
     """12345 -> '12.345' (deutsche Tausenderpunkte)."""
     return f"{int(n):,}".replace(",", ".")
@@ -398,6 +435,11 @@ def _build_category(players, key, stat_id, kind_fn, name_fn, value_label, limit)
 def _aggregate(players: list[dict], limit: int) -> dict:
     """Baut die komplette Statistik: je Kategorie eine SPIELER-Rangliste (Top-N)
     plus die Server-Summen fuer das Stats-Band."""
+    # Bots/Farmen komplett raushalten (aus Rangliste, Summen und Spielerzahl).
+    before = len(players)
+    players = [p for p in players if not _is_bot(_display_name(p))]
+    if before != len(players):
+        log.info("MC-Stats: %d Bot(s)/Farm(en) ausgeschlossen.", before - len(players))
     cats = {}
     for key, _emoji, _label, stat_id, kind_fn, name_fn, word in _CATS:
         cats[key] = {"label": word,
