@@ -45,6 +45,11 @@ _version = ""
 _limit = 5
 _timeout = 8.0
 _avatars = True
+# Flatternde/instabile Netze: den Stats-Abruf mehrfach probieren, bevor wir
+# "nicht erreichbar" melden. So killt ein kurzer Verbindungs-Aussetzer nicht
+# gleich den ganzen Befehl.
+_HTTP_RETRIES = 4
+_HTTP_RETRY_DELAY = 1.2
 
 
 def setup() -> bool:
@@ -257,17 +262,32 @@ async def _fetch_http() -> list[dict]:
     import aiohttp  # lazy: Bot soll auch ohne aiohttp grundsaetzlich starten
     headers = {"X-Auth-Token": _token} if _token else {}
     params = {"token": _token} if _token else {}
-    timeout = aiohttp.ClientTimeout(total=_timeout)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(_url, headers=headers, params=params) as resp:
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
-    if isinstance(data, dict):
-        global _server_name, _version
-        _server_name = data.get("server") or _server_name
-        _version = data.get("mc_version") or _version
-        return data.get("players") or []
-    return data or []
+    # Eigenes Connect-Timeout, damit ein haengender Verbindungsaufbau nicht das
+    # ganze Zeitbudget frisst (wichtig fuer die Retries bei flatterndem Netz).
+    timeout = aiohttp.ClientTimeout(total=_timeout, sock_connect=min(4.0, _timeout))
+    last_exc: "Exception | None" = None
+    for attempt in range(1, _HTTP_RETRIES + 1):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(_url, headers=headers, params=params) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json(content_type=None)
+            if isinstance(data, dict):
+                global _server_name, _version
+                _server_name = data.get("server") or _server_name
+                _version = data.get("mc_version") or _version
+                return data.get("players") or []
+            return data or []
+        except (aiohttp.ClientConnectionError, asyncio.TimeoutError, OSError) as exc:
+            # Nur Verbindungs-Wackler erneut versuchen - HTTP-Status-Fehler (z. B.
+            # 401 falscher Token) fliegen sofort raus (raise_for_status -> oben).
+            last_exc = exc
+            if attempt < _HTTP_RETRIES:
+                log.info("MC-Stats Versuch %d/%d fehlgeschlagen (%s) - neuer Versuch "
+                         "in %.1fs", attempt, _HTTP_RETRIES, type(exc).__name__,
+                         _HTTP_RETRY_DELAY)
+                await asyncio.sleep(_HTTP_RETRY_DELAY)
+    raise last_exc
 
 
 def _read_dir() -> list[dict]:
