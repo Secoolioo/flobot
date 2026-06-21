@@ -44,13 +44,14 @@ _server_name = "Minecraft"
 _version = ""
 _limit = 5
 _timeout = 8.0
+_avatars = True
 
 
 def setup() -> bool:
     """Aktiviert das Feature, wenn es nicht abgeschaltet ist UND eine Quelle
     (HTTP-URL oder lokaler stats-Ordner) konfiguriert wurde."""
     global _enabled, _bot_name, _url, _token, _dir, _usercache
-    global _server_name, _version, _limit, _timeout
+    global _server_name, _version, _limit, _timeout, _avatars
 
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
     if os.getenv("MINECRAFT_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -71,6 +72,7 @@ def setup() -> bool:
         _timeout = float(os.getenv("MC_HTTP_TIMEOUT", "8"))
     except ValueError:
         _timeout = 8.0
+    _avatars = os.getenv("MC_AVATARS", "1").strip().lower() not in ("0", "false", "no", "off")
 
     if not _url and not _dir:
         log.info("Minecraft-Feature aus: weder MC_STATS_URL noch MC_STATS_DIR gesetzt.")
@@ -151,6 +153,93 @@ def _pretty_block(block_id: str) -> str:
 
 def _block_kind(block_id: str) -> str:
     return _KIND_MAP.get(_short_id(block_id), "generic")
+
+
+# --- Item-Namen / -Icons (Crafting / Benutzt) ----------------------------
+_ITEM_DE = {
+    "oak_planks": "Eichenbretter", "stick": "Stock", "torch": "Fackel",
+    "crafting_table": "Werkbank", "furnace": "Ofen", "chest": "Truhe",
+    "iron_ingot": "Eisenbarren", "gold_ingot": "Goldbarren",
+    "copper_ingot": "Kupferbarren", "netherite_ingot": "Netheritbarren",
+    "diamond": "Diamant", "emerald": "Smaragd", "bread": "Brot",
+    "iron_pickaxe": "Eisen-Spitzhacke", "diamond_pickaxe": "Diamant-Spitzhacke",
+    "netherite_pickaxe": "Netherit-Spitzhacke", "iron_sword": "Eisenschwert",
+    "diamond_sword": "Diamantschwert", "bucket": "Eimer", "water_bucket": "Wassereimer",
+    "arrow": "Pfeil", "bow": "Bogen", "wheat": "Weizen", "coal": "Kohle",
+    "redstone": "Redstone", "shield": "Schild", "ladder": "Leiter",
+}
+
+
+def _pretty_item(item_id: str) -> str:
+    sid = _short_id(item_id)
+    if sid in _ITEM_DE:
+        return _ITEM_DE[sid]
+    if sid in _BLOCK_DE:
+        return _BLOCK_DE[sid]
+    return sid.replace("_", " ").title()
+
+
+def _item_kind(item_id: str) -> str:
+    """Icon-Art fuer ein Item: bekannter Block -> Block-Icon, sonst Item-Familie."""
+    sid = _short_id(item_id)
+    bk = _KIND_MAP.get(sid)
+    if bk:
+        return bk
+    if sid.endswith("_planks") or sid.endswith("_wood") or sid.endswith("_log"):
+        return "item:plank"
+    if sid.endswith("_ingot") or sid in ("iron_nugget", "gold_nugget"):
+        return "item:ingot"
+    if sid in ("diamond", "emerald", "amethyst_shard", "quartz", "lapis_lazuli"):
+        return "item:gem"
+    if sid.endswith(("_pickaxe", "_axe", "_shovel", "_hoe")):
+        return "item:tool"
+    if sid.endswith("_sword"):
+        return "item:sword"
+    if sid in ("bread", "apple", "golden_apple", "carrot", "potato", "beef",
+               "porkchop", "cooked_beef", "melon_slice", "cookie", "cooked_porkchop"):
+        return "item:food"
+    if sid == "stick":
+        return "item:stick"
+    if sid == "torch" or sid.endswith("_torch"):
+        return "item:torch"
+    return "item:generic"
+
+
+# --- Mob-Namen / -Icons (getoetete Mobs) ---------------------------------
+_MOB_DE = {
+    "zombie": "Zombie", "skeleton": "Skelett", "creeper": "Creeper", "spider": "Spinne",
+    "cave_spider": "Hoehlenspinne", "enderman": "Enderman", "witch": "Hexe",
+    "slime": "Schleim", "blaze": "Lohe", "ghast": "Ghast", "piglin": "Piglin",
+    "zombified_piglin": "Zombie-Piglin", "hoglin": "Hoglin",
+    "wither_skeleton": "Wither-Skelett", "drowned": "Ertrunkener",
+    "husk": "Wuestenzombie", "stray": "Eiswanderer", "phantom": "Phantom",
+    "pillager": "Pluenderer", "vindicator": "Diener", "silverfish": "Silberfischchen",
+    "magma_cube": "Magmawuerfel", "guardian": "Waechter", "cow": "Kuh",
+    "pig": "Schwein", "chicken": "Huhn", "sheep": "Schaf", "villager": "Dorfbewohner",
+}
+
+
+def _pretty_mob(mob_id: str) -> str:
+    return _MOB_DE.get(_short_id(mob_id), _short_id(mob_id).replace("_", " ").title())
+
+
+_MOB_FACES = {"zombie", "skeleton", "creeper", "spider", "cave_spider", "enderman",
+              "witch", "slime", "blaze", "piglin", "zombified_piglin"}
+
+
+def _mob_kind(mob_id: str) -> str:
+    sid = _short_id(mob_id)
+    if sid in _MOB_FACES:
+        return f"mob:{sid}"
+    if "spider" in sid:
+        return "mob:spider"
+    if "skeleton" in sid:
+        return "mob:skeleton"
+    if "zombie" in sid or sid in ("drowned", "husk"):
+        return "mob:zombie"
+    if "piglin" in sid:
+        return "mob:piglin"
+    return "mob:generic"
 
 
 # --- Roh-Stats holen -----------------------------------------------------
@@ -234,66 +323,88 @@ def _display_name(p: dict) -> str:
     return f"Spieler {uid[:8]}" if uid else "Unbekannt"
 
 
-def _aggregate(players: list[dict], limit: int) -> dict:
-    """Baut aus den Roh-Stats die fertige Leaderboard-Struktur fuer Embed+Render."""
-    miners: list[dict] = []
-    tot_mined = tot_deaths = tot_kills = tot_cm = 0
-    tot_play_ticks = 0
-    block_global: dict[str, int] = {}      # block_id -> Gesamtmenge
-    block_top_by: dict[str, tuple[int, str]] = {}  # block_id -> (max, spielername)
+def _fmt(n) -> str:
+    """12345 -> '12.345' (deutsche Tausenderpunkte)."""
+    return f"{int(n):,}".replace(",", ".")
 
+
+# --- Kategorien (Tab-Buttons, wie das Ingame-Statistik-Menue) -------------
+# Jede Kategorie ranked SPIELER (zum Vergleichen). Tupel:
+#   (key, Button-Emoji, Label, stat_id, kind_fn, name_fn, Wert-Wort)
+# 'playtime' ist ein Spezialfall (Wert = Stunden, Spezialitaet = Top-Block).
+_CATS = [
+    ("mined",    "⛏️", "Abbau",    "minecraft:mined",   _block_kind, _pretty_block, "Bloecke"),
+    ("playtime", "⏱️", "Aktiv",    None,                _block_kind, _pretty_block, "Stunden"),
+    ("crafted",  "🔨", "Crafting", "minecraft:crafted", _item_kind,  _pretty_item,  "gecraftet"),
+    ("used",     "🗡️", "Benutzt",  "minecraft:used",    _item_kind,  _pretty_item,  "benutzt"),
+    ("killed",   "👹", "Mobs",     "minecraft:killed",  _mob_kind,   _pretty_mob,   "Kills"),
+]
+_CAT_LABEL = {key: label for key, _e, label, *_rest in _CATS}
+_DEFAULT_CAT = "mined"
+
+
+def _build_category(players, key, stat_id, kind_fn, name_fn, value_label, limit):
+    """Rangliste der SPIELER fuer eine Kategorie: je Spieler Gesamtzahl + seine
+    Spezialitaet (haeufigstes Item/Block/Mob in dieser Kategorie)."""
+    rows = []
     for p in players:
         stats = p.get("stats") or {}
-        mined = stats.get("minecraft:mined") or {}
-        custom = stats.get("minecraft:custom") or {}
-        total = sum(int(v) for v in mined.values())
-        name = _display_name(p)
-
-        # Top-Bloecke dieses Spielers
-        blocks = sorted(mined.items(), key=lambda kv: -int(kv[1]))
-        top_blocks = [{"name": _pretty_block(bid), "kind": _block_kind(bid),
-                       "count": int(cnt)} for bid, cnt in blocks[:4]]
-
-        play_ticks = int(custom.get("minecraft:play_time", 0))
-        deaths = int(custom.get("minecraft:deaths", 0))
-        kills = int(custom.get("minecraft:mob_kills", 0))
-        cm = sum(int(v) for k, v in custom.items() if k.endswith("_one_cm"))
-
-        miners.append({
-            "name": name, "total_mined": total, "blocks": top_blocks,
-            "play_h": play_ticks / 20 / 3600, "deaths": deaths, "kills": kills,
+        if key == "playtime":
+            ticks = int((stats.get("minecraft:custom") or {}).get("minecraft:play_time", 0))
+            count = ticks / 20 / 3600
+            spec_src = stats.get("minecraft:mined") or {}
+        else:
+            spec_src = stats.get(stat_id) or {}
+            count = sum(int(v) for v in spec_src.values() if int(v) > 0)
+        if count <= 0:
+            continue
+        top = None
+        if spec_src:
+            tid, tc = max(spec_src.items(), key=lambda kv: int(kv[1]))
+            if int(tc) > 0:
+                top = {"name": name_fn(tid), "kind": kind_fn(tid), "count": int(tc)}
+        rows.append({
+            "name": _display_name(p), "uuid": str(p.get("uuid", "")), "count": count,
+            "value": f"{count:.0f}" if key == "playtime" else _fmt(int(count)),
+            "label": value_label, "top": top,
         })
-        tot_mined += total
-        tot_play_ticks += play_ticks
-        tot_deaths += deaths
-        tot_kills += kills
-        tot_cm += cm
-        for bid, cnt in mined.items():
-            c = int(cnt)
-            block_global[bid] = block_global.get(bid, 0) + c
-            if c > block_top_by.get(bid, (0, ""))[0]:
-                block_top_by[bid] = (c, name)
+    rows.sort(key=lambda r: (-r["count"], r["name"].lower()))
+    rows = rows[:limit]
+    for i, r in enumerate(rows, 1):
+        r["rank"] = i
+    return rows
 
-    miners.sort(key=lambda m: (-m["total_mined"], m["name"].lower()))
-    for i, m in enumerate(miners[:limit], 1):
-        m["rank"] = i
 
-    spotlight = None
-    if block_global:
-        bid, gcount = max(block_global.items(), key=lambda kv: kv[1])
-        if gcount > 0:
-            spotlight = {"name": _pretty_block(bid), "kind": _block_kind(bid),
-                         "count": gcount, "by": block_top_by.get(bid, (0, "?"))[1]}
+def _aggregate(players: list[dict], limit: int) -> dict:
+    """Baut die komplette Statistik: je Kategorie eine SPIELER-Rangliste (Top-N)
+    plus die Server-Summen fuer das Stats-Band."""
+    cats = {}
+    for key, _emoji, _label, stat_id, kind_fn, name_fn, word in _CATS:
+        cats[key] = {"label": word,
+                     "rows": _build_category(players, key, stat_id, kind_fn,
+                                             name_fn, word, limit)}
+    default_cat = next((k for k, *_ in _CATS if cats[k]["rows"]), _DEFAULT_CAT)
+
+    tot_mined = tot_deaths = tot_kills = tot_cm = tot_play = 0
+    for p in players:
+        stats = p.get("stats") or {}
+        custom = stats.get("minecraft:custom") or {}
+        mined = stats.get("minecraft:mined") or {}
+        tot_mined += sum(int(v) for v in mined.values())
+        tot_play += int(custom.get("minecraft:play_time", 0))
+        tot_deaths += int(custom.get("minecraft:deaths", 0))
+        tot_kills += int(custom.get("minecraft:mob_kills", 0))
+        tot_cm += sum(int(v) for k, v in custom.items() if k.endswith("_one_cm"))
 
     return {
         "server": _server_name,
         "version": _version,
         "player_count": len(players),
-        "miners": miners[:limit],
-        "spotlight": spotlight,
+        "default_cat": default_cat,
+        "cats": cats,
         "totals": {
             "mined": tot_mined,
-            "play_h": tot_play_ticks / 20 / 3600,
+            "play_h": tot_play / 20 / 3600,
             "deaths": tot_deaths,
             "kills": tot_kills,
             "km": tot_cm / 100000,
@@ -301,48 +412,93 @@ def _aggregate(players: list[dict], limit: int) -> dict:
     }
 
 
+def _has_any_rows(data: dict) -> bool:
+    return any((data.get("cats") or {}).get(k, {}).get("rows") for k, *_ in _CATS)
+
+
+# --- Spieler-Koepfe (echte Minecraft-Skins via Minotar, gecacht) ---------
+_HEAD_CACHE: "dict[str, bytes | None]" = {}
+_HEAD_URL = "https://minotar.net/helm/{uuid}/{size}.png"
+_HEAD_SIZE = 96
+
+
+async def _fetch_head(session, uuid: str):
+    key = uuid.replace("-", "").lower()
+    if key in _HEAD_CACHE:
+        return _HEAD_CACHE[key]
+    blob = None
+    try:
+        async with session.get(_HEAD_URL.format(uuid=key, size=_HEAD_SIZE)) as resp:
+            if resp.status == 200:
+                blob = await resp.read()
+    except Exception:  # noqa: BLE001 - Avatar ist nice-to-have, nie fatal
+        blob = None
+    _HEAD_CACHE[key] = blob
+    return blob
+
+
+async def _attach_heads(data: dict) -> None:
+    """Holt fuer alle Spieler den echten Skin-Kopf (gecacht) und haengt die PNG-
+    Bytes an die Reihen (render zeichnet sie ohne Netz)."""
+    uuids, seen = [], set()
+    for cat in (data.get("cats") or {}).values():
+        for r in cat.get("rows") or []:
+            u = r.get("uuid")
+            if u and u not in seen:
+                seen.add(u)
+                uuids.append(u)
+    if not uuids:
+        return
+    import aiohttp
+    timeout = aiohttp.ClientTimeout(total=_timeout)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await asyncio.gather(*(_fetch_head(session, u) for u in uuids),
+                                 return_exceptions=True)
+    except Exception:  # noqa: BLE001
+        pass
+    for cat in (data.get("cats") or {}).values():
+        for r in cat.get("rows") or []:
+            r["head"] = _HEAD_CACHE.get(str(r.get("uuid", "")).replace("-", "").lower())
+
+
 # --- Darstellung ---------------------------------------------------------
-def _fmt(n: int) -> str:
-    """12345 -> '12.345' (deutsche Tausenderpunkte)."""
-    return f"{int(n):,}".replace(",", ".")
-
-
-def _render_file(data: dict):
-    """Optionales MC-Style-Banner (render.mc_leaderboard). Faellt sauber aus."""
-    fn = getattr(render, "mc_leaderboard", None)
+def _render_file(data: dict, category: str):
+    """Optionales MC-Style-Statistikbild (render.mc_stats). Faellt sauber aus."""
+    fn = getattr(render, "mc_stats", None)
     if not callable(fn):
         return None
     try:
-        buf = fn(data)
+        buf = fn(data, category)
     except Exception:  # noqa: BLE001 - Bild ist nice-to-have, nie fatal
-        log.exception("MC-Leaderboard-Bild fehlgeschlagen - nutze Text-Embed")
+        log.exception("MC-Statistik-Bild fehlgeschlagen - nutze Text-Embed")
         return None
     if buf is None:
         return None
-    return discord.File(buf, filename="mcleaderboard.png")
+    return discord.File(buf, filename="mcstats.png")
 
 
-def _embed(data: dict, *, with_image: bool, with_fields: bool) -> discord.Embed:
+def _embed(data: dict, category: str, *, with_image: bool, with_fields: bool) -> discord.Embed:
     t = data["totals"]
     ver = f" · {data['version']}" if data.get("version") else ""
     emb = discord.Embed(
-        title="⛏️ Minecraft Leaderboard",
+        title=f"⛏️ Minecraft Statistik — {_CAT_LABEL.get(category, '')}",
         description=(f"**{data['server']}**{ver} · {data['player_count']} Spieler\n"
-                     f"Wer hat am meisten abgebaut? 👇"),
+                     f"Vergleicht euch – Kategorie unten mit den **Buttons** wechseln. 👇"),
         color=0x5E9B33,  # Gras-Gruen
     )
     if with_image:
-        emb.set_image(url="attachment://mcleaderboard.png")
+        emb.set_image(url="attachment://mcstats.png")
     if with_fields:
-        for m in data["miners"]:
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(m["rank"], f"#{m['rank']}")
-            top = m["blocks"][0] if m["blocks"] else None
-            extra = f" · meist {top['name']} ({_fmt(top['count'])})" if top else ""
-            emb.add_field(
-                name=f"{medal} {m['name']}",
-                value=f"⛏️ **{_fmt(m['total_mined'])}** Bloecke{extra}",
-                inline=False,
-            )
+        cat = (data.get("cats") or {}).get(category, {})
+        word = cat.get("label", "")
+        for r in cat.get("rows") or []:
+            rk = r.get("rank") or 0
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rk, f"#{rk}")
+            top = r.get("top")
+            extra = f" · {top['name']} ×{_fmt(top['count'])}" if top else ""
+            emb.add_field(name=f"{medal} {r.get('name', '?')}",
+                          value=f"**{r.get('value', '0')}** {word}{extra}", inline=False)
     emb.set_footer(
         text=(f"Gesamt: {_fmt(t['mined'])} Bloecke · {t['play_h']:.0f} h gespielt · "
               f"{_fmt(t['kills'])} Mobs · {_fmt(t['deaths'])} Tode · {t['km']:.1f} km"))
@@ -357,6 +513,67 @@ def _protect(msg) -> None:
         bot.protect_message(msg)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _release(msg) -> None:
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# --- Interaktive Statistik-Ansicht (Tab-Buttons) -------------------------
+class MCStatsView(discord.ui.View):
+    """Wie das Ingame-Statistik-Menue: Buttons wechseln die Kategorie; jede
+    Kategorie ist eine Spieler-Rangliste mit echtem Skin-Kopf."""
+
+    def __init__(self, data: dict, *, timeout: float = 300):
+        super().__init__(timeout=timeout)
+        self.data = data
+        self.message = None
+        self.category = data.get("default_cat", _DEFAULT_CAT)
+        for key, emoji, label, *_rest in _CATS:
+            rows = (data.get("cats") or {}).get(key, {}).get("rows") or []
+            btn = discord.ui.Button(
+                label=label, emoji=emoji, disabled=not rows, custom_id=f"mc:{key}",
+                style=discord.ButtonStyle.primary if key == self.category
+                else discord.ButtonStyle.secondary)
+            btn.callback = self._cb(key)
+            self.add_item(btn)
+
+    def _cb(self, key: str):
+        async def callback(interaction: discord.Interaction):
+            await self._switch(interaction, key)
+        return callback
+
+    async def _switch(self, interaction: discord.Interaction, key: str) -> None:
+        for child in self.children:
+            cid = getattr(child, "custom_id", "") or ""
+            if cid.startswith("mc:"):
+                child.style = (discord.ButtonStyle.primary
+                               if cid == f"mc:{key}" else discord.ButtonStyle.secondary)
+        file = _render_file(self.data, key)
+        emb = _embed(self.data, key, with_image=file is not None, with_fields=file is None)
+        try:
+            await interaction.response.edit_message(
+                embed=emb, attachments=[file] if file is not None else [], view=self)
+            self.category = key            # erst nach erfolgreichem Edit
+        except discord.HTTPException:
+            log.exception("MC-Statistik-Wechsel fehlgeschlagen")
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        try:
+            if self.message is not None:
+                await self.message.edit(view=self)
+        except discord.HTTPException:
+            pass
+        finally:
+            _release(self.message)        # IMMER freigeben
 
 
 # --- Befehl --------------------------------------------------------------
@@ -394,28 +611,38 @@ async def handle(message: discord.Message) -> object:
         await _reply_error(message)
         return HANDLED
 
-    if not players:
+    data = _aggregate(players, _limit)
+    if not players or not _has_any_rows(data):
         emb = discord.Embed(
-            title="⛏️ Minecraft Leaderboard",
+            title="⛏️ Minecraft Statistik",
             description="Es gibt noch keine Statistiken – spielt erst mal ein bisschen! 🙂",
             color=0x5E9B33)
         await _safe_reply(message, embed=emb)
         return HANDLED
 
-    data = _aggregate(players, _limit)
-    file = _render_file(data)
-    emb = _embed(data, with_image=file is not None, with_fields=file is None)
-    kwargs = {"embed": emb, "mention_author": False}
+    if _avatars:
+        try:
+            await _attach_heads(data)
+        except Exception as exc:  # noqa: BLE001 - Avatare optional
+            log.warning("MC-Avatare nicht ladbar (%s)", type(exc).__name__)
+
+    cat = data.get("default_cat", _DEFAULT_CAT)
+    file = _render_file(data, cat)
+    emb = _embed(data, cat, with_image=file is not None, with_fields=file is None)
+    view = MCStatsView(data)
+    kwargs = {"embed": emb, "view": view, "mention_author": False}
     if file is not None:
         kwargs["file"] = file
     msg = await _safe_reply(message, **kwargs)
-    _protect(msg)
+    if msg is not None:
+        view.message = msg
+        _protect(msg)
     return HANDLED
 
 
 async def _reply_error(message: discord.Message) -> None:
     emb = discord.Embed(
-        title="⛏️ Minecraft Leaderboard",
+        title="⛏️ Minecraft Statistik",
         description=("Komm gerade nicht an den Minecraft-Server ran. Laeuft die "
                      "**Flo MC Bridge** und stimmt `MC_STATS_URL`/`MC_STATS_TOKEN`?"),
         color=0xE74C3C)
@@ -426,5 +653,5 @@ async def _safe_reply(message: discord.Message, **kwargs):
     try:
         return await message.reply(**kwargs)
     except discord.HTTPException:
-        log.exception("MC-Leaderboard konnte nicht gesendet werden")
+        log.exception("MC-Statistik konnte nicht gesendet werden")
         return None

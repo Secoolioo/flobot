@@ -88,7 +88,12 @@ MC_VERSION=1.21.10
 # Optional:
 MC_LB_LIMIT=5            # wie viele Spieler im Bild (3–10)
 MC_HTTP_TIMEOUT=8        # Sekunden
+MC_AVATARS=1             # echte Skin-Köpfe (Minotar) laden; 0 = aus
 ```
+
+Im Discord ist das Leaderboard **interaktiv**: Buttons schalten zwischen den
+Kategorien **Abbau · Aktiv · Crafting · Benutzt · Mobs** um – jede ist eine
+Spieler-Rangliste (Top 5) mit echtem **Skin-Kopf** zum Vergleichen.
 
 > Laufen Bot **und** Server ausnahmsweise auf derselben Maschine, kann Flo die
 > Dateien auch direkt lesen – dann statt `MC_STATS_URL` einfach

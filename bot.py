@@ -420,13 +420,16 @@ def _help_detail_embed(key: str) -> discord.Embed:
         return emb
     if key == "minecraft":
         emb = discord.Embed(title="⛏️ Minecraft",
-                            description="Die besten Statistiken vom Minecraft-Server – "
-                                        "im echten Block-Look. 🟩",
+                            description="Die Server-Statistiken im echten Ingame-Look. 🟩",
                             color=0x5E9B33)
-        emb.add_field(name="Bestenliste",
-            value=(f"`{name} mcleaderboard` · `{name} mc stats` · `{name} minecraft top`\n"
-                   "Wer hat am meisten abgebaut, welche Bloecke – plus Spielzeit, "
-                   "Mob-Kills, Tode & Strecke."), inline=False)
+        emb.add_field(name="Aufrufen",
+            value=f"`{name} mcleaderboard` · `{name} mc stats` · `{name} minecraft top`",
+            inline=False)
+        emb.add_field(name="Kategorien (Buttons)",
+            value=("⛏️ **Abbau** · ⏱️ **Aktiv** · 🔨 **Crafting** · 🗡️ **Benutzt** · "
+                   "👹 **Mobs**\nJede Kategorie ist eine **Spieler-Rangliste** (Top 5) "
+                   "mit echtem **Skin-Kopf** – zum Vergleichen, wer am meisten "
+                   "abgebaut/gebaut/getoetet hat."), inline=False)
         return emb
     if key == "chaos":
         emb = discord.Embed(title="😈 Chaos",

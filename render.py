@@ -896,66 +896,245 @@ def _mc_header(img, d, box, data):
     tx = x0 + 168
     _mc_text(d, tx, y0 + 50, "MINECRAFT", 46, _GOLD, anchor="lm")
     mw = d.textlength("MINECRAFT ", font=_font(46))
-    _mc_text(d, tx + mw, y0 + 50, "LEADERBOARD", 46, _WHITE, anchor="lm")
+    _mc_text(d, tx + mw, y0 + 50, "STATISTIK", 46, _WHITE, anchor="lm")
     ver = f"  ·  {data['version']}" if data.get("version") else ""
     sub = f"{data.get('server', '?')}{ver}  ·  {data.get('player_count', 0)} Spieler"
     _mc_text(d, tx, y0 + 90, sub, 19, (224, 228, 234), anchor="lm", shadow=0.32)
 
 
-def _mc_spotlight(img, d, box, sp):
+# --- Mob-Gesichter (einfache Pixel-Faces fuer die haeufigsten Mobs) -------
+_MOB_PAL = {
+    "zombie":   {"skin": (74, 122, 74), "eye": (22, 34, 22)},
+    "skeleton": {"skin": (200, 202, 200), "eye": (40, 40, 44)},
+    "creeper":  {"skin": (94, 184, 86), "eye": (18, 38, 16), "creeper": True},
+    "spider":   {"skin": (62, 52, 48), "eye": (170, 44, 44)},
+    "cave_spider": {"skin": (40, 70, 76), "eye": (170, 44, 44)},
+    "enderman": {"skin": (26, 24, 32), "eye": (190, 130, 240)},
+    "witch":    {"skin": (78, 112, 98), "eye": (40, 22, 42)},
+    "slime":    {"skin": (112, 198, 94), "eye": (32, 64, 26), "slime": True},
+    "blaze":    {"skin": (236, 184, 40), "eye": (120, 60, 0)},
+    "piglin":   {"skin": (150, 120, 110), "eye": (40, 30, 24)},
+    "zombified_piglin": {"skin": (120, 140, 96), "eye": (36, 44, 24)},
+    "generic":  {"skin": (120, 122, 130), "eye": (30, 30, 36)},
+}
+
+
+def _mob_face(size: int, kind: str) -> Image.Image:
+    """Einfaches Minecraft-Mob-Gesicht (Kopf + Augen) als Pixel-Icon."""
+    pal = _MOB_PAL.get(kind, _MOB_PAL["generic"])
+    skin, eye = pal["skin"], pal["eye"]
+    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tile)
+    g = 8
+    cell = size / g
+    seed = sum(ord(c) for c in kind) + 3
+    for gy in range(g):
+        for gx in range(g):
+            hh = (gx * 53 + gy * 131 + seed * 17) % 100
+            delta = (hh / 100 * 2 - 1) * 9
+            cc = tuple(_clamp(skin[i] + delta) for i in range(3))
+            td.rectangle([round(gx * cell), round(gy * cell),
+                          round((gx + 1) * cell), round((gy + 1) * cell)], fill=cc + (255,))
+
+    def box(fx0, fy0, fx1, fy1):
+        td.rectangle([round(size * fx0), round(size * fy0),
+                      round(size * fx1), round(size * fy1)], fill=eye + (255,))
+    if pal.get("creeper"):
+        box(0.22, 0.30, 0.40, 0.50)
+        box(0.60, 0.30, 0.78, 0.50)
+        box(0.42, 0.52, 0.58, 0.86)
+        box(0.30, 0.60, 0.70, 0.74)
+    elif pal.get("slime"):
+        box(0.28, 0.40, 0.40, 0.54)
+        box(0.60, 0.40, 0.72, 0.54)
+        box(0.42, 0.64, 0.58, 0.72)
+    else:
+        box(0.22, 0.36, 0.40, 0.52)
+        box(0.60, 0.36, 0.78, 0.52)
+    lite = _mix(skin, (255, 255, 255), 0.22)
+    dark = _mix(skin, (0, 0, 0), 0.34)
+    td.line([(0, 0), (size - 1, 0)], fill=lite + (255,))
+    td.line([(0, 0), (0, size - 1)], fill=lite + (255,))
+    td.line([(0, size - 1), (size - 1, size - 1)], fill=dark + (255,))
+    td.line([(size - 1, 0), (size - 1, size - 1)], fill=dark + (255,))
+    td.rectangle([0, 0, size - 1, size - 1], outline=(16, 16, 20, 255), width=1)
+    return tile
+
+
+# --- Item-Icons (Crafting/Benutzt): Inventar-Slot + einfaches Symbol ------
+_ITEM_COL = {
+    "ingot": (214, 216, 222), "plank": (162, 124, 74), "tool": (150, 152, 158),
+    "sword": (206, 208, 214), "food": (198, 96, 72), "stick": (150, 116, 70),
+    "torch": (252, 212, 92), "gem": (96, 222, 214), "generic": (152, 156, 164),
+}
+
+
+def _item_tile(size: int, family: str) -> Image.Image:
+    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tile)
+    slot = (60, 62, 70)
+    td.rectangle([0, 0, size - 1, size - 1], fill=slot + (255,))
+    dk = _mix(slot, (0, 0, 0), 0.45)
+    lt = _mix(slot, (255, 255, 255), 0.16)
+    td.rectangle([0, 0, size - 1, 2], fill=dk + (255,))
+    td.rectangle([0, 0, 2, size - 1], fill=dk + (255,))
+    td.rectangle([0, size - 3, size - 1, size - 1], fill=lt + (255,))
+    td.rectangle([size - 3, 0, size - 1, size - 1], fill=lt + (255,))
+    col = _ITEM_COL.get(family, _ITEM_COL["generic"])
+
+    def rc(fx0, fy0, fx1, fy1, c, rad=0):
+        b = [round(size * fx0), round(size * fy0), round(size * fx1), round(size * fy1)]
+        if rad:
+            td.rounded_rectangle(b, radius=rad, fill=c + (255,))
+        else:
+            td.rectangle(b, fill=c + (255,))
+    if family in ("tool", "pickaxe", "axe", "shovel", "hoe", "sword"):
+        td.line([(round(size * 0.32), round(size * 0.74)),
+                 (round(size * 0.62), round(size * 0.30))],
+                fill=(150, 116, 70, 255), width=max(2, size // 12))
+        if family == "sword":
+            rc(0.54, 0.16, 0.70, 0.46, col)
+        else:
+            rc(0.52, 0.18, 0.80, 0.34, col, rad=max(2, size // 12))
+    elif family == "ingot":
+        rc(0.24, 0.40, 0.76, 0.62, col, rad=max(2, size // 12))
+    elif family == "plank":
+        for k in range(3):
+            yy = 0.30 + 0.16 * k
+            rc(0.22, yy, 0.78, yy + 0.10, _mix(col, (0, 0, 0), 0.08 * k))
+    elif family == "food":
+        td.ellipse([round(size * 0.28), round(size * 0.30),
+                    round(size * 0.72), round(size * 0.74)], fill=col + (255,))
+    elif family == "torch":
+        rc(0.46, 0.42, 0.54, 0.82, (150, 116, 70))
+        td.ellipse([round(size * 0.40), round(size * 0.22),
+                    round(size * 0.60), round(size * 0.48)], fill=col + (255,))
+    elif family == "gem":
+        cx = size / 2
+        td.polygon([(cx, round(size * 0.24)), (round(size * 0.74), round(size * 0.5)),
+                    (cx, round(size * 0.78)), (round(size * 0.26), round(size * 0.5))],
+                   fill=col + (255,))
+    elif family == "stick":
+        td.line([(round(size * 0.36), round(size * 0.74)),
+                 (round(size * 0.64), round(size * 0.28))],
+                fill=col + (255,), width=max(2, size // 10))
+    else:
+        rc(0.28, 0.28, 0.72, 0.72, col, rad=max(2, size // 10))
+    td.rectangle([0, 0, size - 1, size - 1], outline=(16, 16, 20, 255), width=1)
+    return tile
+
+
+def _mc_icon(size: int, kind: str) -> Image.Image:
+    """Dispatcher: 'mob:...' -> Mob-Gesicht, 'item:...' -> Item-Slot, sonst Block."""
+    k = kind or "generic"
+    if k.startswith("mob:"):
+        return _mob_face(size, k[4:])
+    if k.startswith("item:"):
+        return _item_tile(size, k[5:])
+    return _block_tile(size, k)
+
+
+# --- Tab-Leiste (wie die Reiter im Ingame-Statistik-Menue) ----------------
+_TABS = [("mined", "ABBAU"), ("playtime", "AKTIV"), ("crafted", "CRAFTING"),
+         ("used", "BENUTZT"), ("killed", "MOBS")]
+
+
+def _mc_tabs(d, box, active):
     x0, y0, x1, y1 = box
-    _mc_panel(d, box, (58, 60, 70), depth=5)
-    s = y1 - y0 - 18
-    tile = _block_tile(s, sp.get("kind", "generic"))
-    img.paste(tile, (x0 + 12, y0 + 9), tile)
-    tx = x0 + 12 + s + 16
-    _mc_text(d, tx, y0 + 14, "MEIST ABGEBAUT", 15, (255, 214, 90), anchor="la", shadow=0.32)
-    nf, name = _fit_font(d, str(sp.get("name", "?")), x1 - tx - 300, 26, 17)
-    _mc_text(d, tx, y0 + 33, name, nf.size, _WHITE, anchor="la")
-    nw = d.textlength(name, font=nf)
-    _mc_text(d, tx + nw + 14, y0 + 40, f"x{_fmt_int(sp.get('count', 0))}", 22,
-             (108, 224, 132), anchor="la")
-    _mc_text(d, x1 - 16, y0 + 40, f"Boss: {sp.get('by', '?')}", 17, (200, 205, 214),
-             anchor="ra", shadow=0.32)
+    n = len(_TABS)
+    gap = 8
+    cw = ((x1 - x0) - (n - 1) * gap) / n
+    for i, (key, label) in enumerate(_TABS):
+        bx0 = x0 + i * (cw + gap)
+        bx1 = bx0 + cw
+        on = key == active
+        base = (242, 198, 50) if on else (58, 60, 70)
+        _mc_panel(d, (round(bx0), y0, round(bx1), y1), base, depth=4)
+        fg = (28, 26, 18) if on else (214, 218, 226)
+        _mc_text(d, (bx0 + bx1) / 2, (y0 + y1) / 2, label, 17, fg,
+                 anchor="mm", shadow=0.0 if on else 0.34)
 
 
 _MEDAL = {1: (242, 198, 50), 2: (196, 202, 210), 3: (198, 132, 70)}
 
 
-def _mc_row(img, d, box, m):
+def _default_head(size: int) -> Image.Image:
+    """Notfall-Kopf (Steve-artig), falls kein echter Skin geladen werden konnte."""
+    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    dd = ImageDraw.Draw(im)
+    skin = (199, 159, 124)
+    hair = (74, 54, 38)
+    eye = (60, 70, 120)
+
+    def rc(fx0, fy0, fx1, fy1, c):
+        dd.rectangle([round(size * fx0), round(size * fy0),
+                      round(size * fx1), round(size * fy1)], fill=c + (255,))
+    rc(0, 0, 1, 1, skin)
+    rc(0, 0, 1, 0.28, hair)
+    rc(0, 0, 0.18, 0.5, hair)
+    rc(0.82, 0, 1, 0.5, hair)
+    rc(0.24, 0.42, 0.42, 0.56, (250, 250, 250))
+    rc(0.32, 0.42, 0.42, 0.56, eye)
+    rc(0.58, 0.42, 0.76, 0.56, (250, 250, 250))
+    rc(0.58, 0.42, 0.68, 0.56, eye)
+    rc(0.40, 0.62, 0.60, 0.70, _mix(skin, (0, 0, 0), 0.22))
+    return im
+
+
+def _player_head(size: int, head_bytes) -> Image.Image:
+    """Echter Minecraft-Skin-Kopf (PNG-Bytes von der Bridge/Minotar) als Pixel-
+    Icon; ohne Skin der Notfall-Kopf."""
+    if head_bytes:
+        try:
+            im = Image.open(io.BytesIO(head_bytes)).convert("RGBA")
+            return im.resize((size, size), Image.NEAREST)
+        except Exception:  # noqa: BLE001 - kaputtes Bild -> Notfall-Kopf
+            pass
+    return _default_head(size)
+
+
+def _mc_player_row(img, d, box, row):
+    """Premium-Spieler-Reihe: Rang-Medaille, echter Skin-Kopf, Name + Spezialitaet
+    (Top-Item/-Mob), und die grosse Vergleichszahl rechts."""
     x0, y0, x1, y1 = box
-    rank = m.get("rank", 0)
+    rank = row.get("rank") or 0
     accent = _MEDAL.get(rank, (96, 100, 110))
-    base = _mix((58, 60, 70), accent, 0.18 if rank <= 3 else 0.05)
+    base = _mix((52, 55, 64), accent, 0.22 if rank <= 3 else 0.06)
     _mc_panel(d, box, base, depth=5)
-    # Rang-Medaille (abgeschraegter Block mit Nummer)
-    ms = y1 - y0 - 22
-    mx, my = x0 + 14, y0 + 11
+    # Rang-Medaille
+    ms = 58
+    mx, my = x0 + 14, y0 + (y1 - y0 - ms) // 2
     _mc_panel(d, (mx, my, mx + ms, my + ms), accent, depth=4)
-    _mc_text(d, mx + ms / 2, my + ms / 2, str(rank), 34, (28, 26, 20), anchor="mm", shadow=0.0)
-    # Rechts: Top-Bloecke als Icons + Anzahl (Geometrie zuerst, damit der Name
-    # niemals in die Icons hineinlaeuft).
-    blocks = m.get("blocks") or []
-    ts, slot = 52, 82
-    blocks_left = x1 - 16 - len(blocks) * slot
-    bx = blocks_left + (slot - ts) // 2
-    for b in blocks:
-        tile = _block_tile(ts, b.get("kind", "generic"))
-        cy = y0 + 14
-        img.paste(tile, (bx, cy), tile)
-        _mc_text(d, bx + ts / 2, cy + ts + 13, _fmt_int(b.get("count", 0)), 16, _WHITE,
-                 anchor="mm", shadow=0.34)
-        bx += slot
-    # Name (auf den freien Platz begrenzt) + abgebaute Bloecke
-    tx = mx + ms + 18
-    name_max = (blocks_left if blocks else x1 - 16) - tx - 14
-    nf, name = _fit_font(d, str(m.get("name", "?")), max(80, name_max), 27, 16)
-    _mc_text(d, tx, y0 + 20, name, nf.size, _WHITE, anchor="la")
-    total = _fmt_int(m.get("total_mined", 0))
-    _mc_text(d, tx, y0 + 56, total, 30, (255, 210, 70), anchor="la")
-    nw = d.textlength(total, font=_font(30))
-    _mc_text(d, tx + nw + 10, y0 + 64, "Bloecke abgebaut", 16, (206, 210, 218),
-             anchor="la", shadow=0.34)
+    _mc_text(d, mx + ms / 2, my + ms / 2, str(rank), 30, (28, 26, 20), anchor="mm", shadow=0.0)
+    # Echter Spieler-Kopf (gerahmt)
+    hs = y1 - y0 - 24
+    hx, hy = mx + ms + 14, y0 + 12
+    _mc_panel(d, (hx - 3, hy - 3, hx + hs + 3, hy + hs + 3), (38, 40, 48), depth=3)
+    head = _player_head(hs, row.get("head"))
+    img.paste(head, (hx, hy), head)
+    # Grosse Vergleichszahl rechts (zuerst – fuer die Namensbreite)
+    val = str(row.get("value", "0"))
+    word = str(row.get("label", ""))
+    rx = x1 - 24
+    _mc_text(d, rx, y0 + 38, val, 38, (255, 214, 80), anchor="ra")
+    _mc_text(d, rx, y0 + 80, word, 16, (200, 204, 212), anchor="ra", shadow=0.34)
+    valw = d.textlength(val, font=_font(38))
+    inner_right = rx - valw - 34
+    # Name
+    tx = hx + hs + 18
+    nf, name = _fit_font(d, str(row.get("name", "?")), max(80, inner_right - tx), 28, 16)
+    _mc_text(d, tx, y0 + 22, name, nf.size, _WHITE, anchor="la")
+    # Spezialitaet: kleines Icon + Text
+    top = row.get("top")
+    if top:
+        isz = 34
+        icon = _mc_icon(isz, top.get("kind", "generic"))
+        img.paste(icon, (tx, y0 + 58), icon)
+        sx = tx + isz + 10
+        sf, stext = _fit_font(
+            d, f"{top.get('name', '?')}  x{_fmt_int(top.get('count', 0) or 0)}",
+            max(60, inner_right - sx), 18, 13)
+        _mc_text(d, sx, y0 + 62, stext, sf.size, (176, 210, 172), anchor="la", shadow=0.34)
 
 
 def _mc_totals(img, d, box, t):
@@ -980,22 +1159,24 @@ def _mc_totals(img, d, box, t):
                    fill=(64, 66, 76))
 
 
-def mc_leaderboard(data: dict) -> "io.BytesIO | None":
-    """Minecraft-Style-Leaderboard: Gras-Header, Spotlight-Block, Rang-Reihen mit
-    Block-Icons + Anzahl, und ein Haupt-Stats-Band (wie der Statistik-Screen)."""
-    miners = data.get("miners") or []
-    if not miners:
-        return None
+def mc_stats(data: dict, category: str = None) -> "io.BytesIO | None":
+    """Minecraft-Statistik im Ingame-Look: Gras-Header, Tab-Leiste (aktive
+    Kategorie hervorgehoben) und die Spieler-Rangliste der Kategorie - jeder mit
+    echtem Skin-Kopf, Vergleichszahl und Spezialitaet. Unten das Haupt-Stats-Band."""
+    cats = data.get("cats") or {}
+    if not category or category not in cats:
+        category = data.get("default_cat") or next(iter(cats), "mined")
+    rows = cats.get(category, {}).get("rows") or []
+
     W = 1000
     pad = 34
-    head_h = 132
-    spot_h = 78 if data.get("spotlight") else 0
-    row_h = 104
+    head_h = 120
+    tab_h = 50
+    row_h = 108
     gap = 14
-    foot_h = 96
-    n = len(miners)
-    H = (pad + head_h + gap + (spot_h + gap if spot_h else 0) + 6
-         + n * row_h + (n - 1) * gap + 8 + foot_h + pad)
+    foot_h = 92
+    n = max(1, len(rows))
+    H = pad + head_h + 12 + tab_h + 14 + n * row_h + (n - 1) * gap + 10 + foot_h + pad
 
     img = _vgrad(W, H, (46, 49, 56), (24, 25, 30)).convert("RGBA")
     d = ImageDraw.Draw(img, "RGBA")
@@ -1003,14 +1184,22 @@ def mc_leaderboard(data: dict) -> "io.BytesIO | None":
 
     y = pad
     _mc_header(img, d, (pad, y, W - pad, y + head_h), data)
-    y += head_h + gap
-    if spot_h:
-        _mc_spotlight(img, d, (pad, y, W - pad, y + spot_h), data["spotlight"])
-        y += spot_h + gap
-    y += 6
-    for m in miners:
-        _mc_row(img, d, (pad, y, W - pad, y + row_h), m)
-        y += row_h + gap
-    _mc_totals(img, d, (pad, H - pad - foot_h, W - pad, H - pad), data["totals"])
+    y += head_h + 12
+    _mc_tabs(d, (pad, y, W - pad, y + tab_h), category)
+    y += tab_h + 14
+    if rows:
+        for r in rows:
+            _mc_player_row(img, d, (pad, y, W - pad, y + row_h), r)
+            y += row_h + gap
+    else:
+        _mc_panel(d, (pad, y, W - pad, y + row_h), (50, 52, 60), depth=5)
+        _mc_text(d, W / 2, y + row_h / 2, "Noch keine Daten in dieser Kategorie",
+                 22, (200, 204, 212), anchor="mm", shadow=0.34)
+    _mc_totals(img, d, (pad, H - pad - foot_h, W - pad, H - pad), data.get("totals") or {})
 
     return _png(img)
+
+
+def mc_leaderboard(data: dict) -> "io.BytesIO | None":
+    """Rueckwaerts-kompatibel: die Standard-Kategorie."""
+    return mc_stats(data, None)
