@@ -26,6 +26,7 @@ import casino
 import economy
 import fun
 import games
+import minecraft
 import moderation
 import music
 import schedule_logic
@@ -107,6 +108,9 @@ CASINO_ENABLED = casino.setup()
 # Moderation (Nachrichten loeschen / Purge). Faellt nie technisch aus - das noetige
 # Recht 'Nachrichten verwalten' wird erst beim Befehl pro Nutzer/Bot geprueft.
 MOD_ENABLED = moderation.setup()
+# Minecraft-Leaderboard (liest Server-Stats per HTTP-Bridge oder lokalem Ordner).
+# Aus, wenn keine Quelle (MC_STATS_URL / MC_STATS_DIR) konfiguriert ist.
+MINECRAFT_ENABLED = minecraft.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -314,6 +318,7 @@ def _help_categories() -> "list[tuple[str, str, str]]":
         ("spiele", "🎮", "Spiele", GAMES_ENABLED),
         ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
         ("casino", "🎰", "Casino", CASINO_ENABLED),
+        ("minecraft", "⛏️", "Minecraft", MINECRAFT_ENABLED),
         ("chaos", "😈", "Chaos", FUN_ENABLED),
         ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
         ("mod", "🛡️", "Moderation", MOD_ENABLED),
@@ -412,6 +417,16 @@ def _help_detail_embed(key: str) -> discord.Embed:
         emb.add_field(name="Weitere Spiele",
             value=(f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · "
                    f"`{name} roulette 50 rot`"), inline=False)
+        return emb
+    if key == "minecraft":
+        emb = discord.Embed(title="⛏️ Minecraft",
+                            description="Die besten Statistiken vom Minecraft-Server – "
+                                        "im echten Block-Look. 🟩",
+                            color=0x5E9B33)
+        emb.add_field(name="Bestenliste",
+            value=(f"`{name} mcleaderboard` · `{name} mc stats` · `{name} minecraft top`\n"
+                   "Wer hat am meisten abgebaut, welche Bloecke – plus Spielzeit, "
+                   "Mob-Kills, Tode & Strecke."), inline=False)
         return emb
     if key == "chaos":
         emb = discord.Embed(title="😈 Chaos",
@@ -872,6 +887,7 @@ async def on_message(message: discord.Message) -> None:
             (MUSIC_ENABLED, music.handle),
             (VOICE_GAGS_ENABLED, voicegags.handle),
             (GAMES_ENABLED, games.handle),
+            (MINECRAFT_ENABLED, minecraft.handle),
             (CASINO_ENABLED, casino.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FUN_ENABLED, fun.handle),
@@ -891,8 +907,8 @@ async def on_message(message: discord.Message) -> None:
     if antwort is not None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
                 or antwort is casino.HANDLED or antwort is games.HANDLED
-                or antwort is economy.HANDLED):
-            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele / Economy).
+                or antwort is economy.HANDLED or antwort is minecraft.HANDLED):
+            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele / Economy / Minecraft).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):

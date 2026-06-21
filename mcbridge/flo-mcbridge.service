@@ -1,0 +1,19 @@
+[Unit]
+Description=Flo MC Bridge (Statistik-Exporter fuer den Discord-Bot Flo)
+After=network.target
+
+[Service]
+Type=simple
+# WICHTIG: derselbe User wie der Minecraft-Server, damit die stats-Dateien
+# gelesen werden koennen (oft 'minecraft'):
+User=minecraft
+WorkingDirectory=/opt/flo-mcbridge
+ExecStart=/usr/bin/java -jar /opt/flo-mcbridge/flo-mcbridge.jar /opt/flo-mcbridge/flo-mcbridge.properties
+Restart=on-failure
+RestartSec=5
+# Etwas Haertung (optional):
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

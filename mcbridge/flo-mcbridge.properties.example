@@ -1,0 +1,29 @@
+# ============================================================
+#  Flo MC Bridge – Konfiguration  (auf dem MINECRAFT-Server)
+# ============================================================
+# Kopiere diese Datei nach  flo-mcbridge.properties  und passe sie an.
+
+# PFLICHT: ein langes Zufalls-Geheimnis. NICHT der Discord-Token!
+# Genau dasselbe Token gehoert beim Bot in die .env als MC_STATS_TOKEN.
+# Vorschlag erzeugen:  openssl rand -hex 24
+token = HIER_EIN_LANGES_ZUFALLS_TOKEN_EINTRAGEN
+
+# HTTP-Port (in der Firewall fuer die Bot-Maschine freigeben)
+port = 4918
+bind = 0.0.0.0
+
+# Wo liegen die Spieler-Statistiken? Genau EINE Variante setzen:
+#  a) direkt der stats-Ordner ...
+# stats_dir = /opt/minecraft/world/stats
+#  b) ... oder der Welt-Ordner (stats = <world_dir>/stats) ...
+# world_dir = /opt/minecraft/world
+#  c) ... oder Server-Ordner + Welt-Name (level-name aus server.properties):
+server_dir = /opt/minecraft
+level_name = world
+
+# Optional: usercache.json (sonst automatisch neben dem Server gesucht).
+# usercache = /opt/minecraft/usercache.json
+
+# Anzeige im Discord-Embed:
+server_name = SUPA SIGMA SERVA
+mc_version = 1.21.10

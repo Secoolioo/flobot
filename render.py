@@ -757,3 +757,260 @@ def shop_banner(items: list[dict], *, date: str = "") -> io.BytesIO | None:
         y += row_h + gap
 
     return _png(img)
+
+
+# =========================================================================
+#  Minecraft-Leaderboard (Block-Style, Pixel-Optik)
+# =========================================================================
+# Bewusst OHNE Emoji (Pillow-Schrift kann keine Farb-Emojis) - die Minecraft-
+# Anmutung kommt aus: Drop-Shadow-Text, abgeschraegte GUI-Panels (Bevel),
+# selbstgezeichnete Pixel-Block-Icons mit Erz-Sprenkeln und der typischen Palette.
+
+def _clamp(v: float) -> int:
+    return max(0, min(255, int(v)))
+
+
+# Palette je Block-Art: base = Grundfarbe, noise = Koernung, spec = Erz-Sprenkel,
+# grass = gruene Oberkante (Gras-Block), bark = vertikale Holzmaserung.
+_MC_PAL = {
+    "stone":         {"base": (124, 124, 124), "noise": 14},
+    "cobblestone":   {"base": (120, 120, 120), "noise": 26},
+    "deepslate":     {"base": (74, 74, 79), "noise": 14},
+    "dirt":          {"base": (134, 96, 67), "noise": 16},
+    "grass_block":   {"base": (134, 96, 67), "noise": 16, "grass": (96, 160, 54)},
+    "sand":          {"base": (219, 206, 160), "noise": 12},
+    "gravel":        {"base": (128, 124, 122), "noise": 28},
+    "netherrack":    {"base": (102, 40, 40), "noise": 20},
+    "obsidian":      {"base": (24, 20, 38), "noise": 10, "spec": (74, 52, 110)},
+    "ice":           {"base": (147, 184, 232), "noise": 9},
+    "coal_ore":      {"base": (124, 124, 124), "noise": 14, "spec": (32, 32, 32)},
+    "iron_ore":      {"base": (124, 124, 124), "noise": 14, "spec": (214, 176, 150)},
+    "copper_ore":    {"base": (124, 124, 124), "noise": 14, "spec": (225, 140, 100)},
+    "gold_ore":      {"base": (124, 124, 124), "noise": 14, "spec": (252, 219, 80)},
+    "redstone_ore":  {"base": (124, 124, 124), "noise": 14, "spec": (220, 44, 44)},
+    "lapis_ore":     {"base": (124, 124, 124), "noise": 14, "spec": (42, 84, 200)},
+    "diamond_ore":   {"base": (124, 124, 124), "noise": 14, "spec": (92, 224, 222)},
+    "emerald_ore":   {"base": (124, 124, 124), "noise": 14, "spec": (50, 204, 92)},
+    "ancient_debris": {"base": (100, 74, 62), "noise": 16, "spec": (122, 92, 82)},
+    "quartz":        {"base": (102, 40, 40), "noise": 18, "spec": (236, 231, 226)},
+    "log":           {"base": (108, 82, 50), "noise": 13, "bark": True},
+    "generic":       {"base": (122, 126, 132), "noise": 14},
+}
+
+
+def _block_tile(size: int, kind: str) -> Image.Image:
+    """Selbstgezeichnetes Pixel-Block-Icon (Front-Textur) im Minecraft-Stil:
+    Grundfarbe + Koernung, Erz-Sprenkel, Hell/Dunkel-Bevel, dunkler Rahmen."""
+    pal = _MC_PAL.get(kind, _MC_PAL["generic"])
+    base = pal["base"]
+    noise = pal.get("noise", 14)
+    grass = pal.get("grass")
+    bark = pal.get("bark")
+    spec = pal.get("spec")
+    g = 8
+    cell = size / g
+    seed = sum(ord(c) for c in kind) + 7
+    tile = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tile)
+    for gy in range(g):
+        for gx in range(g):
+            h = (gx * 53 + gy * 131 + seed * 17) % 100
+            delta = (h / 100 * 2 - 1) * noise
+            col = base
+            if grass is not None and gy == 0:
+                col = grass
+            elif grass is not None and gy == 1:
+                col = _mix(grass, base, 0.5)
+            elif bark and gx % 3 == 0:
+                col = _mix(base, (0, 0, 0), 0.22)
+            cc = tuple(_clamp(col[i] + delta) for i in range(3))
+            td.rectangle([round(gx * cell), round(gy * cell),
+                          round((gx + 1) * cell), round((gy + 1) * cell)], fill=cc + (255,))
+    if spec is not None:
+        hl = _mix(spec, (255, 255, 255), 0.5)
+        for gy in range(g):
+            for gx in range(g):
+                if grass is not None and gy <= 1:
+                    continue
+                if (gx * 7 + gy * 5 + seed) % 11 < 2:
+                    x0, y0 = round(gx * cell), round(gy * cell)
+                    td.rectangle([x0, y0, round((gx + 1) * cell), round((gy + 1) * cell)],
+                                 fill=spec + (255,))
+                    td.rectangle([x0, y0, round(x0 + cell / 2), round(y0 + cell / 2)],
+                                 fill=hl + (255,))
+    lite = _mix(base, (255, 255, 255), 0.28)
+    dark = _mix(base, (0, 0, 0), 0.38)
+    td.line([(0, 0), (size - 1, 0)], fill=lite + (255,))
+    td.line([(0, 0), (0, size - 1)], fill=lite + (255,))
+    td.line([(0, size - 1), (size - 1, size - 1)], fill=dark + (255,))
+    td.line([(size - 1, 0), (size - 1, size - 1)], fill=dark + (255,))
+    td.rectangle([0, 0, size - 1, size - 1], outline=(16, 16, 20, 255), width=1)
+    return tile
+
+
+def _mc_text(d, x, int_y, text, size, fill, anchor="la", shadow=0.30):
+    """Text mit dem typischen Minecraft-Schlagschatten (dunkler, nach unten-rechts)."""
+    f = _font(size)
+    off = max(2, size // 9)
+    sc = tuple(int(c * shadow) for c in fill)
+    d.text((x + off, int_y + off), text, font=f, fill=sc, anchor=anchor)
+    d.text((x, int_y), text, font=f, fill=fill, anchor=anchor)
+
+
+def _mc_panel(d, box, base, depth=5, outline=(14, 14, 18)):
+    """Klassisches Minecraft-GUI-Panel: heller Rand oben/links, dunkler Rand
+    unten/rechts, schwarze Kontur - der ikonische Inventar-Bevel."""
+    x0, y0, x1, y1 = box
+    d.rectangle(box, fill=base)
+    lite = _mix(base, (255, 255, 255), 0.30)
+    dark = _mix(base, (0, 0, 0), 0.42)
+    d.rectangle([x0, y0, x1, y0 + depth - 1], fill=lite)
+    d.rectangle([x0, y0, x0 + depth - 1, y1], fill=lite)
+    d.rectangle([x0, y1 - depth + 1, x1, y1], fill=dark)
+    d.rectangle([x1 - depth + 1, y0, x1, y1], fill=dark)
+    d.rectangle(box, outline=outline, width=2)
+
+
+def _fmt_int(n) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _mc_grid(d, w, h):
+    for x in range(0, w, 40):
+        d.line([(x, 0), (x, h)], fill=(255, 255, 255, 8))
+    for y in range(0, h, 40):
+        d.line([(0, y), (w, y)], fill=(0, 0, 0, 30))
+
+
+def _mc_header(img, d, box, data):
+    x0, y0, x1, y1 = box
+    _mc_panel(d, box, (126, 90, 62), depth=6)          # Erd-Korpus
+    gh = 30
+    d.rectangle([x0 + 6, y0 + 6, x1 - 6, y0 + 6 + gh], fill=(96, 160, 54))   # Gras-Oberkante
+    d.rectangle([x0 + 6, y0 + 6 + gh - 7, x1 - 6, y0 + 6 + gh], fill=(80, 138, 46))
+    # Block-Trio links als Deko
+    for i, k in enumerate(("grass_block", "diamond_ore", "gold_ore")):
+        t = _block_tile(46, k)
+        img.paste(t, (x0 + 20 + i * 30, y1 - 60), t)
+    # Titel (zweifarbig, mit MC-Schatten)
+    tx = x0 + 168
+    _mc_text(d, tx, y0 + 50, "MINECRAFT", 46, _GOLD, anchor="lm")
+    mw = d.textlength("MINECRAFT ", font=_font(46))
+    _mc_text(d, tx + mw, y0 + 50, "LEADERBOARD", 46, _WHITE, anchor="lm")
+    ver = f"  ·  {data['version']}" if data.get("version") else ""
+    sub = f"{data.get('server', '?')}{ver}  ·  {data.get('player_count', 0)} Spieler"
+    _mc_text(d, tx, y0 + 90, sub, 19, (224, 228, 234), anchor="lm", shadow=0.32)
+
+
+def _mc_spotlight(img, d, box, sp):
+    x0, y0, x1, y1 = box
+    _mc_panel(d, box, (58, 60, 70), depth=5)
+    s = y1 - y0 - 18
+    tile = _block_tile(s, sp.get("kind", "generic"))
+    img.paste(tile, (x0 + 12, y0 + 9), tile)
+    tx = x0 + 12 + s + 16
+    _mc_text(d, tx, y0 + 14, "MEIST ABGEBAUT", 15, (255, 214, 90), anchor="la", shadow=0.32)
+    nf, name = _fit_font(d, str(sp.get("name", "?")), x1 - tx - 300, 26, 17)
+    _mc_text(d, tx, y0 + 33, name, nf.size, _WHITE, anchor="la")
+    nw = d.textlength(name, font=nf)
+    _mc_text(d, tx + nw + 14, y0 + 40, f"x{_fmt_int(sp.get('count', 0))}", 22,
+             (108, 224, 132), anchor="la")
+    _mc_text(d, x1 - 16, y0 + 40, f"Boss: {sp.get('by', '?')}", 17, (200, 205, 214),
+             anchor="ra", shadow=0.32)
+
+
+_MEDAL = {1: (242, 198, 50), 2: (196, 202, 210), 3: (198, 132, 70)}
+
+
+def _mc_row(img, d, box, m):
+    x0, y0, x1, y1 = box
+    rank = m.get("rank", 0)
+    accent = _MEDAL.get(rank, (96, 100, 110))
+    base = _mix((58, 60, 70), accent, 0.18 if rank <= 3 else 0.05)
+    _mc_panel(d, box, base, depth=5)
+    # Rang-Medaille (abgeschraegter Block mit Nummer)
+    ms = y1 - y0 - 22
+    mx, my = x0 + 14, y0 + 11
+    _mc_panel(d, (mx, my, mx + ms, my + ms), accent, depth=4)
+    _mc_text(d, mx + ms / 2, my + ms / 2, str(rank), 34, (28, 26, 20), anchor="mm", shadow=0.0)
+    # Rechts: Top-Bloecke als Icons + Anzahl (Geometrie zuerst, damit der Name
+    # niemals in die Icons hineinlaeuft).
+    blocks = m.get("blocks") or []
+    ts, slot = 52, 82
+    blocks_left = x1 - 16 - len(blocks) * slot
+    bx = blocks_left + (slot - ts) // 2
+    for b in blocks:
+        tile = _block_tile(ts, b.get("kind", "generic"))
+        cy = y0 + 14
+        img.paste(tile, (bx, cy), tile)
+        _mc_text(d, bx + ts / 2, cy + ts + 13, _fmt_int(b.get("count", 0)), 16, _WHITE,
+                 anchor="mm", shadow=0.34)
+        bx += slot
+    # Name (auf den freien Platz begrenzt) + abgebaute Bloecke
+    tx = mx + ms + 18
+    name_max = (blocks_left if blocks else x1 - 16) - tx - 14
+    nf, name = _fit_font(d, str(m.get("name", "?")), max(80, name_max), 27, 16)
+    _mc_text(d, tx, y0 + 20, name, nf.size, _WHITE, anchor="la")
+    total = _fmt_int(m.get("total_mined", 0))
+    _mc_text(d, tx, y0 + 56, total, 30, (255, 210, 70), anchor="la")
+    nw = d.textlength(total, font=_font(30))
+    _mc_text(d, tx + nw + 10, y0 + 64, "Bloecke abgebaut", 16, (206, 210, 218),
+             anchor="la", shadow=0.34)
+
+
+def _mc_totals(img, d, box, t):
+    x0, y0, x1, y1 = box
+    _mc_panel(d, box, (40, 42, 50), depth=5)
+    cells = [
+        (_fmt_int(t.get("mined", 0)), "BLOECKE", (255, 210, 70)),
+        (f"{t.get('play_h', 0):.0f}", "STUNDEN", (120, 200, 255)),
+        (_fmt_int(t.get("kills", 0)), "MOB-KILLS", (240, 120, 120)),
+        (_fmt_int(t.get("deaths", 0)), "TODE", (210, 210, 216)),
+        (f"{t.get('km', 0):.1f}", "KM ZU FUSS", (150, 224, 140)),
+    ]
+    n = len(cells)
+    inner = (x1 - x0) - 20
+    cw = inner / n
+    for i, (val, label, col) in enumerate(cells):
+        cx = x0 + 10 + cw * (i + 0.5)
+        _mc_text(d, cx, y0 + 30, val, 30, col, anchor="mm")
+        _mc_text(d, cx, y0 + 58, label, 15, (190, 194, 202), anchor="mm", shadow=0.34)
+        if i < n - 1:
+            d.line([(x0 + 10 + cw * (i + 1), y0 + 14), (x0 + 10 + cw * (i + 1), y1 - 14)],
+                   fill=(64, 66, 76))
+
+
+def mc_leaderboard(data: dict) -> "io.BytesIO | None":
+    """Minecraft-Style-Leaderboard: Gras-Header, Spotlight-Block, Rang-Reihen mit
+    Block-Icons + Anzahl, und ein Haupt-Stats-Band (wie der Statistik-Screen)."""
+    miners = data.get("miners") or []
+    if not miners:
+        return None
+    W = 1000
+    pad = 34
+    head_h = 132
+    spot_h = 78 if data.get("spotlight") else 0
+    row_h = 104
+    gap = 14
+    foot_h = 96
+    n = len(miners)
+    H = (pad + head_h + gap + (spot_h + gap if spot_h else 0) + 6
+         + n * row_h + (n - 1) * gap + 8 + foot_h + pad)
+
+    img = _vgrad(W, H, (46, 49, 56), (24, 25, 30)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    _mc_grid(d, W, H)
+
+    y = pad
+    _mc_header(img, d, (pad, y, W - pad, y + head_h), data)
+    y += head_h + gap
+    if spot_h:
+        _mc_spotlight(img, d, (pad, y, W - pad, y + spot_h), data["spotlight"])
+        y += spot_h + gap
+    y += 6
+    for m in miners:
+        _mc_row(img, d, (pad, y, W - pad, y + row_h), m)
+        y += row_h + gap
+    _mc_totals(img, d, (pad, H - pad - foot_h, W - pad, H - pad), data["totals"])
+
+    return _png(img)
