@@ -288,7 +288,7 @@ class GuildPlayer:
     speed: float = 1.0               # 0.5 - 2.0, per Tempo-Dropdown im Panel waehlbar
     _seg_start: float | None = None  # monotonic: Start des laufenden Abschnitts (None=aus/pausiert)
     _played: float = 0.0             # bereits gespielte Song-Sekunden vor diesem Abschnitt
-    _replacing: bool = False         # True waehrend Tempo-/Positions-Neustart (kein _advance)
+    _play_gen: int = 0               # Generation des aktuell gueltigen Players (gegen Race beim Neustart)
 
     async def connect(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
         if self.voice and self.voice.is_connected():
@@ -301,18 +301,19 @@ class GuildPlayer:
     def is_active(self) -> bool:
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
 
-    def start(self, track: Track, *, seek: float = 0.0) -> None:
+    def start(self, track: Track, *, seek: float = 0.0, keep_speed: bool = False) -> None:
         """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL).
 
         seek = Song-Sekunde, ab der gespielt wird (fuer nahtlosen Tempo-Wechsel).
+        keep_speed = True nur beim Effekt-Neustart DESSELBEN Songs (apply_speed) -
+        dann bleibt das gewaehlte Tempo; sonst startet jeder neue Song auf Normaltempo.
         Bei speed != 1.0 wird die passende Filterkette angehaengt (atempo bzw.
         slowed+reverb)."""
         if self.voice is None or not self.voice.is_connected():
             raise RuntimeError("keine Voice-Verbindung")
-        if not self._replacing:
+        if not keep_speed:
             # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
-            # einzeln gewaehlt. Nur ein Effekt-Neustart desselben Songs (apply_speed,
-            # setzt _replacing) behaelt das gerade gewaehlte Tempo bei.
+            # einzeln gewaehlt.
             self.speed = 1.0
         before = _FFMPEG_BEFORE
         if seek > 0.5:
@@ -330,9 +331,14 @@ class GuildPlayer:
         self.current = track
         self._played = seek          # Positions-Uhr auf die Startstelle setzen
         self._seg_start = time.monotonic()
+        # Jede Wiedergabe bekommt eine eigene Generation. Der after-Callback merkt
+        # sie sich fest - so kann ein verspaeteter Callback eines bereits ersetzten
+        # Players (z. B. nach einem Tempo-Wechsel) nichts mehr ausloesen.
+        self._play_gen += 1
+        gen = self._play_gen
         self.voice.play(
             discord.PCMVolumeTransformer(source, self.volume),
-            after=self._after,
+            after=lambda err, g=gen: self._after(err, g),
         )
 
     def position(self) -> float:
@@ -365,28 +371,29 @@ class GuildPlayer:
             return False
         pos = self.position()        # Position noch mit ALTEM Tempo berechnen ...
         self.speed = new_speed       # ... dann erst auf das neue Tempo umstellen
-        self._replacing = True
+        # Generation hochzaehlen, BEVOR wir stoppen: der after-Callback des jetzt
+        # gestoppten Players ist damit garantiert veraltet und loest kein _advance aus -
+        # egal, wann er (verspaetet, aus dem FFmpeg-Thread) feuert.
+        self._play_gen += 1
         try:
-            self.voice.stop()                 # killt die alte Quelle (_after sieht _replacing)
+            self.voice.stop()                 # killt die alte Quelle (ihr after ist jetzt stale)
             for _ in range(40):               # warten bis die alte Quelle wirklich weg ist
                 if not self.voice.is_playing():
                     break
                 await asyncio.sleep(0.05)
-            self.start(track, seek=pos)        # an gleicher Stelle mit neuem Tempo weiter
+            self.start(track, seek=pos, keep_speed=True)   # gleiche Stelle, Tempo bleibt
         except Exception:
             log.exception("Tempo-Wechsel fehlgeschlagen")
             return False
-        finally:
-            self._replacing = False
         return True
 
-    def _after(self, error: Exception | None) -> None:
+    def _after(self, error: Exception | None, gen: int) -> None:
         # Laeuft in einem FFmpeg-Thread -> Arbeit zurueck in den Event-Loop schieben.
         # Alles abfangen: ein Fehler hier darf den Player-Thread NICHT mitreissen.
         if error:
             log.error("FFmpeg/Player-Fehler: %s", error)
-        if self._replacing:
-            return  # Tempo-/Positions-Neustart ersetzt die Quelle selbst -> kein _advance
+        if gen != self._play_gen:
+            return  # veralteter Callback eines ersetzten/gestoppten Players -> ignorieren
         try:
             asyncio.run_coroutine_threadsafe(self._advance(), self.loop)
         except Exception:
