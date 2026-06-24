@@ -234,6 +234,16 @@ def _safe_unlink(path: str) -> None:
 async def _play_path(guild: discord.Guild, channel, source: str) -> tuple[bool, str]:
     """Spielt eine Datei. Reagiert ruecksichtsvoll auf einen schon laufenden
     Voice-Client (z. B. Musik): wird gerade gespielt, lehnt es hoeflich ab."""
+    # Belegt die Musik den Voice-Channel (auch in Songpausen / beim Tempo-Wechsel /
+    # waehrend eines Reconnects)? Dann NICHT reingraetschen - sonst kapern wir ihren
+    # Voice-Client und sie bricht ab ("random leave").
+    try:
+        import music
+        if music.is_voice_busy(guild.id):
+            return (False, "Ich bin gerade im Voice mit Musik beschäftigt. "
+                           "Kurz warten oder `Flo stop`.")
+    except Exception:  # noqa: BLE001 - im Zweifel einfach normal weitermachen
+        pass
     vc = guild.voice_client
     created = False
     try:

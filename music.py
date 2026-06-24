@@ -52,6 +52,12 @@ HANDLED = object()
 
 MAX_QUEUE = 50          # Schutz: maximale Laenge der Warteschlange pro Server
 DEFAULT_VOLUME = 0.5    # 0.0 - 1.0
+# Takt des Voice-Watchdogs (bot.py-Loop). Haelt die Verbindung am Leben und
+# repariert Desyncs/Zombies selbst, solange der Bot in einem Call sein SOLL.
+VOICE_HEAL_SECONDS = 15
+VOICE_ZOMBIE_TICKS = 3        # so viele stille Ticks (=Sek*Ticks) bis "Zombie" -> Neustart
+VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
+VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
 # --- Optik: Farben + Embed-Helfer ----------------------------------------
 _COL_PLAY = 0x1DB954     # Gruen  - laeuft / spielt
@@ -289,14 +295,44 @@ class GuildPlayer:
     _seg_start: float | None = None  # monotonic: Start des laufenden Abschnitts (None=aus/pausiert)
     _played: float = 0.0             # bereits gespielte Song-Sekunden vor diesem Abschnitt
     _play_gen: int = 0               # Generation des aktuell gueltigen Players (gegen Race beim Neustart)
+    active_channel_id: int | None = None  # in DIESEM Kanal soll der Bot bleiben (None = bewusst raus)
+    _advancing: bool = False         # laeuft gerade _advance (Songwechsel)? -> Watchdog haelt sich raus
+    _stall_ticks: int = 0            # Zaehler fuer "verbunden, aber still" (Zombie-Erkennung, entprellt)
+    _last_reconnect: float = 0.0     # monotonic des letzten Reconnect-Versuchs (Loop-Bremse)
+    _reconnect_fails: int = 0        # aufeinanderfolgende fehlgeschlagene Reconnects (Aufgabe-Schwelle)
+    # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
+    # damit nie zwei channel.connect() gleichzeitig laufen.
+    _voice_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def connect(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
-        if self.voice and self.voice.is_connected():
-            if self.voice.channel.id != channel.id:
-                await self.voice.move_to(channel)
-        else:
-            self.voice = await channel.connect(self_deaf=True)
+        # Lock: nie gleichzeitig mit einem Watchdog-_reconnect verbinden.
+        async with self._voice_lock:
+            vc = self.voice if (self.voice and self.voice.is_connected()) else channel.guild.voice_client
+            if vc is not None and vc.is_connected():
+                self.voice = vc
+                if vc.channel.id != channel.id:
+                    try:
+                        await vc.move_to(channel)
+                    except Exception:  # noqa: BLE001 - move_to gescheitert -> sauber neu verbinden
+                        log.warning("move_to gescheitert, verbinde neu in '%s'", channel.name)
+                        await self._fresh_connect(channel)
+            else:
+                await self._fresh_connect(channel)
+            self.active_channel_id = channel.id   # ab jetzt: hier drinbleiben (Watchdog haelt's am Leben)
+            self._reconnect_fails = 0
         return self.voice
+
+    async def _fresh_connect(self, channel: "discord.VoiceChannel") -> None:
+        """Raeumt einen evtl. haengenden Client weg und verbindet frisch.
+        NUR aus gehaltenem _voice_lock heraus aufrufen."""
+        stale = self.voice or channel.guild.voice_client
+        if stale is not None:
+            try:
+                await asyncio.wait_for(stale.disconnect(force=True), timeout=10)
+            except Exception:  # noqa: BLE001
+                pass
+        self.voice = None
+        self.voice = await channel.connect(self_deaf=True, reconnect=True)
 
     def is_active(self) -> bool:
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
@@ -331,6 +367,7 @@ class GuildPlayer:
         self.current = track
         self._played = seek          # Positions-Uhr auf die Startstelle setzen
         self._seg_start = time.monotonic()
+        self._stall_ticks = 0        # frisch gestartet (buffert evtl. kurz) -> kein Zombie-Alarm
         # Jede Wiedergabe bekommt eine eigene Generation. Der after-Callback merkt
         # sie sich fest - so kann ein verspaeteter Callback eines bereits ersetzten
         # Players (z. B. nach einem Tempo-Wechsel) nichts mehr ausloesen.
@@ -364,27 +401,30 @@ class GuildPlayer:
         Stelle mit neuem Tempo neu. True = live umgestellt, False = nur gemerkt
         (gilt dann fuer den naechsten Song)."""
         new_speed = max(0.5, min(2.0, float(new_speed)))
-        track = self.current
-        if track is None or self.voice is None or not self.voice.is_connected() \
-                or not (self.voice.is_playing() or self.voice.is_paused()):
-            self.speed = new_speed   # nichts laeuft -> nur merken, gilt fuer naechsten Song
-            return False
-        pos = self.position()        # Position noch mit ALTEM Tempo berechnen ...
-        self.speed = new_speed       # ... dann erst auf das neue Tempo umstellen
-        # Generation hochzaehlen, BEVOR wir stoppen: der after-Callback des jetzt
-        # gestoppten Players ist damit garantiert veraltet und loest kein _advance aus -
-        # egal, wann er (verspaetet, aus dem FFmpeg-Thread) feuert.
-        self._play_gen += 1
-        try:
-            self.voice.stop()                 # killt die alte Quelle (ihr after ist jetzt stale)
-            for _ in range(40):               # warten bis die alte Quelle wirklich weg ist
-                if not self.voice.is_playing():
-                    break
-                await asyncio.sleep(0.05)
-            self.start(track, seek=pos, keep_speed=True)   # gleiche Stelle, Tempo bleibt
-        except Exception:
-            log.exception("Tempo-Wechsel fehlgeschlagen")
-            return False
+        # Lock: serialisiert schnelle Doppelklicks und haelt den Watchdog waehrend
+        # des stop->start-Fensters raus (heal() ueberspringt, solange das Lock haelt).
+        async with self._voice_lock:
+            track = self.current
+            if track is None or self.voice is None or not self.voice.is_connected() \
+                    or not (self.voice.is_playing() or self.voice.is_paused()):
+                self.speed = new_speed   # nichts laeuft -> nur merken, gilt fuer naechsten Song
+                return False
+            pos = self.position()        # Position noch mit ALTEM Tempo berechnen ...
+            self.speed = new_speed       # ... dann erst auf das neue Tempo umstellen
+            # Generation hochzaehlen, BEVOR wir stoppen: der after-Callback des jetzt
+            # gestoppten Players ist damit garantiert veraltet und loest kein _advance aus -
+            # egal, wann er (verspaetet, aus dem FFmpeg-Thread) feuert.
+            self._play_gen += 1
+            try:
+                self.voice.stop()                 # killt die alte Quelle (ihr after ist jetzt stale)
+                for _ in range(40):               # warten bis die alte Quelle wirklich weg ist
+                    if not self.voice.is_playing():
+                        break
+                    await asyncio.sleep(0.05)
+                self.start(track, seek=pos, keep_speed=True)   # gleiche Stelle, Tempo bleibt
+            except Exception:
+                log.exception("Tempo-Wechsel fehlgeschlagen")
+                return False
         return True
 
     def _after(self, error: Exception | None, gen: int) -> None:
@@ -405,26 +445,32 @@ class GuildPlayer:
         UEBERSPRUNGEN statt den Player anzuhalten - so bleibt die Musik bei einem
         faulen Song nicht stehen. Schleife statt Rekursion, damit auch eine ganze
         Reihe toter Songs sauber uebersprungen wird."""
-        while True:
-            if not self.voice or not self.voice.is_connected() or not self.queue:
-                self.current = None
-                await _retire_panel(self)
+        # _advancing markiert die (ggf. langsame) Aufloesephase, damit der Voice-
+        # Watchdog in dieser Luecke KEINEN Zombie-Alarm ausloest.
+        self._advancing = True
+        try:
+            while True:
+                if not self.voice or not self.voice.is_connected() or not self.queue:
+                    self.current = None
+                    await _retire_panel(self)
+                    return
+                track = self.queue.pop(0)
+                try:
+                    if not track.stream_url and track.query:
+                        track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
+                    self.start(track)
+                except Exception:
+                    log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
+                    continue  # naechsten Song versuchen, nicht stoppen
+                # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
+                # aus, darf das den laufenden Song NICHT abbrechen.
+                try:
+                    await _send_panel(self, track)
+                except Exception:
+                    log.exception("Now-Playing-Panel nach Advance fehlgeschlagen (egal)")
                 return
-            track = self.queue.pop(0)
-            try:
-                if not track.stream_url and track.query:
-                    track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
-                self.start(track)
-            except Exception:
-                log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
-                continue  # naechsten Song versuchen, nicht stoppen
-            # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
-            # aus, darf das den laufenden Song NICHT abbrechen.
-            try:
-                await _send_panel(self, track)
-            except Exception:
-                log.exception("Now-Playing-Panel nach Advance fehlgeschlagen (egal)")
-            return
+        finally:
+            self._advancing = False
 
     async def disconnect(self) -> None:
         self.queue.clear()
@@ -432,6 +478,9 @@ class GuildPlayer:
         self.speed = 1.0           # frische Session startet wieder mit Normaltempo
         self._seg_start = None
         self._played = 0.0
+        self.active_channel_id = None   # bewusst raus -> Watchdog soll NICHT zurueckholen
+        self._stall_ticks = 0
+        self._play_gen += 1             # alte after-Callbacks entwerten
         await _retire_panel(self)
         if self.voice is not None:
             try:
@@ -439,6 +488,108 @@ class GuildPlayer:
             except Exception:  # noqa: BLE001
                 pass
             self.voice = None
+
+    # --- Selbstheilung: haelt die Voice-Verbindung am Leben ---------------
+    async def heal(self, guild: "discord.Guild") -> None:
+        """Periodischer Watchdog (bot.py-Loop). Sorgt dafuer, dass der Bot in
+        SEINEM Kanal verbunden bleibt und repariert Desyncs/Zombies selbst.
+        Tut nichts, wenn der Bot bewusst draussen ist, gerade ein Songwechsel
+        laeuft oder schon eine voice-Op (connect/reconnect/Tempo) aktiv ist."""
+        if self.active_channel_id is None or self._advancing or self._voice_lock.locked():
+            return
+        channel = guild.get_channel(self.active_channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            self.active_channel_id = None   # Kanal gibt es nicht mehr -> aufgeben
+            return
+        # Realen Voice-Client bestimmen (unser Objekt KANN abgehaengt sein).
+        vc = self.voice if (self.voice and self.voice.is_connected()) else guild.voice_client
+        if vc is None or not vc.is_connected():
+            log.warning("Voice-Desync: sollte in '%s' verbunden sein, ist es nicht.", channel.name)
+            await self._reconnect(channel)
+            return
+        self.voice = vc   # echten Client adoptieren (Discord kennt ihn, wir bisher nicht)
+        # Zombie: verbunden, sollte spielen, tut es aber mehrere Ticks lang nicht.
+        if self.current is not None and not vc.is_paused() and not vc.is_playing():
+            self._stall_ticks += 1
+            if self._stall_ticks >= VOICE_ZOMBIE_TICKS:
+                self._stall_ticks = 0
+                log.warning("Voice-Zombie: verbunden, aber still - starte neu.")
+                await self._reconnect(channel)
+        else:
+            self._stall_ticks = 0
+
+    async def _reconnect(self, channel: "discord.VoiceChannel") -> None:
+        """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
+        laufenden Song fort. Loop-gebremst (Mindestabstand) und mit Aufgabe-
+        Schwelle gegen Endlos-Versuche; alles mit Timeouts gegen Haenger."""
+        if time.monotonic() - self._last_reconnect < VOICE_RECONNECT_MIN_GAP:
+            return  # zu kurz her -> der Verbindung/dem Buffering erst Zeit geben
+        async with self._voice_lock:
+            # Unter Lock nochmal pruefen: hat sich das Problem schon erledigt
+            # (discord.py-Auto-Reconnect oder paralleler connect)? Dann NICHT abreissen.
+            live = self.voice if (self.voice and self.voice.is_connected()) else channel.guild.voice_client
+            if live is not None and live.is_connected() and (
+                    self.current is None or live.is_playing() or live.is_paused()):
+                self.voice = live
+                self._reconnect_fails = 0
+                return
+            # Wiedergabe ist gerissen -> Positions-Uhr JETZT einfrieren, damit der Song
+            # an der zuletzt gehoerten Stelle fortsetzt und nicht die Ausfallzeit ueberspringt.
+            self._clock_pause()
+            self._last_reconnect = time.monotonic()
+            self._play_gen += 1   # evtl. noch fliegende after-Callbacks entwerten
+            # alte/halbtote Verbindung hart wegraeumen
+            old = self.voice or channel.guild.voice_client
+            if old is not None:
+                try:
+                    await asyncio.wait_for(old.disconnect(force=True), timeout=10)
+                except Exception:  # noqa: BLE001
+                    pass
+            self.voice = None
+            try:
+                self.voice = await asyncio.wait_for(
+                    channel.connect(self_deaf=True, reconnect=True), timeout=20)
+            except discord.ClientException:
+                # 'Already connected' -> Geist-Client haengt im Guild. Hart weg, 1x retry.
+                ghost = channel.guild.voice_client
+                if ghost is not None:
+                    try:
+                        await asyncio.wait_for(ghost.disconnect(force=True), timeout=10)
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    self.voice = await asyncio.wait_for(
+                        channel.connect(self_deaf=True, reconnect=True), timeout=20)
+                except Exception:  # noqa: BLE001
+                    self._note_reconnect_fail(channel)
+                    return
+            except Exception:  # noqa: BLE001
+                self._note_reconnect_fail(channel)
+                return
+            # Erfolg: Wiedergabe fortsetzen (laufenden Song an aktueller Stelle, sonst naechsten).
+            self._reconnect_fails = 0
+            if self.current is not None:
+                try:
+                    self.start(self.current, seek=self.position(), keep_speed=True)
+                except Exception:  # noqa: BLE001
+                    log.exception("Resume nach Reconnect fehlgeschlagen")
+            elif self.queue:
+                await self._advance()
+            log.info("Voice in '%s' wiederhergestellt.", channel.name)
+
+    def _note_reconnect_fail(self, channel: "discord.VoiceChannel") -> None:
+        """Zaehlt fehlgeschlagene Reconnects; nach zu vielen am Stueck gibt der
+        Watchdog auf (Marker loeschen), damit kein Endlos-Loop entsteht. Ein neues
+        'Flo spiel' startet sauber neu."""
+        self._reconnect_fails += 1
+        if self._reconnect_fails >= VOICE_RECONNECT_MAX_FAILS:
+            log.error("Voice-Reconnect in '%s' nach %d Versuchen aufgegeben.",
+                      channel.name, self._reconnect_fails)
+            self.active_channel_id = None
+            self._reconnect_fails = 0
+        else:
+            log.warning("Voice-Reconnect fehlgeschlagen (%d/%d).",
+                        self._reconnect_fails, VOICE_RECONNECT_MAX_FAILS)
 
 
 _players: dict[int, GuildPlayer] = {}
@@ -450,6 +601,26 @@ def _player_for(guild_id: int) -> GuildPlayer:
         player = GuildPlayer(loop=asyncio.get_running_loop())
         _players[guild_id] = player
     return player
+
+
+async def heal_voice(guild: "discord.Guild") -> None:
+    """Vom bot.py-Watchdog-Loop aufgerufen: haelt die Voice-Verbindung dieses
+    Servers am Leben und repariert Desyncs selbst. No-op, wenn kein Player aktiv."""
+    player = _players.get(guild.id)
+    if player is not None:
+        await player.heal(guild)
+
+
+def is_voice_busy(guild_id: int) -> bool:
+    """True, wenn die Musik den Voice-Channel dieses Servers belegt - auch in
+    Songpausen, beim Tempo-Wechsel oder waehrend eines Reconnects. voicegags
+    fragt das, um nicht in den Musik-Voice-Client reinzugraetschen."""
+    player = _players.get(guild_id)
+    if player is None:
+        return False
+    if player.active_channel_id is not None:
+        return True   # Bot soll in einem Kanal sein (Session laeuft) -> belegt
+    return player.voice is not None and player.voice.is_connected()
 
 
 # --- yt-dlp / Spotify Helfer ---------------------------------------------

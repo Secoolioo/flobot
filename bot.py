@@ -636,6 +636,19 @@ async def voice_xp_loop() -> None:
         log.exception("Voice-XP-Loop Fehler - laeuft weiter")
 
 
+@tasks.loop(seconds=music.VOICE_HEAL_SECONDS)
+async def voice_heal_loop() -> None:
+    """Voice-Watchdog: haelt den Musik-Bot in seinem Sprachkanal und repariert
+    Desyncs/Zombie-Verbindungen selbst (siehe music.heal_voice)."""
+    guild = client.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    try:
+        await music.heal_voice(guild)
+    except Exception:
+        log.exception("Voice-Heal-Loop Fehler - laeuft weiter")
+
+
 @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
 async def event_loop() -> None:
     """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
@@ -981,6 +994,8 @@ async def on_ready() -> None:
         status_loop.start()
     if ECONOMY_ENABLED and not voice_xp_loop.is_running():
         voice_xp_loop.start()
+    if MUSIC_ENABLED and not voice_heal_loop.is_running():
+        voice_heal_loop.start()
     if GAMES_ENABLED and not event_loop.is_running():
         event_loop.start()
     if AUTODELETE_CHANNEL_IDS and not autodelete_sweep_loop.is_running():
