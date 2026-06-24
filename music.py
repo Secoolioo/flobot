@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import difflib
 import json
 import logging
 import os
@@ -193,12 +194,33 @@ _CONTROL = [
 # (spiel/spiele/play), damit Fragen wie "spielst du..." NICHT als Befehl gelten.
 _PLAY_TEXT_RE = re.compile(r"^(?:spiele?|play)\s+(?:mal\s+)?(.+)", re.I)
 
-# Lautstaerke: "flo lautstaerke 30", "flo volume 80", "flo lauter", "flo leiser".
-_VOLUME_SET_RE = re.compile(
-    r"^(?:lautstaerke|lautstärke|volume|vol)\s*(?:auf\s*)?(\d{1,3})", re.I
-)
-_VOLUME_UP_RE = re.compile(r"^(?:lauter|louder)\b", re.I)
-_VOLUME_DOWN_RE = re.compile(r"^(?:leiser|quieter)\b", re.I)
+# Lautstaerke - tolerant: "flo lautstärke 30", "flo ls 80", "flo LS", "flo vol 50",
+# "flo lautstärke auf 30" sowie gaengige Tippfehler. Ohne Zahl -> aktuelle anzeigen.
+_VOLUME_UP_RE = re.compile(r"^(?:lauter|louder|lautr)\b", re.I)
+_VOLUME_DOWN_RE = re.compile(r"^(?:leiser|quieter|leise)\b", re.I)
+# Erstes Wort + optionale Zahl ("auf"/"%"/ohne Leerzeichen alles ok).
+_VOLUME_ARG_RE = re.compile(r"^([A-Za-zÄÖÜäöüß]+)\.?\s*(?:auf\s*)?(\d{1,3})?", re.I)
+# Eindeutige Kurz-/Langformen (Vergleich case-insensitiv ueber .lower()).
+_VOLUME_WORDS = {
+    "ls", "lst", "lstk", "lstrk", "lstrke", "vol", "volume", "lautst", "lautstk",
+    "lautstaerke", "lautstärke", "lautstarke", "lautstrke", "lautstaerk",
+    "lautstärk", "lautsärke", "lautstärje", "lautsterke", "lautstaeke", "lautsärcke",
+}
+# Kanonische Schreibweisen fuer den Tippfehler-Abgleich (difflib).
+_VOLUME_CANON = ("lautstärke", "lautstaerke", "lautstarke", "volume")
+
+
+def _is_volume_word(word: str) -> bool:
+    """True, wenn das Wort 'Lautstaerke' meint - inkl. Kurzform (ls) und Tippfehler."""
+    w = word.lower().strip(".:!?")
+    if w in ("lauter", "louder", "lautr", "leiser", "quieter", "leise"):
+        return False  # relative Befehle - die laufen ueber _VOLUME_UP/DOWN_RE
+    if w in _VOLUME_WORDS:
+        return True
+    # Tippfehler: ab 5 Zeichen nah an einer kanonischen Schreibweise.
+    return len(w) >= 5 and bool(
+        difflib.get_close_matches(w, _VOLUME_CANON, n=1, cutoff=0.8)
+    )
 
 
 # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
@@ -728,14 +750,15 @@ def parse_command(text: str) -> tuple[str, str] | None:
         if pattern.match(cleaned):
             return (action, "")
 
-    # 3) Lautstaerke? ("lautstaerke 30", "volume 80", "lauter", "leiser")
-    m = _VOLUME_SET_RE.match(cleaned)
-    if m:
-        return ("volume", m.group(1))
+    # 3) Lautstaerke? Relativ (lauter/leiser) oder absolut ("ls 30", "vol 80",
+    #    Tippfehler ...). Ohne Zahl -> aktuelle Lautstaerke anzeigen ("?").
     if _VOLUME_UP_RE.match(cleaned):
         return ("volume", "+")
     if _VOLUME_DOWN_RE.match(cleaned):
         return ("volume", "-")
+    vm = _VOLUME_ARG_RE.match(cleaned)
+    if vm and _is_volume_word(vm.group(1)):
+        return ("volume", vm.group(2) or "?")
 
     # 4) "spiel <suchbegriff>" ohne Link -> YouTube-Suche
     m = _PLAY_TEXT_RE.match(cleaned)
@@ -1166,6 +1189,12 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
     # --- Steuerbefehle, die keine Voice-Verbindung voraussetzen ---
     if action == "volume":
         cur = int(round(player.volume * 100))
+        if arg == "?":
+            bar = "🔉" if cur < 50 else ("🔊" if cur <= 100 else "📢")
+            return _embed(
+                f"Lautstärke steht aktuell auf **{cur}%**.\n"
+                f"Ändern z. B. mit `flo ls 50`, `flo lauter` oder `flo leiser`.",
+                title=f"{bar}  Lautstärke", color=_COL_CTRL)
         if arg == "+":
             new = min(200, cur + 20)
         elif arg == "-":
