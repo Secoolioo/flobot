@@ -454,17 +454,61 @@ def _levelup_target(guild, fallback):
     return fallback
 
 
+# Unhinged Level-Up-Texter. Die KI roastet den Aufsteiger derb & lustig.
+_LEVELUP_SYSTEM = (
+    "Du bist Flo, ein komplett unhinged, asozialer Gremlin-Bot ohne jede Manieren. "
+    "Ein User in einem Discord ist gerade im Level aufgestiegen. Feiere das, indem "
+    "du ihn auf absurd-derbe, vulgaere und brutal lustige Art zur Sau machst - wie "
+    "der schlimmste beste Freund, den man haben kann. NSFW, Schimpfwoerter und "
+    "fiese Sexwitze sind ausdruecklich erlaubt und erwuenscht.\n"
+    "Regeln:\n"
+    "- Deutsch. EIN bis ZWEI kurze, knackige Saetze. Keine Einleitung wie 'Hier:' "
+    "oder Anfuehrungszeichen drumherum.\n"
+    "- Erwaehne das neue Level irgendwie.\n"
+    "- Jedes Mal anders, lieber absurd-kreativ als generisch.\n"
+    "- KEIN echter Hass gegen Herkunft, Hautfarbe, Religion, Geschlecht, Behinderung "
+    "oder sexuelle Orientierung - das ist nicht lustig. Alles andere ist Freiwild.\n"
+    "- Hoechstens 1-2 Emojis, kein Spam."
+)
+# Fallback, falls die KI aus ist oder zickt - trotzdem mit etwas Pfeffer.
+_LEVELUP_FALLBACK = [
+    "GG! Level {lvl} – und im echten Leben immer noch hartes Level 1, ne?",
+    "Level {lvl} erreicht. Geh mal raus, die Sonne fragt nach dir, du Höhlentroll.",
+    "Sheesh, Level {lvl}! Deine Tastatur leidet mehr als dein Sozialleben.",
+    "Aufstieg auf Level {lvl}! Gönn dir zur Feier mal 'ne Dusche, du Sumpfkreatur.",
+    "Level {lvl}, Sigma-Move. Schade nur, dass dich offline keiner kennt.",
+    "Boom, Level {lvl}. Touch grass, bevor es Wurzeln in deinem Stuhl schlägt.",
+]
+
+
+async def _levelup_text(member, level: int) -> str:
+    """Holt einen frischen, unhinged Roast von der KI; faellt sonst auf eine
+    derbe Standardzeile zurueck. Bricht NIE die Ansage ab."""
+    if ai.is_enabled():
+        name = getattr(member, "display_name", "") or "der Typ"
+        try:
+            out = await ai.generate(
+                f"{name} ist gerade auf Level {level} aufgestiegen. Roaste ihn/sie dafür.",
+                system=_LEVELUP_SYSTEM,
+                temperature=1.15,   # hoch = mehr Chaos/Abwechslung
+                max_tokens=120,
+            )
+        except Exception:  # noqa: BLE001 - KI-Fehler darf die Ansage nicht killen
+            out = None
+        if out:
+            return out.strip().strip('"').strip()
+    return random.choice(_LEVELUP_FALLBACK).format(lvl=level)
+
+
 async def _announce_levelup(guild, member, level: int, fallback=None) -> None:
     channel = _levelup_target(guild, fallback)
     if channel is None:
         return
     reward = level * 25
-    spruch = random.choice([
-        "GG!", "Lets gooo!", "Sheesh!", "Aufstieg!", "Weiter so!", "Sigma move.",
-    ])
+    roast = await _levelup_text(member, level)
     emb = discord.Embed(
         title=LEVELUP_EMBED_TITLE,
-        description=f"{member.mention} ist jetzt **Level {level}**! {spruch}",
+        description=f"{member.mention} ist jetzt **Level {level}**!\n\n{roast}",
         color=discord.Color.gold(),
     )
     emb.add_field(name="Belohnung", value=f"💰 +{reward} {COIN}", inline=True)
