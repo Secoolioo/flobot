@@ -283,9 +283,15 @@ class GuildPlayer:
         """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL).
 
         seek = Song-Sekunde, ab der gespielt wird (fuer nahtlosen Tempo-Wechsel).
-        Bei speed != 1.0 wird FFmpegs atempo-Filter angehaengt."""
+        Bei speed != 1.0 wird die passende Filterkette angehaengt (atempo bzw.
+        slowed+reverb)."""
         if self.voice is None or not self.voice.is_connected():
             raise RuntimeError("keine Voice-Verbindung")
+        if not self._replacing:
+            # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
+            # einzeln gewaehlt. Nur ein Effekt-Neustart desselben Songs (apply_speed,
+            # setzt _replacing) behaelt das gerade gewaehlte Tempo bei.
+            self.speed = 1.0
         before = _FFMPEG_BEFORE
         if seek > 0.5:
             # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
