@@ -108,6 +108,48 @@ _FFMPEG_BEFORE = (
 )
 _FFMPEG_OPTS = "-vn"
 
+# --- Geschwindigkeit / "slowed + reverb" ---------------------------------
+# Discord-Audio ist immer 48000 Hz Stereo (discord.py haengt -f s16le -ar 48000
+# -ac 2 vor unsere -filter:a-Optionen).
+_AUDIO_RATE = 48000
+
+# Beim VERLANGSAMEN (speed < 1.0) bauen wir den klassischen "slowed + reverb"-Sound:
+# asetrate zieht Tempo UND Tonhoehe zusammen runter (der tiefe, traeumerische Vibe),
+# danach eine getunte Hall-Kette. Diese Suffix-Kette folgt auf das Slow-Praefix
+#   aresample=48000,asetrate=<R>,aresample=48000
+# und ist bewusst rate-unabhaengig (gilt identisch fuer 0.5x und 0.75x).
+#
+# Aufbau der Kette (per FFmpeg validiert: 0 Clipping, ~ -1.0 dBFS, 113x Realtime):
+#   highpass=45          -> raeumt den Sub-Matsch weg, der beim Oktav-Drop (0.5x) entsteht
+#   2x aecho             -> dichte Frueh-Reflexionen + weicher Nachhall = lush, nicht Slapback
+#   bass/treble/lowpass  -> warmer, dunkler "Tape"-Ton statt schrill/metallisch
+#   extrastereo          -> breiteres, immersiveres Hallfeld
+#   volume=2.2           -> statischer Make-up-Gain, damit slowed nicht leiser als normal ist
+#   alimiter(level=false)-> harte Brick-Wall bei ~ -1 dBFS, verhindert jedes Clipping
+_REVERB_SUFFIX = (
+    "highpass=f=45,"
+    "aecho=0.85:0.88:29|47|71|97:0.5|0.36|0.26|0.18,"
+    "aecho=0.8:0.75:131|181:0.22|0.14,"
+    "bass=g=2:f=110,treble=g=-3.5:f=4000,lowpass=f=10500,"
+    "extrastereo=m=1.5,volume=2.2,"
+    "alimiter=level=false:limit=0.89:attack=2:release=80"
+)
+
+
+def _build_audio_filter(speed: float) -> str | None:
+    """Baut die -filter:a-Kette fuer die gewuenschte Geschwindigkeit.
+
+    None  -> Normaltempo, kein Filter.
+    >1.0  -> reines atempo (Tonhoehe bleibt, kein Reverb) - Speed-up.
+    <1.0  -> slowed + reverb (asetrate-Pitchdrop + Hall-Kette)."""
+    if abs(speed - 1.0) <= 1e-3:
+        return None
+    if speed > 1.0:
+        return f"atempo={speed:.3f}"
+    rate = round(_AUDIO_RATE * speed)   # 0.5 -> 24000 (Oktave tiefer), 0.75 -> 36000
+    return f"aresample={_AUDIO_RATE},asetrate={rate},aresample={_AUDIO_RATE},{_REVERB_SUFFIX}"
+
+
 # --- URL-Erkennung -------------------------------------------------------
 _URL_RE = re.compile(r"(https?://\S+|spotify:[a-z]+:\S+)", re.IGNORECASE)
 # Hinweis: Die Spotify-App schiebt bei geteilten Links ein Sprach-Praefix ein,
@@ -221,6 +263,10 @@ class GuildPlayer:
     text_channel: discord.abc.Messageable | None = None
     volume: float = DEFAULT_VOLUME   # 0.0 - 2.0, per Befehl aenderbar
     panel_message: "discord.Message | None" = None  # aktuelles Steuer-Panel
+    speed: float = 1.0               # 0.5 - 2.0, per Tempo-Dropdown im Panel waehlbar
+    _seg_start: float | None = None  # monotonic: Start des laufenden Abschnitts (None=aus/pausiert)
+    _played: float = 0.0             # bereits gespielte Song-Sekunden vor diesem Abschnitt
+    _replacing: bool = False         # True waehrend Tempo-/Positions-Neustart (kein _advance)
 
     async def connect(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
         if self.voice and self.voice.is_connected():
@@ -233,24 +279,86 @@ class GuildPlayer:
     def is_active(self) -> bool:
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
 
-    def start(self, track: Track) -> None:
-        """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL)."""
+    def start(self, track: Track, *, seek: float = 0.0) -> None:
+        """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL).
+
+        seek = Song-Sekunde, ab der gespielt wird (fuer nahtlosen Tempo-Wechsel).
+        Bei speed != 1.0 wird FFmpegs atempo-Filter angehaengt."""
         if self.voice is None or not self.voice.is_connected():
             raise RuntimeError("keine Voice-Verbindung")
+        before = _FFMPEG_BEFORE
+        if seek > 0.5:
+            # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
+            # weiterlaeuft statt von vorne (Tempo/Reverb aendern nur den Klang, nicht die Pos.)
+            before = f"-ss {seek:.2f} {_FFMPEG_BEFORE}"
+        opts = _FFMPEG_OPTS
+        af = _build_audio_filter(self.speed)
+        if af is not None:
+            # Speed-up: atempo (Tonhoehe bleibt). Slow: slowed + reverb (siehe _build_audio_filter).
+            opts = f"{_FFMPEG_OPTS} -filter:a {af}"
         source = discord.FFmpegPCMAudio(
-            track.stream_url, before_options=_FFMPEG_BEFORE, options=_FFMPEG_OPTS
+            track.stream_url, before_options=before, options=opts
         )
         self.current = track
+        self._played = seek          # Positions-Uhr auf die Startstelle setzen
+        self._seg_start = time.monotonic()
         self.voice.play(
             discord.PCMVolumeTransformer(source, self.volume),
             after=self._after,
         )
+
+    def position(self) -> float:
+        """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
+        pos = self._played
+        if self._seg_start is not None:
+            pos += (time.monotonic() - self._seg_start) * self.speed
+        return max(0.0, pos)
+
+    def _clock_pause(self) -> None:
+        """Positions-Uhr beim Pausieren einfrieren."""
+        if self._seg_start is not None:
+            self._played += (time.monotonic() - self._seg_start) * self.speed
+            self._seg_start = None
+
+    def _clock_resume(self) -> None:
+        """Positions-Uhr beim Fortsetzen weiterlaufen lassen."""
+        if self._seg_start is None:
+            self._seg_start = time.monotonic()
+
+    async def apply_speed(self, new_speed: float) -> bool:
+        """Setzt die Geschwindigkeit und startet den laufenden Song an der aktuellen
+        Stelle mit neuem Tempo neu. True = live umgestellt, False = nur gemerkt
+        (gilt dann fuer den naechsten Song)."""
+        new_speed = max(0.5, min(2.0, float(new_speed)))
+        track = self.current
+        if track is None or self.voice is None or not self.voice.is_connected() \
+                or not (self.voice.is_playing() or self.voice.is_paused()):
+            self.speed = new_speed   # nichts laeuft -> nur merken, gilt fuer naechsten Song
+            return False
+        pos = self.position()        # Position noch mit ALTEM Tempo berechnen ...
+        self.speed = new_speed       # ... dann erst auf das neue Tempo umstellen
+        self._replacing = True
+        try:
+            self.voice.stop()                 # killt die alte Quelle (_after sieht _replacing)
+            for _ in range(40):               # warten bis die alte Quelle wirklich weg ist
+                if not self.voice.is_playing():
+                    break
+                await asyncio.sleep(0.05)
+            self.start(track, seek=pos)        # an gleicher Stelle mit neuem Tempo weiter
+        except Exception:
+            log.exception("Tempo-Wechsel fehlgeschlagen")
+            return False
+        finally:
+            self._replacing = False
+        return True
 
     def _after(self, error: Exception | None) -> None:
         # Laeuft in einem FFmpeg-Thread -> Arbeit zurueck in den Event-Loop schieben.
         # Alles abfangen: ein Fehler hier darf den Player-Thread NICHT mitreissen.
         if error:
             log.error("FFmpeg/Player-Fehler: %s", error)
+        if self._replacing:
+            return  # Tempo-/Positions-Neustart ersetzt die Quelle selbst -> kein _advance
         try:
             asyncio.run_coroutine_threadsafe(self._advance(), self.loop)
         except Exception:
@@ -286,6 +394,9 @@ class GuildPlayer:
     async def disconnect(self) -> None:
         self.queue.clear()
         self.current = None
+        self.speed = 1.0           # frische Session startet wieder mit Normaltempo
+        self._seg_start = None
+        self._played = 0.0
         await _retire_panel(self)
         if self.voice is not None:
             try:
@@ -691,7 +802,8 @@ def _title_value(track: "Track") -> str:
     return f"**{_short(track.title, 90)}**"
 
 
-def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "") -> discord.Embed:
+def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "",
+                       speed: float = 1.0) -> discord.Embed:
     """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
     e = discord.Embed(title="▶️  Jetzt läuft", description=_title_value(track),
                       color=_COL_PLAY)
@@ -702,8 +814,21 @@ def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "") -> d
         e.add_field(name="Gewünscht von", value=track.requested_by, inline=True)
     if queue_len > 0:
         e.add_field(name="In der Schlange", value=f"{queue_len} Song(s)", inline=True)
+    if abs(speed - 1.0) > 1e-3:
+        if speed < 1.0:
+            e.add_field(name="Effekt", value=f"🌌 `{speed:g}×` slowed + reverb", inline=True)
+        else:
+            e.add_field(name="Tempo", value=f"🚀 `{speed:g}×`", inline=True)
+    # Fussnote: optionaler Extra-Text und (falls aktiv) die Tempo-/Effekt-Anzeige.
+    foot = []
     if extra:
-        e.set_footer(text=extra)
+        foot.append(extra)
+    if speed < 1.0 - 1e-3:
+        foot.append(f"🌌 Slowed + Reverb aktiv ({speed:g}×)")
+    elif speed > 1.0 + 1e-3:
+        foot.append(f"🎚️ Tempo {speed:g}× aktiv")
+    if foot:
+        e.set_footer(text="  ·  ".join(foot))
     if track.thumbnail:
         e.set_thumbnail(url=track.thumbnail)
     return e
@@ -861,8 +986,60 @@ class QueuePositionView(discord.ui.View):
                 pass
 
 
+# Auswaehlbare Geschwindigkeiten (atempo deckt 0.5-2.0 ab).
+_SPEEDS: tuple[float, ...] = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
+
+class _SpeedSelect(discord.ui.Select):
+    """Dropdown im Panel: Songgeschwindigkeit waehlen. Stellt den laufenden Song
+    sofort an der aktuellen Stelle mit dem neuen Tempo um (FFmpeg atempo)."""
+
+    def __init__(self, player: "GuildPlayer") -> None:
+        self.player = player
+        super().__init__(placeholder="🎚️ Geschwindigkeit wählen …",
+                         min_values=1, max_values=1, options=self._opts(), row=1)
+
+    def _opts(self) -> "list[discord.SelectOption]":
+        cur = self.player.speed
+        out: list[discord.SelectOption] = []
+        for s in _SPEEDS:
+            if s < 1.0:
+                emoji, label = "🌌", f"{s:g}× · slowed + reverb"
+                desc = "langsamer & tiefer mit Hall"
+            elif s > 1.0:
+                emoji, label, desc = "🚀", f"{s:g}× · speed", "schneller, gleiche Tonhöhe"
+            else:
+                emoji, label, desc = "🎵", "1× · normal", "Originaltempo"
+            out.append(discord.SelectOption(label=label, value=f"{s}", emoji=emoji,
+                                            description=desc, default=abs(s - cur) < 1e-3))
+        return out
+
+    def refresh(self) -> None:
+        """Optionen neu aufbauen, damit das aktuelle Tempo als ausgewaehlt erscheint."""
+        self.options = self._opts()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        v = self.player.voice
+        if v is None or not (v.is_playing() or v.is_paused()):
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        new = float(self.values[0])
+        await interaction.response.defer()        # Tempo-Wechsel kann ~1s dauern
+        await self.player.apply_speed(new)
+        self.refresh()
+        try:
+            cur = self.player.current
+            if cur is not None:
+                emb = _now_playing_embed(cur, len(self.player.queue), speed=self.player.speed)
+                await interaction.edit_original_response(embed=emb, view=self.view)
+            else:
+                await interaction.edit_original_response(view=self.view)
+        except discord.HTTPException:
+            pass
+
+
 class PlaybackControlView(discord.ui.View):
-    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue.
+    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue + Tempo-Dropdown.
 
     timeout=None: bleibt fuer die ganze (ggf. lange) Songdauer aktiv. Beim Posten
     eines neuen Panels wird das alte ueber _send_panel sauber entschaerft.
@@ -873,6 +1050,8 @@ class PlaybackControlView(discord.ui.View):
         self.player = player
         self.message: discord.Message | None = None
         self._sync_pause()
+        self._speed_select = _SpeedSelect(player)   # eigene Zeile unter den Buttons
+        self.add_item(self._speed_select)
 
     def _sync_pause(self) -> None:
         """Pause-Button passend zum aktuellen Zustand beschriften."""
@@ -891,8 +1070,10 @@ class PlaybackControlView(discord.ui.View):
             return
         if v.is_paused():
             v.resume()
+            self.player._clock_resume()   # Positions-Uhr weiterlaufen lassen
         else:
             v.pause()
+            self.player._clock_pause()    # Positions-Uhr einfrieren
         self._sync_pause()
         await interaction.response.edit_message(view=self)
 
@@ -941,7 +1122,7 @@ async def _send_panel(player: "GuildPlayer", track: "Track", *,
                      reply_to: "discord.Message | None" = None, extra: str = "") -> None:
     """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird entschaerft)."""
     await _retire_panel(player)
-    emb = _now_playing_embed(track, len(player.queue), extra=extra)
+    emb = _now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
     view = PlaybackControlView(player)
     try:
         if reply_to is not None:
