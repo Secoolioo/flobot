@@ -462,13 +462,14 @@ _LEVELUP_SYSTEM = (
     "der schlimmste beste Freund, den man haben kann. NSFW, Schimpfwoerter und "
     "fiese Sexwitze sind ausdruecklich erlaubt und erwuenscht.\n"
     "Regeln:\n"
-    "- Deutsch. EIN bis ZWEI kurze, knackige Saetze. Keine Einleitung wie 'Hier:' "
-    "oder Anfuehrungszeichen drumherum.\n"
+    "- GENAU EIN kurzer Satz, hoechstens ~15 Woerter. Kurz und schmerzhaft, aber "
+    "lustig - es soll ein bisschen weh tun, nicht in einen Roman ausarten.\n"
+    "- Deutsch. Keine Einleitung wie 'Hier:' und keine Anfuehrungszeichen drumherum.\n"
     "- Erwaehne das neue Level irgendwie.\n"
-    "- Jedes Mal anders, lieber absurd-kreativ als generisch.\n"
+    "- Jedes Mal anders, lieber pointiert-absurd als generisch.\n"
     "- KEIN echter Hass gegen Herkunft, Hautfarbe, Religion, Geschlecht, Behinderung "
     "oder sexuelle Orientierung - das ist nicht lustig. Alles andere ist Freiwild.\n"
-    "- Hoechstens 1-2 Emojis, kein Spam."
+    "- Hoechstens 1 Emoji."
 )
 # Fallback, falls die KI aus ist oder zickt - trotzdem mit etwas Pfeffer.
 _LEVELUP_FALLBACK = [
@@ -488,10 +489,10 @@ async def _levelup_text(member, level: int) -> str:
         name = getattr(member, "display_name", "") or "der Typ"
         try:
             out = await ai.generate(
-                f"{name} ist gerade auf Level {level} aufgestiegen. Roaste ihn/sie dafür.",
+                f"{name} ist gerade auf Level {level} aufgestiegen. Ein kurzer, fieser Einzeiler.",
                 system=_LEVELUP_SYSTEM,
                 temperature=1.15,   # hoch = mehr Chaos/Abwechslung
-                max_tokens=120,
+                max_tokens=60,      # harte Bremse -> bleibt ein kurzer Satz
             )
         except Exception:  # noqa: BLE001 - KI-Fehler darf die Ansage nicht killen
             out = None
