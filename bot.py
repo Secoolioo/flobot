@@ -679,16 +679,26 @@ async def shop_refresh_loop() -> None:
         log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
 
 
+def _keep_bot_msg(m: discord.Message) -> bool:
+    """True = diese Bot-Nachricht ist vom Auto-Loeschen ausgenommen: Level-Up-
+    Ansagen (Erfolge sollen sichtbar bleiben) und das aktuelle Musik-Panel
+    'Jetzt laeuft' (die Steuer-Buttons muessen den ganzen Song erreichbar bleiben).
+    Alte Panels raeumt der Musik-Player beim Songwechsel selbst weg."""
+    if client.user is None or m.author.id != client.user.id or not m.embeds:
+        return False
+    title = m.embeds[0].title
+    return title in (economy.LEVELUP_EMBED_TITLE, music.NOWPLAYING_EMBED_TITLE)
+
+
 def _sweepable(m: discord.Message) -> bool:
-    """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen
-    des Bots, angepinnte Nachrichten und aktive Spiele bleiben (wie beim
+    """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen,
+    das Musik-Panel, angepinnte Nachrichten und aktive Spiele bleiben (wie beim
     Einzel-Auto-Loeschen)."""
     if m.pinned:
         return False
     if m.id in PROTECTED_MSG_IDS:
         return False    # laeuft noch (oder in der Gnadenfrist) -> nicht wegraeumen
-    if (client.user is not None and m.author.id == client.user.id
-            and m.embeds and m.embeds[0].title == economy.LEVELUP_EMBED_TITLE):
+    if _keep_bot_msg(m):
         return False
     return True
 
@@ -809,12 +819,9 @@ async def on_message(message: discord.Message) -> None:
     # Antworten des Bots dort wieder verschwinden. AUSNAHME: Level-Up-Ansagen des
     # Bots bleiben stehen (Erfolge sollen sichtbar bleiben).
     if message.channel.id in AUTODELETE_CHANNEL_IDS:
-        is_levelup = (
-            message.author.id == client.user.id
-            and message.embeds
-            and message.embeds[0].title == economy.LEVELUP_EMBED_TITLE
-        )
-        if not is_levelup:
+        # Level-Up-Ansagen UND das aktuelle Musik-Panel bleiben stehen, alles
+        # andere wird nach kurzer Zeit geloescht.
+        if not _keep_bot_msg(message):
             _spawn(_delete_after(message, AUTODELETE_SECONDS))
 
     if message.author.bot:

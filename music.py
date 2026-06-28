@@ -59,6 +59,11 @@ VOICE_ZOMBIE_TICKS = 3        # so viele stille Ticks (=Sek*Ticks) bis "Zombie" 
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
+# Titel des 'Jetzt laeuft'-Panels. bot.py nimmt Bot-Nachrichten mit diesem Titel
+# vom Auto-Loeschen aus, damit die Steuer-Buttons den ganzen Song erreichbar
+# bleiben (alte Panels raeumt der Player beim Songwechsel selbst weg).
+NOWPLAYING_EMBED_TITLE = "▶️  Jetzt läuft"
+
 # --- Optik: Farben + Embed-Helfer ----------------------------------------
 _COL_PLAY = 0x1DB954     # Gruen  - laeuft / spielt
 _COL_QUEUE = 0x5865F2    # Blurple - Warteschlange / hinzugefuegt
@@ -1012,7 +1017,7 @@ def _title_value(track: "Track") -> str:
 def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "",
                        speed: float = 1.0) -> discord.Embed:
     """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
-    e = discord.Embed(title="▶️  Jetzt läuft", description=_title_value(track),
+    e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=_title_value(track),
                       color=_COL_PLAY)
     dur = _fmt_dur(track.duration)
     if dur:
@@ -1299,6 +1304,9 @@ class PlaybackControlView(discord.ui.View):
         if self.player.voice is None or not self.player.voice.is_connected():
             await interaction.response.send_message("Ich bin in keinem Sprachkanal.", ephemeral=True)
             return
+        # Diese Nachricht wird gleich zur 'Gestoppt'-Bestaetigung umgebaut -> aus der
+        # Panel-Verwaltung nehmen, damit disconnect()->_retire_panel sie NICHT loescht.
+        self.player.panel_message = None
         await self.player.disconnect()
         for child in self.children:
             if isinstance(child, discord.ui.Button):
@@ -1314,49 +1322,25 @@ class PlaybackControlView(discord.ui.View):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
 
 
-# --- Auto-Loesch-Schutz fuer das Song-Panel ------------------------------
-def _protect(msg) -> None:
-    """Schuetzt das 'Jetzt laeuft'-Panel vorm Auto-Loeschen, damit es samt aller
-    Buttons/Effekte den GANZEN Song ueberlebt (auch in #commands-artigen Channels).
-    Lazy-Import von bot wegen Zirkel-Import."""
-    if msg is None:
-        return
-    try:
-        import bot
-        bot.protect_message(msg)
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _release(msg) -> None:
-    """Gibt ein altes Panel wieder frei (Song vorbei / neuer Song) -> der Bot
-    raeumt es nach kurzer Gnadenfrist weg."""
-    if msg is None:
-        return
-    try:
-        import bot
-        bot.release_message(msg)
-    except Exception:  # noqa: BLE001
-        pass
-
-
 async def _retire_panel(player: "GuildPlayer") -> None:
-    """Entfernt die Buttons unter dem zuletzt geposteten Steuer-Panel und gibt es
-    wieder fuers Auto-Loeschen frei (der Song dazu ist vorbei)."""
+    """Loescht das zuletzt gepostete Steuer-Panel selbst - der Song dazu ist vorbei
+    bzw. wird gleich durch ein neues ersetzt. Das AKTUELLE Panel ist beim Auto-
+    Loeschen ausgenommen (bot.py, ueber NOWPLAYING_EMBED_TITLE); alte raeumen wir
+    hier sofort weg, damit nichts liegen bleibt."""
     msg = player.panel_message
     player.panel_message = None
     if msg is not None:
         try:
-            await msg.edit(view=None)
+            await msg.delete()
         except discord.HTTPException:
             pass
-        _release(msg)
 
 
 async def _send_panel(player: "GuildPlayer", track: "Track", *,
                      reply_to: "discord.Message | None" = None, extra: str = "") -> None:
-    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird entschaerft).
-    Das neue Panel wird vorm Auto-Loeschen geschuetzt, bis der Song zu Ende ist."""
+    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
+    Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
+    vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
     await _retire_panel(player)
     emb = _now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
     view = PlaybackControlView(player)
@@ -1372,7 +1356,6 @@ async def _send_panel(player: "GuildPlayer", track: "Track", *,
         return
     view.message = msg
     player.panel_message = msg
-    _protect(msg)   # bleibt mit allen Buttons sichtbar, bis der Song vorbei ist
 
 
 # --- Oeffentlicher Einstieg ----------------------------------------------
