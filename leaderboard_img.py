@@ -43,6 +43,12 @@ _GOLD = (250, 222, 42)      # Platz 1             #fade2a
 _SILVER = (176, 176, 184)   # Platz 2
 _BRONZE = (205, 127, 50)    # Platz 3
 _DARK = (17, 18, 23)        # Text auf hellen Medaillen
+_BG_TOP = (25, 27, 34)      # Hintergrund-Verlauf oben (leicht heller)
+_BG_BOT = (14, 15, 20)      # Hintergrund-Verlauf unten (dunkler) -> Tiefe
+_ZEBRA = (27, 30, 36)       # jede 2. Zeile
+_ROW1 = (42, 36, 20)        # Platz 1: zarter Gold-Schimmer
+_ACCENT2 = (255, 200, 90)   # helleres Gold fuer Header-Akzent
+_WHITE = (236, 238, 245)
 
 # Schriftarten: erst DejaVu (Fedora/Ubuntu/macOS), sonst PIL-Standard.
 _FONT_REG = [
@@ -231,6 +237,31 @@ def _draw_avatar(img, d, row: dict, name: str, cy: int, ring) -> None:
               outline=ring, width=3)
 
 
+def _vgrad(w: int, h: int, top: tuple, bot: tuple) -> "Image.Image":
+    """Senkrechter Farbverlauf (oben 'top' -> unten 'bot') als Hintergrund."""
+    col = Image.new("RGB", (1, h))
+    px = col.load()
+    span = max(1, h - 1)
+    for y in range(h):
+        f = y / span
+        px[0, y] = tuple(int(top[c] + (bot[c] - top[c]) * f) for c in range(3))
+    return col.resize((w, h))
+
+
+def _trophy(d, x: int, y: int, s: float, color) -> None:
+    """Zeichnet einen kleinen Pokal (fuer den Header)."""
+    cup_w = s
+    # Henkel
+    d.arc([x - s * 0.22, y, x + s * 0.30, y + s * 0.55], 70, 290, fill=color, width=3)
+    d.arc([x + cup_w * 0.70, y, x + cup_w * 1.22, y + s * 0.55], 250, 110, fill=color, width=3)
+    # Becher (Trapez)
+    d.polygon([(x, y - s * 0.04), (x + cup_w, y - s * 0.04),
+               (x + cup_w * 0.74, y + s * 0.5), (x + cup_w * 0.26, y + s * 0.5)], fill=color)
+    # Stiel + Fuss
+    d.rectangle([x + cup_w * 0.44, y + s * 0.5, x + cup_w * 0.56, y + s * 0.72], fill=color)
+    d.rectangle([x + cup_w * 0.30, y + s * 0.72, x + cup_w * 0.70, y + s * 0.86], fill=color)
+
+
 def _gauge(draw, x: int, y: int, w: int, h: int, frac: float, color) -> None:
     """Zeichnet einen Grafana-Balken (Track + gefuellter Teil)."""
     frac = max(0.0, min(1.0, frac))
@@ -266,11 +297,11 @@ def render_png(rows: list[dict], *, title: str = "FLO  LEADERBOARD",
 def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
     n = len(rows)
     height = _HEADER_H + _ROW_H * n + _FOOTER_H
-    img = Image.new("RGB", (_W, height), _BG)
+    img = _vgrad(_W, height, _BG_TOP, _BG_BOT)   # Hintergrund mit Verlauf -> Tiefe
     d = ImageDraw.Draw(img)
 
     # Aeusserer Panel-Rahmen
-    d.rounded_rectangle([6, 6, _W - 7, height - 7], radius=12,
+    d.rounded_rectangle([6, 6, _W - 7, height - 7], radius=14,
                         outline=_BORDER, width=2)
 
     # Normierung der Balken auf den jeweils groessten Wert in der Spalte.
@@ -288,15 +319,21 @@ def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
         top = _HEADER_H + i * _ROW_H
         cy = top + _ROW_H // 2
 
-        # Zeilen-Hintergrund (Zebra) + dezente Trennlinie
-        if i % 2 == 1:
-            d.rectangle([10, top, _W - 11, top + _ROW_H], fill=_PANEL_ALT)
-        d.line([18, top, _W - 18, top], fill=_BORDER, width=1)
+        # Zeilen-Hintergrund: Platz 1 zart golden, sonst weiche Zebra-Streifen.
+        if i == 0:
+            d.rounded_rectangle([12, top + 3, _W - 13, top + _ROW_H - 3],
+                                radius=10, fill=_ROW1)
+        elif i % 2 == 1:
+            d.rounded_rectangle([12, top + 3, _W - 13, top + _ROW_H - 3],
+                                radius=10, fill=_ZEBRA)
 
-        # --- Rang (Medaille fuer Top 3, sonst #N) ---
+        # --- Rang (Medaille fuer Top 3 mit Glow, sonst dezente Ziffer) ---
         rc = _rank_color(i)
         if rc is not None:
             cr = 15
+            glow = tuple(min(255, c + 40) for c in rc)
+            d.ellipse([_X_RANK - 2, cy - cr - 2, _X_RANK + 2 * cr + 2, cy + cr + 2],
+                      outline=glow, width=2)
             d.ellipse([_X_RANK, cy - cr, _X_RANK + 2 * cr, cy + cr], fill=rc)
             num = str(i + 1)
             tw = d.textlength(num, font=f_rank)
@@ -342,9 +379,12 @@ def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
 
 
 def _draw_header(d, title: str, subtitle: str) -> None:
-    # Oranger Akzentbalken links (Grafana-Panel-Look)
-    d.rectangle([18, 26, 24, 78], fill=_ORANGE)
-    d.text((40, 28), title, font=_font(30, bold=True), fill=_FG)
+    # Goldener Pokal + Titel
+    _trophy(d, 24, 30, 30, _GOLD)
+    d.text((74, 28), title, font=_font(30, bold=True), fill=_WHITE)
+    # Gold-Akzentlinie direkt unter dem Titel
+    tw_title = d.textlength(title, font=_font(30, bold=True))
+    d.rectangle([74, 66, 74 + tw_title, 69], fill=_ACCENT2)
     if subtitle:
         f = _font(15)
         tw = d.textlength(subtitle, font=f)
