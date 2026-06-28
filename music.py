@@ -1314,8 +1314,35 @@ class PlaybackControlView(discord.ui.View):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
 
 
+# --- Auto-Loesch-Schutz fuer das Song-Panel ------------------------------
+def _protect(msg) -> None:
+    """Schuetzt das 'Jetzt laeuft'-Panel vorm Auto-Loeschen, damit es samt aller
+    Buttons/Effekte den GANZEN Song ueberlebt (auch in #commands-artigen Channels).
+    Lazy-Import von bot wegen Zirkel-Import."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.protect_message(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _release(msg) -> None:
+    """Gibt ein altes Panel wieder frei (Song vorbei / neuer Song) -> der Bot
+    raeumt es nach kurzer Gnadenfrist weg."""
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _retire_panel(player: "GuildPlayer") -> None:
-    """Entfernt die Buttons unter dem zuletzt geposteten Steuer-Panel."""
+    """Entfernt die Buttons unter dem zuletzt geposteten Steuer-Panel und gibt es
+    wieder fuers Auto-Loeschen frei (der Song dazu ist vorbei)."""
     msg = player.panel_message
     player.panel_message = None
     if msg is not None:
@@ -1323,11 +1350,13 @@ async def _retire_panel(player: "GuildPlayer") -> None:
             await msg.edit(view=None)
         except discord.HTTPException:
             pass
+        _release(msg)
 
 
 async def _send_panel(player: "GuildPlayer", track: "Track", *,
                      reply_to: "discord.Message | None" = None, extra: str = "") -> None:
-    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird entschaerft)."""
+    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird entschaerft).
+    Das neue Panel wird vorm Auto-Loeschen geschuetzt, bis der Song zu Ende ist."""
     await _retire_panel(player)
     emb = _now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
     view = PlaybackControlView(player)
@@ -1343,6 +1372,7 @@ async def _send_panel(player: "GuildPlayer", track: "Track", *,
         return
     view.message = msg
     player.panel_message = msg
+    _protect(msg)   # bleibt mit allen Buttons sichtbar, bis der Song vorbei ist
 
 
 # --- Oeffentlicher Einstieg ----------------------------------------------
