@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import unicodedata
 
 log = logging.getLogger("dcbot.leaderboard")
 
@@ -87,9 +88,11 @@ _ROW_H = 78
 _FOOTER_H = 46
 
 # Spalten-Anker (x in Pixeln)
-_X_RANK = 30
-_X_NAME = 96
-_NAME_W = 290
+_X_RANK = 26
+_X_AVATAR = 72        # Profilbild-Kreis
+_AVA_D = 52           # Durchmesser des Profilbilds
+_X_NAME = 142         # Name beginnt rechts vom Avatar
+_NAME_W = 256
 _X_MSG = 410          # Balken-Start Nachrichten
 _BAR_W = 188          # Balken-Breite (beide Gauges gleich)
 _X_VOICE = 712        # Balken-Start Voice
@@ -129,6 +132,103 @@ def _truncate(draw, text: str, font, max_w: int) -> str:
     while text and draw.textlength(text + "…", font=font) > max_w:
         text = text[:-1]
     return (text + "…") if text else "…"
+
+
+# --- Namen darstellbar machen (Emoji/Fancy-Unicode/Zalgo abfangen) -------
+_notdef_cache: dict = {}
+_glyph_cache: dict = {}
+
+
+def _chbytes(font, ch: str) -> bytes:
+    """Rendert EIN Zeichen auf eine kleine Canvas und gibt die Pixel zurueck."""
+    im = Image.new("L", (48, 48), 0)
+    ImageDraw.Draw(im).text((6, 6), ch, font=font, fill=255)
+    return im.tobytes()
+
+
+def _glyph_ok(font, ch: str) -> bool:
+    """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer)."""
+    fid = id(font)
+    ck = (fid, ch)
+    if ck in _glyph_cache:
+        return _glyph_cache[ck]
+    notdef = _notdef_cache.get(fid)
+    if notdef is None:
+        try:
+            notdef = _chbytes(font, "￿")   # Nicht-Zeichen -> garantiert Tofu
+        except Exception:  # noqa: BLE001
+            notdef = b""
+        _notdef_cache[fid] = notdef
+    try:
+        b = _chbytes(font, ch)
+        ok = bool(b) and b != notdef and any(b)
+    except Exception:  # noqa: BLE001
+        ok = False
+    _glyph_cache[ck] = ok
+    return ok
+
+
+def _safe_name(font, name: str, fallback: str = "Spieler") -> str:
+    """Macht einen Discord-Namen darstellbar:
+    - NFKC-Normalisierung (fancy 𝓒𝓸𝓸𝓵 -> Cool, vollbreite ＡＢ -> AB),
+    - kombinierende Zeichen (Zalgo), Steuer-/Format-/Emoji-Glyphen raus,
+    - alles, wofuer die Schrift kein Glyph hat (CJK etc.), faellt weg.
+    Bleibt nichts Lesbares uebrig, kommt der Fallback (z. B. der Rang)."""
+    name = unicodedata.normalize("NFKC", name or "")
+    out: list[str] = []
+    for ch in name:
+        if ch == " ":
+            out.append(" ")
+            continue
+        cat = unicodedata.category(ch)
+        if cat[0] == "M":                       # kombinierende Zeichen (Zalgo)
+            continue
+        if cat in ("Cc", "Cf", "Cs", "Co", "Cn"):   # Steuer/Format/unbelegt
+            continue
+        if ord(ch) >= 0x1F000:                  # Emoji- & Symbol-Zusatzebenen
+            continue
+        if _glyph_ok(font, ch):
+            out.append(ch)
+    res = " ".join("".join(out).split()).strip()
+    return res or fallback
+
+
+def _avatar_circle(data: bytes, diam: int) -> "Image.Image | None":
+    """Macht aus den Avatar-Bytes ein rundes RGBA-Bild (diam x diam)."""
+    try:
+        im = Image.open(io.BytesIO(data)).convert("RGBA")
+    except Exception:  # noqa: BLE001 - kaputter/leerer Download -> Platzhalter
+        return None
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    im = im.resize((diam, diam), resample)
+    mask = Image.new("L", (diam, diam), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, diam - 1, diam - 1], fill=255)
+    out = Image.new("RGBA", (diam, diam), (0, 0, 0, 0))
+    out.paste(im, (0, 0), mask)
+    return out
+
+
+def _draw_avatar(img, d, row: dict, name: str, cy: int, ring) -> None:
+    """Zeichnet das Profilbild (oder einen Initial-Platzhalter) mit farbigem Ring."""
+    ax = _X_AVATAR
+    ay = cy - _AVA_D // 2
+    circ = None
+    av = row.get("avatar")
+    if av:
+        circ = _avatar_circle(av, _AVA_D)
+    if circ is not None:
+        img.paste(circ, (ax, ay), circ)
+    else:
+        # Platzhalter: gefuellter Kreis + erster Buchstabe des Namens
+        d.ellipse([ax, ay, ax + _AVA_D, ay + _AVA_D], fill=_PANEL_ALT)
+        initial = (name[:1] or "?").upper()
+        fi = _font(26, bold=True)
+        iw = d.textlength(initial, font=fi)
+        d.text((ax + _AVA_D / 2 - iw / 2, ay + _AVA_D / 2 - 16), initial,
+               font=fi, fill=_FG_DIM)
+    # Ring drumherum (Rang-Farbe fuer Top 3, sonst dezent)
+    d.ellipse([ax - 2, ay - 2, ax + _AVA_D + 1, ay + _AVA_D + 1],
+              outline=ring, width=3)
 
 
 def _gauge(draw, x: int, y: int, w: int, h: int, frac: float, color) -> None:
@@ -196,18 +296,24 @@ def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
         # --- Rang (Medaille fuer Top 3, sonst #N) ---
         rc = _rank_color(i)
         if rc is not None:
-            cr = 19
+            cr = 15
             d.ellipse([_X_RANK, cy - cr, _X_RANK + 2 * cr, cy + cr], fill=rc)
             num = str(i + 1)
             tw = d.textlength(num, font=f_rank)
             d.text((_X_RANK + cr - tw / 2, cy - 13), num, font=f_rank, fill=_DARK)
         else:
-            txt = f"#{i + 1}"
+            txt = f"{i + 1}"
             tw = d.textlength(txt, font=f_rank)
-            d.text((_X_RANK + 19 - tw / 2, cy - 12), txt, font=f_rank, fill=_FG_DIM)
+            d.text((_X_RANK + 15 - tw / 2, cy - 12), txt, font=f_rank, fill=_FG_DIM)
+
+        # --- Name erst darstellbar machen (Emoji/Fancy-Unicode/Zalgo abfangen) ---
+        safe = _safe_name(f_name, r.get("name", ""), fallback=f"Spieler #{i + 1}")
+
+        # --- Profilbild (oder Initial-Platzhalter) mit Rang-Ring ---
+        _draw_avatar(img, d, r, safe, cy, rc or _BORDER)
 
         # --- Name + Meta-Zeile (Level · Coins · Titel) ---
-        name = _truncate(d, r.get("name", "Unbekannt"), f_name, _NAME_W)
+        name = _truncate(d, safe, f_name, _NAME_W)
         d.text((_X_NAME, cy - 22), name, font=f_name, fill=_FG)
         meta = f"Lvl {r.get('level', 0)}  ·  {_fmt_num(r.get('coins', 0))} Coins"
         clean = _clean_title(r.get("title", ""))

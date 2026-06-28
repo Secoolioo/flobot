@@ -12,6 +12,7 @@ Topf gibt.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -597,7 +598,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | discord.Fil
         wer = "Du hast" if target.id == message.author.id else f"{target.display_name} hat"
         return f"💰 {wer} **{c} {COIN}**."
     if first in ("top", "bestenliste", "rangliste", "leaderboard", "lb"):
-        return _leaderboard()
+        return await _leaderboard(message.guild)
     if first in ("daily", "täglich", "taeglich", "tagesbonus"):
         return await _daily(message.author)
     if first in ("pay", "zahl", "zahle", "überweis", "ueberweis", "überweise"):
@@ -643,11 +644,17 @@ def _card(member: discord.abc.User) -> discord.Embed:
 
 
 def leaderboard_data(limit: int = 10) -> list[dict]:
-    """Aufbereitete Bestenliste fuer das Leaderboard-Bild (sortiert nach XP)."""
-    ranking = sorted(_users().values(), key=lambda p: p.get("xp", 0), reverse=True)
+    """Aufbereitete Bestenliste fuers Leaderboard-Bild (sortiert nach XP).
+    'id' = Discord-User-ID (fuers Laden des Profilbilds)."""
+    ranking = sorted(_users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
     out: list[dict] = []
-    for prof in ranking[:limit]:
+    for key, prof in ranking[:limit]:
+        try:
+            uid = int(key)
+        except (TypeError, ValueError):
+            uid = 0
         out.append({
+            "id": uid,
             "name": prof.get("name") or "Unbekannt",
             "level": _level_only(prof.get("xp", 0)),
             "xp": prof.get("xp", 0),
@@ -659,11 +666,48 @@ def leaderboard_data(limit: int = 10) -> list[dict]:
     return out
 
 
-def _leaderboard() -> "discord.Embed | discord.File":
-    """Bestenliste als Grafana-artiges PNG (wenn Pillow da ist), sonst als Embed."""
+# Avatar-Cache: Profilbilder aendern sich selten -> kurz zwischenspeichern,
+# damit ein wiederholtes 'top' nicht jedes Mal alles neu laedt.
+_AVATAR_CACHE: dict[str, tuple[bytes, float]] = {}
+_AVATAR_TTL = 1800.0   # 30 Minuten
+
+
+async def _attach_avatars(rows: list[dict], guild) -> None:
+    """Laedt die Discord-Profilbilder der Top-Spieler (parallel, mit Cache &
+    Timeout) und haengt die Bytes als row['avatar'] an. Faellt etwas aus, bleibt
+    es leer - das Bild zeigt dann einen Initial-Platzhalter (nie ein Crash)."""
+    if guild is None:
+        return
+
+    async def one(row: dict) -> None:
+        uid = row.get("id") or 0
+        member = guild.get_member(uid) if uid else None
+        if member is None:
+            return
+        asset = member.display_avatar
+        key = getattr(asset, "key", "") or str(uid)
+        now = time.monotonic()
+        hit = _AVATAR_CACHE.get(key)
+        if hit and now - hit[1] < _AVATAR_TTL:
+            row["avatar"] = hit[0]
+            return
+        try:
+            data = await asyncio.wait_for(asset.with_size(64).read(), timeout=5)
+        except Exception:  # noqa: BLE001 - Profilbild ist nur Deko
+            return
+        _AVATAR_CACHE[key] = (data, now)
+        row["avatar"] = data
+
+    await asyncio.gather(*(one(r) for r in rows), return_exceptions=True)
+
+
+async def _leaderboard(guild=None) -> "discord.Embed | discord.File":
+    """Bestenliste als Grafana-artiges PNG (wenn Pillow da ist), sonst als Embed.
+    Laedt die Profilbilder der Top-Spieler mit ins Bild."""
     rows = leaderboard_data(10)
     if rows and leaderboard_img.is_available():
         try:
+            await _attach_avatars(rows, guild)
             stand = datetime.now(_tz).strftime("Stand: %d.%m.%Y %H:%M")
             png = leaderboard_img.render_png(rows, subtitle=stand)
             if png:
