@@ -26,6 +26,7 @@ import casino
 import economy
 import fun
 import games
+import media
 import moderation
 import music
 import schedule_logic
@@ -100,6 +101,9 @@ MUSIC_ENABLED = music.setup()
 ECONOMY_ENABLED = economy.setup()
 GAMES_ENABLED = games.setup()
 FUN_ENABLED = fun.setup()
+# Bilder: generieren (Pollinations, kostenlos) + Quote-Meme (Pillow). Bild-Lesen
+# (Vision) laeuft ueber die KI und braucht daher AI_ENABLED.
+MEDIA_ENABLED = media.setup()
 VOICE_GAGS_ENABLED = voicegags.setup()
 # Casino (Blackjack, Crash, Keno, Roulette) - spielt mit den Flo Coins aus economy.
 # Faellt aus, wenn economy aus ist (dort liegt der Coin-Topf).
@@ -136,7 +140,7 @@ WEISHEITEN = [
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
-     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED]
+     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -315,6 +319,7 @@ def _help_categories() -> "list[tuple[str, str, str]]":
         ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
         ("casino", "🎰", "Casino", CASINO_ENABLED),
         ("chaos", "😈", "Chaos", FUN_ENABLED),
+        ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
         ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
         ("mod", "🛡️", "Moderation", MOD_ENABLED),
         ("ki", "💬", "KI", AI_ENABLED),
@@ -447,12 +452,27 @@ def _help_detail_embed(key: str) -> discord.Embed:
             value=(f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} nuke`\n"
                    "Angepinnte Nachrichten bleiben beim Löschen erhalten."), inline=False)
         return emb
+    if key == "bilder":
+        emb = discord.Embed(title="🎨 Bilder",
+                            description="Bilder generieren, lesen lassen & Zitate basteln – alles gratis.",
+                            color=0x9B7BE0)
+        emb.add_field(name="Generieren",
+            value=(f"`{name} male <was>` · `{name} zeichne <was>`\n"
+                   f"z. B. `{name} male einen Drachen aus Neon`"), inline=False)
+        emb.add_field(name="Lesen / Sehen",
+            value=(f"Poste ein Bild und frag mich was dazu – ich schau's mir an. 👀\n"
+                   f"`{name} was ist das?` (mit Bild dran)"), inline=False)
+        emb.add_field(name="Zitat-Meme",
+            value=(f"`{name} quote <spruch>` – dein Profilbild + Spruch als Quote.\n"
+                   f"Oder antworte mit `{name} quote` auf eine Nachricht. 😎"), inline=False)
+        return emb
     if key == "ki":
         emb = discord.Embed(title="💬 KI",
                             description="Kein Befehl erkannt? Dann antworte ich wie eine KI.",
                             color=0x5865F2)
         emb.add_field(name="So gehts",
-            value=(f"Stell mir einfach eine Frage:\n`{name} wie wird das Wetter?`"),
+            value=(f"Stell mir einfach eine Frage:\n`{name} wie wird das Wetter?`\n"
+                   "Ich folge dem Gespräch und schaue mir auch **Bilder** an. 😉"),
             inline=False)
         return emb
     return _help_overview_embed()
@@ -810,6 +830,27 @@ async def _release_after(message: discord.Message, delay: float) -> None:
         log.warning("Auto-Loeschen (Spielende) fehlgeschlagen: %s", exc)
 
 
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
+
+
+def _first_image_url(message: discord.Message) -> "str | None":
+    """URL des ersten Bildes - im Anhang der Nachricht ODER in der Nachricht,
+    auf die geantwortet wurde. Sonst None (dann normale Text-KI)."""
+    def _scan(msg) -> "str | None":
+        for att in getattr(msg, "attachments", None) or []:
+            ct = (att.content_type or "").lower()
+            if ct.startswith("image/") or att.filename.lower().endswith(_IMAGE_EXTS):
+                return att.url
+        return None
+    url = _scan(message)
+    if url:
+        return url
+    ref = message.reference.resolved if message.reference is not None else None
+    if isinstance(ref, discord.Message):
+        return _scan(ref)
+    return None
+
+
 @client.event
 async def on_message(message: discord.Message) -> None:
     """Zentrale Nachrichten-Verarbeitung: Auto-Loeschen, passive Spass-Hooks
@@ -906,6 +947,7 @@ async def on_message(message: discord.Message) -> None:
             (GAMES_ENABLED, games.handle),
             (CASINO_ENABLED, casino.handle),
             (ECONOMY_ENABLED, economy.handle),
+            (MEDIA_ENABLED, media.handle),
             (FUN_ENABLED, fun.handle),
         ):
             if not enabled:
@@ -923,8 +965,8 @@ async def on_message(message: discord.Message) -> None:
     if antwort is not None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
                 or antwort is casino.HANDLED or antwort is games.HANDLED
-                or antwort is economy.HANDLED):
-            return  # Modul hat selbst geantwortet (Loesch-Bestaetigung / Musik / Casino / Spiele / Economy).
+                or antwort is economy.HANDLED or antwort is media.HANDLED):
+            return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
         elif isinstance(antwort, discord.Embed):
@@ -941,13 +983,23 @@ async def on_message(message: discord.Message) -> None:
     # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
     title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
     tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
-    log.info("KI-Frage von %s: %s", message.author.display_name, content[:150])
+    # Bild dabei (Anhang oder in der beantworteten Nachricht)? -> Flo schaut es sich
+    # an (Vision), statt nur den Text zu lesen.
+    image_url = _first_image_url(message)
+    log.info("KI-Frage von %s%s: %s", message.author.display_name,
+             " [+Bild]" if image_url else "", content[:150])
     async with message.channel.typing():
         try:
-            antwort = await ai.ask_flo(
-                content, author=message.author.display_name, title=title, tone=tone,
-                channel_id=message.channel.id,
-            )
+            if image_url:
+                antwort = await ai.see_image(
+                    content, image_url, author=message.author.display_name,
+                    title=title, tone=tone, channel_id=message.channel.id,
+                )
+            else:
+                antwort = await ai.ask_flo(
+                    content, author=message.author.display_name, title=title, tone=tone,
+                    channel_id=message.channel.id,
+                )
         except Exception:
             log.exception("KI-Antwort fehlgeschlagen")
             antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."

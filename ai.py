@@ -32,10 +32,13 @@ log = logging.getLogger("dcbot.ai")
 # Groq hat einen kostenlosen Tarif (mit Ratenlimits, ohne Kreditkarte).
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
+# Bild-Lesen (Vision): multimodales Groq-Modell, gleicher kostenloser Key.
+DEFAULT_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # --- Konfiguration (wird in setup() aus der .env gelesen) ----------------
 _client: "AsyncOpenAI | None" = None
 _model: str = DEFAULT_MODEL
+_vision_model: str = DEFAULT_VISION_MODEL
 _default_city: str = "Regensburg"
 _bot_name: str = "Flo"
 
@@ -107,9 +110,10 @@ def setup() -> bool:
     Muss aufgerufen werden, nachdem load_dotenv() gelaufen ist.
     Rueckgabe: True, wenn das KI-Feature aktiv ist.
     """
-    global _client, _model, _default_city, _bot_name, TEMPERATURE
+    global _client, _model, _vision_model, _default_city, _bot_name, TEMPERATURE
 
     _model = os.getenv("LLM_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    _vision_model = os.getenv("LLM_VISION_MODEL", DEFAULT_VISION_MODEL).strip() or DEFAULT_VISION_MODEL
     _default_city = os.getenv("DEFAULT_WEATHER_CITY", "Regensburg").strip() or "Regensburg"
     _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
     try:
@@ -492,3 +496,37 @@ async def ask_flo(user_message: str, *, author: str = "", title: str = "",
         return "Mein KI-Dienst antwortet gerade nicht. Versuch es gleich nochmal."
 
     return "Das war mir gerade zu kompliziert - frag mich nochmal einfacher."
+
+
+async def see_image(user_message: str, image_url: str, *, author: str = "",
+                    title: str = "", tone: str = "",
+                    channel_id: "int | None" = None) -> str:
+    """Schaut sich ein Bild an (Vision-Modell) und antwortet in Flos Persoenlichkeit.
+    image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL."""
+    if _client is None:
+        return "Mein KI-Modus ist gerade nicht eingerichtet."
+
+    text = (user_message or "").strip() or "Schau dir das Bild an und sag was dazu."
+    if author:
+        text = f"{author} schreibt: {text}"
+    history = _recent(channel_id, skip_content=(user_message or "").strip())
+    messages: list[dict] = [
+        {"role": "system", "content": _system_prompt(author, title, tone)},
+        *history,
+        {"role": "user", "content": [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]},
+    ]
+    try:
+        response = await _client.chat.completions.create(
+            model=_vision_model,
+            messages=messages,
+            max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE,
+        )
+        return (response.choices[0].message.content or "").strip() \
+            or "Dazu faellt mir gerade nichts ein."
+    except Exception:  # noqa: BLE001
+        log.exception("Vision-Aufruf fehlgeschlagen")
+        return "Das Bild konnte ich mir gerade nicht anschauen - versuch's gleich nochmal."

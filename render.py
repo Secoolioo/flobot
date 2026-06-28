@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import io
 import math
+import unicodedata
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 
 # --- Schriften -----------------------------------------------------------
 # DejaVu Sans deckt die Kartensymbole ♠♥♦♣ und × ab. Mehrere Pfade, damit es
@@ -755,5 +756,122 @@ def shop_banner(items: list[dict], *, date: str = "") -> io.BytesIO | None:
               col, (15, 17, 25))
 
         y += row_h + gap
+
+    return _png(img)
+
+
+# === Quote-Meme ("Flo quote") ===========================================
+_RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS
+_notdef_q: dict[int, bytes] = {}
+
+
+def _renderable_char(font, ch: str) -> bool:
+    """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer)."""
+    if ord(ch) >= 0x1F000:               # Emoji-/Symbol-Zusatzebenen
+        return False
+    fid = id(font)
+    nd = _notdef_q.get(fid)
+    if nd is None:
+        im = Image.new("L", (48, 48), 0)
+        ImageDraw.Draw(im).text((6, 6), "￿", font=font, fill=255)
+        nd = im.tobytes()
+        _notdef_q[fid] = nd
+    im = Image.new("L", (48, 48), 0)
+    try:
+        ImageDraw.Draw(im).text((6, 6), ch, font=font, fill=255)
+    except Exception:
+        return False
+    b = im.tobytes()
+    return bool(b) and b != nd and any(b)
+
+
+def _clean_text(s: str) -> str:
+    """Macht Text darstellbar: NFKC, Emoji/Steuer-/Zalgo-/unbekannte Glyphen raus."""
+    s = unicodedata.normalize("NFKC", s or "")
+    ref = _font(40)
+    out: list[str] = []
+    for ch in s:
+        if ch in ("\n", "\t", " "):
+            out.append(" ")
+            continue
+        cat = unicodedata.category(ch)
+        if cat[0] == "M" or cat in ("Cc", "Cf", "Cs", "Co", "Cn"):
+            continue
+        if _renderable_char(ref, ch):
+            out.append(ch)
+    return " ".join("".join(out).split()).strip()
+
+
+def _wrap(d, text: str, font, max_w: int) -> list[str]:
+    """Bricht Text auf max_w Pixel um (Wort-weise; lange Woerter hart trennen)."""
+    lines: list[str] = []
+    for word in text.split():
+        if not lines or d.textlength(lines[-1] + " " + word, font=font) > max_w:
+            if d.textlength(word, font=font) <= max_w or not lines:
+                lines.append(word)
+            else:
+                cur = ""
+                for ch in word:
+                    if d.textlength(cur + ch, font=font) <= max_w:
+                        cur += ch
+                    else:
+                        lines.append(cur)
+                        cur = ch
+                if cur:
+                    lines.append(cur)
+        else:
+            lines[-1] += " " + word
+    return lines or [""]
+
+
+def quote_card(avatar: "bytes | None", text: str, author: str) -> io.BytesIO:
+    """Zitat-Bild im 'make it a quote'-Stil: links das (graustufige) Profilbild
+    mit Verlauf ins Schwarze, rechts das Zitat + '- Name' darunter."""
+    W, H, AVW = 1200, 630, 620
+    img = Image.new("RGB", (W, H), (0, 0, 0))
+
+    # Profilbild links: Graustufen, quadratisch gefittet, Alpha-Verlauf nach schwarz.
+    if avatar:
+        try:
+            av = Image.open(io.BytesIO(avatar)).convert("L")
+            av = ImageOps.autocontrast(ImageOps.fit(av, (AVW, H), method=_RESAMPLE))
+            grad = Image.new("L", (AVW, 1))
+            gpx = grad.load()
+            solid = int(AVW * 0.42)
+            for x in range(AVW):
+                gpx[x, 0] = 255 if x < solid else max(0, int(255 * (1 - (x - solid) / (AVW - solid))))
+            img.paste(av.convert("RGB"), (0, 0), grad.resize((AVW, H)))
+        except Exception:
+            pass
+
+    d = ImageDraw.Draw(img)
+    tx0, tx1 = 640, W - 56
+    tw = tx1 - tx0
+
+    # Zitat: groesste Schrift, die in Breite UND Hoehe passt.
+    quote = _clean_text(text) or "..."
+    quote = f"„{quote}“"        # „..."
+    chosen, lines = 50, [quote]
+    for size in range(54, 23, -2):
+        f = _font(size)
+        ls = _wrap(d, quote, f, tw)
+        if (size + 12) * len(ls) <= H - 210:
+            chosen, lines = size, ls
+            break
+    f = _font(chosen)
+    line_h = chosen + 12
+    block_h = line_h * len(lines)
+    y = (H - block_h) // 2 - 16
+    for ln in lines:
+        lw = d.textlength(ln, font=f)
+        d.text((tx0 + (tw - lw) / 2, y), ln, font=f, fill=_WHITE)
+        y += line_h
+
+    # Autor darunter ("- Name").
+    author = _clean_text(author) or "Unbekannt"
+    fa = _font(30)
+    aut = f"— {author}"
+    aw = d.textlength(aut, font=fa)
+    d.text((tx0 + (tw - aw) / 2, y + 20), aut, font=fa, fill=(160, 162, 172))
 
     return _png(img)
