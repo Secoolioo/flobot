@@ -824,6 +824,11 @@ async def on_message(message: discord.Message) -> None:
 
     content = message.content or ""
 
+    # Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat (auch ohne direkt
+    # angesprochen zu sein), damit er dem Gespraech folgen kann, wenn man ihn fragt.
+    if AI_ENABLED and content.strip():
+        ai.note_message(message.channel.id, message.author.display_name, content)
+
     # --- Passive Hooks: sehen JEDE Nachricht (vor dem Flo-Trigger) ---
     # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
     if ECONOMY_ENABLED:
@@ -844,6 +849,13 @@ async def on_message(message: discord.Message) -> None:
     angesprochen = bool(_TRIGGER_RE.search(content))
     if not angesprochen and client.user in message.mentions:
         angesprochen = True
+    # Antwort auf eine Flo-Nachricht zaehlt auch als angesprochen (natuerliches
+    # Weiterreden, ohne 'Flo' tippen zu muessen).
+    if not angesprochen and message.reference is not None:
+        ref = message.reference.resolved
+        if (isinstance(ref, discord.Message) and client.user is not None
+                and ref.author.id == client.user.id):
+            angesprochen = True
     if not angesprochen:
         return
 
@@ -926,12 +938,15 @@ async def on_message(message: discord.Message) -> None:
     async with message.channel.typing():
         try:
             antwort = await ai.ask_flo(
-                content, author=message.author.display_name, title=title, tone=tone
+                content, author=message.author.display_name, title=title, tone=tone,
+                channel_id=message.channel.id,
             )
         except Exception:
             log.exception("KI-Antwort fehlgeschlagen")
             antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
     log.info("KI-Antwort an %s (%d Zeichen)", message.author.display_name, len(antwort))
+    # Flos eigene Antwort ins Gedaechtnis legen -> der naechste Turn hat den Kontext.
+    ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
     await _reply_chunks(message, antwort)
 
 

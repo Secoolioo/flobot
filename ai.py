@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import re
+import time
+from collections import deque
 
 import aiohttp
 
@@ -231,6 +233,11 @@ _GUARDRAIL = (
 def _system_prompt(author: str = "", title: str = "", tone: str = "") -> str:
     persona = os.getenv("BOT_PERSONA", "").strip() or _DEFAULT_PERSONA.format(name=_bot_name)
     base = f"{persona} {_HARD_RULES.format(city=_default_city)} {_GUARDRAIL}"
+    # Kurzzeit-Gedaechtnis: die letzten Chat-Nachrichten kommen als Kontext mit.
+    base += (" Dir liegt der juengste Chatverlauf vor (mehrere Leute, Format "
+             "'Name: Text'). Beziehe dich natuerlich darauf, merke dir, worum es "
+             "gerade geht, und antworte als Teil des Gespraechs - aber wiederhole "
+             "nicht staendig den Verlauf.")
     clean = _clean_title(title)
     if clean:
         wer = author or "Der Nutzer"
@@ -364,13 +371,65 @@ async def generate(
         return None
 
 
+# --- Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat pro Channel -----
+_HISTORY: "dict[int, deque]" = {}
+_HIST_MAX = 12          # so viele letzte Nachrichten je Channel behalten
+_HIST_TTL = 1200.0      # 20 min - aelteres ist kein lebendiger Kontext mehr
+
+
+def note_message(channel_id: int, name: str, content: str, *, is_bot: bool = False) -> None:
+    """Merkt sich eine Chat-Nachricht (pro Channel, begrenzt), damit Flo dem
+    Gespraech folgen kann. bot.py ruft das fuer JEDE Nachricht im Chat auf -
+    auch fuer Flos eigene Antworten (is_bot=True)."""
+    if not channel_id or not content:
+        return
+    content = content.strip()
+    if not content:
+        return
+    dq = _HISTORY.get(channel_id)
+    if dq is None:
+        dq = deque(maxlen=_HIST_MAX)
+        _HISTORY[channel_id] = dq
+    dq.append({
+        "role": "assistant" if is_bot else "user",
+        "name": (name or "?")[:40],
+        "content": content[:500],
+        "t": time.monotonic(),
+    })
+
+
+def _recent(channel_id: "int | None", skip_content: str = "") -> list[dict]:
+    """Baut den juengsten Gespraechsverlauf als LLM-Nachrichten. 'skip_content'
+    laesst die aktuelle Frage weg (die wird separat als letzte user-Nachricht
+    angehaengt), damit sie nicht doppelt drinsteht."""
+    if not channel_id:
+        return []
+    dq = _HISTORY.get(channel_id)
+    if not dq:
+        return []
+    now = time.monotonic()
+    items = [e for e in dq if now - e["t"] <= _HIST_TTL]
+    if skip_content and items and items[-1]["role"] == "user" \
+            and items[-1]["content"] == skip_content[:500]:
+        items = items[:-1]
+    out: list[dict] = []
+    for e in items:
+        if e["role"] == "assistant":
+            out.append({"role": "assistant", "content": e["content"]})
+        else:
+            out.append({"role": "user", "content": f'{e["name"]}: {e["content"]}'})
+    return out
+
+
 async def ask_flo(user_message: str, *, author: str = "", title: str = "",
-                  tone: str = "") -> str:
+                  tone: str = "", channel_id: "int | None" = None) -> str:
     """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
     Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
     mit diesem Titel anzusprechen. 'tone' steuert die Gelassenheit: je seltener
-    der Titel, desto entspannter/chilliger spricht Flo (kommt aus economy)."""
+    der Titel, desto entspannter/chilliger spricht Flo (kommt aus economy).
+    'channel_id' bringt den juengsten Gespraechsverlauf als Kontext mit, damit
+    Flo dem Gespraech folgen kann (Kurzzeit-Gedaechtnis)."""
     if _client is None:
         return "Mein KI-Modus ist gerade nicht eingerichtet."
 
@@ -378,8 +437,10 @@ async def ask_flo(user_message: str, *, author: str = "", title: str = "",
     if author:
         text = f"{author} schreibt: {text}"
 
+    history = _recent(channel_id, skip_content=user_message.strip())
     messages: list[dict] = [
         {"role": "system", "content": _system_prompt(author, title, tone)},
+        *history,
         {"role": "user", "content": text},
     ]
 
