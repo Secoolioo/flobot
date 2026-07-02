@@ -25,6 +25,7 @@ import ai
 import casino
 import economy
 import fun
+import food
 import games
 import media
 import moderation
@@ -104,6 +105,8 @@ FUN_ENABLED = fun.setup()
 # Bilder: generieren (Pollinations, kostenlos) + Quote-Meme (Pillow). Bild-Lesen
 # (Vision) laeuft ueber die KI und braucht daher AI_ENABLED.
 MEDIA_ENABLED = media.setup()
+# Kalorien-Analyse: Essensfotos im Kalorien-Channel automatisch analysieren.
+FOOD_ENABLED = food.setup()
 VOICE_GAGS_ENABLED = voicegags.setup()
 # Casino (Blackjack, Crash, Keno, Roulette) - spielt mit den Flo Coins aus economy.
 # Faellt aus, wenn economy aus ist (dort liegt der Coin-Topf).
@@ -140,7 +143,7 @@ WEISHEITEN = [
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
-     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED]
+     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -465,6 +468,11 @@ def _help_detail_embed(key: str) -> discord.Embed:
         emb.add_field(name="Zitat-Meme",
             value=(f"`{name} quote <spruch>` – dein Profilbild + Spruch als Quote.\n"
                    f"Oder antworte mit `{name} quote` auf eine Nachricht. 😎"), inline=False)
+        if FOOD_ENABLED:
+            emb.add_field(name="Kalorien-Check 🍎",
+                value=(f"Essensfoto in den **Kalorien-Channel** posten – ich sage dir "
+                       f"Kalorien, Eiweiß & wie natürlich es ist.\n"
+                       f"Überall sonst: `{name} kalorien` + Bild."), inline=False)
         return emb
     if key == "ki":
         emb = discord.Embed(title="💬 KI",
@@ -881,6 +889,9 @@ async def on_message(message: discord.Message) -> None:
     # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
     if ECONOMY_ENABLED:
         _spawn(economy.on_message(message))
+    # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
+    if FOOD_ENABLED:
+        _spawn(food.on_message_passive(message))
     # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
     # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
     if GAMES_ENABLED:
@@ -947,6 +958,7 @@ async def on_message(message: discord.Message) -> None:
             (GAMES_ENABLED, games.handle),
             (CASINO_ENABLED, casino.handle),
             (ECONOMY_ENABLED, economy.handle),
+            (FOOD_ENABLED, food.handle),
             (MEDIA_ENABLED, media.handle),
             (FUN_ENABLED, fun.handle),
         ):
@@ -965,7 +977,8 @@ async def on_message(message: discord.Message) -> None:
     if antwort is not None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
                 or antwort is casino.HANDLED or antwort is games.HANDLED
-                or antwort is economy.HANDLED or antwort is media.HANDLED):
+                or antwort is economy.HANDLED or antwort is media.HANDLED
+                or antwort is food.HANDLED):
             return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)

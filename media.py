@@ -78,12 +78,13 @@ async def generate_image(prompt: str) -> "bytes | None":
     PNG-Bytes zurueck. None bei Fehler/Timeout."""
     url = _POLLI.format(p=urllib.parse.quote(prompt[:400]))
     try:
-        timeout = aiohttp.ClientTimeout(total=75)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return None
-                raw = await resp.read()
+        # geteilte Session aus ai (Keep-Alive) statt neuer pro Bild
+        async with ai.http_session().get(
+            url, timeout=aiohttp.ClientTimeout(total=75)
+        ) as resp:
+            if resp.status != 200:
+                return None
+            raw = await resp.read()
     except Exception:  # noqa: BLE001 - Netzfehler darf den Bot nie crashen
         log.exception("Bildgenerierung fehlgeschlagen")
         return None

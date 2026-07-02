@@ -12,6 +12,7 @@ Ohne gueltige Konfiguration ist das Feature einfach aus - der restliche Bot
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -256,49 +257,66 @@ def _system_prompt(author: str = "", title: str = "", tone: str = "") -> str:
     return base
 
 
+# --- Geteilte HTTP-Session (Performance) ----------------------------------
+# Eine Session pro Prozess statt pro Anfrage: spart TCP/TLS-Handshakes und
+# haelt Verbindungen offen (Keep-Alive). Alle Module holen sie sich hier.
+_http: "aiohttp.ClientSession | None" = None
+
+
+def http_session() -> aiohttp.ClientSession:
+    """Liefert die geteilte aiohttp-Session (lazy erstellt, Prozess-Lebensdauer).
+    Timeout bitte pro Anfrage setzen: session.get(url, timeout=ClientTimeout(...))."""
+    global _http
+    if _http is None or _http.closed:
+        _http = aiohttp.ClientSession()
+    return _http
+
+
 async def get_weather(city: str) -> dict:
     """Holt aktuelles Wetter + heutige Vorhersage von Open-Meteo (ohne API-Key)."""
     timeout = aiohttp.ClientTimeout(total=12)
+    session = http_session()   # geteilte Session (Keep-Alive) statt eigener pro Abruf
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            # 1) Geocoding: Ortsname -> Koordinaten
-            async with session.get(
-                "https://geocoding-api.open-meteo.com/v1/search",
-                params={"name": city, "count": 1, "language": "de", "format": "json"},
-            ) as resp:
-                resp.raise_for_status()
-                geo = await resp.json()
+        # 1) Geocoding: Ortsname -> Koordinaten
+        async with session.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": city, "count": 1, "language": "de", "format": "json"},
+            timeout=timeout,
+        ) as resp:
+            resp.raise_for_status()
+            geo = await resp.json()
 
-            results = geo.get("results") or []
-            if not results:
-                return {"error": f"Ort '{city}' wurde nicht gefunden."}
-            loc = results[0]
-            lat = loc["latitude"]
-            lon = loc["longitude"]
-            ort = loc.get("name", city)
-            land = loc.get("country", "")
+        results = geo.get("results") or []
+        if not results:
+            return {"error": f"Ort '{city}' wurde nicht gefunden."}
+        loc = results[0]
+        lat = loc["latitude"]
+        lon = loc["longitude"]
+        ort = loc.get("name", city)
+        land = loc.get("country", "")
 
-            # 2) Vorhersage fuer diesen Punkt
-            async with session.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": lat,
-                    "longitude": lon,
-                    "current": (
-                        "temperature_2m,apparent_temperature,relative_humidity_2m,"
-                        "precipitation,weather_code,wind_speed_10m"
-                    ),
-                    "daily": (
-                        "temperature_2m_max,temperature_2m_min,"
-                        "precipitation_probability_max,weather_code"
-                    ),
-                    "timezone": "auto",
-                    "forecast_days": 1,
-                },
-            ) as resp:
-                resp.raise_for_status()
-                fc = await resp.json()
-    except (aiohttp.ClientError, OSError) as exc:
+        # 2) Vorhersage fuer diesen Punkt
+        async with session.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": (
+                    "temperature_2m,apparent_temperature,relative_humidity_2m,"
+                    "precipitation,weather_code,wind_speed_10m"
+                ),
+                "daily": (
+                    "temperature_2m_max,temperature_2m_min,"
+                    "precipitation_probability_max,weather_code"
+                ),
+                "timezone": "auto",
+                "forecast_days": 1,
+            },
+            timeout=timeout,
+        ) as resp:
+            resp.raise_for_status()
+            fc = await resp.json()
+    except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as exc:
         log.warning("Wetterabruf fehlgeschlagen: %s", exc)
         return {"error": "Wetterdienst gerade nicht erreichbar."}
 
@@ -530,3 +548,25 @@ async def see_image(user_message: str, image_url: str, *, author: str = "",
     except Exception:  # noqa: BLE001
         log.exception("Vision-Aufruf fehlgeschlagen")
         return "Das Bild konnte ich mir gerade nicht anschauen - versuch's gleich nochmal."
+
+
+async def see_image_raw(prompt: str, image_url: str, *, temperature: float = 0.3,
+                        max_tokens: int = 500) -> "str | None":
+    """Nuechterner Vision-Aufruf OHNE Persona/Verlauf - fuer strukturierte
+    Analysen (z. B. JSON). Gibt den rohen Text zurueck oder None bei Fehler."""
+    if _client is None:
+        return None
+    try:
+        response = await _client.chat.completions.create(
+            model=_vision_model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return (response.choices[0].message.content or "").strip() or None
+    except Exception:  # noqa: BLE001
+        log.exception("Vision-Raw-Aufruf fehlgeschlagen")
+        return None

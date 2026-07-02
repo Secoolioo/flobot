@@ -71,14 +71,15 @@ _INK = (13, 17, 23)
 
 # --- kleine Zeichen-Helfer ----------------------------------------------
 def _vgrad(w: int, h: int, top: tuple, bot: tuple) -> Image.Image:
-    """Vertikaler Farbverlauf (ohne numpy)."""
-    img = Image.new("RGB", (w, h), top)
-    d = ImageDraw.Draw(img)
+    """Vertikaler Farbverlauf (ohne numpy). Schnell: 1px-Spalte zeichnen und
+    auf volle Breite skalieren statt h einzelne Linien."""
+    col = Image.new("RGB", (1, h))
+    px = col.load()
+    span = max(1, h - 1)
     for y in range(h):
-        f = y / max(1, h - 1)
-        col = tuple(round(top[i] + (bot[i] - top[i]) * f) for i in range(3))
-        d.line([(0, y), (w, y)], fill=col)
-    return img
+        f = y / span
+        px[0, y] = tuple(round(top[i] + (bot[i] - top[i]) * f) for i in range(3))
+    return col.resize((w, h))
 
 
 def _pill(d: ImageDraw.ImageDraw, x: int, y: int, text: str, size: int,
@@ -874,4 +875,233 @@ def quote_card(avatar: "bytes | None", text: str, author: str) -> io.BytesIO:
     aw = d.textlength(aut, font=fa)
     d.text((tx0 + (tw - aw) / 2, y + 20), aut, font=fa, fill=(160, 162, 172))
 
+    return _png(img)
+
+
+# === Ernaehrungs-Karte ("Kalorien-Channel") ===============================
+def _round_img(data: bytes, w: int, h: int, radius: int = 0) -> "Image.Image | None":
+    """Bild-Bytes -> RGBA, auf w x h gefittet, optional mit runden Ecken."""
+    try:
+        im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (w, h),
+                          method=_RESAMPLE)
+    except Exception:  # noqa: BLE001
+        return None
+    out = im.convert("RGBA")
+    if radius > 0:
+        mask = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1],
+                                               radius=radius, fill=255)
+        out.putalpha(mask)
+    return out
+
+
+def _fnum(val) -> float:
+    """Robuste Zahl aus beliebigen (LLM-)Werten: 1200, "1200", "ca. 1200 kcal",
+    "8/10" -> erste Zahl; sonst 0. Schuetzt die Karte unabhaengig vom Aufrufer."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    import re as _re
+    m = _re.search(r"-?\d+(?:[.,]\d+)?", str(val or ""))
+    return float(m.group(0).replace(",", ".")) if m else 0.0
+
+
+def _score_color(score: float) -> tuple:
+    """0 (Industrie, rot) -> 10 (natuerlich, gruen), stufenlos."""
+    f = max(0.0, min(1.0, score / 10.0))
+    r1, g1, b1 = (231, 76, 60)     # rot
+    r2, g2, b2 = (46, 204, 113)    # gruen
+    return (round(r1 + (r2 - r1) * f), round(g1 + (g2 - g1) * f),
+            round(b1 + (b2 - b1) * f))
+
+
+def _hbar(d, x: int, y: int, w: int, h: int, frac: float, color,
+          track=(38, 42, 50)) -> None:
+    """Horizontaler Wert-Balken mit rundem Track."""
+    frac = max(0.0, min(1.0, frac))
+    r = h // 2
+    d.rounded_rectangle([x, y, x + w, y + h], radius=r, fill=track)
+    fw = int(round(w * frac))
+    if frac > 0 and fw < h:
+        fw = h
+    if fw > 0:
+        d.rounded_rectangle([x, y, x + fw, y + h], radius=r, fill=color)
+
+
+def nutrition_card(food_img: "bytes | None", data: dict) -> io.BytesIO:
+    """Ernaehrungs-Karte: links das Essensfoto, rechts Kalorien, Makros,
+    Natuerlichkeits-Score (gruen=natuerlich, rot=Industrie) und Fazit."""
+    W, H, PW = 1200, 640, 470
+    img = _vgrad(W, H, (24, 27, 35), (13, 15, 20)).convert("RGBA")
+    d = ImageDraw.Draw(img)
+
+    # --- Foto links (abgerundet), sonst Emoji-Platzhalter ---
+    photo = _round_img(food_img, PW - 40, H - 48, radius=22) if food_img else None
+    if photo is not None:
+        img.paste(photo, (24, 24), photo)
+    else:
+        d.rounded_rectangle([24, 24, PW - 16, H - 24], radius=22, fill=(30, 34, 44))
+        d.text((PW // 2 - 40, H // 2 - 60), "🍽", font=_font(96), fill=(90, 96, 110))
+
+    x0, x1 = PW + 24, W - 44
+    tw = x1 - x0
+
+    # --- Gerichtname (bis 2 Zeilen, automatisch verkleinert) ---
+    name = _clean_text(str(data.get("gericht") or "Unbekanntes Gericht"))[:80] or "Essen"
+    nf, nlines = _font(44), [name]
+    for size in (44, 38, 32, 27):
+        nf = _font(size)
+        nlines = _wrap(d, name, nf, tw)
+        if len(nlines) <= 2:
+            break
+    nlines = nlines[:2]
+    y = 34
+    for ln in nlines:
+        d.text((x0, y), ln, font=nf, fill=_WHITE)
+        y += nf.size + 8
+
+    # --- Kalorien gross ---
+    y += 10
+    kcal = int(_fnum(data.get("kcal")))
+    kmin, kmax = int(_fnum(data.get("kcal_min"))), int(_fnum(data.get("kcal_max")))
+    d.text((x0, y), f"{kcal}", font=_font(76), fill=_GOLD)
+    kw = d.textlength(f"{kcal}", font=_font(76))
+    d.text((x0 + kw + 14, y + 40), "kcal", font=_font(30), fill=(150, 155, 168))
+    if kmax > kmin > 0:
+        d.text((x0 + kw + 100, y + 46), f"(≈ {kmin}–{kmax})", font=_font(20),
+               fill=(120, 125, 138))
+    y += 100
+
+    # --- Makro-Balken ---
+    macros = [
+        ("EIWEISS", _fnum(data.get("protein_g")), (46, 204, 113)),
+        ("KOHLENHYDRATE", _fnum(data.get("carbs_g")), (87, 148, 242)),
+        ("FETT", _fnum(data.get("fett_g")), (255, 152, 48)),
+        ("ZUCKER", _fnum(data.get("zucker_g")), (240, 98, 146)),
+    ]
+    peak = max([m[1] for m in macros] + [1.0])
+    lf, vf = _font(17), _font(21)
+    for label, grams, col in macros:
+        d.text((x0, y), label, font=lf, fill=(140, 145, 158))
+        _hbar(d, x0 + 190, y + 3, tw - 300, 16, grams / peak, col)
+        d.text((x1 - 92, y - 1), f"{grams:g} g", font=vf, fill=_WHITE)
+        y += 38
+    y += 14
+
+    # --- Natuerlichkeits-Score ---
+    score = max(0.0, min(10.0, _fnum(data.get("natur_score"))))
+    scol = _score_color(score)
+    d.text((x0, y), "NATÜRLICHKEIT", font=lf, fill=(140, 145, 158))
+    d.text((x1 - 92, y - 3), f"{score:g}/10", font=_font(24), fill=scol)
+    _hbar(d, x0, y + 26, tw - 110, 20, score / 10.0, scol)
+    y += 62
+    verarbeitung = _clean_text(str(data.get("verarbeitung") or ""))[:60]
+    if verarbeitung:
+        d.text((x0, y), verarbeitung, font=_font(20), fill=scol)
+        y += 34
+
+    # --- Fazit-Pille + Flo-Spruch ---
+    if score >= 7:
+        pill_txt = "✓ GUT FÜR DEINEN KÖRPER"
+    elif score >= 4:
+        pill_txt = "~ GEHT SO – IN MASSEN"
+    else:
+        pill_txt = "✗ INDUSTRIE – LASS ES LIEBER"
+    _pill(d, x0, y + 4, pill_txt.replace("✓ ", "").replace("✗ ", "").replace("~ ", ""),
+          22, scol, (13, 15, 20))
+    y += 62
+    spruch = _clean_text(str(data.get("flo_spruch") or data.get("fazit") or ""))
+    if spruch:
+        sf = _font(19)
+        for ln in _wrap(d, f"„{spruch[:180]}“", sf, tw)[:3]:
+            d.text((x0, y), ln, font=sf, fill=(165, 170, 182))
+            y += 26
+
+    d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18,
+                        outline=(48, 53, 63), width=2)
+    return _png(img)
+
+
+# === Level-Karte (Rank-Card als Bild) =====================================
+def level_card(avatar: "bytes | None", *, name: str, level: int, into: int,
+               step: int, place: int, total: int, xp: int, coins: int,
+               msgs: int, voice_secs: int, streak: int, title: str = "",
+               accent: "tuple | None" = None) -> io.BytesIO:
+    """Rank-Card: Avatar mit Ring, Name, Titel, Level + Platz, XP-Balken und
+    Stat-Zeile (Coins, Nachrichten, Voice, Streak)."""
+    W, H = 1000, 320
+    acc = accent or (88, 101, 242)   # Blurple, ausser eine Titel-Farbe kommt mit
+    img = _vgrad(W, H, (26, 29, 38), (13, 15, 20)).convert("RGBA")
+    d = ImageDraw.Draw(img)
+
+    # --- Avatar links (rund, mit Akzent-Ring) ---
+    AD = 190
+    ax, ay = 42, (H - AD) // 2
+    circ = None
+    if avatar:
+        try:
+            im = ImageOps.fit(Image.open(io.BytesIO(avatar)).convert("RGB"),
+                              (AD, AD), method=_RESAMPLE)
+            mask = Image.new("L", (AD, AD), 0)
+            ImageDraw.Draw(mask).ellipse([0, 0, AD - 1, AD - 1], fill=255)
+            circ = im.convert("RGBA")
+            circ.putalpha(mask)
+        except Exception:  # noqa: BLE001
+            circ = None
+    if circ is not None:
+        img.paste(circ, (ax, ay), circ)
+    else:
+        d.ellipse([ax, ay, ax + AD, ay + AD], fill=(34, 38, 48))
+        ini = (name[:1] or "?").upper()
+        iw = d.textlength(ini, font=_font(84))
+        d.text((ax + AD / 2 - iw / 2, ay + AD / 2 - 52), ini, font=_font(84),
+               fill=(120, 126, 140))
+    d.ellipse([ax - 5, ay - 5, ax + AD + 4, ay + AD + 4], outline=acc, width=5)
+
+    x0, x1 = ax + AD + 46, W - 46
+    tw = x1 - x0
+
+    # --- Name + Titel-Pille ---
+    safe = _clean_text(name)[:32] or "Spieler"
+    nf = _font(46) if d.textlength(safe, font=_font(46)) <= tw - 220 else _font(34)
+    d.text((x0, 34), safe, font=nf, fill=_WHITE)
+    if title:
+        t = _clean_text(title)[:28]
+        if t:
+            tf = _font(19)
+            pw = int(d.textlength(t, font=tf) + 26)
+            px = x1 - pw
+            d.rounded_rectangle([px, 40, px + pw, 40 + 32], radius=16, fill=acc)
+            d.text((px + 13, 45), t, font=tf, fill=(13, 15, 20))
+
+    # --- Level + Platz (keine Emojis - die Schrift hat keine Emoji-Glyphen) ---
+    d.text((x0, 96), f"Level {level}", font=_font(34), fill=_GOLD)
+    lw = d.textlength(f"Level {level}", font=_font(34))
+    d.text((x0 + lw + 26, 104), f"Platz #{place} von {total}", font=_font(22),
+           fill=(150, 155, 168))
+
+    # --- XP-Balken ---
+    pct = 1.0 if step <= 0 else max(0.0, min(1.0, into / step))
+    _hbar(d, x0, 156, tw, 26, pct, acc)
+    d.text((x0, 192), f"{into} / {step} XP bis Level {level + 1}",
+           font=_font(19), fill=(150, 155, 168))
+    ptxt = f"{round(pct * 100)}%"
+    d.text((x1 - d.textlength(ptxt, font=_font(19)), 192), ptxt,
+           font=_font(19), fill=(150, 155, 168))
+
+    # --- Stat-Zeile (Label ueber Wert; Text statt Emoji - kein Tofu) ---
+    h, rem = divmod(int(voice_secs), 3600)
+    m = rem // 60
+    vtxt = f"{h}h {m}m" if h else f"{m}m"
+    stats = [("COINS", f"{coins:,}".replace(",", ".")),
+             ("NACHRICHTEN", f"{msgs:,}".replace(",", ".")),
+             ("VOICE", vtxt),
+             ("STREAK", f"{streak} Tag(e)")]
+    lf2, vf2 = _font(15), _font(23)
+    seg = tw // len(stats)
+    for i, (label, val) in enumerate(stats):
+        sx = x0 + i * seg
+        d.text((sx, 232), label, font=lf2, fill=(120, 126, 140))
+        d.text((sx, 254), val, font=vf2, fill=(200, 205, 218))
+
+    d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18, outline=(48, 53, 63), width=2)
     return _png(img)

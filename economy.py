@@ -592,7 +592,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | discord.Fil
     target = message.mentions[0] if message.mentions else message.author
 
     if first in ("level", "lvl", "rank", "rang"):
-        return _card(target)
+        return await _card_image(target)
     if first in ("coins", "konto", "kontostand", "münzen", "muenzen", "balance", "bal"):
         c = get_coins(target.id)
         wer = "Du hast" if target.id == message.author.id else f"{target.display_name} hat"
@@ -617,6 +617,48 @@ async def handle(message: discord.Message) -> "str | discord.Embed | discord.Fil
     return None
 
 
+def _rarity_accent(prof: dict) -> "tuple | None":
+    """RGB-Akzentfarbe der Titel-Seltenheit (fuer die Level-Karte)."""
+    rar = prof.get("title_rarity") or ""
+    hexcol = titles.RARITY.get(rar, {}).get("color")
+    if not hexcol:
+        return None
+    return ((hexcol >> 16) & 255, (hexcol >> 8) & 255, hexcol & 255)
+
+
+async def _card_image(member: discord.abc.User) -> "discord.File | discord.Embed":
+    """Level-/Rank-Karte als gerendertes Bild; faellt bei Problemen aufs
+    bewaehrte Embed zurueck (niemals ein Crash)."""
+    prof = _profile(member.id)
+    level, into, step = _level_for_xp(prof["xp"])
+    place, total = _rank_of(member.id)
+    avatar = None
+    try:
+        avatar = await asyncio.wait_for(
+            member.display_avatar.with_size(256).read(), timeout=6)
+    except Exception:  # noqa: BLE001 - Avatar ist nur Deko
+        pass
+    try:
+        buf = render.level_card(
+            avatar,
+            name=getattr(member, "display_name", "") or "Spieler",
+            level=level, into=into, step=step, place=place, total=total,
+            xp=prof["xp"], coins=prof["coins"], msgs=prof.get("msgs", 0),
+            voice_secs=prof.get("voice_secs", 0), streak=prof.get("streak", 0),
+            title=_clean_title_text(prof.get("title") or ""),
+            accent=_rarity_accent(prof),
+        )
+        return discord.File(buf, filename="flo_level.png")
+    except Exception:  # noqa: BLE001
+        log.exception("Level-Karte fehlgeschlagen - nutze Embed")
+        return _card(member)
+
+
+def _clean_title_text(title: str) -> str:
+    """Titel ohne fuehrendes Emoji (das kann die Karte nicht zeichnen)."""
+    return re.sub(r"^\W+", "", title or "").strip()
+
+
 def _card(member: discord.abc.User) -> discord.Embed:
     prof = _profile(member.id)
     level, into, step = _level_for_xp(prof["xp"])
@@ -628,11 +670,11 @@ def _card(member: discord.abc.User) -> discord.Embed:
         description=f"`{_bar(into, step)}`  **{pct}%**\n{into} / {step} XP bis Level {level + 1}",
         color=discord.Color.blurple(),
     )
-    emb.set_author(name=member.display_name, icon_url=member.display_avatar.url)
     try:
+        emb.set_author(name=member.display_name, icon_url=member.display_avatar.url)
         emb.set_thumbnail(url=member.display_avatar.url)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - Avatar ist nur Deko, Fallback darf nie crashen
+        emb.set_author(name=str(getattr(member, "display_name", "Spieler")))
     emb.add_field(name="Gesamt-XP", value=f"✨ {prof['xp']}", inline=True)
     emb.add_field(name=COIN, value=f"💰 {prof['coins']}", inline=True)
     emb.add_field(name="Platz", value=f"🏅 #{place} / {total}", inline=True)

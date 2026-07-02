@@ -1041,6 +1041,8 @@ def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "",
         foot.append(f"🎚️ Tempo {speed:g}× aktiv")
     if foot:
         e.set_footer(text="  ·  ".join(foot))
+    else:
+        e.set_footer(text="🎚️ Tempo & Effekte: Menü unter den Buttons")
     if track.thumbnail:
         e.set_thumbnail(url=track.thumbnail)
     return e
