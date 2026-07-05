@@ -22,7 +22,9 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 import ai
+import bayern
 import casino
+import cmdnorm
 import economy
 import fun
 import food
@@ -107,6 +109,8 @@ FUN_ENABLED = fun.setup()
 MEDIA_ENABLED = media.setup()
 # Kalorien-Analyse: Essensfotos im Kalorien-Channel automatisch analysieren.
 FOOD_ENABLED = food.setup()
+# Bayrisch/Oesterreichisch: Dialekt-Begruessungen + KI-Dialekt-Toggle.
+BAYERN_ENABLED = bayern.setup() if AI_ENABLED else False
 VOICE_GAGS_ENABLED = voicegags.setup()
 # Casino (Blackjack, Crash, Keno, Roulette) - spielt mit den Flo Coins aus economy.
 # Faellt aus, wenn economy aus ist (dort liegt der Coin-Topf).
@@ -373,6 +377,7 @@ def _help_detail_embed(key: str) -> discord.Embed:
                    f"`{name} join` · `{name} leave`"), inline=False)
         emb.add_field(name="Steuerung",
             value=(f"`{name} skip` · `{name} pause` · `{name} weiter` · `{name} stop`\n"
+                   f"`{name} nochmal` – letzten Song wieder · `{name} nochmal 2` – den davor\n"
                    "… oder einfach die **Buttons** unter dem laufenden Lied. 😉"), inline=False)
         emb.add_field(name="Warteschlange",
             value=(f"`{name} queue` · `{name} lautstärke 50`\n"
@@ -482,6 +487,12 @@ def _help_detail_embed(key: str) -> discord.Embed:
             value=(f"Stell mir einfach eine Frage:\n`{name} wie wird das Wetter?`\n"
                    "Ich folge dem Gespräch und schaue mir auch **Bilder** an. 😉"),
             inline=False)
+        if BAYERN_ENABLED:
+            emb.add_field(name="Boarisch 🥨",
+                value=(f"`{name} bayrisch an` – ab dann red i im Dialekt mit dir.\n"
+                       f"`{name} bayrisch aus` zum Zurückschalten. Vertippen? Halb so wild – "
+                       "ich erkenne Befehle auch mit **einem Buchstaben Fehler**."),
+                inline=False)
         return emb
     return _help_overview_embed()
 
@@ -947,11 +958,23 @@ async def on_message(message: discord.Message) -> None:
             log.exception("Hilfe konnte nicht gesendet werden")
         return
 
+    # Befehls-Normalisierung: erstes Wort auf Tippfehler/Dialekt korrigieren, damit
+    # ALLE Befehle tolerant reagieren. message.content wird nur fuer den Befehls-
+    # durchlauf angepasst und danach wiederhergestellt (die KI bekommt das Original).
+    _orig_content = message.content
+    try:
+        _norm = cmdnorm.normalize(ai.strip_lead(content))
+    except Exception:  # noqa: BLE001
+        _norm = None
+    if _norm is not None:
+        message.content = f"{ai.bot_name()} {_norm}"
+
     # Befehls-Handler der Reihe nach durchgehen. Jeder gibt entweder eine Antwort
     # (Text ODER Embed = Befehl erkannt, fertig) oder None (= naechster ist dran).
     antwort: "str | discord.Embed | discord.File | None" = None
     async with message.channel.typing():
         for enabled, handler in (
+            (BAYERN_ENABLED, bayern.handle),
             (MOD_ENABLED, moderation.handle),
             (MUSIC_ENABLED, music.handle),
             (VOICE_GAGS_ENABLED, voicegags.handle),
@@ -973,6 +996,10 @@ async def on_message(message: discord.Message) -> None:
                 antwort = "Da ist gerade etwas schiefgelaufen."
             if antwort is not None:
                 break
+
+    # Originaltext wiederherstellen: die KI (und alles Weitere) sieht wieder
+    # exakt, was der Nutzer geschrieben hat - egal ob korrigiert wurde.
+    message.content = _orig_content
 
     if antwort is not None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
@@ -999,19 +1026,23 @@ async def on_message(message: discord.Message) -> None:
     # Bild dabei (Anhang oder in der beantworteten Nachricht)? -> Flo schaut es sich
     # an (Vision), statt nur den Text zu lesen.
     image_url = _first_image_url(message)
-    log.info("KI-Frage von %s%s: %s", message.author.display_name,
-             " [+Bild]" if image_url else "", content[:150])
+    # Dialekt-Modus in diesem Server aktiv? -> Flo antwortet boarisch.
+    bavarian = BAYERN_ENABLED and bayern.is_on(message.guild.id)
+    log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
+             " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
+             content[:150])
     async with message.channel.typing():
         try:
             if image_url:
                 antwort = await ai.see_image(
                     content, image_url, author=message.author.display_name,
                     title=title, tone=tone, channel_id=message.channel.id,
+                    bavarian=bavarian,
                 )
             else:
                 antwort = await ai.ask_flo(
                     content, author=message.author.display_name, title=title, tone=tone,
-                    channel_id=message.channel.id,
+                    channel_id=message.channel.id, bavarian=bavarian,
                 )
         except Exception:
             log.exception("KI-Antwort fehlgeschlagen")

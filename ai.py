@@ -235,7 +235,8 @@ _GUARDRAIL = (
 )
 
 
-def _system_prompt(author: str = "", title: str = "", tone: str = "") -> str:
+def _system_prompt(author: str = "", title: str = "", tone: str = "",
+                   bavarian: bool = False) -> str:
     persona = os.getenv("BOT_PERSONA", "").strip() or _DEFAULT_PERSONA.format(name=_bot_name)
     base = f"{persona} {_HARD_RULES.format(city=_default_city)} {_GUARDRAIL}"
     # Kurzzeit-Gedaechtnis: die letzten Chat-Nachrichten kommen als Kontext mit.
@@ -254,6 +255,12 @@ def _system_prompt(author: str = "", title: str = "", tone: str = "") -> str:
     # Tonfall nach Seltenheit des Titels: je seltener, desto entspannter spricht Flo.
     if tone:
         base += f" {tone.strip()}"
+    if bavarian:
+        try:
+            import bayern
+            base += bayern.DIALECT_PROMPT
+        except Exception:  # noqa: BLE001
+            pass
     return base
 
 
@@ -444,7 +451,8 @@ def _recent(channel_id: "int | None", skip_content: str = "") -> list[dict]:
 
 
 async def ask_flo(user_message: str, *, author: str = "", title: str = "",
-                  tone: str = "", channel_id: "int | None" = None) -> str:
+                  tone: str = "", channel_id: "int | None" = None,
+                  bavarian: bool = False) -> str:
     """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
     Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
@@ -461,7 +469,7 @@ async def ask_flo(user_message: str, *, author: str = "", title: str = "",
 
     history = _recent(channel_id, skip_content=user_message.strip())
     messages: list[dict] = [
-        {"role": "system", "content": _system_prompt(author, title, tone)},
+        {"role": "system", "content": _system_prompt(author, title, tone, bavarian)},
         *history,
         {"role": "user", "content": text},
     ]
@@ -518,7 +526,7 @@ async def ask_flo(user_message: str, *, author: str = "", title: str = "",
 
 async def see_image(user_message: str, image_url: str, *, author: str = "",
                     title: str = "", tone: str = "",
-                    channel_id: "int | None" = None) -> str:
+                    channel_id: "int | None" = None, bavarian: bool = False) -> str:
     """Schaut sich ein Bild an (Vision-Modell) und antwortet in Flos Persoenlichkeit.
     image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL."""
     if _client is None:
@@ -529,7 +537,7 @@ async def see_image(user_message: str, image_url: str, *, author: str = "",
         text = f"{author} schreibt: {text}"
     history = _recent(channel_id, skip_content=(user_message or "").strip())
     messages: list[dict] = [
-        {"role": "system", "content": _system_prompt(author, title, tone)},
+        {"role": "system", "content": _system_prompt(author, title, tone, bavarian)},
         *history,
         {"role": "user", "content": [
             {"type": "text", "text": text},

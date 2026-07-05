@@ -205,6 +205,13 @@ _CONTROL = [
 # (spiel/spiele/play), damit Fragen wie "spielst du..." NICHT als Befehl gelten.
 _PLAY_TEXT_RE = re.compile(r"^(?:spiele?|play)\s+(?:mal\s+)?(.+)", re.I)
 
+# "flo nochmal", "flo spiel nochmal 2", "flo repeat 3", "flo wiederhole" ->
+# den zuletzt (bzw. N-t-letzten) gespielten Song noch einmal spielen.
+_REPLAY_RE = re.compile(
+    r"^(?:spiel(?:e|st)?\s+)?"
+    r"(?:nochmal(?:s)?|noch\s*mal|repeat|replay|wiederhol(?:e|en|st)?)"
+    r"\s*(\d+)?\b", re.I)
+
 # Lautstaerke - tolerant: "flo lautstärke 30", "flo ls 80", "flo LS", "flo vol 50",
 # "flo lautstärke auf 30" sowie gaengige Tippfehler. Ohne Zahl -> aktuelle anzeigen.
 _VOLUME_UP_RE = re.compile(r"^(?:lauter|louder|lautr)\b", re.I)
@@ -291,6 +298,7 @@ class GuildPlayer:
     """Haelt Voice-Verbindung und Warteschlange fuer EINEN Server."""
     loop: asyncio.AbstractEventLoop
     queue: list[Track] = field(default_factory=list)
+    history: list[Track] = field(default_factory=list)  # zuletzt gespielt (fuer 'nochmal')
     voice: discord.VoiceClient | None = None
     current: Track | None = None
     text_channel: discord.abc.Messageable | None = None
@@ -382,6 +390,11 @@ class GuildPlayer:
             discord.PCMVolumeTransformer(source, self.volume),
             after=lambda err, g=gen: self._after(err, g),
         )
+        if not keep_speed:
+            # Jeden NEU gestarteten Song in den Verlauf legen (fuer 'flo nochmal').
+            # Effekt-/Tempo-Neustarts (keep_speed) zaehlen nicht als neuer Song.
+            self.history.append(track)
+            del self.history[:-30]   # nur die letzten 30 behalten
 
     def position(self) -> float:
         """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
@@ -928,6 +941,12 @@ def parse_command(text: str) -> tuple[str, str] | None:
     if not cleaned:
         return None
 
+    # 2a) Wiederholen? (vor der Freitext-Suche, sonst wuerde "spiel nochmal"
+    #     als Suche nach "nochmal" gedeutet.)
+    rm = _REPLAY_RE.match(cleaned)
+    if rm:
+        return ("replay", rm.group(1) or "1")
+
     # 2) Steuerbefehl am Satzanfang?
     for action, pattern in _CONTROL:
         if pattern.match(cleaned):
@@ -1378,6 +1397,25 @@ async def handle(message: discord.Message) -> "str | discord.Embed | object | No
     action, arg = cmd
     player = _player_for(message.guild.id)
     player.text_channel = message.channel
+
+    # --- Wiederholen: den (N-t-)letzten Song aus dem Verlauf erneut spielen ---
+    if action == "replay":
+        try:
+            idx = max(1, int(arg))
+        except (TypeError, ValueError):
+            idx = 1
+        if idx > len(player.history):
+            if not player.history:
+                return _embed("Ich hab noch keinen Song im Verlauf. Spiel erst was! 🎵",
+                              color=_COL_ERR)
+            return _embed(f"So weit reicht mein Verlauf nicht – ich kenne die letzten "
+                          f"**{len(player.history)}** Songs.", color=_COL_ERR)
+        want = player.history[-idx]
+        again = want.webpage_url or want.query or want.title
+        if not again:
+            return _embed("Diesen Song kann ich leider nicht nochmal laden.", color=_COL_ERR)
+        # Wie ein normaler Play-Befehl weiterbehandeln.
+        action, arg = "play", again
 
     # --- Steuerbefehle, die keine Voice-Verbindung voraussetzen ---
     if action == "volume":
