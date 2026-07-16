@@ -47,6 +47,12 @@ KNOWN: set[str] = {
     "blackjack", "karte", "ziehen", "zieh", "stand", "stehen", "bleiben",
     "bleib", "genug", "fertig", "double", "doppeln", "verdoppeln", "crash",
     "absturz", "rakete", "rocket", "keno", "roulette", "kessel",
+    "mines", "minen", "minesweeper", "bomben", "cashout", "auszahlen",
+    "glücksrad", "gluecksrad", "wheel", "rubbellos", "rubbel",
+    "scratch", "duell", "duel", "stats", "statistik", "statistiken", "bilanz",
+    # words (Wort-Zaehler)
+    "wörter", "woerter", "wort", "worte", "wortzähler", "wortzaehler",
+    "words", "word", "wordcount",
     # fun
     "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
     "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",
@@ -88,6 +94,10 @@ STOPWORDS: set[str] = {
     "halts", "warnt", "warnst", "ratet", "ratest", "kickt", "kickst", "rollt",
     "rollst", "pausen", "pausier", "stopp", "stops", "spielt", "spielst",
     "leiser", "leise", "banne", "banns", "kalte", "kalter", "bilde", "bilder",
+    # 1 Buchstabe von 'worte'/'wort' entfernt - normale Woerter in Ruhe lassen:
+    "orte", "ort", "worten", "wert", "werte",
+    # 1 Tippfehler von 'minen'/'bomben' - Alltagswoerter nicht kapern:
+    "meinen", "mienen", "bombe",
 }
 # Echte Befehle nie als Stopword blocken:
 STOPWORDS -= KNOWN

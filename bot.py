@@ -34,6 +34,7 @@ import moderation
 import music
 import schedule_logic
 import voicegags
+import words
 
 load_dotenv()
 
@@ -118,6 +119,9 @@ CASINO_ENABLED = casino.setup()
 # Moderation (Nachrichten loeschen / Purge). Faellt nie technisch aus - das noetige
 # Recht 'Nachrichten verwalten' wird erst beim Befehl pro Nutzer/Bot geprueft.
 MOD_ENABLED = moderation.setup()
+# Wort-Zaehler ('Flo woerter <wort>'): zaehlt passiv jedes Wort auf dem Server,
+# beim ersten Start liest ein Backfill die komplette History ein.
+WORDS_ENABLED = words.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -147,7 +151,8 @@ WEISHEITEN = [
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
-     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED]
+     VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
+     WORDS_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -251,6 +256,12 @@ async def _restart_bot() -> None:
     systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
     schliessen, damit ffmpeg-Subprozesse nicht verwaisen."""
     await asyncio.sleep(0.4)  # der Interaktions-Antwort Zeit zum Rausgehen geben
+    # Wort-Zaehler speichert debounced - vor dem Neustart einmal hart sichern.
+    if WORDS_ENABLED:
+        try:
+            await words.flush_now()
+        except Exception:
+            log.exception("Wort-Zaehler-Flush vor Neustart fehlgeschlagen")
     try:
         await client.close()
     except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
@@ -325,6 +336,7 @@ def _help_categories() -> "list[tuple[str, str, str]]":
         ("spiele", "🎮", "Spiele", GAMES_ENABLED),
         ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
         ("casino", "🎰", "Casino", CASINO_ENABLED),
+        ("wörter", "📊", "Wörter", WORDS_ENABLED),
         ("chaos", "😈", "Chaos", FUN_ENABLED),
         ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
         ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
@@ -416,15 +428,36 @@ def _help_detail_embed(key: str) -> discord.Embed:
         return emb
     if key == "casino":
         emb = discord.Embed(title="🎰 Casino",
-                            description="Setz deine Flo Coins – mit Köpfchen. 😏",
+                            description="Setz deine Flo Coins – mit Köpfchen. 😏\n"
+                                        "Alle Spiele mit **Animationen** & Buttons.",
                             color=0xE91E63)
         emb.add_field(name="Übersicht", value=f"`{name} casino`", inline=False)
         emb.add_field(name="Blackjack",
             value=(f"`{name} blackjack 50` – danach per **Button** "
                    "`Karte` / `Stand` / `Double`."), inline=False)
+        emb.add_field(name="Mines 💣",
+            value=(f"`{name} mines 50` – Diamanten aufdecken, per **Cashout** "
+                   "raus, bevor's knallt. Mehr Bomben = fettere Faktoren."),
+            inline=False)
         emb.add_field(name="Weitere Spiele",
             value=(f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · "
-                   f"`{name} roulette 50 rot`"), inline=False)
+                   f"`{name} roulette 50 rot`\n"
+                   f"`{name} rad 50` (Glücksrad) · `{name} rubbellos 50`"),
+            inline=False)
+        emb.add_field(name="Duell & Bilanz",
+            value=(f"`{name} duell @wer 50` – Münz-Duell, Gewinner nimmt alles.\n"
+                   f"`{name} stats` – deine Casino-Bilanz als Karte."), inline=False)
+        return emb
+    if key == "wörter":
+        emb = discord.Embed(title="📊 Wörter",
+                            description="Flo zählt jedes Wort auf dem Server mit – "
+                                        "inklusive der kompletten Vergangenheit.",
+                            color=0x5794F2)
+        emb.add_field(name="Abfragen",
+            value=(f"`{name} wörter pizza` – wie oft wurde **pizza** schon gesagt "
+                   "(+ Rang & Top-Sager)."), inline=False)
+        emb.add_field(name="Top-Liste",
+            value=f"`{name} wörter` – die meistgesagten Wörter als Bild.", inline=False)
         return emb
     if key == "chaos":
         emb = discord.Embed(title="😈 Chaos",
@@ -900,6 +933,12 @@ async def on_message(message: discord.Message) -> None:
     # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
     if ECONOMY_ENABLED:
         _spawn(economy.on_message(message))
+    # Wort-Zaehler: synchron und billig (reine dict-Arbeit, Speichern debounced).
+    if WORDS_ENABLED:
+        try:
+            words.note_message(message)
+        except Exception:
+            log.exception("Wort-Zaehler-Hook fehlgeschlagen")
     # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
     if FOOD_ENABLED:
         _spawn(food.on_message_passive(message))
@@ -980,6 +1019,7 @@ async def on_message(message: discord.Message) -> None:
             (VOICE_GAGS_ENABLED, voicegags.handle),
             (GAMES_ENABLED, games.handle),
             (CASINO_ENABLED, casino.handle),
+            (WORDS_ENABLED, words.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FOOD_ENABLED, food.handle),
             (MEDIA_ENABLED, media.handle),
@@ -1005,7 +1045,7 @@ async def on_message(message: discord.Message) -> None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
                 or antwort is casino.HANDLED or antwort is games.HANDLED
                 or antwort is economy.HANDLED or antwort is media.HANDLED
-                or antwort is food.HANDLED):
+                or antwort is food.HANDLED or antwort is words.HANDLED):
             return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1118,6 +1158,12 @@ async def on_ready() -> None:
         event_loop.start()
     if AUTODELETE_CHANNEL_IDS and not autodelete_sweep_loop.is_running():
         autodelete_sweep_loop.start()
+    # Wort-Zaehler: einmaliger History-Backfill (neustart-sicher, laeuft im
+    # Hintergrund weiter; is_scanning() ist False, sobald alles eingelesen ist).
+    if WORDS_ENABLED and words.is_scanning():
+        guild = client.get_guild(GUILD_ID)
+        if guild is not None:
+            _spawn(words.backfill(guild))
     if ECONOMY_ENABLED and not shop_refresh_loop.is_running():
         # Beim Start einmal sicherstellen, dass der Shop fuer HEUTE gewuerfelt ist
         # (falls der Bot ueber den 2-Uhr-Termin hinweg offline war), dann den

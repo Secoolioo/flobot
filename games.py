@@ -25,6 +25,7 @@ import time
 import discord
 
 import ai
+import casino
 import economy
 import render
 from store import JsonStore
@@ -205,11 +206,22 @@ async def _ssp(message: discord.Message, args: list[str]) -> str:
     return f"{ub} vs {bb} — **Ich gewinne!** 😎"
 
 
+# --- Render-Helfer: Animation in Thread, Standbild als Fallback ------------
+async def _anim(anim_fn, static_fn, *args, **kwargs) -> tuple:
+    """Rendert ein Spielergebnis als GIF in einem Thread (Event-Loop bleibt
+    frei); faellt die Animation aus, kommt das Standbild. (BytesIO, endung)."""
+    try:
+        return await asyncio.to_thread(anim_fn, *args, **kwargs), "gif"
+    except Exception:
+        log.exception("Animation fehlgeschlagen - nutze Standbild")
+        return await asyncio.to_thread(static_fn, *args, **kwargs), "png"
+
+
 # --- Coinflip ------------------------------------------------------------
 async def _flip_result(uid: int, bet: int, tip: "str | None"):
     """Wirft die Muenze, verrechnet (bei Einsatz + Tipp) Coins und baut Embed +
-    Bild. tip: 'kopf'/'zahl' oder None (freier Wurf). Gibt (embed, buffer, name)
-    zurueck – wird vom Text-Befehl UND vom Button-Menue genutzt."""
+    animiertes Bild. tip: 'kopf'/'zahl' oder None (freier Wurf). Gibt
+    (embed, buffer, name) zurueck – Text-Befehl UND Button-Menue nutzen das."""
     ergebnis = random.choice(["kopf", "zahl"])
     note, color = "", discord.Color.blurple()
     spielt_um_coins = bet > 0 and economy.is_enabled() and tip in ("kopf", "zahl")
@@ -217,10 +229,12 @@ async def _flip_result(uid: int, bet: int, tip: "str | None"):
         if tip == ergebnis:
             economy.add_coins(uid, bet)
             await economy.flush()
+            await casino.record(uid, "coinflip", bet, bet * 2)
             note, color = f"Gewonnen! **+{bet}** Flo Coins 🎉", discord.Color.green()
         else:
             economy.add_coins(uid, -bet)
             await economy.flush()
+            await casino.record(uid, "coinflip", bet, 0)
             note, color = f"Verloren! **-{bet}** Flo Coins 😬", discord.Color.red()
     emb = discord.Embed(
         title="🪙 Münzwurf",
@@ -228,8 +242,9 @@ async def _flip_result(uid: int, bet: int, tip: "str | None"):
         color=color)
     if spielt_um_coins:
         emb.set_footer(text=f"Konto: {economy.get_coins(uid)} Flo Coins")
-    fn = f"coin_{uid}_{random.randint(1000, 9999)}.png"
-    return emb, render.coin_flip(ergebnis), fn
+    buf, ext = await _anim(render.coin_flip_anim, render.coin_flip, ergebnis)
+    fn = f"coin_{uid}_{random.randint(1000, 9999)}.{ext}"
+    return emb, buf, fn
 
 
 async def _coinflip(message: discord.Message, args: list[str]) -> object:
@@ -276,6 +291,7 @@ async def _spin_slot(uid: int, bet: int):
     if use_coins:
         economy.add_coins(uid, win - bet)
         await economy.flush()
+        await casino.record(uid, "slots", bet, win)
     elif win and economy.is_enabled():
         economy.add_coins(uid, win)
         await economy.flush()
@@ -293,8 +309,10 @@ async def _spin_slot(uid: int, bet: int):
                             f"Konto: {economy.get_coins(uid)}")
     elif win and economy.is_enabled():
         emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {economy.get_coins(uid)}")
-    fn = f"slot_{uid}_{random.randint(1000, 9999)}.png"
-    return emb, render.slot_machine(keys, win=win, jackpot=jackpot), fn
+    buf, ext = await _anim(render.slot_machine_anim, render.slot_machine,
+                           keys, win=win, jackpot=jackpot)
+    fn = f"slot_{uid}_{random.randint(1000, 9999)}.{ext}"
+    return emb, buf, fn
 
 
 async def _slot(message: discord.Message, args: list[str]) -> object:
@@ -325,7 +343,8 @@ async def _dice(message: discord.Message, args: list[str]) -> object:
         desc = f"{count}×W{sides}:  {' + '.join(map(str, rolls))}  =  **{sum(rolls)}**"
     emb = discord.Embed(title="🎲 Würfel", description=desc, color=discord.Color.blurple())
     fn = f"dice_{message.author.id}_{random.randint(1000, 9999)}.png"
-    return await _send_image(message, emb, render.dice_roll(rolls, sides), fn)
+    buf = await asyncio.to_thread(render.dice_roll, rolls, sides)
+    return await _send_image(message, emb, buf, fn)
 
 
 def _extract_int(args: list[str]) -> int | None:
@@ -524,7 +543,15 @@ async def _start_quiz(message: discord.Message) -> object:
         frage, antwort = random.choice(_QUIZ_BANK)
 
     tok = _new_token(cid)
-    msg = await _say(message, f"🧠 **Quiz!** (du hast {QUIZ_TIMEOUT}s)\n{frage}")
+    emb = discord.Embed(title="🧠 Quiz", description=f"**{frage}**",
+                        color=discord.Color.blurple())
+    emb.set_footer(text=f"{QUIZ_TIMEOUT}s Zeit · Antwort einfach in den Chat · "
+                        f"+{QUIZ_REWARD} Flo Coins")
+    try:
+        msg = await message.reply(embed=emb, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Quiz-Frage konnte nicht gesendet werden")
+        msg = None
     _quiz[cid] = {"answer": antwort, "frage": frage,
                   "expires": time.monotonic() + QUIZ_TIMEOUT, "token": tok, "msg": msg}
     _protect(msg)   # laeuft -> nicht vom Auto-Loeschen wegraeumen lassen
@@ -603,8 +630,17 @@ async def _start_guess(message: discord.Message) -> object:
         return "Hier läuft schon eine Raterunde - rate weiter! 🔢"
     number = random.randint(1, 100)
     tok = _new_token(cid)
-    msg = await _say(message, "🔢 Ich denke an eine Zahl zwischen **1 und 100**. "
-                              "Schreib deine Tipps einfach in den Chat!")
+    emb = discord.Embed(
+        title="🔢 Zahlenraten",
+        description="Ich denke an eine Zahl zwischen **1 und 100** – "
+                    "schreib deine Tipps einfach in den Chat!",
+        color=discord.Color.blurple())
+    emb.set_footer(text=f"{GUESS_TIMEOUT}s Zeit · je weniger Versuche, desto mehr Coins")
+    try:
+        msg = await message.reply(embed=emb, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Zahlenraten konnte nicht gestartet werden")
+        msg = None
     _guess[cid] = {"number": number, "tries": 0,
                    "expires": time.monotonic() + GUESS_TIMEOUT, "token": tok, "msg": msg}
     _protect(msg)   # laeuft (bis zu 90s) -> nicht wegraeumen lassen
@@ -692,13 +728,16 @@ async def _check_counting(message: discord.Message) -> bool:
             pass
         if economy.is_enabled():
             await economy.add_xp(message.author, 5)
+            await economy.flush()   # add_xp speichert selbst nicht
         return True
-    # Falsch oder zweimal hintereinander -> Reset.
+    # Falsch oder zweimal hintereinander -> Reset. Grund VOR dem Reset ermitteln
+    # (danach ist state['last'] geleert und die Meldung waere immer 'erwartet war N').
+    grund = ("du warst zweimal hintereinander dran"
+             if (num == expected and state.get("last") == str(message.author.id))
+             else f"erwartet war {expected}")
     state["count"] = 0
     state["last"] = ""
     await _store.save()
-    grund = ("du warst zweimal hintereinander dran"
-             if state.get("last") == str(message.author.id) else f"erwartet war {expected}")
     try:
         await message.add_reaction("❌")
         await message.channel.send(

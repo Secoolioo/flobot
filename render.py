@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import math
+import random
 import unicodedata
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
@@ -592,6 +593,11 @@ def _legend(d: ImageDraw.ImageDraw, x: int, y: int, col: tuple, text: str) -> in
 
 def keno_grid(picks: list, draw: list, hits: list) -> io.BytesIO:
     """Zahlenraster 1-40: Treffer (gold), eigener Tipp (blau), gezogen (grau)."""
+    return _png(_keno_img(picks, draw, hits))
+
+
+def _keno_img(picks: list, draw: list, hits: list) -> Image.Image:
+    """Zeichnet das Keno-Raster als Image (fuer PNG und GIF-Frames)."""
     cols, rows = 8, 5
     cell, gap, pad, top = 58, 10, 28, 60
     W = pad * 2 + cols * cell + (cols - 1) * gap
@@ -624,7 +630,7 @@ def keno_grid(picks: list, draw: list, hits: list) -> io.BytesIO:
     lx += _legend(d, lx, ly, (241, 196, 15), f"Treffer {len(hits)}")
     lx += _legend(d, lx, ly, (41, 55, 90), "dein Tipp")
     _legend(d, lx, ly, (66, 70, 88), "gezogen")
-    return _png(img)
+    return img
 
 
 # --- Shop-Banner (v1.2) --------------------------------------------------
@@ -1104,4 +1110,495 @@ def level_card(avatar: "bytes | None", *, name: str, level: int, into: int,
         d.text((sx, 254), val, font=vf2, fill=(200, 205, 218))
 
     d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18, outline=(48, 53, 63), width=2)
+    return _png(img)
+
+
+# === Animationen (GIF) ====================================================
+# Alle *_anim-Funktionen liefern ein animiertes GIF als io.BytesIO. Sie sind
+# CPU-gebunden (Pillow) - die Aufrufer starten sie deshalb via
+# asyncio.to_thread, damit der Event-Loop nie blockiert. Frame-Anzahl und
+# Groessen sind bewusst klein gehalten (Discord spielt GIFs im Embed ab).
+def _gif(frames: list, durations, *, colors: int = 192) -> io.BytesIO:
+    """Frames (RGB/RGBA-Images) -> animiertes GIF. Die Palette kommt vom
+    letzten Frame (dem Endbild) - eine gemeinsame Palette ist schnell und
+    verhindert Farb-Flackern zwischen den Frames."""
+    pal = frames[-1].convert("RGB").convert("P", palette=Image.ADAPTIVE, colors=colors)
+    quant = [f.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE)
+             for f in frames]
+    if isinstance(durations, int):
+        durations = [durations] * len(quant)
+    buf = io.BytesIO()
+    quant[0].save(buf, format="GIF", save_all=True, append_images=quant[1:],
+                  duration=durations, loop=0, optimize=False)
+    buf.seek(0)
+    return buf
+
+
+def _ease_out(t: float) -> float:
+    """Kubisches Aus-Bremsen: schnell starten, weich zum Stillstand."""
+    return 1.0 - (1.0 - t) ** 3
+
+
+# --- Muenzwurf (animiert) --------------------------------------------------
+def _coin_face(d: ImageDraw.ImageDraw, cx: float, cy: float, R: float,
+               face: str, squash: float) -> None:
+    """Zeichnet die Muenze mit vertikaler Stauchung (squash 0..1 = Kante..voll)."""
+    ry = max(5.0, R * squash)
+    d.ellipse([cx - R, cy + R * 0.82, cx + R, cy + R * 1.04], fill=(0, 0, 0, 80))
+    d.ellipse([cx - R, cy - ry, cx + R, cy + ry], fill=(250, 202, 46),
+              outline=(150, 110, 10), width=5)
+    d.ellipse([cx - R * 0.82, cy - ry * 0.82, cx + R * 0.82, cy + ry * 0.82],
+              outline=(214, 172, 40), width=3)
+    if squash >= 0.6:
+        if face == "kopf":
+            _crown(d, cx, cy - ry * 0.10, R * 0.40 * squash, (150, 110, 10))
+        else:
+            d.text((cx, cy - ry * 0.08), "★", font=_font(int(R * 0.9 * squash)),
+                   fill=(150, 110, 10), anchor="mm")
+
+
+def coin_flip_anim(result: str) -> io.BytesIO:
+    """Muenzwurf als GIF: die Muenze flippt (Stauchung + Seitenwechsel) und
+    bleibt auf dem Ergebnis liegen."""
+    W = H = 320
+    other = "zahl" if result == "kopf" else "kopf"
+    # (squash, face) - drei immer langsamere Flips, Ende = Ergebnis voll offen.
+    seq = [(1.0, other), (0.45, other), (0.08, other), (0.5, result),
+           (1.0, result), (0.5, result), (0.1, result), (0.55, other),
+           (1.0, other), (0.6, other), (0.25, other), (0.7, result),
+           (1.0, result)]
+    frames: list[Image.Image] = []
+    for squash, face in seq:
+        img = _vgrad(W, H, (26, 32, 52), (12, 15, 26)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        _coin_face(d, W / 2, H / 2 - 10, 100, face, squash)
+        frames.append(img)
+    # Endbild mit Label
+    img = _vgrad(W, H, (26, 32, 52), (12, 15, 26)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    _coin_face(d, W / 2, H / 2 - 10, 100, result, 1.0)
+    d.text((W / 2, H / 2 + 118), result.upper(), font=_font(34),
+           fill=(245, 197, 24), anchor="mm")
+    frames.append(img)
+    durations = [70] * (len(frames) - 1) + [3500]
+    return _gif(frames, durations)
+
+
+# --- Slots (animiert) ------------------------------------------------------
+def _slot_frame(keys: list, spinning: list, *, win: int = 0,
+                jackpot: bool = False, show_result: bool = False) -> Image.Image:
+    """Ein Frame der Slot-Maschine. ``spinning[i]`` True = Walze i laeuft noch
+    (zeigt ein Zufallssymbol + Bewegungs-Streifen), sonst das Endsymbol."""
+    pad, tile, gap, top_h, bot_h = 26, 150, 18, 72, 58
+    W = pad * 2 + 3 * tile + 2 * gap
+    H = pad * 2 + top_h + tile + bot_h
+    img = _vgrad(W, H, (34, 18, 48), (16, 10, 26)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rounded_rectangle([8, 8, W - 8, H - 8], radius=20, outline=(245, 197, 24, 200), width=4)
+    d.text((W / 2, pad + 2), "★  FLO  SLOTS  ★", font=_font(34),
+           fill=(245, 197, 24), anchor="ma")
+    ry, rx = pad + top_h, pad
+    d.rounded_rectangle([pad - 8, ry - 8, W - pad + 8, ry + tile + 8], radius=16,
+                        fill=(8, 6, 14))
+    for i, key in enumerate(keys):
+        show = random.choice(SLOT_KEYS) if spinning[i] else key
+        _slot_window(img, rx, ry, tile, show)
+        if spinning[i]:
+            dd = ImageDraw.Draw(img, "RGBA")
+            for off in (28, 74, 120):   # Bewegungs-Streifen ueber dem Symbol
+                dd.rounded_rectangle([rx + 12, ry + off, rx + tile - 12, ry + off + 12],
+                                     radius=6, fill=(255, 255, 255, 46))
+        rx += tile + gap
+    d = ImageDraw.Draw(img, "RGBA")
+    line_col = (46, 204, 113) if (show_result and win > 0) else (96, 100, 118)
+    ly = ry + tile / 2
+    d.line([(pad - 2, ly), (W - pad + 2, ly)], fill=line_col, width=3)
+    by = ry + tile + 14
+    if show_result:
+        if jackpot:
+            _pill_c(d, W / 2, int(by), "JACKPOT!", 30, (245, 197, 24), (28, 16, 4))
+        elif win > 0:
+            _pill_c(d, W / 2, int(by), f"GEWINN  +{win}", 26, (46, 204, 113), (8, 28, 16))
+        else:
+            _pill_c(d, W / 2, int(by), "leider nichts", 24, (70, 74, 92), (228, 230, 238))
+    else:
+        _pill_c(d, W / 2, int(by), "· · ·", 24, (40, 34, 58), (180, 170, 200))
+    return img
+
+
+def slot_machine_anim(symbols: list, *, win: int = 0, jackpot: bool = False) -> io.BytesIO:
+    """Slot-Walzen als GIF: alle drei Walzen laufen und stoppen nacheinander."""
+    frames: list[Image.Image] = []
+    stops = (5, 9, 13)                      # Frame, ab dem Walze i steht
+    total = 14
+    for f in range(total):
+        spinning = [f < stops[i] for i in range(3)]
+        frames.append(_slot_frame(symbols, spinning))
+    frames.append(_slot_frame(symbols, [False] * 3, win=win, jackpot=jackpot,
+                              show_result=True))
+    durations = [70] * total + [3500]
+    return _gif(frames, durations)
+
+
+# --- Roulette (animiert) ---------------------------------------------------
+def _roul_ring(size: int, spin: int) -> Image.Image:
+    """Zeichnet den Zahlenring EINMAL (Gewinnerfach oben) - die Animation
+    rotiert dann nur noch dieses Bild (schnell, C-Ebene)."""
+    ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ring, "RGBA")
+    c = size / 2
+    Ro = size / 2 - 2
+    Ri = Ro * 0.765
+    n = len(_ROUL_ORDER)
+    seg = 360.0 / n
+    idx = _ROUL_ORDER.index(spin) if spin in _ROUL_ORDER else 0
+    base = -90.0 - idx * seg - seg / 2
+    for i, num in enumerate(_ROUL_ORDER):
+        a0 = base + i * seg
+        d.pieslice([c - Ro, c - Ro, c + Ro, c + Ro], a0, a0 + seg,
+                   fill=_roul_color(num), outline=(18, 18, 22))
+    Rm = (Ro + Ri) / 2 + 6
+    for i, num in enumerate(_ROUL_ORDER):
+        a = math.radians(base + i * seg + seg / 2)
+        d.text((c + Rm * math.cos(a), c + Rm * math.sin(a)), str(num),
+               font=_font(14), fill=(245, 245, 245), anchor="mm")
+    # Innenkreis gehoert zum Ring (dreht optisch mit, ist aber uni -> unsichtbar)
+    d.ellipse([c - Ri, c - Ri, c + Ri, c + Ri], fill=(12, 60, 40),
+              outline=(245, 197, 24), width=4)
+    return ring
+
+
+def roulette_wheel_anim(spin: int, won: bool) -> io.BytesIO:
+    """Roulette als GIF: der Kessel dreht sich aus und stoppt mit dem
+    Gewinnerfach oben unterm Zeiger; am Ende erscheint das Ergebnis-Hub."""
+    W = H = 440
+    ring_size = 392
+    ring = _roul_ring(ring_size, spin)
+    cx, cy = W / 2, H / 2 + 4
+    rx0, ry0 = int(cx - ring_size / 2), int(cy - ring_size / 2)
+
+    def frame(angle: float, final: bool) -> Image.Image:
+        img = _vgrad(W, H, _FELT_TOP, _FELT_BOT).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        outline = ((46, 204, 113) if won else (231, 76, 60)) if final else (245, 197, 24)
+        d.rounded_rectangle([6, 6, W - 6, H - 6], radius=20, outline=outline, width=4)
+        r = ring.rotate(angle, resample=Image.BILINEAR) if angle else ring
+        img.paste(r, (rx0, ry0), r)
+        d = ImageDraw.Draw(img, "RGBA")
+        # Zeiger + Kugel oben (statisch)
+        d.polygon([(cx - 15, cy - ring_size / 2 - 26), (cx + 15, cy - ring_size / 2 - 26),
+                   (cx, cy - ring_size / 2 + 8)], fill=(245, 245, 245), outline=(20, 20, 20))
+        d.ellipse([cx - 11, cy - ring_size / 2 + 6, cx + 11, cy - ring_size / 2 + 28],
+                  fill=(250, 250, 252), outline=(60, 60, 60), width=2)
+        if final:
+            d.ellipse([cx - 72, cy - 72, cx + 72, cy + 72], fill=_roul_color(spin),
+                      outline=(245, 197, 24), width=4)
+            d.text((cx, cy - 8), str(spin), font=_font(60), fill=(250, 250, 252), anchor="mm")
+            name = "GRÜN" if spin == 0 else ("ROT" if spin in _ROUL_RED else "SCHWARZ")
+            d.text((cx, cy + 42), name, font=_font(22), fill=(250, 250, 252), anchor="mm")
+        return img
+
+    N = 18
+    frames = [frame((1.0 - _ease_out(i / N)) * 900.0, final=False) for i in range(N)]
+    frames.append(frame(0.0, final=True))
+    durations = [60] * N + [4000]
+    return _gif(frames, durations)
+
+
+# --- Crash (animiert) ------------------------------------------------------
+def crash_chart_anim(crash_point: float, target: float, cashed: bool) -> io.BytesIO:
+    """Crash als GIF: die Kurve waechst live mit laufendem Multiplikator-Badge,
+    das Endbild ist der volle Chart (mit Glow, Ziel-Linie, Explosion/Cashout)."""
+    W, H = 820, 420
+    L, R, T, B = 72, 30, 70, 50
+    x0, x1, y0, y1 = L, W - R, T, H - B
+    cp = max(1.001, float(crash_point))
+    ymax = max(max(cp, target) * 1.16, 1.6)
+
+    def px(t: float) -> float:
+        return x0 + t * (x1 - x0)
+
+    def py(m: float) -> float:
+        return y1 - (m - 1.0) / (ymax - 1.0) * (y1 - y0)
+
+    base = _vgrad(W, H, _CRASH_TOP, _CRASH_BOT).convert("RGBA")
+    bd = ImageDraw.Draw(base, "RGBA")
+    bd.rounded_rectangle([6, 6, W - 6, H - 6], radius=20, outline=(255, 255, 255, 26), width=2)
+    for m in _nice_ticks(ymax):
+        yy = py(m)
+        bd.line([(x0, yy), (x1, yy)], fill=(255, 255, 255, 18), width=1)
+        bd.text((x0 - 12, yy), f"{m:g}×", font=_font(18), fill=(150, 160, 176), anchor="rm")
+    bd.line([(x0, y0), (x0, y1)], fill=(80, 90, 106), width=2)
+    bd.line([(x0, y1), (x1, y1)], fill=(80, 90, 106), width=2)
+    bd.text((x0, 18), "CRASH", font=_font(28), fill=(236, 240, 246))
+
+    N = 140
+    full = [(i / N, cp ** (i / N)) for i in range(N + 1)]
+    frames: list[Image.Image] = []
+    steps = 12
+    for s in range(1, steps + 1):
+        f = _ease_out(s / steps) if s < steps else 1.0
+        cut = max(2, int(f * (N + 1)))
+        pts = [(px(t), py(m)) for t, m in full[:cut]]
+        img = base.copy()
+        d = ImageDraw.Draw(img, "RGBA")
+        d.line(pts, fill=(120, 200, 255), width=5, joint="curve")
+        cur = full[cut - 1][1]
+        badge = f"{cur:.2f}×"
+        bf = _font(40)
+        tw = d.textlength(badge, font=bf)
+        d.rounded_rectangle([x1 - tw - 36, 14, x1, 64], radius=16, fill=(0, 0, 0, 130),
+                            outline=(120, 200, 255), width=3)
+        d.text(((x1 - tw - 36 + x1) / 2, 39), badge, font=bf, fill=(120, 200, 255),
+               anchor="mm")
+        frames.append(img)
+    # Endbild = der volle statische Chart (Glow, Ziel-Linie, Burst/Cashout).
+    final = Image.open(crash_chart(crash_point, target, cashed)).convert("RGBA")
+    frames.append(final)
+    durations = [80] * steps + [4500]
+    return _gif(frames, durations)
+
+
+# --- Keno (animiert) -------------------------------------------------------
+def keno_grid_anim(picks: list, draw: list, hits: list) -> io.BytesIO:
+    """Keno-Ziehung als GIF: die 10 gezogenen Zahlen erscheinen nacheinander."""
+    hitset = set(hits)
+    frames: list[Image.Image] = []
+    for i in range(len(draw) + 1):
+        part = draw[:i]
+        part_hits = [n for n in part if n in hitset]
+        frames.append(_keno_img(picks, part, part_hits))
+    durations = [180] + [320] * (len(frames) - 2) + [4500]
+    return _gif(frames, durations)
+
+
+# --- Gluecksrad ------------------------------------------------------------
+def _wheel_seg_color(mult: float) -> tuple:
+    if mult <= 0:
+        return (52, 56, 68)          # Niete - dunkelgrau
+    if mult < 1.0:
+        return (230, 126, 34)        # Teil vom Einsatz - orange
+    if mult < 2.0:
+        return (52, 152, 219)        # kleiner Gewinn - blau
+    if mult < 5.0:
+        return (46, 204, 113)        # guter Gewinn - gruen
+    return (241, 196, 15)            # Jackpot - gold
+
+
+def _wheel_ring(size: int, mults: list, idx: int) -> Image.Image:
+    """Gluecksrad-Ring einmal zeichnen (Gewinnersegment oben), dann rotieren."""
+    ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ring, "RGBA")
+    c = size / 2
+    Ro = size / 2 - 2
+    n = len(mults)
+    seg = 360.0 / n
+    base = -90.0 - idx * seg - seg / 2
+    for i, m in enumerate(mults):
+        a0 = base + i * seg
+        d.pieslice([c - Ro, c - Ro, c + Ro, c + Ro], a0, a0 + seg,
+                   fill=_wheel_seg_color(m), outline=(16, 18, 24))
+    Rm = Ro * 0.72
+    for i, m in enumerate(mults):
+        a = math.radians(base + i * seg + seg / 2)
+        label = "0" if m <= 0 else (f"×{m:g}")
+        d.text((c + Rm * math.cos(a), c + Rm * math.sin(a)), label,
+               font=_font(22), fill=(250, 250, 252), anchor="mm")
+    d.ellipse([c - Ro * 0.30, c - Ro * 0.30, c + Ro * 0.30, c + Ro * 0.30],
+              fill=(24, 27, 38), outline=(245, 197, 24), width=4)
+    return ring
+
+
+def wheel_fortune_anim(mults: list, idx: int) -> io.BytesIO:
+    """Gluecksrad als GIF: dreht aus, Gewinnersegment landet oben am Zeiger,
+    am Ende zeigt die Nabe den Multiplikator."""
+    W = H = 440
+    ring_size = 396
+    ring = _wheel_ring(ring_size, mults, idx)
+    cx, cy = W / 2, H / 2 + 6
+    rx0, ry0 = int(cx - ring_size / 2), int(cy - ring_size / 2)
+    won = mults[idx] > 0
+
+    def frame(angle: float, final: bool) -> Image.Image:
+        img = _vgrad(W, H, (30, 24, 52), (13, 11, 24)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        outline = ((46, 204, 113) if won else (231, 76, 60)) if final else (245, 197, 24)
+        d.rounded_rectangle([6, 6, W - 6, H - 6], radius=20, outline=outline, width=4)
+        d.text((18, 14), "GLÜCKSRAD", font=_font(22), fill=(245, 197, 24))
+        r = ring.rotate(angle, resample=Image.BILINEAR) if angle else ring
+        img.paste(r, (rx0, ry0), r)
+        d = ImageDraw.Draw(img, "RGBA")
+        d.polygon([(cx - 16, cy - ring_size / 2 - 18), (cx + 16, cy - ring_size / 2 - 18),
+                   (cx, cy - ring_size / 2 + 16)], fill=(245, 245, 245), outline=(20, 20, 20))
+        if final:
+            m = mults[idx]
+            label = "NIETE" if m <= 0 else f"×{m:g}"
+            col = _wheel_seg_color(m)
+            d.ellipse([cx - 64, cy - 64, cx + 64, cy + 64], fill=(24, 27, 38),
+                      outline=col, width=5)
+            d.text((cx, cy), label, font=_font(34 if len(label) <= 4 else 26),
+                   fill=col, anchor="mm")
+        return img
+
+    N = 18
+    frames = [frame((1.0 - _ease_out(i / N)) * 1080.0, final=False) for i in range(N)]
+    frames.append(frame(0.0, final=True))
+    durations = [60] * N + [4000]
+    return _gif(frames, durations)
+
+
+# --- Rubbellos -------------------------------------------------------------
+def _scratch_img(keys: list, revealed: int, win_rows: list, win: int,
+                 show_result: bool) -> Image.Image:
+    """Rubbellos 3x3: ``revealed`` Felder sind schon freigerubbelt, der Rest
+    zeigt die Rubbel-Schicht. ``win_rows``: Indizes (0-2) der Gewinn-Reihen."""
+    pad, tile, gap, top = 26, 128, 14, 66
+    W = pad * 2 + 3 * tile + 2 * gap
+    H = top + 3 * tile + 2 * gap + 64
+    img = _vgrad(W, H, (36, 30, 18), (18, 14, 8)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rounded_rectangle([8, 8, W - 8, H - 8], radius=20, outline=(245, 197, 24, 210), width=4)
+    d.text((W / 2, 18), "FLO  RUBBELLOS", font=_font(30), fill=(245, 197, 24), anchor="ma")
+    for i, key in enumerate(keys):
+        r, c = divmod(i, 3)
+        x = pad + c * (tile + gap)
+        y = top + r * (tile + gap)
+        if i < revealed:
+            in_win = show_result and (r in win_rows)
+            bgc = (255, 249, 224) if in_win else (248, 249, 252)
+            d.rounded_rectangle([x, y, x + tile, y + tile], radius=14, fill=bgc,
+                                outline=(245, 197, 24) if in_win else (60, 64, 80),
+                                width=4 if in_win else 3)
+            _slot_symbol(d, x + tile / 2, y + tile / 2, tile * 0.3, key)
+        else:
+            d.rounded_rectangle([x, y, x + tile, y + tile], radius=14, fill=(118, 122, 132),
+                                outline=(80, 84, 94), width=3)
+            d.text((x + tile / 2, y + tile / 2), "?", font=_font(52),
+                   fill=(70, 74, 84), anchor="mm")
+    if show_result:
+        by = top + 3 * tile + 2 * gap + 12
+        if win > 0:
+            _pill_c(d, W / 2, by, f"GEWINN  +{win}", 26, (46, 204, 113), (8, 28, 16))
+        else:
+            _pill_c(d, W / 2, by, "leider kein Gewinn", 22, (70, 74, 92), (228, 230, 238))
+    return img
+
+
+def scratch_card_anim(keys: list, win_rows: list, win: int) -> io.BytesIO:
+    """Rubbellos als GIF: die 9 Felder werden nacheinander freigerubbelt."""
+    frames = [_scratch_img(keys, i, win_rows, win, show_result=False)
+              for i in range(0, 9)]
+    frames.append(_scratch_img(keys, 9, win_rows, win, show_result=True))
+    durations = [200] * 9 + [4500]
+    return _gif(frames, durations)
+
+
+# === Casino-Statistik-Karte ================================================
+def casino_stats_card(name: str, avatar: "bytes | None", stats: dict) -> io.BytesIO:
+    """Persoenliche Casino-Bilanz: Kopf mit Avatar+Name, vier Kennzahlen und
+    ein Balken je Spiel (Anzahl Runden, Netto eingefaerbt).
+
+    ``stats``: {games, wagered, payout, best_win, per: {spiel: {n, net}}}
+    """
+    per = dict(stats.get("per") or {})
+    rows = sorted(per.items(), key=lambda kv: kv[1].get("n", 0), reverse=True)
+    W = 900
+    head, row_h = 176, 52
+    H = head + max(1, len(rows)) * row_h + 40
+    img = _vgrad(W, H, (26, 24, 40), (12, 11, 20)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rounded_rectangle([6, 6, W - 6, H - 6], radius=18, outline=(48, 53, 63), width=2)
+
+    # Avatar + Name
+    AD = 84
+    ax, ay = 34, 28
+    circ = None
+    if avatar:
+        try:
+            im = ImageOps.fit(Image.open(io.BytesIO(avatar)).convert("RGB"),
+                              (AD, AD), method=_RESAMPLE)
+            mask = Image.new("L", (AD, AD), 0)
+            ImageDraw.Draw(mask).ellipse([0, 0, AD - 1, AD - 1], fill=255)
+            circ = im.convert("RGBA")
+            circ.putalpha(mask)
+        except Exception:  # noqa: BLE001
+            circ = None
+    if circ is not None:
+        img.paste(circ, (ax, ay), circ)
+        d.ellipse([ax - 4, ay - 4, ax + AD + 3, ay + AD + 3],
+                  outline=(241, 196, 15), width=4)
+    safe = _clean_text(name)[:26] or "Spieler"
+    d.text((ax + AD + 24, ay + 4), safe, font=_font(38), fill=_WHITE)
+    d.text((ax + AD + 24, ay + 54), "CASINO-BILANZ", font=_font(17),
+           fill=(150, 155, 168))
+
+    # Kennzahlen-Zeile
+    net = int(stats.get("payout", 0)) - int(stats.get("wagered", 0))
+    net_col = _GREEN if net >= 0 else _RED_HOT
+    kennz = [
+        ("RUNDEN", f"{stats.get('games', 0):,}".replace(",", "."), _WHITE),
+        ("EINSATZ", f"{stats.get('wagered', 0):,}".replace(",", "."), _WHITE),
+        ("NETTO", f"{'+' if net >= 0 else ''}{net:,}".replace(",", "."), net_col),
+        ("BESTER GEWINN", f"+{stats.get('best_win', 0):,}".replace(",", "."), _GOLD),
+    ]
+    seg = (W - 68) // len(kennz)
+    for i, (label, val, col) in enumerate(kennz):
+        sx = 34 + i * seg
+        d.text((sx, 124), label, font=_font(15), fill=(120, 126, 140))
+        d.text((sx, 144), val, font=_font(26), fill=col)
+
+    # Balken je Spiel (Anzahl Runden relativ zum Maximum, Netto rechts)
+    if rows:
+        peak = max(v.get("n", 0) for _g, v in rows) or 1
+        y = head + 8
+        for game, v in rows:
+            n, gnet = int(v.get("n", 0)), int(v.get("net", 0))
+            col = _GREEN if gnet >= 0 else _RED_HOT
+            d.text((34, y + 2), game.upper()[:14], font=_font(18), fill=(200, 205, 218))
+            _hbar(d, 220, y + 4, W - 470, 18, n / peak, (87, 148, 242))
+            d.text((W - 232, y + 2), f"{n}×", font=_font(18), fill=(150, 155, 168))
+            d.text((W - 34, y + 2), f"{'+' if gnet >= 0 else ''}{gnet}",
+                   font=_font(18), fill=col, anchor="ra")
+            y += row_h
+    else:
+        d.text((34, head + 10), "Noch keine Runden gespielt.", font=_font(20),
+               fill=(150, 155, 168))
+    return _png(img)
+
+
+# === Woerter-Top-Liste =====================================================
+def words_card(rows: list, *, total_words: int = 0, total_count: int = 0) -> io.BytesIO:
+    """Top-Woerter des Servers als Balken-Karte. ``rows``: [(wort, anzahl), ...]"""
+    W = 900
+    head, row_h = 118, 46
+    n = max(1, len(rows))
+    H = head + n * row_h + 42
+    img = _vgrad(W, H, (22, 28, 40), (11, 14, 22)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rounded_rectangle([6, 6, W - 6, H - 6], radius=18, outline=(48, 53, 63), width=2)
+    hf = _font(42)
+    d.text((34, 26), "FLO", font=hf, fill=_WHITE)
+    d.text((34 + d.textlength("FLO ", font=hf), 26), "WÖRTER", font=hf, fill=_GOLD)
+    if total_words:
+        d.text((W - 34, 44), f"{total_words:,}".replace(",", ".") + " Wörter erfasst",
+               font=_font(18), fill=(150, 158, 188), anchor="rm")
+    d.line([(34, head - 16), (W - 34, head - 16)], fill=(54, 60, 86), width=2)
+
+    if rows:
+        peak = max(c for _w, c in rows) or 1
+        y = head
+        medal = {0: (250, 222, 42), 1: (176, 176, 184), 2: (205, 127, 50)}
+        for i, (wort, count) in enumerate(rows):
+            col = medal.get(i, (87, 148, 242))
+            d.text((34, y + 6), f"{i + 1}.", font=_font(20),
+                   fill=medal.get(i, (130, 136, 150)))
+            word_txt = _clean_text(str(wort))[:18] or "?"
+            d.text((84, y + 6), word_txt, font=_font(22), fill=_WHITE)
+            _hbar(d, 320, y + 10, W - 560, 16, count / peak, col)
+            d.text((W - 34, y + 6), f"{count:,}".replace(",", "."), font=_font(21),
+                   fill=(200, 205, 218), anchor="ra")
+            y += row_h
+    else:
+        d.text((34, head + 8), "Noch keine Wörter gezählt.", font=_font(20),
+               fill=(150, 155, 168))
     return _png(img)
