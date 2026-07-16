@@ -197,6 +197,21 @@ def test_admin_owner_gate() -> None:
     assert hilfe is not None and not isinstance(hilfe, str)
 
 
+def test_admin_ansage_parsing() -> None:
+    # Rohe Channel-ID
+    cid, text = admin._parse_announce("1453881901738889351 Servus Leute!")
+    assert cid == 1453881901738889351 and text == "Servus Leute!"
+    # Channel-Erwaehnung <#id> (so kam es in der DM an)
+    cid, text = admin._parse_announce("<#1453881901738889351> Servus Leute!")
+    assert cid == 1453881901738889351 and text == "Servus Leute!"
+    # Mehrzeiliger Text bleibt komplett erhalten
+    cid, text = admin._parse_announce("1453881901738889351 Zeile 1\nZeile 2")
+    assert cid is not None and text == "Zeile 1\nZeile 2"
+    # Ohne Text / ohne ID -> Hinweis-Fall
+    assert admin._parse_announce("1453881901738889351") == (None, "")
+    assert admin._parse_announce("hallo welt") == (None, "")
+
+
 def test_cmdnorm_admin_sicherheit() -> None:
     # Alltagswoerter, die 1 Tippfehler von Admin-Befehlen entfernt sind,
     # duerfen NICHT gekapert werden.

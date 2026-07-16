@@ -212,20 +212,41 @@ async def _profile(message: discord.Message, rest: str) -> "str | discord.Embed"
     return emb
 
 
-async def _announce(message: discord.Message, rest: str) -> str:
-    m = re.match(r"\s*(\d{15,20})\s+(.+)", rest or "", re.DOTALL)
+def _parse_announce(rest: str) -> tuple[int | None, str]:
+    """Zerlegt 'ansage ...' in (channel_id, text). Akzeptiert die rohe ID
+    UND eine Channel-Erwaehnung wie <#1234...>."""
+    m = re.match(r"\s*(?:<#)?(\d{15,20})>?\s+(.+)", rest or "", re.DOTALL)
     if not m:
-        return (f"So: `{_bot_name} ansage <channel-id> <text>` - "
+        return None, ""
+    return int(m.group(1)), m.group(2).strip()
+
+
+async def _announce(message: discord.Message, rest: str) -> str:
+    cid, text = _parse_announce(rest)
+    if cid is None or not text:
+        return (f"So: `{_bot_name} ansage <channel-id> <text>` "
+                f"(auch `{_bot_name} ansage #channel <text>`) - "
                 "ich schicke den Text als Flo in den Channel.")
+    channel = None
     try:
         import bot
-        channel = bot.client.get_channel(int(m.group(1)))
-    except Exception:  # noqa: BLE001
+        channel = bot.client.get_channel(cid)
+        if channel is None:
+            # Nicht im Cache (z. B. Thread oder frisch angelegt) -> per API holen.
+            channel = await bot.client.fetch_channel(cid)
+    except discord.NotFound:
+        return f"Es gibt keinen Channel mit der ID `{cid}`."
+    except discord.Forbidden:
+        return "Auf diesen Channel habe ich keinen Zugriff."
+    except Exception:  # noqa: BLE001 - z. B. Client (noch) nicht bereit
+        log.exception("Ansage: Channel-Aufloesung fehlgeschlagen")
         channel = None
     if channel is None or not hasattr(channel, "send"):
         return "Diesen Channel finde ich nicht (oder er ist kein Text-Channel)."
     try:
-        await channel.send(m.group(2).strip())
+        await channel.send(text)
+    except discord.Forbidden:
+        return f"Mir fehlt das Schreibrecht in **#{getattr(channel, 'name', cid)}**."
     except discord.HTTPException as exc:
         return f"Senden fehlgeschlagen: {exc}"
     return f"✅ Gesendet in **#{getattr(channel, 'name', '?')}**."

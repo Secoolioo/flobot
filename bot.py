@@ -37,6 +37,16 @@ import schedule_logic
 import voicegags
 import words
 
+# WICHTIG: Der Bot laeuft als 'python bot.py' - dieses Modul heisst dann
+# '__main__'. Die Feature-Module (admin, casino, games, economy) machen aber
+# lazy 'import bot' fuer client/protect_message. Ohne den Alias unten wuerde
+# das bot.py ein ZWEITES Mal ausfuehren: doppelte Setups im Log, ein zweiter
+# (nie eingeloggter) discord.Client, dessen get_channel() immer None liefert,
+# und ein Loesch-Schutz, der ins Leere zeigt. Der Alias sorgt dafuer, dass
+# 'import bot' IMMER dieses laufende Modul liefert.
+if __name__ == "__main__":
+    sys.modules.setdefault("bot", sys.modules[__name__])
+
 load_dotenv()
 
 logging.basicConfig(
