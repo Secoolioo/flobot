@@ -697,7 +697,6 @@ async def _check_guess(message: discord.Message) -> bool:
         except discord.HTTPException:
             pass
         return True
-    hint = "höher ⬆️" if tip < ziel else "tiefer ⬇️"
     try:
         await message.add_reaction("⬆️" if tip < ziel else "⬇️")
     except discord.HTTPException:

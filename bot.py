@@ -247,6 +247,25 @@ def _is_help(content: str) -> bool:
     return bool(_HELP_RE.match(ai.strip_lead(content)))
 
 
+# 'Flo moderation' / 'Flo musik' o. Ae. -> direkt die passende Hilfe-Kategorie
+# statt einer KI-Antwort. Nur Woerter, die KEIN anderes Modul als Befehl nutzt
+# ('spiele' fehlt bewusst - das ist der Musik-Play-Befehl; 'casino' oeffnet den
+# Casino-Hub; 'woerter' die Top-Liste).
+_HELP_CATEGORY_ALIASES = {
+    "moderation": "mod", "mod": "mod",
+    "musik": "musik", "music": "musik",
+    "bilder": "bilder", "voice": "voice",
+    "economy": "economy",
+}
+
+
+def _help_category_key(content: str) -> "str | None":
+    """Kategorie-Schluessel, wenn die Nachricht NUR aus einem Kategorie-Wort
+    besteht ('Flo moderation?'), sonst None."""
+    word = ai.strip_lead(content).lower().strip(" ?!.,")
+    return _HELP_CATEGORY_ALIASES.get(word)
+
+
 # --- Neustart (nur Bot-Besitzer) -----------------------------------------
 _RESTART_RE = re.compile(
     r"^(?:restart|reboot|neustart\w*|neu\s*starten?|neue?\s*starten?|starte?\s+neu)\b",
@@ -827,24 +846,52 @@ def _spawn(coro) -> None:
     task.add_done_callback(_bg_tasks.discard)
 
 
-async def _delete_after(message: discord.Message, delay: float) -> None:
-    """Loescht eine Nachricht nach 'delay' Sekunden (best effort). Steht die
-    Nachricht zu diesem Zeitpunkt noch unter Schutz (aktives Spiel), wird sie
-    NICHT geloescht - release_message() raeumt sie spaeter selbst auf."""
-    try:
-        await asyncio.sleep(delay)
-        if message.id in PROTECTED_MSG_IDS:
-            return  # aktives Spiel -> in Ruhe lassen
-        await message.delete()
-    except discord.NotFound:
-        pass  # schon weg (manuell geloescht o. Ae.)
-    except discord.Forbidden:
-        log.warning(
-            "Auto-Loeschen: mir fehlt das Recht 'Nachrichten verwalten' in #%s.",
-            getattr(message.channel, "name", message.channel.id),
-        )
-    except discord.HTTPException as exc:
-        log.warning("Auto-Loeschen fehlgeschlagen: %s", exc)
+# Sammel-Loeschung: Ein Timer + einzelner DELETE-Call PRO Nachricht hat bei
+# Chat-Bursts das Rate-Limit gerissen (60 s spaeter feuerten Dutzende DELETEs
+# gleichzeitig -> 429). Stattdessen sammeln wir faellige Nachrichten je Channel
+# und loeschen sie gebuendelt (Bulk-Delete: bis 100 Nachrichten = 1 API-Call).
+_pending_deletes: "dict[int, list[tuple[float, discord.Message]]]" = {}
+
+
+def _queue_delete(message: discord.Message, delay: float) -> None:
+    """Merkt eine Nachricht fuers gebuendelte Auto-Loeschen vor."""
+    _pending_deletes.setdefault(message.channel.id, []).append(
+        (time.monotonic() + delay, message))
+
+
+@tasks.loop(seconds=5.0)
+async def autodelete_batch_loop() -> None:
+    """Loescht faellige Auto-Loesch-Nachrichten im Buendel. Geschuetzte
+    Nachrichten (aktive Spiele) fallen raus - release_message() raeumt die
+    spaeter selbst auf. Schon geloeschte Nachrichten ignoriert der Bulk-Call."""
+    now = time.monotonic()
+    for cid in list(_pending_deletes):
+        entries = _pending_deletes.get(cid) or []
+        due = [m for ts, m in entries
+               if ts <= now and m.id not in PROTECTED_MSG_IDS]
+        rest = [(ts, m) for ts, m in entries if ts > now]
+        if rest:
+            _pending_deletes[cid] = rest
+        else:
+            _pending_deletes.pop(cid, None)
+        if not due:
+            continue
+        channel = due[0].channel
+        for i in range(0, len(due), 100):
+            chunk = due[i:i + 100]
+            try:
+                if len(chunk) == 1:
+                    await chunk[0].delete()
+                else:
+                    await channel.delete_messages(chunk)
+            except discord.NotFound:
+                pass  # schon weg (Sweep/manuell)
+            except discord.Forbidden:
+                log.warning(
+                    "Auto-Loeschen: mir fehlt 'Nachrichten verwalten' in #%s.",
+                    getattr(channel, "name", cid))
+            except discord.HTTPException as exc:
+                log.warning("Auto-Loeschen (Buendel) fehlgeschlagen: %s", exc)
 
 
 def protect_message(message: "discord.Message | None") -> None:
@@ -1002,9 +1049,10 @@ async def on_message(message: discord.Message) -> None:
     # Bots bleiben stehen (Erfolge sollen sichtbar bleiben).
     if message.channel.id in AUTODELETE_CHANNEL_IDS:
         # Level-Up-Ansagen UND das aktuelle Musik-Panel bleiben stehen, alles
-        # andere wird nach kurzer Zeit geloescht.
+        # andere wird nach kurzer Zeit geloescht (gebuendelt, siehe
+        # autodelete_batch_loop - schont das Rate-Limit).
         if not _keep_bot_msg(message):
-            _spawn(_delete_after(message, AUTODELETE_SECONDS))
+            _queue_delete(message, AUTODELETE_SECONDS)
 
     if message.author.bot:
         return
@@ -1079,6 +1127,19 @@ async def on_message(message: discord.Message) -> None:
                 embed=_help_overview_embed(), view=view, mention_author=False)
         except discord.HTTPException:
             log.exception("Hilfe konnte nicht gesendet werden")
+        return
+
+    # 'Flo moderation' / 'Flo musik' -> direkt die passende Hilfe-Kategorie.
+    _cat = _help_category_key(content)
+    if _cat is not None:
+        view = HelpView()
+        view.active = _cat
+        view._sync()
+        try:
+            view.message = await message.reply(
+                embed=_help_detail_embed(_cat), view=view, mention_author=False)
+        except discord.HTTPException:
+            log.exception("Kategorie-Hilfe konnte nicht gesendet werden")
         return
 
     # Befehls-Normalisierung: erstes Wort auf Tippfehler/Dialekt korrigieren, damit
@@ -1243,6 +1304,8 @@ async def on_ready() -> None:
         event_loop.start()
     if AUTODELETE_CHANNEL_IDS and not autodelete_sweep_loop.is_running():
         autodelete_sweep_loop.start()
+    if AUTODELETE_CHANNEL_IDS and not autodelete_batch_loop.is_running():
+        autodelete_batch_loop.start()
     # Wort-Zaehler: einmaliger History-Backfill (neustart-sicher, laeuft im
     # Hintergrund weiter; is_scanning() ist False, sobald alles eingelesen ist).
     if WORDS_ENABLED and words.is_scanning():
