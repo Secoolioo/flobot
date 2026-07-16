@@ -255,6 +255,16 @@ def get_coins(user_id: int) -> int:
     return _profile(user_id)["coins"] if _enabled else 0
 
 
+def display_name_of(user_id: int) -> "str | None":
+    """Zuletzt bekannter Anzeigename aus dem Profil-Cache (wird bei jeder
+    Nachricht aktualisiert), sonst None. Praktisch als Fallback, wenn
+    guild.get_member() ohne Members-Intent nichts liefert."""
+    if not _enabled:
+        return None
+    prof = _users().get(str(user_id))
+    return (prof or {}).get("name") or None
+
+
 def get_title(user_id: int) -> str:
     """Aktuell getragener Titel (Label inkl. Emoji), z. B. '🤖 NPC', sonst ''.
     bot.py reicht das an die KI weiter, damit Flo den Nutzer damit anspricht."""
@@ -709,35 +719,62 @@ def leaderboard_data(limit: int = 10) -> list[dict]:
 
 
 # Avatar-Cache: Profilbilder aendern sich selten -> kurz zwischenspeichern,
-# damit ein wiederholtes 'top' nicht jedes Mal alles neu laedt.
-_AVATAR_CACHE: dict[str, tuple[bytes, float]] = {}
-_AVATAR_TTL = 1800.0   # 30 Minuten
+# damit ein wiederholtes 'top' nicht jedes Mal alles neu laedt. Schluessel ist
+# die User-ID, damit der Cache VOR jeder User-Aufloesung greifen kann.
+_AVATAR_CACHE: dict[int, tuple[bytes, float]] = {}
+_AVATAR_TTL = 1800.0       # 30 Minuten
+# Negativ-Cache: IDs, deren Aufloesung/Download gerade erst fehlschlug
+# (geloeschter Account, CDN-Huster) - nicht bei jedem 'top' neu versuchen.
+_AVATAR_FAIL: dict[int, float] = {}
+_AVATAR_FAIL_TTL = 600.0   # 10 Minuten
+
+
+async def _resolve_avatar_user(guild, uid: int):
+    """Member-/User-Objekt fuer die Avatar-URL. WICHTIG: Ohne das privilegierte
+    Members-Intent ist guild.get_member() unzuverlaessig - im Cache stehen nur
+    Mitglieder, die gerade geschrieben haben oder im Voice sind. Deshalb die
+    Kette Member-Cache -> globaler User-Cache -> API-Fetch. So bekommt das
+    Leaderboard die Bilder IMMER, nicht nur fuer zufaellig aktive Leute."""
+    member = guild.get_member(uid) if guild is not None else None
+    if member is not None:
+        return member
+    try:
+        import bot
+        user = bot.client.get_user(uid)
+        if user is None:
+            user = await bot.client.fetch_user(uid)
+        return user
+    except Exception:  # noqa: BLE001 - unbekannte/geloeschte ID, API-Huster
+        return None
 
 
 async def _attach_avatars(rows: list[dict], guild) -> None:
     """Laedt die Discord-Profilbilder der Top-Spieler (parallel, mit Cache &
     Timeout) und haengt die Bytes als row['avatar'] an. Faellt etwas aus, bleibt
     es leer - das Bild zeigt dann einen Initial-Platzhalter (nie ein Crash)."""
-    if guild is None:
-        return
 
     async def one(row: dict) -> None:
-        uid = row.get("id") or 0
-        member = guild.get_member(uid) if uid else None
-        if member is None:
+        uid = int(row.get("id") or 0)
+        if not uid:
             return
-        asset = member.display_avatar
-        key = getattr(asset, "key", "") or str(uid)
         now = time.monotonic()
-        hit = _AVATAR_CACHE.get(key)
+        hit = _AVATAR_CACHE.get(uid)
         if hit and now - hit[1] < _AVATAR_TTL:
             row["avatar"] = hit[0]
             return
-        try:
-            data = await asyncio.wait_for(asset.with_size(64).read(), timeout=5)
-        except Exception:  # noqa: BLE001 - Profilbild ist nur Deko
+        if _AVATAR_FAIL.get(uid, 0.0) > now:
+            return  # gerade erst fehlgeschlagen -> kurz Ruhe geben
+        user = await _resolve_avatar_user(guild, uid)
+        if user is None:
+            _AVATAR_FAIL[uid] = now + _AVATAR_FAIL_TTL
             return
-        _AVATAR_CACHE[key] = (data, now)
+        try:
+            data = await asyncio.wait_for(
+                user.display_avatar.with_size(64).read(), timeout=5)
+        except Exception:  # noqa: BLE001 - Profilbild ist nur Deko
+            _AVATAR_FAIL[uid] = now + _AVATAR_FAIL_TTL
+            return
+        _AVATAR_CACHE[uid] = (data, now)
         row["avatar"] = data
 
     await asyncio.gather(*(one(r) for r in rows), return_exceptions=True)

@@ -26,6 +26,7 @@ import re
 import discord
 
 import ai
+import economy
 import render
 from store import JsonStore
 
@@ -361,8 +362,11 @@ async def _word_query(message: discord.Message, raw: str) -> "str | object":
         medaillen = ("🥇", "🥈", "🥉")
         zeilen = []
         for i, (uid, n) in enumerate(users[:3]):
+            # get_member ist ohne Members-Intent unzuverlaessig -> Fallback
+            # auf den Namens-Cache von economy (wird bei jeder Nachricht gepflegt).
             member = message.guild.get_member(int(uid))
-            name = member.display_name if member else "Unbekannt"
+            name = (member.display_name if member
+                    else economy.display_name_of(int(uid)) or "Unbekannt")
             zeilen.append(f"{medaillen[i]} **{name}** ({n}×)")
         emb.add_field(name="Top-Sager", value="\n".join(zeilen), inline=True)
     emb.set_footer(text=f"{_bot_name} zählt seit dem ersten Server-Tag mit. 🧮")

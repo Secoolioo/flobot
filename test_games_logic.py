@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import admin
 import casino
 import cmdnorm
+import economy
 import render
 import words
 
@@ -195,6 +196,60 @@ def test_admin_owner_gate() -> None:
     # Adminhilfe kommt als Embed.
     hilfe = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "adminhilfe")))
     assert hilfe is not None and not isinstance(hilfe, str)
+
+
+# --- Leaderboard-Avatare ---------------------------------------------------------
+def test_attach_avatars_cache_und_fallback() -> None:
+    """Avatar-Laden: Erfolg fuellt Cache, Fehlschlag landet im Negativ-Cache,
+    zweiter Aufruf kommt ohne Resolver aus dem Cache."""
+    orig = economy._resolve_avatar_user
+    economy._AVATAR_CACHE.clear()
+    economy._AVATAR_FAIL.clear()
+    try:
+        # 1) Aufloesung schlaegt fehl -> kein Avatar, Negativ-Cache gesetzt.
+        async def _none(_guild, _uid):
+            return None
+        economy._resolve_avatar_user = _none
+        rows = [{"id": 42}]
+        asyncio.run(economy._attach_avatars(rows, None))
+        assert "avatar" not in rows[0]
+        assert 42 in economy._AVATAR_FAIL
+
+        # 2) Erfolg -> Bytes am Row + im Cache.
+        class FakeAsset:
+            def with_size(self, _n):
+                return self
+
+            async def read(self):
+                return b"PNGDATA"
+
+        class FakeUser:
+            display_avatar = FakeAsset()
+
+        async def _user(_guild, _uid):
+            return FakeUser()
+        economy._resolve_avatar_user = _user
+        rows = [{"id": 43}]
+        asyncio.run(economy._attach_avatars(rows, None))
+        assert rows[0]["avatar"] == b"PNGDATA"
+        assert economy._AVATAR_CACHE[43][0] == b"PNGDATA"
+
+        # 3) Zweiter Aufruf: kommt aus dem Cache, Resolver wird nicht gebraucht.
+        async def _boom(_guild, _uid):
+            raise AssertionError("Resolver darf bei Cache-Treffer nicht laufen")
+        economy._resolve_avatar_user = _boom
+        rows = [{"id": 43}]
+        asyncio.run(economy._attach_avatars(rows, None))
+        assert rows[0]["avatar"] == b"PNGDATA"
+    finally:
+        economy._resolve_avatar_user = orig
+        economy._AVATAR_CACHE.clear()
+        economy._AVATAR_FAIL.clear()
+
+
+def test_economy_display_name_of() -> None:
+    # economy ist im Test nicht aktiviert -> None statt Crash.
+    assert economy.display_name_of(123456789012345678) is None
 
 
 def test_admin_ansage_parsing() -> None:
