@@ -21,6 +21,7 @@ import discord
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import admin
 import ai
 import bayern
 import casino
@@ -122,6 +123,9 @@ MOD_ENABLED = moderation.setup()
 # Wort-Zaehler ('Flo woerter <wort>'): zaehlt passiv jedes Wort auf dem Server,
 # beim ersten Start liest ein Backfill die komplette History ein.
 WORDS_ENABLED = words.setup()
+# Admin-Befehle (nur OWNER_ID): Coins geben/nehmen/setzen, XP, Ansagen, Shop -
+# im Server UND privat per DM. Andere bekommen in DMs keine Antwort.
+ADMIN_ENABLED = admin.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -152,7 +156,7 @@ WEISHEITEN = [
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
-     WORDS_ENABLED]
+     WORDS_ENABLED, ADMIN_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -160,6 +164,10 @@ if _NEED_MESSAGES or AUTODELETE_CHANNEL_IDS:
     # guild_messages: noetig, um Nachrichten-Events ueberhaupt zu EMPFANGEN
     # (sonst feuert on_message nie). Ist KEIN privilegiertes Intent.
     intents.guild_messages = True
+    # dm_messages: Privatnachrichten empfangen (Owner-DM-Steuerung). Der
+    # Nachrichten-TEXT ist in DMs immer verfuegbar, das privilegierte
+    # message_content-Intent gilt nur fuer Server-Nachrichten.
+    intents.dm_messages = True
 if _NEED_MESSAGES:
     # message_content: noetig, um den TEXT der Nachricht zu lesen. Privilegiert -
     # muss zusaetzlich im Discord Developer Portal aktiviert sein.
@@ -882,6 +890,87 @@ async def _release_after(message: discord.Message, delay: float) -> None:
         log.warning("Auto-Loeschen (Spielende) fehlgeschlagen: %s", exc)
 
 
+async def _send_restart_prompt(message: discord.Message) -> None:
+    """Schickt die Neustart-Sicherheitsabfrage (Server ODER Owner-DM)."""
+    view = RestartConfirmView(OWNER_ID)
+    emb = discord.Embed(
+        title="🔄 Kompletten Neustart?",
+        description=("Soll ich den **ganzen Bot** neu starten? "
+                     "Laufende Musik/Voice wird dabei getrennt."),
+        color=discord.Color.orange())
+    try:
+        view.message = await message.reply(embed=emb, view=view, mention_author=False)
+    except discord.HTTPException:
+        log.exception("Restart-Abfrage konnte nicht gesendet werden")
+
+
+async def _handle_owner_dm(message: discord.Message) -> None:
+    """Privatnachrichten des BESITZERS: Admin-Befehle, Restart, Hilfe und
+    normaler KI-Chat - ganz ohne 'Flo' davor. Alle anderen DMs beantwortet
+    der Bot bewusst nicht (der Aufrufer filtert schon auf OWNER_ID)."""
+    content = message.content or ""
+    if not content.strip() and not message.attachments:
+        return
+
+    if _is_restart(content):
+        await _send_restart_prompt(message)
+        return
+    if _is_help(content):
+        view = HelpView()
+        try:
+            view.message = await message.reply(
+                embed=_help_overview_embed(), view=view, mention_author=False)
+        except discord.HTTPException:
+            log.exception("Hilfe (DM) konnte nicht gesendet werden")
+        return
+
+    # Tippfehler-Toleranz wie im Server (nur fuer den Befehls-Durchlauf).
+    _orig_content = message.content
+    try:
+        _norm = cmdnorm.normalize(ai.strip_lead(content))
+    except Exception:  # noqa: BLE001
+        _norm = None
+    if _norm is not None:
+        message.content = f"{ai.bot_name()} {_norm}"
+
+    antwort: "str | discord.Embed | None" = None
+    if ADMIN_ENABLED:
+        try:
+            antwort = await admin.handle(message)
+        except Exception:
+            log.exception("Admin-Befehl (DM) fehlgeschlagen")
+            antwort = "Da ist gerade etwas schiefgelaufen."
+    message.content = _orig_content
+
+    if antwort is not None:
+        log.info("Admin-DM von %s: %s", message.author.display_name, content[:80])
+        await _send_reply(message, antwort)
+        return
+
+    # Kein Admin-Befehl -> normaler KI-Chat (auch mit Bild).
+    if not AI_ENABLED:
+        return
+    ai.note_message(message.channel.id, message.author.display_name, content)
+    title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
+    tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
+    image_url = _first_image_url(message)
+    async with message.channel.typing():
+        try:
+            if image_url:
+                antwort = await ai.see_image(
+                    content, image_url, author=message.author.display_name,
+                    title=title, tone=tone, channel_id=message.channel.id)
+            else:
+                antwort = await ai.ask_flo(
+                    content, author=message.author.display_name, title=title,
+                    tone=tone, channel_id=message.channel.id)
+        except Exception:
+            log.exception("KI-Antwort (DM) fehlgeschlagen")
+            antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
+    ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
+    await _reply_chunks(message, antwort)
+
+
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
@@ -920,6 +1009,10 @@ async def on_message(message: discord.Message) -> None:
     if message.author.bot:
         return
     if message.guild is None:
+        # Privatnachrichten: NUR der Besitzer bekommt Antworten (Admin-Befehle
+        # + KI-Chat). Alle anderen duerfen schreiben - Flo bleibt dort stumm.
+        if OWNER_ID and message.author.id == OWNER_ID:
+            await _handle_owner_dm(message)
         return
 
     content = message.content or ""
@@ -975,16 +1068,7 @@ async def on_message(message: discord.Message) -> None:
                 description="Nur mein Besitzer darf mich neu starten. 😉",
                 color=discord.Color.red()))
             return
-        view = RestartConfirmView(OWNER_ID)
-        emb = discord.Embed(
-            title="🔄 Kompletten Neustart?",
-            description=("Soll ich den **ganzen Bot** neu starten? "
-                         "Laufende Musik/Voice wird dabei getrennt."),
-            color=discord.Color.orange())
-        try:
-            view.message = await message.reply(embed=emb, view=view, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Restart-Abfrage konnte nicht gesendet werden")
+        await _send_restart_prompt(message)
         return
 
     # 'Flo hilfe' / 'Flo befehle' -> interaktives Menue mit Kategorie-Buttons.
@@ -1015,6 +1099,7 @@ async def on_message(message: discord.Message) -> None:
         for enabled, handler in (
             (BAYERN_ENABLED, bayern.handle),
             (MOD_ENABLED, moderation.handle),
+            (ADMIN_ENABLED, admin.handle),
             (MUSIC_ENABLED, music.handle),
             (VOICE_GAGS_ENABLED, voicegags.handle),
             (GAMES_ENABLED, games.handle),

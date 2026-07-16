@@ -1,12 +1,15 @@
-"""Pur-logische Tests fuer Casino-, Spiel- und Wort-Zaehler-Logik.
+"""Pur-logische Tests fuer Casino-, Spiel-, Wort-Zaehler- und Admin-Logik.
 
 Laufen OHNE Discord-Verbindung und ohne Zusatzpakete (gleicher Runner wie
 test_logic.py):  python test_games_logic.py
 """
 from __future__ import annotations
 
+import asyncio
 import random
+from types import SimpleNamespace
 
+import admin
 import casino
 import cmdnorm
 import render
@@ -146,6 +149,61 @@ def test_cmdnorm_neue_befehle() -> None:
     # Exakte neue Befehle bleiben unveraendert (None = nichts zu korrigieren).
     assert cmdnorm.normalize("wörter pizza") is None
     assert cmdnorm.normalize("mines 50 3") is None
+
+
+# --- Admin-Befehle (nur Besitzer) -----------------------------------------------------
+def _fake_msg(uid: int, content: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        author=SimpleNamespace(id=uid, bot=False, display_name="Tester"),
+        content=content, mentions=[], guild=None)
+
+
+def test_admin_extract() -> None:
+    # Mention + Betrag
+    uid, amount = admin._extract("<@1040135855710404659> 250")
+    assert uid == 1040135855710404659 and amount == 250
+    # Rohe ID + Betrag (DM-Fall)
+    uid, amount = admin._extract("123456789012345678 100")
+    assert uid == 123456789012345678 and amount == 100
+    # Negativer Betrag
+    uid, amount = admin._extract("123456789012345678 -50")
+    assert uid == 123456789012345678 and amount == -50
+    # Nichts Brauchbares
+    assert admin._extract("hallo welt") == (None, None)
+    # Betrag ohne Ziel
+    uid, amount = admin._extract("500")
+    assert uid is None and amount == 500
+
+
+def test_admin_owner_gate() -> None:
+    admin.setup()
+    # Fremde bekommen von admin.handle grundsaetzlich None (kein Befehl, keine Antwort).
+    fremd = asyncio.run(admin.handle(_fake_msg(999, "gib 123456789012345678 100")))
+    assert fremd is None
+    # Besitzer: unbekanntes Wort -> None (KI/andere Handler sind dran).
+    frei = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "wie geht's dir?")))
+    assert frei is None
+    # Besitzer: Admin-Befehl wird erkannt (economy ist im Test aus -> Hinweis-Text).
+    antwort = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID,
+                                                 "gib 123456789012345678 100")))
+    assert isinstance(antwort, str) and "Economy" in antwort
+    # Besitzer: 'gib' als normales Chat-Wort (kein Ziel, kein Betrag) wird NICHT
+    # gekapert - die KI soll antworten duerfen.
+    chat = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID,
+                                              "gib mir mal einen Tipp")))
+    assert chat is None
+    # Adminhilfe kommt als Embed.
+    hilfe = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "adminhilfe")))
+    assert hilfe is not None and not isinstance(hilfe, str)
+
+
+def test_cmdnorm_admin_sicherheit() -> None:
+    # Alltagswoerter, die 1 Tippfehler von Admin-Befehlen entfernt sind,
+    # duerfen NICHT gekapert werden.
+    for satz in ("nimmt das ernst", "profi tipp", "ansagen bitte"):
+        assert cmdnorm.normalize(satz) is None, satz
+    # Echte Vertipper werden weiterhin korrigiert.
+    assert cmdnorm.normalize("admiin") == "admin"
 
 
 def run() -> None:

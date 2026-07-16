@@ -53,6 +53,9 @@ KNOWN: set[str] = {
     # words (Wort-Zaehler)
     "wörter", "woerter", "wort", "worte", "wortzähler", "wortzaehler",
     "words", "word", "wordcount",
+    # admin (nur Besitzer - schadet als Korrekturziel niemandem)
+    "gib", "nimm", "setcoins", "gibxp", "profil", "ansage", "shopneu",
+    "adminhilfe", "admin",
     # fun
     "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
     "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",
@@ -98,6 +101,8 @@ STOPWORDS: set[str] = {
     "orte", "ort", "worten", "wert", "werte",
     # 1 Tippfehler von 'minen'/'bomben' - Alltagswoerter nicht kapern:
     "meinen", "mienen", "bombe",
+    # 1 Tippfehler von 'nimm'/'profil'/'ansage' (Admin-Befehle):
+    "nimmt", "profi", "ansagen",
 }
 # Echte Befehle nie als Stopword blocken:
 STOPWORDS -= KNOWN
