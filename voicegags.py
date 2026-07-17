@@ -24,6 +24,7 @@ from pathlib import Path
 import discord
 
 import ai
+from store import JsonStore
 
 log = logging.getLogger("dcbot.voice")
 
@@ -34,6 +35,7 @@ _enabled: bool = False
 _bot_name: str = "Flo"
 _tts_engine: str = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
 _join_sounds: bool = False
+_store: JsonStore | None = None   # persistente Schalter (Soundboard an/aus)
 
 # Hintergrund-Tasks (Sound spielt bis zu 60 s - Button antwortet sofort).
 _bg: set[asyncio.Task] = set()
@@ -100,6 +102,8 @@ def setup() -> bool:
             log.exception("Soundpack-Generierung fehlgeschlagen")
     _tts_engine = _detect_tts()
     _join_sounds = os.getenv("JOIN_SOUNDS", "0").strip().lower() in ("1", "true", "yes", "on")
+    global _store
+    _store = JsonStore("voicegags.json", default={"soundboard": True})
     _enabled = True
     log.info(
         "Voice-Gags aktiv (Sounds: %s, TTS: %s, Join-Sounds: %s).",
@@ -122,6 +126,21 @@ def _detect_tts() -> str:
         if shutil.which(binary):
             return binary
     return ""
+
+
+def soundboard_enabled() -> bool:
+    """Owner-Schalter: darf das Soundboard gerade benutzt werden?"""
+    if _store is None:
+        return True
+    return bool(_store.data.get("soundboard", True))
+
+
+async def set_soundboard(an: bool) -> None:
+    """Schaltet das Soundboard an/aus (persistiert; nur admin.py ruft das)."""
+    if _store is None:
+        return
+    _store.data["soundboard"] = bool(an)
+    await _store.save()
 
 
 def _count_sounds() -> int:
@@ -166,6 +185,8 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
     rest = parts[1] if len(parts) > 1 else ""
 
     if first in ("sounds", "soundboard", "soundliste"):
+        if not soundboard_enabled():
+            return "Das Soundboard ist gerade **deaktiviert**. 🔇"
         sounds = _list_sounds()
         if not sounds:
             return (f"Noch keine Sounds da. Leg Dateien in `{SOUNDS_DIR.name}/` "
@@ -173,6 +194,8 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
         return await _open_soundboard(message, sounds)
 
     if first in ("sound", "sb", "soundeffekt"):
+        if not soundboard_enabled():
+            return "Das Soundboard ist gerade **deaktiviert**. 🔇"
         return await _cmd_sound(message, rest)
 
     if first in ("sprich", "tts", "say", "vorlesen"):
@@ -205,6 +228,10 @@ class _SoundBtn(discord.ui.Button):
         self.sound_name = name
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not soundboard_enabled():
+            await interaction.response.send_message(
+                "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
+            return
         member = interaction.user
         vs = getattr(member, "voice", None)
         channel = vs.channel if vs and vs.channel else None

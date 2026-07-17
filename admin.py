@@ -128,6 +128,13 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
         return await _announce(message, rest)
     if first in ("dm", "flüster", "fluester"):
         return await _dm(message, rest)
+    if first in ("soundboard", "sounds", "soundliste"):
+        # NUR die an/aus-Form abfangen - 'flo soundboard' ohne Argument faellt
+        # durch an voicegags (der Owner will das Board ja auch benutzen).
+        schalter = rest.strip().lower()
+        if schalter in ("an", "ein", "on", "aus", "off"):
+            return await _toggle_soundboard(schalter in ("an", "ein", "on"))
+        return None
     if first in ("shopneu", "shoprefresh"):
         return await _shop_refresh()
     if first in ("admin", "adminhilfe", "adminhelp"):
@@ -289,6 +296,24 @@ async def _dm(message: discord.Message, rest: str) -> "str | discord.Embed":
     return emb
 
 
+async def _toggle_soundboard(an: bool) -> "str | discord.Embed":
+    """Soundboard serverweit an-/abschalten (persistiert ueber Neustarts)."""
+    try:
+        import voicegags
+        if not voicegags.is_enabled():
+            return "Voice-Gags sind gerade komplett aus (ffmpeg/PyNaCl fehlt?)."
+        await voicegags.set_soundboard(an)
+    except Exception:  # noqa: BLE001
+        log.exception("Soundboard-Toggle fehlgeschlagen")
+        return "Da ist beim Umschalten etwas schiefgelaufen."
+    if an:
+        return _emb("🔊 Soundboard ist wieder **AN** - lasst es krachen!",
+                    color=discord.Color.green())
+    return _emb("🔇 Soundboard ist jetzt **AUS** - niemand kann Sounds abspielen "
+                f"(wieder an: `{_bot_name} soundboard an`).",
+                color=discord.Color.orange())
+
+
 async def _shop_refresh() -> str:
     if not economy.is_enabled():
         return "Economy (Flo Coins) ist gerade aus."
@@ -311,7 +336,7 @@ def _admin_help() -> discord.Embed:
                   value=f"`{n} gibxp @wer 250` · `{n} profil @wer`", inline=False)
     emb.add_field(name="Server",
                   value=(f"`{n} ansage <channel-id> <text>` · `{n} shopneu`\n"
-                         f"`{n} restart`"), inline=False)
+                         f"`{n} soundboard an/aus` · `{n} restart`"), inline=False)
     emb.add_field(name="DM-Relay",
                   value=(f"`{n} dm @wer <text>` – {n} schreibt privat; "
                          "Antworten landen automatisch bei dir."), inline=False)

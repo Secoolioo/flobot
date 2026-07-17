@@ -284,6 +284,38 @@ def test_admin_dm_parsing() -> None:
     assert uid == 123456789012345678 and text == ""
 
 
+def test_admin_soundboard_toggle() -> None:
+    import voicegags
+    admin.setup()
+
+    class FakeStore:
+        def __init__(self):
+            self.data = {"soundboard": True}
+            self.saved = 0
+
+        async def save(self):
+            self.saved += 1
+
+    fake = FakeStore()
+    alt_store, alt_enabled = voicegags._store, voicegags._enabled
+    voicegags._store, voicegags._enabled = fake, True
+    try:
+        assert voicegags.soundboard_enabled()
+        # Owner schaltet aus -> Embed + persistiert + Schalter greift.
+        antwort = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard aus")))
+        assert antwort is not None and not isinstance(antwort, str)
+        assert not voicegags.soundboard_enabled() and fake.saved == 1
+        # Wieder an.
+        asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard an")))
+        assert voicegags.soundboard_enabled() and fake.saved == 2
+        # 'soundboard' OHNE an/aus faellt durch (None) - voicegags zeigt das Board.
+        assert asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard"))) is None
+        # Fremde koennen nicht schalten.
+        assert asyncio.run(admin.handle(_fake_msg(999, "soundboard aus"))) is None
+    finally:
+        voicegags._store, voicegags._enabled = alt_store, alt_enabled
+
+
 def test_cmdnorm_admin_sicherheit() -> None:
     # Alltagswoerter, die 1 Tippfehler von Admin-Befehlen entfernt sind,
     # duerfen NICHT gekapert werden.
