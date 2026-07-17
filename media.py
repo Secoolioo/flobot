@@ -130,15 +130,23 @@ async def _fetch_avatar(user) -> "bytes | None":
 
 async def _cmd_quote(message: discord.Message, text: str):
     target = message.author
-    quote = text
+    # Mention-Reste und umschliessende Anfuehrungszeichen aufraeumen
+    # (die Karte setzt selbst typografische Anfuehrungszeichen).
+    quote = re.sub(r"<@!?\d+>", " ", text).strip().strip('"„“”\'').strip()
+    # `flo quote @wer <text>` -> das Zitat der ERWAEHNTEN Person in den Mund legen.
+    erwaehnt = next((m for m in message.mentions if not m.bot), None)
+    if erwaehnt is not None:
+        target = erwaehnt
     # Als Antwort auf eine Nachricht ohne eigenen Text -> deren Inhalt + Autor zitieren.
     ref = message.reference.resolved if message.reference is not None else None
     if isinstance(ref, discord.Message) and not quote:
         quote = (ref.content or "").strip()
-        target = ref.author
+        if erwaehnt is None:
+            target = ref.author
     if not quote:
-        return (f"Was soll das Zitat sein? z. B. `{_bot_name} quote Pizza ist Leben` "
-                f"- oder antworte mit `{_bot_name} quote` auf eine Nachricht.")
+        return (f"Was soll das Zitat sein? z. B. `{_bot_name} quote Pizza ist Leben`, "
+                f"`{_bot_name} quote @wer Ich liebe Montage` - oder antworte mit "
+                f"`{_bot_name} quote` auf eine Nachricht.")
     avatar = await _fetch_avatar(target)
     name = getattr(target, "display_name", None) or "Unbekannt"
     try:

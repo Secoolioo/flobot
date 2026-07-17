@@ -445,7 +445,7 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
     ]),
     "bilder": ("Bilder", 0x9B7BE0, [
         ("flo male <was>", "Bild generieren (gratis)"),
-        ("flo quote <text>", "Quote-Meme - auch als Reply"),
+        ("flo quote [@wer] <text>", "Quote-Meme - für dich, @wen oder als Reply"),
         ("flo kalorien + Bild", "Essen analysieren"),
         ("Bild anhängen + Frage", "Flo schaut sich Bilder an"),
     ]),
