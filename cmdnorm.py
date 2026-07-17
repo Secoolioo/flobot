@@ -58,6 +58,12 @@ KNOWN: set[str] = {
     "adminhilfe", "admin",
     # luxus
     "luxus", "luxury", "prestige", "thron", "throne",
+    # neue casino-spiele
+    "hilo", "tower", "turm", "sieben", "baccarat", "bakkarat", "punto",
+    "doppelt",
+    # coin-spiele
+    "mathe", "rechnen", "kopfrechnen", "anagramm", "wortsalat", "reaktion",
+    "reaktionstest", "reflex", "quizduell",
     # fun
     "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
     "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",
@@ -105,6 +111,8 @@ STOPWORDS: set[str] = {
     "meinen", "mienen", "bombe",
     # 1 Tippfehler von 'nimm'/'profil'/'ansage' (Admin-Befehle):
     "nimmt", "profi", "ansagen",
+    # 1 Tippfehler von 'turm' - 'Sturm' ist Alltagssprache:
+    "sturm",
 }
 # Echte Befehle nie als Stopword blocken:
 STOPWORDS -= KNOWN

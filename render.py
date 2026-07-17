@@ -172,7 +172,8 @@ def _bj_img(dealer: list, player: list, *, hide_hole: bool,
             n_dealer: "int | None" = None, n_player: "int | None" = None,
             slide: "tuple[str, int] | None" = None,
             hole_flip: "float | None" = None,
-            hide_values: bool = False) -> Image.Image:
+            hide_values: bool = False,
+            labels: tuple = ("DEALER", "DU")) -> Image.Image:
     """Blackjack-Tisch als Image. Animations-Parameter:
     ``n_dealer``/``n_player``: nur die ersten n Karten zeigen (Deal-Animation),
     ``slide``: ('player'|'dealer', dx) - letzte gezeigte Karte um dx versetzt,
@@ -198,11 +199,11 @@ def _bj_img(dealer: list, player: list, *, hide_hole: bool,
         img.paste(tile, (x, y), tile)
 
     # Dealer-Reihe
-    d.text((pad, pad - 2), "DEALER", font=_font(26), fill=_WHITE)
+    d.text((pad, pad - 2), labels[0], font=_font(26), fill=_WHITE)
     dv = "–" if hide_values else ("?" if hide_hole else str(dealer_value))
     dv_bg = (231, 76, 60) if (not hide_hole and not hide_values
                               and dealer_value > 21) else (0, 0, 0, 110)
-    _pill(d, pad + 132, pad - 6, dv, 22, dv_bg, _WHITE)
+    _pill(d, pad + 26 + int(d.textlength(labels[0], font=_font(26))), pad - 6, dv, 22, dv_bg, _WHITE)
     ry = pad + label_h
     rx = _row_start(W, len(dealer), gap)
     for i, (r, s) in enumerate(dealer[:nd]):
@@ -222,14 +223,14 @@ def _bj_img(dealer: list, player: list, *, hide_hole: bool,
     # Spieler-Reihe
     py = pad + label_h + CARD_H + row_gap
     d = ImageDraw.Draw(img, "RGBA")
-    d.text((pad, py - 2), "DU", font=_font(26), fill=_WHITE)
+    d.text((pad, py - 2), labels[1], font=_font(26), fill=_WHITE)
     pstate_col = {
         "bust": (231, 76, 60), "lose": (231, 76, 60),
         "blackjack": (241, 196, 15), "win": (46, 204, 113),
         "push": (120, 130, 145),
     }.get(player_state, (0, 0, 0, 110))
-    _pill(d, pad + 70, py - 6, "–" if hide_values else str(player_value),
-          22, pstate_col, _WHITE)
+    _pill(d, pad + 26 + int(d.textlength(labels[1], font=_font(26))), py - 6,
+          "–" if hide_values else str(player_value), 22, pstate_col, _WHITE)
     ry2 = py + label_h
     rx = _row_start(W, len(player), gap)
     for i, (r, s) in enumerate(player[:np_]):
@@ -242,24 +243,26 @@ def _bj_img(dealer: list, player: list, *, hide_hole: bool,
 
 def blackjack_table(dealer: list, player: list, *, hide_hole: bool,
                     dealer_value: int, player_value: int,
-                    player_state: str = "") -> io.BytesIO:
+                    player_state: str = "",
+                    labels: tuple = ("DEALER", "DU")) -> io.BytesIO:
     """Rendert den Blackjack-Tisch als ein Bild (statisch - Fallback und
     Grundlage der Frames von blackjack_table_anim)."""
     return _png(_bj_img(dealer, player, hide_hole=hide_hole,
                         dealer_value=dealer_value, player_value=player_value,
-                        player_state=player_state))
+                        player_state=player_state, labels=labels))
 
 
 def blackjack_table_anim(dealer: list, player: list, *, hide_hole: bool,
                          dealer_value: int, player_value: int,
-                         player_state: str = "", mode: str = "hit") -> io.BytesIO:
+                         player_state: str = "", mode: str = "hit",
+                         labels: tuple = ("DEALER", "DU")) -> io.BytesIO:
     """Blackjack als GIF. ``mode``:
     - 'deal'   : die Startkarten werden einzeln ausgeteilt
     - 'hit'    : die zuletzt gezogene Spieler-Karte slidet ein
     - 'reveal' : die Hole-Card flippt um, Dealer-Karten erscheinen nacheinander
     Gewinn/Blackjack endet mit Blitz + Konfetti, Bust mit rotem Blitz."""
     kw = dict(hide_hole=hide_hole, dealer_value=dealer_value,
-              player_value=player_value)
+              player_value=player_value, labels=labels)
     frames: list[Image.Image] = []
     durations: list[int] = []
 
@@ -453,52 +456,104 @@ def crash_chart(crash_point: float, target: float, cashed: bool) -> io.BytesIO:
 SLOT_KEYS = ["seven", "diamond", "star", "bar", "grape", "lemon", "cherry"]
 
 
+def _ball(d: ImageDraw.ImageDraw, cx: float, cy: float, r: float,
+          col: tuple, dark: tuple, light: tuple) -> None:
+    """Kugel mit Fake-3D: dunkler Rand, Koerper, Schattierung, Glanzpunkt."""
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=dark)
+    d.ellipse([cx - r * 0.93, cy - r * 0.93, cx + r * 0.93, cy + r * 0.93], fill=col)
+    d.ellipse([cx - r * 0.55, cy - r * 0.05, cx + r * 0.8, cy + r * 0.85], fill=dark)
+    d.ellipse([cx - r * 0.75, cy - r * 0.72, cx + r * 0.45, cy + r * 0.4], fill=col)
+    d.ellipse([cx - r * 0.55, cy - r * 0.62, cx - r * 0.05, cy - r * 0.12], fill=light)
+
+
 def _slot_symbol(d: ImageDraw.ImageDraw, cx: float, cy: float, R: float, key: str) -> None:
+    """Slot-Symbole mit Schattierung, Kontur und Glanz (kein Flat-Look)."""
     if key == "seven":
-        d.text((cx, cy), "7", font=_font(int(R * 1.95)), fill=(228, 46, 52), anchor="mm")
+        f = _font(int(R * 1.95))
+        d.text((cx + R * 0.09, cy + R * 0.09), "7", font=f, fill=(120, 14, 20),
+               anchor="mm")                                   # Schlagschatten
+        d.text((cx, cy), "7", font=f, fill=(232, 48, 56), anchor="mm")
+        d.text((cx - R * 0.06, cy - R * 0.08), "7", font=_font(int(R * 1.82)),
+               fill=(255, 110, 110), anchor="mm")             # Licht-Kante
     elif key == "bar":
-        w, h = R * 1.5, R * 0.6
-        d.rounded_rectangle([cx - w, cy - h, cx + w, cy + h], radius=10,
-                            fill=(142, 68, 173), outline=(92, 42, 118), width=3)
-        d.text((cx, cy), "BAR", font=_font(int(R * 0.8)), fill=(245, 240, 250), anchor="mm")
+        w, h = R * 1.5, R * 0.62
+        d.rounded_rectangle([cx - w + 4, cy - h + 5, cx + w + 4, cy + h + 5],
+                            radius=12, fill=(60, 26, 80))     # Schatten
+        d.rounded_rectangle([cx - w, cy - h, cx + w, cy + h], radius=12,
+                            fill=(142, 68, 173), outline=(245, 197, 24), width=3)
+        d.rounded_rectangle([cx - w + 6, cy - h + 5, cx + w - 6, cy - h * 0.15],
+                            radius=8, fill=(168, 96, 198))    # oberer Glanz
+        f = _font(int(R * 0.8))
+        d.text((cx + 2, cy + 2), "BAR", font=f, fill=(70, 30, 95), anchor="mm")
+        d.text((cx, cy), "BAR", font=f, fill=(255, 250, 235), anchor="mm")
     elif key == "star":
-        pts = []
-        for i in range(10):
-            ang = -math.pi / 2 + i * math.pi / 5
-            rr = R if i % 2 == 0 else R * 0.42
-            pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
-        d.polygon(pts, fill=(245, 197, 24), outline=(190, 150, 12))
+        def stern(rr_out: float, rr_in: float, off: float = 0.0) -> list:
+            pts = []
+            for i in range(10):
+                ang = -math.pi / 2 + i * math.pi / 5
+                rr = rr_out if i % 2 == 0 else rr_in
+                pts.append((cx + rr * math.cos(ang) + off,
+                            cy + rr * math.sin(ang) + off))
+            return pts
+        d.polygon(stern(R, R * 0.42, off=R * 0.07), fill=(150, 110, 12))  # Schatten
+        d.polygon(stern(R, R * 0.42), fill=(250, 204, 32), outline=(170, 125, 8))
+        d.polygon(stern(R * 0.62, R * 0.26), fill=(255, 232, 120))
+        _sparkle(d, cx - R * 0.5, cy - R * 0.55, R * 0.2, (255, 255, 255))
     elif key == "diamond":
         t = (cx, cy - R); b = (cx, cy + R * 1.05)
-        l = (cx - R * 0.82, cy - R * 0.18); r = (cx + R * 0.82, cy - R * 0.18)
-        d.polygon([t, r, b, l], fill=(52, 170, 219), outline=(28, 108, 150))
-        d.line([l, r], fill=(205, 236, 250), width=2)
-        d.line([t, b], fill=(205, 236, 250), width=1)
+        l = (cx - R * 0.85, cy - R * 0.18); r = (cx + R * 0.85, cy - R * 0.18)
+        d.polygon([(t[0] + 3, t[1] + 4), (r[0] + 3, r[1] + 4),
+                   (b[0] + 3, b[1] + 4), (l[0] + 3, l[1] + 4)],
+                  fill=(20, 80, 112))                          # Schatten
+        d.polygon([t, r, b, l], fill=(64, 186, 235), outline=(24, 100, 140))
+        # Facetten: obere Kante hell, linke Flanke mittel
+        lt = (cx - R * 0.42, cy - R * 0.62)
+        rt = (cx + R * 0.42, cy - R * 0.62)
+        d.polygon([t, rt, (cx, cy - R * 0.18), lt], fill=(168, 228, 250))
+        d.polygon([l, lt, (cx, cy - R * 0.18), (cx, cy + R * 0.4)], fill=(110, 205, 242))
+        d.polygon([lt, rt, (cx, cy - R * 0.18)], fill=(214, 242, 252))
+        _sparkle(d, cx + R * 0.4, cy - R * 0.7, R * 0.22, (255, 255, 255))
     elif key == "cherry":
         rr = R * 0.5
-        d.line([(cx, cy - R), (cx - R * 0.55, cy + R * 0.25)], fill=(80, 140, 40), width=4)
-        d.line([(cx, cy - R), (cx + R * 0.55, cy + R * 0.25)], fill=(80, 140, 40), width=4)
-        for ox in (cx - R * 0.85, cx + R * 0.55):
-            oy = cy + R * 0.25
-            d.ellipse([ox - rr, oy - rr, ox + rr, oy + rr], fill=(214, 48, 49),
-                      outline=(150, 20, 25))
-            d.ellipse([ox - rr * 0.5, oy - rr * 0.55, ox - rr * 0.05, oy - rr * 0.1],
-                      fill=(245, 150, 150))
+        # Stiele mit leichtem Bogen + Blatt mit Ader
+        d.line([(cx, cy - R), (cx - R * 0.2, cy - R * 0.45),
+                (cx - R * 0.6, cy + R * 0.1)], fill=(96, 128, 48), width=5,
+               joint="curve")
+        d.line([(cx, cy - R), (cx + R * 0.25, cy - R * 0.4),
+                (cx + R * 0.5, cy + R * 0.1)], fill=(96, 128, 48), width=5,
+               joint="curve")
+        d.ellipse([cx - R * 0.1, cy - R * 1.25, cx + R * 0.65, cy - R * 0.8],
+                  fill=(96, 168, 62), outline=(60, 118, 38), width=2)
+        d.line([(cx + 0, cy - R * 1.02), (cx + R * 0.55, cy - R * 1.02)],
+               fill=(60, 118, 38), width=2)
+        _ball(d, cx - R * 0.72, cy + R * 0.3, rr, (222, 52, 58), (140, 18, 24),
+              (255, 170, 170))
+        _ball(d, cx + R * 0.5, cy + R * 0.38, rr, (236, 66, 72), (150, 22, 28),
+              (255, 190, 190))
     elif key == "lemon":
+        d.ellipse([cx - R * 0.9, cy - R * 0.56, cx + R * 0.98, cy + R * 0.68],
+                  fill=(190, 150, 10))                         # Schatten/Rand
         d.ellipse([cx - R * 0.92, cy - R * 0.62, cx + R * 0.92, cy + R * 0.62],
-                  fill=(245, 210, 38), outline=(200, 165, 10), width=2)
-        d.polygon([(cx + R * 0.45, cy - R * 0.45), (cx + R * 0.98, cy - R * 0.88),
-                   (cx + R * 0.7, cy - R * 0.3)], fill=(80, 160, 55))
+                  fill=(248, 214, 44), outline=(196, 158, 12), width=2)
+        # Enden-Noppen + Schattierung + Glanz
+        d.ellipse([cx - R * 1.04, cy - R * 0.16, cx - R * 0.78, cy + R * 0.16],
+                  fill=(248, 214, 44), outline=(196, 158, 12), width=2)
+        d.ellipse([cx + R * 0.78, cy - R * 0.16, cx + R * 1.04, cy + R * 0.16],
+                  fill=(248, 214, 44), outline=(196, 158, 12), width=2)
+        d.ellipse([cx - R * 0.55, cy - R * 0.45, cx + R * 0.2, cy - R * 0.05],
+                  fill=(255, 240, 150))
+        d.polygon([(cx + R * 0.4, cy - R * 0.5), (cx + R * 0.95, cy - R * 0.95),
+                   (cx + R * 0.72, cy - R * 0.32)], fill=(88, 165, 58))
     elif key == "grape":
-        rr = R * 0.32
-        for gx, gy in [(-0.5, 0.15), (0.5, 0.15), (0.0, 0.05), (-0.25, 0.6),
-                       (0.25, 0.6), (0.0, 1.05)]:
+        rr = R * 0.34
+        d.line([(cx, cy - R * 1.15), (cx, cy - R * 0.55)], fill=(112, 82, 42), width=5)
+        d.ellipse([cx + R * 0.02, cy - R * 1.32, cx + R * 0.72, cy - R * 0.9],
+                  fill=(96, 168, 62), outline=(60, 118, 38), width=2)
+        # Beeren von hinten nach vorn - jede mit eigenem Glanzpunkt
+        for gx, gy in [(-0.52, 0.0), (0.52, 0.0), (0.0, -0.12), (-0.28, 0.45),
+                       (0.28, 0.45), (0.0, 0.88)]:
             ox, oy = cx + gx * R, cy + gy * R - R * 0.2
-            d.ellipse([ox - rr, oy - rr, ox + rr, oy + rr], fill=(142, 82, 190),
-                      outline=(95, 50, 140))
-        d.line([(cx, cy - R), (cx, cy - R * 0.5)], fill=(110, 80, 40), width=4)
-        d.polygon([(cx, cy - R), (cx + R * 0.42, cy - R * 1.1), (cx + R * 0.15, cy - R * 0.6)],
-                  fill=(80, 160, 55))
+            _ball(d, ox, oy, rr, (148, 88, 198), (92, 46, 138), (208, 168, 235))
 
 
 def _slot_window(img: Image.Image, x: int, y: int, s: int, key: str) -> None:
@@ -1286,7 +1341,7 @@ def level_card(avatar: "bytes | None", *, name: str, level: int, into: int,
 # CPU-gebunden (Pillow) - die Aufrufer starten sie deshalb via
 # asyncio.to_thread, damit der Event-Loop nie blockiert. Frame-Anzahl und
 # Groessen sind bewusst klein gehalten (Discord spielt GIFs im Embed ab).
-def _gif(frames: list, durations, *, colors: int = 192) -> io.BytesIO:
+def _gif(frames: list, durations, *, colors: int = 144) -> io.BytesIO:
     """Frames (RGB/RGBA-Images) -> animiertes GIF. Die gemeinsame Palette wird
     aus Anfangs-, Mittel- UND Endframe gebaut - nur das Endbild wuerde Farben
     verlieren, die es selbst nicht enthaelt (z. B. Walzen-Symbole mitten im
@@ -1649,17 +1704,17 @@ def roulette_wheel_anim(spin: int, won: bool) -> io.BytesIO:
             _confetti(img, conf_t, seed=29)
         return img
 
-    N = 20
+    N = 16
     frames = [frame(i / N, final=False) for i in range(N)]
     if won:
         frames.append(_flash(frame(1.0, final=True), (46, 204, 113), 46))
         for ct in (0.3, 0.65):
             frames.append(frame(1.0, final=True, conf_t=ct))
         frames.append(frame(1.0, final=True))
-        durations = [55] * N + [90, 140, 140, 4000]
+        durations = [65] * N + [90, 140, 140, 4000]
     else:
         frames.append(frame(1.0, final=True))
-        durations = [55] * N + [4000]
+        durations = [65] * N + [4000]
     return _gif(frames, durations)
 
 
@@ -1867,17 +1922,17 @@ def wheel_fortune_anim(mults: list, idx: int) -> io.BytesIO:
             _confetti(img, conf_t, seed=11)
         return img
 
-    N = 18
+    N = 15
     frames = [frame((1.0 - _ease_out(i / N)) * 1080.0, final=False) for i in range(N)]
     if won:
         frames.append(frame(0.0, final=True, highlight=True))
         frames.append(frame(0.0, final=True, conf_t=0.3))
         frames.append(frame(0.0, final=True, highlight=True, conf_t=0.65))
         frames.append(frame(0.0, final=True))
-        durations = [60] * N + [110, 140, 140, 4000]
+        durations = [70] * N + [110, 140, 140, 4000]
     else:
         frames.append(frame(0.0, final=True))
-        durations = [60] * N + [4000]
+        durations = [70] * N + [4000]
     return _gif(frames, durations)
 
 
@@ -2025,6 +2080,74 @@ def casino_stats_card(name: str, avatar: "bytes | None", stats: dict) -> io.Byte
     else:
         d.text((34, head + 10), "Noch keine Runden gespielt.", font=_font(20),
                fill=(150, 155, 168))
+    return _png(img)
+
+
+# === HiLo-Karte ============================================================
+def hilo_card(rank: str, suit: str, *, streak: int, mult: float,
+              state: str = "") -> io.BytesIO:
+    """Hoeher/Tiefer: grosse Spielkarte + Serie/Multiplikator.
+    ``state``: '' (laeuft) / 'win' (Cashout) / 'lose'."""
+    W, H = 460, 300
+    img = _vgrad(W, H, (24, 30, 46), (11, 14, 22)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    rand = {"win": (46, 204, 113), "lose": (231, 76, 60)}.get(state, (245, 197, 24))
+    d.rounded_rectangle([6, 6, W - 6, H - 6], radius=18, outline=rand, width=4)
+    d.text((26, 20), "HÖHER / TIEFER", font=_font(24), fill=(245, 197, 24))
+    tile = _card_tile(rank, suit)
+    img.paste(tile, (44, 76), tile)
+    x0 = 230
+    d.text((x0, 84), "SERIE", font=_font(16), fill=(140, 146, 160))
+    d.text((x0, 106), f"{streak} richtig", font=_font(26), fill=_WHITE)
+    d.text((x0, 152), "MULTIPLIKATOR", font=_font(16), fill=(140, 146, 160))
+    d.text((x0, 174), f"×{mult:.2f}", font=_font(34), fill=(245, 197, 24))
+    if state == "win":
+        _pill(d, x0, 224, "CASHOUT!", 20, (46, 204, 113), (8, 28, 16))
+    elif state == "lose":
+        _pill(d, x0, 224, "VERLOREN", 20, (231, 76, 60), (30, 8, 8))
+    else:
+        d.text((x0, 226), "gleiche Karte = verloren", font=_font(15),
+               fill=(120, 126, 140))
+    return _png(img)
+
+
+# === Hilfe-Karten ==========================================================
+def help_card(title: str, accent: tuple, entries: list,
+              *, subtitle: str = "") -> io.BytesIO:
+    """Befehls-Uebersicht als Bild: pro Zeile links der Befehl als Code-Pille,
+    rechts die Kurzbeschreibung. ``entries``: [(befehl, beschreibung)] oder
+    [(befehl, beschreibung, rgb-farbe)] fuer eigene Pillen-Farben."""
+    W = 900
+    head, row_h = 92, 54
+    H = head + len(entries) * row_h + 24
+    img = _vgrad(W, H, (22, 24, 33), (12, 13, 19)).convert("RGBA")
+    d = ImageDraw.Draw(img, "RGBA")
+    d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18, outline=accent, width=3)
+
+    d.text((34, 24), _clean_text(title), font=_font(36), fill=_WHITE)
+    tw = d.textlength(_clean_text(title), font=_font(36))
+    d.line([(34, 70), (34 + tw, 70)], fill=accent, width=3)
+    if subtitle:
+        d.text((W - 34, 40), subtitle, font=_font(17), fill=(140, 146, 160),
+               anchor="rm")
+
+    cf, df = _font(19), _font(19)
+    y = head
+    for entry in entries:
+        cmd, desc = entry[0], entry[1]
+        col = entry[2] if len(entry) > 2 and entry[2] else accent
+        # Zebra-Hintergrund fuer Lesbarkeit (opak - Alpha wuerde beim
+        # RGB-Export zu Weiss werden)
+        if (y - head) // row_h % 2 == 1:
+            d.rounded_rectangle([16, y - 4, W - 16, y + row_h - 10], radius=10,
+                                fill=(30, 33, 44))
+        pw = int(d.textlength(cmd, font=cf)) + 26
+        d.rounded_rectangle([34, y, 34 + pw, y + 34], radius=9,
+                            fill=(10, 11, 16), outline=col, width=2)
+        d.text((34 + 13, y + 7), cmd, font=cf, fill=(235, 238, 245))
+        d.text((34 + pw + 20, y + 8), _clean_text(desc), font=df,
+               fill=(165, 172, 186))
+        y += row_h
     return _png(img)
 
 

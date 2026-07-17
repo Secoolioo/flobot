@@ -8,6 +8,7 @@ Start:
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import re
@@ -34,6 +35,7 @@ import luxus
 import media
 import moderation
 import music
+import render
 import schedule_logic
 import voicegags
 import words
@@ -387,17 +389,145 @@ def _help_categories() -> "list[tuple[str, str, str]]":
     return [(k, e, l) for k, e, l, on in cats if on]
 
 
+# Hilfe-Inhalte: (Titel, Farbe, [(befehl, kurz-beschreibung), ...]).
+# Bewusst KOMPAKT - die Details stecken im gerenderten Bild, nicht im Text.
+_HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
+    "musik": ("Musik", 0x1DB954, [
+        ("flo spiel <song/link>", "YouTube & Spotify abspielen"),
+        ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
+        ("flo nochmal [n]", "letzten Song nochmal"),
+        ("flo queue", "Warteschlange zeigen"),
+        ("flo lautstärke 50", "Lautstärke setzen"),
+        ("flo join · leave", "Voice rein / raus"),
+    ]),
+    "spiele": ("Spiele", 0xE67E22, [
+        ("flo quiz", "Quizfrage - Erster gewinnt 50 Coins"),
+        ("flo zahlenraten", "1-100 erraten, schnell = mehr Coins"),
+        ("flo würfel 2d6", "Würfeln (ohne Einsatz)"),
+        ("flo mathe 100", "Kopfrechnen: richtig = x2"),
+        ("flo reaktion 100", "Reaktionstest: schnell = bis x2,5"),
+        ("flo anagramm 100", "Wort entwirren: richtig = x3"),
+        ("flo quizduell @wer 100", "Quiz-Duell - Pot an den Schnellsten"),
+        ("flo ssp @wer 100", "Schere-Stein-Papier ums Geld"),
+        ("flo ssp schere", "SSP gegen Flo (+10 bei Sieg)"),
+    ]),
+    "economy": ("Level & Coins", 0xF1C40F, [
+        ("flo level · top", "Level-Karte & Bestenliste"),
+        ("flo daily", "Tagesbonus + Streak"),
+        ("flo coins · pay @wer 1k", "Kontostand & überweisen (1k = 1000)"),
+        ("flo shop · kaufen 3", "Tages-Titel (2 Uhr neu, Legendary wird ausgerufen)"),
+        ("flo inventar · titel <name>", "Titel verwalten & anlegen"),
+        ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
+    ]),
+    "casino": ("Casino", 0xE91E63, [
+        ("flo casino", "Übersicht - alles per Button"),
+        ("flo blackjack 100", "17+4: Karte / Stand / Double"),
+        ("flo mines 100 [bomben]", "Diamanten sammeln, vor der Bombe raus"),
+        ("flo roulette 100 rot", "Kessel dreht, Kugel entscheidet"),
+        ("flo crash 100 2.0", "Rakete - rechtzeitig aussteigen"),
+        ("flo slots 100 · keno 100 3 7", "Automat & Zahlen-Lotto"),
+        ("flo rad 100 · rubbellos 100", "Glücksrad & Rubbellos"),
+        ("flo hilo 100", "Höher/Tiefer - Serie aufbauen, Cashout"),
+        ("flo tower 100", "Turm hochklettern, Falle meiden"),
+        ("flo sieben 100 unter", "2 Würfel: unter / über / genau 7"),
+        ("flo baccarat 100 bank", "Spieler, Bank oder Tie (x8)"),
+        ("flo don 100", "Doppelt oder nichts - wie weit gehst du?"),
+        ("flo duell @wer 100 · stats", "Münz-Duell & deine Bilanz"),
+    ]),
+    "wörter": ("Wörter", 0x5794F2, [
+        ("flo wörter pizza", "wie oft schon gesagt + Top-Sager"),
+        ("flo wörter", "Top 15 des Servers als Bild"),
+    ]),
+    "chaos": ("Chaos", 0x9B59B6, [
+        ("flo roast @wer · hype @wer", "austeilen oder abfeiern"),
+        ("flo rate @wer · rizz @wer", "0-100 Bewertung mit Spruch"),
+        ("flo spruch · horoskop", "Weisheit & Tages-Horoskop"),
+    ]),
+    "bilder": ("Bilder", 0x9B7BE0, [
+        ("flo male <was>", "Bild generieren (gratis)"),
+        ("flo quote <text>", "Quote-Meme - auch als Reply"),
+        ("flo kalorien + Bild", "Essen analysieren"),
+        ("Bild anhängen + Frage", "Flo schaut sich Bilder an"),
+    ]),
+    "voice": ("Voice", 0x1ABC9C, [
+        ("flo sounds · sound <name>", "Soundboard abspielen"),
+        ("flo sprich <text>", "Text-to-Speech im Voice"),
+    ]),
+    "mod": ("Moderation", 0xED4245, [
+        ("flo lösch 20 · nuke", "aufräumen (Gepinntes bleibt)"),
+        ("flo warn @wer <grund>", "verwarnen (3x = Auto-Timeout)"),
+        ("flo timeout @wer 10m", "stummschalten"),
+        ("flo kick · ban @wer", "rauswerfen / sperren"),
+        ("flo unwarn · untimeout · unban", "alles wieder zurücknehmen"),
+    ]),
+    "ki": ("KI", 0x5865F2, [
+        ("flo <frage>", "einfach fragen - mit Kontext & Bildern"),
+        ("flo bayrisch an / aus", "Dialekt-Modus"),
+    ]),
+}
+# Kurz-Hinweise fuer die Uebersichts-Karte.
+_HELP_HINTS = {
+    "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
+    "economy": "level · daily · shop · luxus", "casino": "13 Spiele · stats",
+    "wörter": "wörter <wort>", "chaos": "roast · rate · horoskop",
+    "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
+    "mod": "lösch · warn · ban", "ki": "einfach fragen",
+}
+_help_png_cache: dict[str, bytes] = {}
+
+
+def _rgb(farbe: int) -> tuple:
+    return ((farbe >> 16) & 0xFF, (farbe >> 8) & 0xFF, farbe & 0xFF)
+
+
+async def _help_file(key: str) -> "discord.File | None":
+    """Hilfe-Karte als Bild (einmal gerendert, dann aus dem Cache)."""
+    png = _help_png_cache.get(key)
+    if png is None:
+        try:
+            if key == "_overview":
+                entries = [(label, _HELP_HINTS.get(k, ""), _rgb(_HELP_DATA[k][1]))
+                           for k, _e, label in _help_categories() if k in _HELP_DATA]
+                buf = await asyncio.to_thread(
+                    render.help_card, f"{ai.bot_name().upper()} – HILFE",
+                    (88, 101, 242), entries, subtitle="Kategorie unten antippen")
+            else:
+                titel, farbe, entries = _HELP_DATA[key]
+                buf = await asyncio.to_thread(render.help_card, titel,
+                                              _rgb(farbe), entries)
+            png = buf.getvalue()
+            _help_png_cache[key] = png
+        except Exception:  # noqa: BLE001 - dann eben Text-Fallback
+            log.exception("Hilfe-Karte fehlgeschlagen (%s)", key)
+            return None
+    fname = "help_uebersicht.png" if key == "_overview" else f"help_{key}.png"
+    return discord.File(io.BytesIO(png), filename=fname)
+
+
+async def _help_payload(key: "str | None") -> "tuple[discord.Embed, discord.File | None]":
+    """Embed + Karten-Bild fuer eine Kategorie (None = Uebersicht)."""
+    if key is None or key not in _HELP_DATA:
+        emb = _help_overview_embed()
+        file = await _help_file("_overview")
+        if file is not None:
+            emb.set_image(url="attachment://help_uebersicht.png")
+        return emb, file
+    titel, farbe, entries = _HELP_DATA[key]
+    emb = discord.Embed(title=titel, color=farbe)
+    file = await _help_file(key)
+    if file is not None:
+        emb.set_image(url=f"attachment://help_{key}.png")
+    else:
+        emb.description = "\n".join(f"`{c}` – {d}" for c, d in entries)
+    return emb, file
+
+
 def _help_overview_embed() -> discord.Embed:
-    """Startansicht des Hilfe-Menues - darunter ein Button je Kategorie."""
+    """Startansicht des Hilfe-Menues - kompakt, die Karte zeigt die Details."""
     name = ai.bot_name()
-    aliases = [n for n in ai.names() if n.lower() != name.lower()]
-    anrede = f"`{name} ...`"
-    if aliases:
-        anrede += " oder " + " / ".join(f"`{a} ...`" for a in aliases)
     emb = discord.Embed(
         title=f"🤖 {name} – Hilfe",
-        description=(f"Sprich mich mit {anrede} an.\n"
-                     "Tippe unten auf eine **Kategorie** für die passenden Befehle. 👇"),
+        description="Kategorie unten antippen. 👇",
         color=discord.Color.blurple(),
     )
     if client.user is not None:
@@ -405,177 +535,8 @@ def _help_overview_embed() -> discord.Embed:
             emb.set_thumbnail(url=client.user.display_avatar.url)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
             pass
-    cats = _help_categories()
-    if cats:
-        emb.add_field(
-            name="Aktive Bereiche",
-            value="\n".join(f"{e}  **{l}**" for _k, e, l in cats),
-            inline=False,
-        )
-    else:
-        emb.add_field(name="—", value="Gerade sind keine Spaß-Features aktiv.", inline=False)
-    emb.set_footer(text="Tipp: Kauf dir im Shop einen Titel – dann spricht Flo dich damit an!")
+    emb.set_footer(text=f"{name} <frage> geht immer · Titel im Shop ändern die Anrede")
     return emb
-
-
-def _help_detail_embed(key: str) -> discord.Embed:
-    """Detail-Ansicht einer Kategorie (wird beim Button-Klick eingeblendet)."""
-    name = ai.bot_name()
-    if key == "musik":
-        emb = discord.Embed(title="🎵 Musik",
-                            description="YouTube & Spotify direkt im Sprachkanal.",
-                            color=0x1DB954)
-        emb.add_field(name="Abspielen",
-            value=(f"`{name} spiel <link/suche>`\n`{name} <youtube/spotify-link>`\n"
-                   f"`{name} join` · `{name} leave`"), inline=False)
-        emb.add_field(name="Steuerung",
-            value=(f"`{name} skip` · `{name} pause` · `{name} weiter` · `{name} stop`\n"
-                   f"`{name} nochmal` – letzten Song wieder · `{name} nochmal 2` – den davor\n"
-                   "… oder einfach die **Buttons** unter dem laufenden Lied. 😉"), inline=False)
-        emb.add_field(name="Warteschlange",
-            value=(f"`{name} queue` · `{name} lautstärke 50`\n"
-                   "Neues Lied bei laufender Musik? Du bekommst einen Button für die **Position**!"),
-            inline=False)
-        return emb
-    if key == "spiele":
-        emb = discord.Embed(title="🎮 Spiele",
-                            description="Kleine Spiele für zwischendurch.",
-                            color=0xE67E22)
-        emb.add_field(name="Raten & Quiz",
-            value=f"`{name} quiz` · `{name} zahlenraten`", inline=False)
-        emb.add_field(name="Schnelle Runden",
-            value=(f"`{name} ssp schere/stein/papier`\n"
-                   f"`{name} coinflip 50 kopf` · `{name} slot 20` · `{name} würfel 2d6`"),
-            inline=False)
-        return emb
-    if key == "economy":
-        emb = discord.Embed(title="📈 Level & Flo Coins",
-                            description="Sammle XP und Coins, gib sie im Shop für Titel aus.",
-                            color=0xF1C40F)
-        emb.add_field(name="Level",
-            value=f"`{name} level` · `{name} top`", inline=False)
-        emb.add_field(name="Coins",
-            value=f"`{name} coins` · `{name} daily` · `{name} pay @x 100`", inline=False)
-        emb.add_field(name="Shop & Titel",
-            value=(f"`{name} shop` – jeden Tag um 2 Uhr **neue** Titel, einfach per "
-                   "**Button** kaufen.\n"
-                   f"`{name} inventar` · `{name} titel <name>` · `{name} titel ab`"),
-            inline=False)
-        emb.add_field(name="Seltenheit & Rollen",
-            value=("🟢 Normal · 🔵 Selten · 🟣 Mythisch · 🟡 Legendär\n"
-                   "Beim Kauf bekommst du die **farbige Rolle** dazu – und je seltener "
-                   "dein Titel, desto entspannter redet Flo mit dir. 😎"),
-            inline=False)
-        if LUXUS_ENABLED:
-            emb.add_field(name="Luxus & Thron 🏆",
-                value=(f"`{name} luxus` – Prestige von **15.000** bis "
-                       "**1 MILLIARDE** Coins: edle Rahmen für deine Level-Karte, "
-                       "die Königskrone … bis zum **FLO-IMPERIUM**.\n"
-                       f"`{name} thron` – es gibt nur **einen** Thron. Erobere ihn, "
-                       "bevor es ein anderer tut! ⚔️"), inline=False)
-        return emb
-    if key == "casino":
-        emb = discord.Embed(title="🎰 Casino",
-                            description="Setz deine Flo Coins – mit Köpfchen. 😏\n"
-                                        "Alle Spiele mit **Animationen** & Buttons.",
-                            color=0xE91E63)
-        emb.add_field(name="Übersicht", value=f"`{name} casino`", inline=False)
-        emb.add_field(name="Blackjack",
-            value=(f"`{name} blackjack 50` – danach per **Button** "
-                   "`Karte` / `Stand` / `Double`."), inline=False)
-        emb.add_field(name="Mines 💣",
-            value=(f"`{name} mines 50` – Diamanten aufdecken, per **Cashout** "
-                   "raus, bevor's knallt. Mehr Bomben = fettere Faktoren."),
-            inline=False)
-        emb.add_field(name="Weitere Spiele",
-            value=(f"`{name} crash 50 2.0` · `{name} keno 50 3 7 12` · "
-                   f"`{name} roulette 50 rot`\n"
-                   f"`{name} rad 50` (Glücksrad) · `{name} rubbellos 50`"),
-            inline=False)
-        emb.add_field(name="Duell & Bilanz",
-            value=(f"`{name} duell @wer 50` – Münz-Duell, Gewinner nimmt alles.\n"
-                   f"`{name} stats` – deine Casino-Bilanz als Karte."), inline=False)
-        return emb
-    if key == "wörter":
-        emb = discord.Embed(title="📊 Wörter",
-                            description="Flo zählt jedes Wort auf dem Server mit – "
-                                        "inklusive der kompletten Vergangenheit.",
-                            color=0x5794F2)
-        emb.add_field(name="Abfragen",
-            value=(f"`{name} wörter pizza` – wie oft wurde **pizza** schon gesagt "
-                   "(+ Rang & Top-Sager)."), inline=False)
-        emb.add_field(name="Top-Liste",
-            value=f"`{name} wörter` – die meistgesagten Wörter als Bild.", inline=False)
-        return emb
-    if key == "chaos":
-        emb = discord.Embed(title="😈 Chaos",
-                            description="Für die ganz feinen Sprüche.",
-                            color=0x9B59B6)
-        emb.add_field(name="Auf Personen",
-            value=(f"`{name} roast @x` · `{name} hype @x` · `{name} rate @x` · "
-                   f"`{name} rizz @x`"), inline=False)
-        emb.add_field(name="Einfach so",
-            value=f"`{name} spruch` · `{name} horoskop`", inline=False)
-        return emb
-    if key == "voice":
-        emb = discord.Embed(title="🔊 Voice",
-                            description="Sounds & Sprachausgabe im Sprachkanal.",
-                            color=0x1ABC9C)
-        emb.add_field(name="Befehle",
-            value=(f"`{name} sounds` · `{name} sound <name>` · `{name} sprich <text>`"),
-            inline=False)
-        return emb
-    if key == "mod":
-        emb = discord.Embed(title="🛡️ Moderation",
-                            description="Nur fürs Team – jede Aktion prüft Rechte.",
-                            color=0xED4245)
-        emb.add_field(name="Verwarnen",
-            value=f"`{name} warn @x Grund` · `{name} warns @x` · `{name} unwarn @x`",
-            inline=False)
-        emb.add_field(name="Timeout / Mute",
-            value=f"`{name} timeout @x 10m Grund` · `{name} untimeout @x`", inline=False)
-        emb.add_field(name="Kick / Bann",
-            value=f"`{name} kick @x Grund` · `{name} ban @x Grund` · `{name} unban <ID>`",
-            inline=False)
-        emb.add_field(name="Aufräumen",
-            value=(f"`{name} lösch <anzahl>` · `{name} lösch alle` · `{name} nuke`\n"
-                   "Angepinnte Nachrichten bleiben beim Löschen erhalten."), inline=False)
-        return emb
-    if key == "bilder":
-        emb = discord.Embed(title="🎨 Bilder",
-                            description="Bilder generieren, lesen lassen & Zitate basteln – alles gratis.",
-                            color=0x9B7BE0)
-        emb.add_field(name="Generieren",
-            value=(f"`{name} male <was>` · `{name} zeichne <was>`\n"
-                   f"z. B. `{name} male einen Drachen aus Neon`"), inline=False)
-        emb.add_field(name="Lesen / Sehen",
-            value=(f"Poste ein Bild und frag mich was dazu – ich schau's mir an. 👀\n"
-                   f"`{name} was ist das?` (mit Bild dran)"), inline=False)
-        emb.add_field(name="Zitat-Meme",
-            value=(f"`{name} quote <spruch>` – dein Profilbild + Spruch als Quote.\n"
-                   f"Oder antworte mit `{name} quote` auf eine Nachricht. 😎"), inline=False)
-        if FOOD_ENABLED:
-            emb.add_field(name="Kalorien-Check 🍎",
-                value=(f"Essensfoto in den **Kalorien-Channel** posten – ich sage dir "
-                       f"Kalorien, Eiweiß & wie natürlich es ist.\n"
-                       f"Überall sonst: `{name} kalorien` + Bild."), inline=False)
-        return emb
-    if key == "ki":
-        emb = discord.Embed(title="💬 KI",
-                            description="Kein Befehl erkannt? Dann antworte ich wie eine KI.",
-                            color=0x5865F2)
-        emb.add_field(name="So gehts",
-            value=(f"Stell mir einfach eine Frage:\n`{name} wie wird das Wetter?`\n"
-                   "Ich folge dem Gespräch und schaue mir auch **Bilder** an. 😉"),
-            inline=False)
-        if BAYERN_ENABLED:
-            emb.add_field(name="Boarisch 🥨",
-                value=(f"`{name} bayrisch an` – ab dann red i im Dialekt mit dir.\n"
-                       f"`{name} bayrisch aus` zum Zurückschalten. Vertippen? Halb so wild – "
-                       "ich erkenne Befehle auch mit **einem Buchstaben Fehler**."),
-                inline=False)
-        return emb
-    return _help_overview_embed()
 
 
 class _HelpNavButton(discord.ui.Button):
@@ -618,8 +579,9 @@ class HelpView(discord.ui.View):
     async def show(self, interaction: discord.Interaction, key: "str | None") -> None:
         self.active = key
         self._sync()
-        emb = _help_overview_embed() if key is None else _help_detail_embed(key)
-        await interaction.response.edit_message(embed=emb, view=self)
+        emb, file = await _help_payload(key)
+        await interaction.response.edit_message(
+            embed=emb, view=self, attachments=[file] if file else [])
 
     async def on_timeout(self) -> None:
         for child in self.children:
@@ -790,13 +752,41 @@ SHOP_REFRESH_TIME = dtime(hour=2, minute=0, tzinfo=TIMEZONE)
 @tasks.loop(time=SHOP_REFRESH_TIME)
 async def shop_refresh_loop() -> None:
     """Wuerfelt jede Nacht um 2 Uhr die Tagesauswahl des Flo Shops neu (random,
-    seltenheits-gewichtet). Faengt alle Fehler ab, damit der Bot weiterlaeuft."""
+    seltenheits-gewichtet). Ist ein LEGENDAERER Titel dabei, wird das im
+    Level-Up-Channel ausgerufen. Faengt alle Fehler ab."""
     try:
         st = await economy.refresh_shop_async(force=True)
         log.info("Flo Shop (2 Uhr) aktualisiert: %d Titel fuer %s.",
                  len(st.get("items", [])), st.get("date", "?"))
+        legendaere = [i for i in st.get("items", [])
+                      if i.get("rarity") == "legendary"]
+        if legendaere:
+            _spawn(_announce_legendary(legendaere))
     except Exception:
         log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
+
+
+async def _announce_legendary(items: list[dict]) -> None:
+    """Ruft legendaere Shop-Titel oeffentlich aus (nur heute im Angebot!)."""
+    guild = client.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    channel = guild.get_channel(economy.LEVELUP_CHANNEL_ID)
+    if channel is None or not channel.permissions_for(guild.me).send_messages:
+        channel = guild.system_channel
+    if channel is None:
+        return
+    zeilen = "\n".join(f"**{i.get('label', i.get('text', '?'))}** – "
+                       f"{i.get('price', '?')} {economy.COIN} (Nr. {i.get('n', '?')})"
+                       for i in items)
+    emb = discord.Embed(
+        title="🟡 LEGENDÄRER Titel im Shop!",
+        description=f"{zeilen}\n\nNur **heute** – `{ai.bot_name()} shop` 🏃",
+        color=discord.Color.gold())
+    try:
+        await channel.send(embed=emb)
+    except discord.HTTPException:
+        log.warning("Legendary-Ansage konnte nicht gesendet werden")
 
 
 def _keep_bot_msg(m: discord.Message) -> bool:
@@ -985,10 +975,11 @@ async def _handle_owner_dm(message: discord.Message) -> None:
         return
     if _is_help(content):
         view = HelpView()
+        emb, file = await _help_payload(None)
         try:
             view.message = await message.reply(
-                embed=_help_overview_embed(), view=view, mention_author=False)
-        except discord.HTTPException:
+                embed=emb, file=file, view=view, mention_author=False)
+        except (discord.HTTPException, TypeError):
             log.exception("Hilfe (DM) konnte nicht gesendet werden")
         return
 
@@ -1145,10 +1136,11 @@ async def on_message(message: discord.Message) -> None:
     # 'Flo hilfe' / 'Flo befehle' -> interaktives Menue mit Kategorie-Buttons.
     if _is_help(content):
         view = HelpView()
+        emb, file = await _help_payload(None)
         try:
             view.message = await message.reply(
-                embed=_help_overview_embed(), view=view, mention_author=False)
-        except discord.HTTPException:
+                embed=emb, file=file, view=view, mention_author=False)
+        except (discord.HTTPException, TypeError):
             log.exception("Hilfe konnte nicht gesendet werden")
         return
 
@@ -1158,10 +1150,11 @@ async def on_message(message: discord.Message) -> None:
         view = HelpView()
         view.active = _cat
         view._sync()
+        emb, file = await _help_payload(_cat)
         try:
             view.message = await message.reply(
-                embed=_help_detail_embed(_cat), view=view, mention_author=False)
-        except discord.HTTPException:
+                embed=emb, file=file, view=view, mention_author=False)
+        except (discord.HTTPException, TypeError):
             log.exception("Kategorie-Hilfe konnte nicht gesendet werden")
         return
 
@@ -1178,34 +1171,36 @@ async def on_message(message: discord.Message) -> None:
 
     # Befehls-Handler der Reihe nach durchgehen. Jeder gibt entweder eine Antwort
     # (Text ODER Embed = Befehl erkannt, fertig) oder None (= naechster ist dran).
+    # BEWUSST OHNE channel.typing(): das war ein zusaetzlicher API-Roundtrip VOR
+    # jedem Befehl (~100-200 ms Extra-Latenz) - die Spiele antworten schnell
+    # genug; nur der (langsame) KI-Fallback tippt weiterhin.
     antwort: "str | discord.Embed | discord.File | None" = None
-    async with message.channel.typing():
-        for enabled, handler in (
-            (BAYERN_ENABLED, bayern.handle),
-            (MOD_ENABLED, moderation.handle),
-            (ADMIN_ENABLED, admin.handle),
-            (MUSIC_ENABLED, music.handle),
-            (VOICE_GAGS_ENABLED, voicegags.handle),
-            (GAMES_ENABLED, games.handle),
-            (CASINO_ENABLED, casino.handle),
-            (LUXUS_ENABLED, luxus.handle),
-            (WORDS_ENABLED, words.handle),
-            (ECONOMY_ENABLED, economy.handle),
-            (FOOD_ENABLED, food.handle),
-            (MEDIA_ENABLED, media.handle),
-            (FUN_ENABLED, fun.handle),
-        ):
-            if not enabled:
-                continue
-            try:
-                antwort = await handler(message)
-            except Exception:
-                log.exception(
-                    "Befehl fehlgeschlagen (%s)", getattr(handler, "__module__", "?")
-                )
-                antwort = "Da ist gerade etwas schiefgelaufen."
-            if antwort is not None:
-                break
+    for enabled, handler in (
+        (BAYERN_ENABLED, bayern.handle),
+        (MOD_ENABLED, moderation.handle),
+        (ADMIN_ENABLED, admin.handle),
+        (MUSIC_ENABLED, music.handle),
+        (VOICE_GAGS_ENABLED, voicegags.handle),
+        (GAMES_ENABLED, games.handle),
+        (CASINO_ENABLED, casino.handle),
+        (LUXUS_ENABLED, luxus.handle),
+        (WORDS_ENABLED, words.handle),
+        (ECONOMY_ENABLED, economy.handle),
+        (FOOD_ENABLED, food.handle),
+        (MEDIA_ENABLED, media.handle),
+        (FUN_ENABLED, fun.handle),
+    ):
+        if not enabled:
+            continue
+        try:
+            antwort = await handler(message)
+        except Exception:
+            log.exception(
+                "Befehl fehlgeschlagen (%s)", getattr(handler, "__module__", "?")
+            )
+            antwort = "Da ist gerade etwas schiefgelaufen."
+        if antwort is not None:
+            break
 
     # Originaltext wiederherstellen: die KI (und alles Weitere) sieht wieder
     # exakt, was der Nutzer geschrieben hat - egal ob korrigiert wurde.

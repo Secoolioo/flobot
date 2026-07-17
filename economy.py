@@ -255,6 +255,22 @@ def get_coins(user_id: int) -> int:
     return _profile(user_id)["coins"] if _enabled else 0
 
 
+# Betrags-Parser: '1000', '1k', '2,5k', '1m'/'1mio', '1mrd' -> Coins.
+_AMOUNT_TOKEN_RE = re.compile(r"^(\d+(?:[.,]\d+)?)(k|m|mio|mrd|b)?$", re.IGNORECASE)
+_AMOUNT_MULT = {"": 1, "k": 1_000, "m": 1_000_000, "mio": 1_000_000,
+                "mrd": 1_000_000_000, "b": 1_000_000_000}
+
+
+def parse_amount(token: str) -> "int | None":
+    """'1k' -> 1000, '2,5k' -> 2500, '1m' -> 1000000. None wenn keine Zahl."""
+    m = _AMOUNT_TOKEN_RE.match((token or "").strip().lower())
+    if not m:
+        return None
+    wert = float(m.group(1).replace(",", "."))
+    betrag = int(round(wert * _AMOUNT_MULT[(m.group(2) or "").lower()]))
+    return betrag if betrag > 0 else None
+
+
 def display_name_of(user_id: int) -> "str | None":
     """Zuletzt bekannter Anzeigename aus dem Profil-Cache (wird bei jeder
     Nachricht aktualisiert), sonst None. Praktisch als Fallback, wenn
@@ -916,12 +932,12 @@ async def _pay(message: discord.Message) -> str:
         return "Dir selbst Geld geben? Netter Versuch. 😄"
     if ziel.bot:
         return "Bots brauchen kein Geld. 🤖"
-    m = re.search(r"(\d+)", re.sub(r"<@!?\d+>", " ", message.content or ""))
-    if not m:
-        return f"Wie viel denn? `{_bot_name} pay @{ziel.display_name} 100`"
-    betrag = int(m.group(1))
-    if betrag <= 0:
-        return "Der Betrag muss positiv sein."
+    # Betrag: auch '1k', '2,5k', '1m' usw. (erster passender Token).
+    rest = re.sub(r"<@!?\d+>", " ", _clean_lead(message.content or ""))
+    betrag = next((parse_amount(t) for t in rest.split()
+                   if parse_amount(t) is not None), None)
+    if betrag is None:
+        return f"Wie viel denn? `{_bot_name} pay @{ziel.display_name} 100` (auch `1k`)"
     if get_coins(message.author.id) < betrag:
         return f"Du hast nicht genug. Kontostand: {get_coins(message.author.id)} {COIN}."
     add_coins(message.author.id, -betrag)
@@ -1087,6 +1103,26 @@ class _ShopView(discord.ui.View):
             log.exception("Kauf fehlgeschlagen")
             text = "Da ist beim Kauf etwas schiefgelaufen. Versuch's gleich nochmal."
         await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="Luxus", emoji="🏆", style=discord.ButtonStyle.primary, row=1)
+    async def _luxus(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        """Bruecke in den Luxus-Shop (Prestige-Katalog + Thron)."""
+        try:
+            import luxus
+            if not luxus.is_enabled():
+                raise RuntimeError("luxus aus")
+            view = luxus._LuxusView(interaction.user.id)
+            await interaction.response.send_message(
+                embed=luxus._luxus_embed(interaction.user.id), view=view)
+            view.message = await interaction.original_response()
+            _protect(view.message)
+        except Exception:  # noqa: BLE001
+            log.exception("Luxus-Bruecke fehlgeschlagen")
+            try:
+                await interaction.response.send_message(
+                    f"`{_bot_name} luxus` öffnet den Luxus-Shop.", ephemeral=True)
+            except discord.HTTPException:
+                pass
 
     async def on_timeout(self) -> None:
         for child in self.children:

@@ -113,13 +113,11 @@ def is_enabled() -> bool:
 
 # --- Einsatz- & Embed-Helfer ---------------------------------------------
 def _resolve_bet(token: str, uid: int) -> int | None:
-    """Wandelt ein Einsatz-Token in eine Zahl. 'alles'/'max' = ganzer Kontostand."""
+    """Einsatz-Token -> Zahl. 'alles'/'max' = Kontostand; '1k'/'2,5k'/'1m' gehen auch."""
     token = (token or "").strip().lower()
     if token in ("all", "alles", "max", "allin", "all-in"):
         return min(economy.get_coins(uid), MAX_BET)
-    if token.isdigit():
-        return int(token)
-    return None
+    return economy.parse_amount(token)
 
 
 def _check_bet(uid: int, bet: int | None) -> tuple[int, str | None]:
@@ -311,6 +309,24 @@ async def handle(message: discord.Message) -> "object | None":
             return None
         return await (_open_setup(message, "scratch") if not args
                       else _scratch_command(message, args))
+    if first in ("hilo", "höhertiefer", "hoehertiefer"):
+        return await (_open_setup(message, "hilo") if not args
+                      else _hilo_command(message, args))
+    if first in ("tower", "turm"):
+        return await (_open_setup(message, "tower") if not args
+                      else _tower_command(message, args))
+    if first == "sieben":
+        return await (_open_setup(message, "sieben") if not args
+                      else _sieben_command(message, args))
+    if first in ("baccarat", "bakkarat", "punto"):
+        return await (_open_setup(message, "baccarat") if not args
+                      else _baccarat_command(message, args))
+    if first in ("don", "doppelt"):
+        # 'doppelt' ist Alltagssprache: nur mit gueltigem Einsatz uebernehmen.
+        if first == "doppelt" and args and _resolve_bet(args[0], message.author.id) is None:
+            return None
+        return await (_open_setup(message, "don") if not args
+                      else _don_command(message, args))
     if first in ("duell", "duel"):
         return await _duel_command(message, args)
     if first in ("stats", "statistik", "statistiken", "bilanz"):
@@ -333,6 +349,11 @@ def _menu(uid: int) -> discord.Embed:
     emb.add_field(name="💣 Mines", value="Diamanten sammeln, Bombe meiden", inline=True)
     emb.add_field(name="🍀 Glücksrad", value="dreh um bis zu ×3", inline=True)
     emb.add_field(name="🎫 Rubbellos", value="3 Gleiche in einer Reihe", inline=True)
+    emb.add_field(name="🃏 HiLo", value="höher/tiefer, Serie & Cashout", inline=True)
+    emb.add_field(name="🗼 Tower", value="5 Ebenen hoch, bis ×6.5", inline=True)
+    emb.add_field(name="🎲 Sieben", value="unter · über · genau 7", inline=True)
+    emb.add_field(name="🃏 Baccarat", value="Spieler · Bank · Tie ×9", inline=True)
+    emb.add_field(name="🪙 D.O.N.", value="doppelt oder nichts", inline=True)
     emb.add_field(name="⚔️ Duell", value=f"`{_bot_name} duell @wer 100`", inline=True)
     emb.add_field(name="📊 Bilanz", value=f"`{_bot_name} stats`", inline=True)
     emb.set_footer(text=_bal_footer(uid))
@@ -1469,6 +1490,600 @@ async def _stats_command(message: discord.Message) -> object:
     return HANDLED
 
 
+# --- Sieben (2 Wuerfel: unter / ueber / genau 7) ---------------------------
+_SIEBEN_TIPS = {
+    "unter": "unter", "drunter": "unter", "under": "unter",
+    "über": "ueber", "ueber": "ueber", "drüber": "ueber", "drueber": "ueber",
+    "over": "ueber", "genau": "genau", "sieben": "genau", "7": "genau",
+}
+_SIEBEN_MULT = {"unter": 2.3, "ueber": 2.3, "genau": 5.8}
+_SIEBEN_LABEL = {"unter": "unter 7", "ueber": "über 7", "genau": "genau 7"}
+
+
+async def _play_sieben(uid: int, bet: int, tip: str
+                       ) -> tuple[discord.Embed, discord.File]:
+    w1, w2 = random.randint(1, 6), random.randint(1, 6)
+    total = w1 + w2
+    hit = (total < 7 if tip == "unter" else total > 7 if tip == "ueber"
+           else total == 7)
+    payout = int(bet * _SIEBEN_MULT[tip]) if hit else 0
+    if payout:
+        economy.add_coins(uid, payout)
+    await economy.flush()
+    await record(uid, "sieben", bet, payout)
+    color, res_name, res_val = _outcome(bet, payout)
+    buf, ext = await _anim(render.dice_roll_anim, render.dice_roll, [w1, w2], 6)
+    fn = f"sieben_{uid}_{random.randint(1000, 9999)}.{ext}"
+    emb = discord.Embed(
+        title="🎲 Sieben",
+        description=f"**{w1} + {w2} = {total}** – dein Tipp: **{_SIEBEN_LABEL[tip]}**",
+        color=color)
+    emb.set_author(name="🎰 Flo Casino")
+    emb.add_field(name=res_name, value=res_val, inline=True)
+    emb.set_image(url=f"attachment://{fn}")
+    emb.set_footer(text=_bal_footer(uid))
+    return emb, discord.File(buf, filename=fn)
+
+
+async def _sieben_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    tip = next((_SIEBEN_TIPS[a.lower()] for a in args[1:]
+                if a.lower() in _SIEBEN_TIPS), None)
+    if not args or tip is None:
+        await _send(message, embed=_info(
+            f"`{_bot_name} sieben <einsatz> <unter|über|genau>` – "
+            "unter/über zahlen ×2.3, genau 7 zahlt ×5.8"))
+        return HANDLED
+    bet, err = _take(uid, _resolve_bet(args[0], uid))
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    emb, file = await _play_sieben(uid, bet, tip)
+    again = _AgainView(uid, "sieben", {"bet": bet, "target": tip})
+    msg = await _send(message, embed=emb, file=file, view=again)
+    if msg:
+        again.message = msg
+    return HANDLED
+
+
+# --- Baccarat (Punto Banco) ------------------------------------------------
+def _bac_val(hand: list) -> int:
+    total = 0
+    for r, _s in hand:
+        total += 1 if r == "A" else (0 if r in ("10", "J", "Q", "K") else int(r))
+    return total % 10
+
+
+def _bac_deal() -> tuple[list, list]:
+    """Teilt nach den Standard-Punto-Banco-Regeln aus (inkl. dritter Karte)."""
+    deck = _new_deck()
+    sp = [deck.pop(), deck.pop()]
+    bk = [deck.pop(), deck.pop()]
+    if _bac_val(sp) >= 8 or _bac_val(bk) >= 8:      # Natural: sofort Schluss
+        return sp, bk
+    dritter = None
+    if _bac_val(sp) <= 5:
+        sp.append(deck.pop())
+        dritter = 1 if sp[2][0] == "A" else (
+            0 if sp[2][0] in ("10", "J", "Q", "K") else int(sp[2][0]))
+    bv = _bac_val(bk)
+    if dritter is None:
+        zieht = bv <= 5
+    else:
+        zieht = (bv <= 2 or (bv == 3 and dritter != 8)
+                 or (bv == 4 and 2 <= dritter <= 7)
+                 or (bv == 5 and 4 <= dritter <= 7)
+                 or (bv == 6 and 6 <= dritter <= 7))
+    if zieht:
+        bk.append(deck.pop())
+    return sp, bk
+
+
+_BAC_TIPS = {"spieler": "spieler", "player": "spieler", "bank": "bank",
+             "banker": "bank", "tie": "tie", "unentschieden": "tie"}
+
+
+async def _play_baccarat(uid: int, bet: int, tip: str
+                         ) -> tuple[discord.Embed, discord.File]:
+    sp, bk = _bac_deal()
+    sv, bv = _bac_val(sp), _bac_val(bk)
+    winner = "tie" if sv == bv else ("spieler" if sv > bv else "bank")
+    if winner == "tie" and tip != "tie":
+        payout = bet                                # Push: Einsatz zurueck
+    elif tip == winner:
+        payout = bet * 9 if tip == "tie" else (bet * 2 if tip == "spieler"
+                                               else int(bet * 1.95))
+    else:
+        payout = 0
+    if payout:
+        economy.add_coins(uid, payout)
+    await economy.flush()
+    await record(uid, "baccarat", bet, payout)
+    color, res_name, res_val = _outcome(bet, payout)
+    state = ("push" if payout == bet else ("win" if payout > bet else "lose"))
+    buf, ext = await _anim(
+        functools.partial(render.blackjack_table_anim, mode="deal",
+                          labels=("BANK", "SPIELER")),
+        functools.partial(render.blackjack_table, labels=("BANK", "SPIELER")),
+        bk, sp, hide_hole=False, dealer_value=bv, player_value=sv,
+        player_state=state)
+    fn = f"bac_{uid}_{random.randint(1000, 9999)}.{ext}"
+    emb = discord.Embed(
+        title="🃏 Baccarat",
+        description=(f"Spieler **{sv}** vs Bank **{bv}** → "
+                     f"**{'Unentschieden' if winner == 'tie' else winner.capitalize()}** "
+                     f"– dein Tipp: **{tip.capitalize()}**"),
+        color=color)
+    emb.set_author(name="🎰 Flo Casino")
+    emb.add_field(name=res_name, value=res_val, inline=True)
+    emb.set_image(url=f"attachment://{fn}")
+    emb.set_footer(text=_bal_footer(uid))
+    return emb, discord.File(buf, filename=fn)
+
+
+async def _baccarat_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    tip = next((_BAC_TIPS[a.lower()] for a in args[1:]
+                if a.lower() in _BAC_TIPS), None)
+    if not args or tip is None:
+        await _send(message, embed=_info(
+            f"`{_bot_name} baccarat <einsatz> <spieler|bank|tie>` – "
+            "Spieler ×2 · Bank ×1.95 · Tie ×9 (Einsatz zurück bei fremdem Tie)"))
+        return HANDLED
+    bet, err = _take(uid, _resolve_bet(args[0], uid))
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    emb, file = await _play_baccarat(uid, bet, tip)
+    again = _AgainView(uid, "baccarat", {"bet": bet, "target": tip})
+    msg = await _send(message, embed=emb, file=file, view=again)
+    if msg:
+        again.message = msg
+    return HANDLED
+
+
+# --- Gemeinsames Geruest fuer die drei Serien-Spiele (HiLo/Tower/DON) ------
+class _SerienView(discord.ui.View):
+    """Basis: Einsatz ist eingezogen, ein settled-Flag schuetzt vor
+    Doppelklick-Buchungen, der Timeout zahlt fair aus (oder erstattet)."""
+
+    spiel = ""          # record()-Schluessel
+    timeout_s = 120
+
+    def __init__(self, uid: int, bet: int) -> None:
+        super().__init__(timeout=self.timeout_s)
+        self.uid = uid
+        self.bet = bet
+        self.settled = False
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.uid:
+            return True
+        await interaction.response.send_message(
+            f"Starte deine eigene Runde: `{_bot_name} {self.spiel} 100`. 😉",
+            ephemeral=True)
+        return False
+
+    def _disable_all(self) -> None:
+        for ch in self.children:
+            if isinstance(ch, (discord.ui.Button, discord.ui.Select)):
+                ch.disabled = True
+
+    async def _payout(self, betrag: int) -> None:
+        if betrag:
+            economy.add_coins(self.uid, betrag)
+        await economy.flush()
+        await record(self.uid, self.spiel, self.bet, betrag)
+
+    # Von den Unterklassen: aktueller Auszahlungswert bei Timeout (0 = weg).
+    def _timeout_wert(self) -> int:
+        return self.bet
+
+    async def on_timeout(self) -> None:
+        if not self.settled:
+            self.settled = True
+            wert = self._timeout_wert()
+            if wert:
+                economy.add_coins(self.uid, wert)
+            await economy.flush()
+            await record(self.uid, self.spiel, self.bet, wert)
+            self._disable_all()
+            if self.message is not None:
+                try:
+                    await self.message.edit(embed=discord.Embed(
+                        description=(f"⏰ Zeit um – **{wert} {economy.COIN}** "
+                                     "automatisch ausgezahlt." if wert else
+                                     "⏰ Zeit um – Runde verfallen."),
+                        color=_C_PUSH), attachments=[], view=self)
+                except discord.HTTPException:
+                    pass
+        else:
+            self._disable_all()
+            if self.message is not None:
+                try:
+                    await self.message.edit(view=self)
+                except discord.HTTPException:
+                    pass
+        if self.message is not None:
+            _release(self.message)
+
+
+class _SerienRestart(discord.ui.Button):
+    """'Nochmal' unter einem beendeten Serien-Spiel: startet frisch."""
+
+    def __init__(self, factory, bet: int, row: int = 2) -> None:
+        super().__init__(label="Nochmal", emoji="🔁",
+                         style=discord.ButtonStyle.success, row=row)
+        self.factory = factory
+        self.bet = bet
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        v: _SerienView = self.view  # type: ignore[assignment]
+        if v.is_finished():
+            await interaction.response.defer()
+            return
+        bet, err = _check_bet(interaction.user.id, self.bet)
+        if err:
+            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
+            return
+        v.stop()                                     # vor dem Abzug: Doppelklick-Schutz
+        economy.add_coins(interaction.user.id, -bet)
+        neu, emb, file = await self.factory(interaction.user.id, bet)
+        await interaction.response.edit_message(
+            embed=emb, view=neu, attachments=[file] if file else [])
+        neu.message = interaction.message
+        _protect(interaction.message)
+
+
+# --- HiLo (Hoeher/Tiefer) --------------------------------------------------
+def _hilo_p(rank_i: int, hoeher: bool) -> float:
+    """Trefferchance fuer hoeher/tiefer ab Kartenindex 0..12 (gleich = verloren)."""
+    return ((12 - rank_i) if hoeher else rank_i) / 13.0
+
+
+class HiloView(_SerienView):
+    spiel = "hilo"
+
+    def __init__(self, uid: int, bet: int) -> None:
+        super().__init__(uid, bet)
+        self.rank_i = random.randrange(13)
+        self.suit = random.choice(_SUITS)
+        self.streak = 0
+        self.mult = 1.0
+        self._cash.disabled = True
+        self._sync()
+
+    def _sync(self) -> None:
+        self._hoch.disabled = self.rank_i >= 12     # ueber Ass geht nichts
+        self._tief.disabled = self.rank_i <= 0
+
+    async def _file(self, state: str = "") -> discord.File:
+        buf = await asyncio.to_thread(render.hilo_card, _RANKS[self.rank_i],
+                                      self.suit, streak=self.streak,
+                                      mult=self.mult, state=state)
+        fn = f"hilo_{self.uid}_{random.randint(1000, 9999)}.png"
+        return discord.File(buf, filename=fn)
+
+    def _embed(self, color=None, note=None) -> discord.Embed:
+        emb = discord.Embed(
+            title="🃏 HiLo",
+            description=note or (f"Kommt die nächste Karte **höher** oder **tiefer**? "
+                                 f"Cashout: **{int(self.bet * self.mult)} {economy.COIN}**"),
+            color=color or _C_PLAY)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        return emb
+
+    async def _zeige(self, interaction, emb: discord.Embed, state: str = "") -> None:
+        file = await self._file(state)
+        emb.set_image(url=f"attachment://{file.filename}")
+        await interaction.response.edit_message(embed=emb, view=self,
+                                                attachments=[file])
+
+    async def _guess(self, interaction: discord.Interaction, hoeher: bool) -> None:
+        if self.settled:
+            await interaction.response.defer()
+            return
+        p = _hilo_p(self.rank_i, hoeher)
+        alt = self.rank_i
+        self.rank_i = random.randrange(13)
+        self.suit = random.choice(_SUITS)
+        gewonnen = self.rank_i > alt if hoeher else self.rank_i < alt
+        if not gewonnen:
+            self.settled = True
+            await self._payout(0)
+            self._disable_all()
+            self.add_item(_SerienRestart(_hilo_start, self.bet))
+            await self._zeige(interaction, self._embed(
+                _C_LOSE, f"**{_RANKS[alt]} → {_RANKS[self.rank_i]}** – daneben. "
+                         f"-{self.bet} {economy.COIN}."), state="lose")
+            return
+        self.streak += 1
+        self.mult = round(self.mult * 0.97 / max(p, 1 / 13), 2)
+        self._cash.disabled = False
+        self._sync()
+        if self.streak >= 12:
+            await self._cashout(interaction)
+            return
+        await self._zeige(interaction, self._embed())
+
+    async def _cashout(self, interaction: discord.Interaction) -> None:
+        if self.settled or self.streak < 1:
+            await interaction.response.defer()
+            return
+        self.settled = True
+        payout = int(self.bet * self.mult)
+        await self._payout(payout)
+        self._disable_all()
+        self.add_item(_SerienRestart(_hilo_start, self.bet))
+        await self._zeige(interaction, self._embed(
+            _C_WIN, f"💰 Cashout bei ×{self.mult:.2f} → "
+                    f"**+{payout - self.bet} {economy.COIN}**."), state="win")
+
+    def _timeout_wert(self) -> int:
+        return int(self.bet * self.mult) if self.streak >= 1 else self.bet
+
+    @discord.ui.button(label="Höher", emoji="🔼", style=discord.ButtonStyle.primary, row=0)
+    async def _hoch(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._guess(i, True)
+
+    @discord.ui.button(label="Tiefer", emoji="🔽", style=discord.ButtonStyle.primary, row=0)
+    async def _tief(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._guess(i, False)
+
+    @discord.ui.button(label="Cashout", emoji="💰", style=discord.ButtonStyle.success, row=0)
+    async def _cash(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._cashout(i)
+
+
+async def _hilo_start(uid: int, bet: int):
+    """Factory: (view, embed, file) fuer eine frische HiLo-Runde."""
+    view = HiloView(uid, bet)
+    file = await view._file()
+    emb = view._embed()
+    emb.set_image(url=f"attachment://{file.filename}")
+    return view, emb, file
+
+
+async def _hilo_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    bet, err = _take(uid, _resolve_bet(args[0], uid) if args else None)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    view, emb, file = await _hilo_start(uid, bet)
+    msg = await _send(message, embed=emb, file=file, view=view)
+    if msg:
+        view.message = msg
+    return HANDLED
+
+
+# --- Tower (Turm hochklettern) ---------------------------------------------
+_TOWER_LEVELS = 5
+_TOWER_DOORS = 3
+_TOWER_STEP = 0.97 * _TOWER_DOORS / (_TOWER_DOORS - 1)    # x1.455 je Ebene
+
+
+def _tower_mult(level: int) -> float:
+    return round(_TOWER_STEP ** level, 2)
+
+
+class TowerView(_SerienView):
+    spiel = "tower"
+
+    def __init__(self, uid: int, bet: int) -> None:
+        super().__init__(uid, bet)
+        self.traps = [random.randrange(_TOWER_DOORS) for _ in range(_TOWER_LEVELS)]
+        self.level = 0                      # geschaffte Ebenen
+        self.wahl: list[int] = []
+        self._cash.disabled = True
+
+    def _turm_text(self, boom_door: "int | None" = None) -> str:
+        zeilen = []
+        for lv in range(_TOWER_LEVELS - 1, -1, -1):
+            tueren = []
+            for tr in range(_TOWER_DOORS):
+                if lv < self.level:
+                    tueren.append("🟩" if self.wahl[lv] == tr else "⬛")
+                elif lv == self.level and boom_door is not None:
+                    tueren.append("💥" if tr == boom_door
+                                  else ("💣" if tr == self.traps[lv] else "⬛"))
+                elif lv == self.level and not self.settled:
+                    tueren.append("🚪")
+                else:
+                    tueren.append("⬜")
+            zeilen.append(f"`×{_tower_mult(lv + 1):>5.2f}`  {' '.join(tueren)}")
+        return "\n".join(zeilen)
+
+    def _embed(self, color=None, note=None, boom_door=None) -> discord.Embed:
+        cash = int(self.bet * _tower_mult(self.level))
+        emb = discord.Embed(
+            title="🗼 Tower",
+            description=(note or f"Ebene **{self.level + 1}/{_TOWER_LEVELS}** – "
+                                 f"eine der drei Türen knallt. Cashout: **{cash}**")
+                        + "\n\n" + self._turm_text(boom_door),
+            color=color or _C_PLAY)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        return emb
+
+    async def _pick(self, interaction: discord.Interaction, door: int) -> None:
+        if self.settled:
+            await interaction.response.defer()
+            return
+        if self.traps[self.level] == door:
+            self.settled = True
+            await self._payout(0)
+            boom_lv = self.level
+            self._disable_all()
+            self.add_item(_SerienRestart(_tower_start, self.bet))
+            emb = self._embed(_C_LOSE,
+                              f"**BOOM!** 💥 Ebene {boom_lv + 1} war's. "
+                              f"-{self.bet} {economy.COIN}.", boom_door=door)
+            await interaction.response.edit_message(embed=emb, view=self)
+            return
+        self.wahl.append(door)
+        self.level += 1
+        self._cash.disabled = False
+        if self.level >= _TOWER_LEVELS:
+            await self._cashout(interaction)
+            return
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _cashout(self, interaction: discord.Interaction) -> None:
+        if self.settled or self.level < 1:
+            await interaction.response.defer()
+            return
+        self.settled = True
+        payout = int(self.bet * _tower_mult(self.level))
+        await self._payout(payout)
+        self._disable_all()
+        self.add_item(_SerienRestart(_tower_start, self.bet))
+        note = (f"🏆 **GANZ OBEN!** ×{_tower_mult(self.level):.2f} → "
+                if self.level >= _TOWER_LEVELS else
+                f"💰 Cashout auf Ebene {self.level} → ")
+        emb = self._embed(_C_WIN, note + f"**+{payout - self.bet} {economy.COIN}**.")
+        await interaction.response.edit_message(embed=emb, view=self)
+
+    def _timeout_wert(self) -> int:
+        return int(self.bet * _tower_mult(self.level)) if self.level >= 1 else self.bet
+
+    @discord.ui.button(label="Links", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
+    async def _t1(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._pick(i, 0)
+
+    @discord.ui.button(label="Mitte", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
+    async def _t2(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._pick(i, 1)
+
+    @discord.ui.button(label="Rechts", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
+    async def _t3(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._pick(i, 2)
+
+    @discord.ui.button(label="Cashout", emoji="💰", style=discord.ButtonStyle.success, row=1)
+    async def _cash(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._cashout(i)
+
+
+async def _tower_start(uid: int, bet: int):
+    view = TowerView(uid, bet)
+    return view, view._embed(), None
+
+
+async def _tower_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    bet, err = _take(uid, _resolve_bet(args[0], uid) if args else None)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    view, emb, _file = await _tower_start(uid, bet)
+    msg = await _send(message, embed=emb, view=view)
+    if msg:
+        view.message = msg
+    return HANDLED
+
+
+# --- D.O.N. (Doppelt oder nichts) ------------------------------------------
+_DON_P = 0.485
+_DON_MAX = 10
+
+
+class DonView(_SerienView):
+    spiel = "don"
+
+    def __init__(self, uid: int, bet: int) -> None:
+        super().__init__(uid, bet)
+        self.pot = bet
+        self.runde = 0
+
+    def _embed(self, color=None, note=None) -> discord.Embed:
+        emb = discord.Embed(
+            title="🪙 Doppelt oder nichts",
+            description=note or (f"Pott: **{self.pot} {economy.COIN}** "
+                                 f"(Runde {self.runde}/{_DON_MAX})\n"
+                                 f"**KOPF** verdoppelt · **ZAHL** nimmt alles."),
+            color=color or _C_PLAY)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        return emb
+
+    async def _zeige(self, interaction, emb: discord.Embed, face: str) -> None:
+        buf, ext = await _anim(render.coin_flip_anim, render.coin_flip, face)
+        fn = f"don_{self.uid}_{random.randint(1000, 9999)}.{ext}"
+        emb.set_image(url=f"attachment://{fn}")
+        await interaction.response.edit_message(
+            embed=emb, view=self, attachments=[discord.File(buf, filename=fn)])
+
+    @discord.ui.button(label="Verdoppeln", emoji="🎲",
+                       style=discord.ButtonStyle.danger, row=0)
+    async def _flip(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if self.settled:
+            await interaction.response.defer()
+            return
+        if random.random() < _DON_P:
+            self.pot *= 2
+            self.runde += 1
+            if self.runde >= _DON_MAX:
+                self.settled = True
+                await self._payout(self.pot)
+                self._disable_all()
+                self.add_item(_SerienRestart(_don_start, self.bet))
+                await self._zeige(interaction, self._embed(
+                    _C_BJ, f"🤯 **{_DON_MAX} MAL KOPF!** Maximum: "
+                           f"**+{self.pot - self.bet} {economy.COIN}**."), "kopf")
+                return
+            await self._zeige(interaction, self._embed(), "kopf")
+            return
+        self.settled = True
+        verlust = self.pot
+        self.pot = 0
+        await self._payout(0)
+        self._disable_all()
+        self.add_item(_SerienRestart(_don_start, self.bet))
+        await self._zeige(interaction, self._embed(
+            _C_LOSE, f"**ZAHL.** Der Pott ({verlust} {economy.COIN}) ist weg. 😵"),
+            "zahl")
+
+    @discord.ui.button(label="Cashout", emoji="💰",
+                       style=discord.ButtonStyle.success, row=0)
+    async def _cash(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if self.settled:
+            await interaction.response.defer()
+            return
+        self.settled = True
+        await self._payout(self.pot)
+        self._disable_all()
+        self.add_item(_SerienRestart(_don_start, self.bet))
+        net = self.pot - self.bet
+        emb = self._embed(_C_WIN if net > 0 else _C_PUSH,
+                          f"💰 Cashout: **{'+' if net >= 0 else ''}{net} "
+                          f"{economy.COIN}** nach {self.runde} Verdopplung(en).")
+        await interaction.response.edit_message(embed=emb, view=self,
+                                                attachments=[])
+
+    def _timeout_wert(self) -> int:
+        return self.pot
+
+
+async def _don_start(uid: int, bet: int):
+    view = DonView(uid, bet)
+    return view, view._embed(), None
+
+
+async def _don_command(message: discord.Message, args: list[str]) -> object:
+    uid = message.author.id
+    bet, err = _take(uid, _resolve_bet(args[0], uid) if args else None)
+    if err:
+        await _send(message, embed=_err(err))
+        return HANDLED
+    view, emb, _file = await _don_start(uid, bet)
+    msg = await _send(message, embed=emb, view=view)
+    if msg:
+        view.message = msg
+    return HANDLED
+
+
 # --- Wiederholen / Formulare (Buttons & Modals) --------------------------
 async def _replay(uid: int, kind: str, params: dict
                   ) -> tuple[discord.Embed, discord.File | None]:
@@ -1482,6 +2097,10 @@ async def _replay(uid: int, kind: str, params: dict
         return await _play_wheel(uid, params["bet"])
     if kind == "scratch":
         return await _play_scratch(uid, params["bet"])
+    if kind == "sieben":
+        return await _play_sieben(uid, params["bet"], params["target"])
+    if kind == "baccarat":
+        return await _play_baccarat(uid, params["bet"], params["target"])
     raise ValueError(kind)
 
 
@@ -1514,6 +2133,14 @@ class _BetModal(discord.ui.Modal):
             self.extra = discord.ui.TextInput(
                 label=f"Bomben (1–{_MINES_MAX})", placeholder="z. B. 3",
                 default=str(params.get("mines", _MINES_DEFAULT)), max_length=2)
+        elif kind == "sieben":
+            self.extra = discord.ui.TextInput(
+                label="Tipp (unter/über/genau)", placeholder="unter",
+                default=str(params.get("target", "unter")), max_length=10)
+        elif kind == "baccarat":
+            self.extra = discord.ui.TextInput(
+                label="Tipp (spieler/bank/tie)", placeholder="bank",
+                default=str(params.get("target", "bank")), max_length=14)
         if self.extra is not None:
             self.add_item(self.extra)
 
@@ -1609,6 +2236,22 @@ class _BetModal(discord.ui.Modal):
             _protect(again.message)
             return
 
+        if self.kind in ("sieben", "baccarat"):
+            mapping = _SIEBEN_TIPS if self.kind == "sieben" else _BAC_TIPS
+            tip = mapping.get((self.extra.value or "").strip().lower())
+            if tip is None:
+                await interaction.response.send_message(
+                    ("Tipp: unter, über oder genau." if self.kind == "sieben"
+                     else "Tipp: spieler, bank oder tie."), ephemeral=True)
+                return
+            economy.add_coins(uid, -bet)
+            emb, file = await _replay(uid, self.kind, {"bet": bet, "target": tip})
+            again = _AgainView(uid, self.kind, {"bet": bet, "target": tip})
+            await interaction.response.send_message(embed=emb, file=file, view=again)
+            again.message = await interaction.original_response()
+            _protect(again.message)
+            return
+
         if self.kind == "mines":
             raw = (self.extra.value or "").strip()
             mines = max(1, min(int(raw), _MINES_MAX)) if raw.isdigit() else _MINES_DEFAULT
@@ -1645,6 +2288,8 @@ _MODAL_TITLES = {
     "mines": "Mines – Einsatz & Bomben",
     "wheel": "Glücksrad – Einsatz",
     "scratch": "Rubbellos – Einsatz",
+    "sieben": "Sieben – Einsatz & Tipp",
+    "baccarat": "Baccarat – Einsatz & Tipp",
 }
 
 
@@ -1791,6 +2436,26 @@ class CasinoHubView(discord.ui.View):
     @discord.ui.button(label="Rubbellos", emoji="🎫", style=discord.ButtonStyle.secondary, row=1)
     async def _scratch(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         await self._open(interaction, "scratch")
+
+    @discord.ui.button(label="HiLo", emoji="🃏", style=discord.ButtonStyle.primary, row=2)
+    async def _hilo(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "hilo")
+
+    @discord.ui.button(label="Tower", emoji="🗼", style=discord.ButtonStyle.primary, row=2)
+    async def _tower(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "tower")
+
+    @discord.ui.button(label="Sieben", emoji="🎲", style=discord.ButtonStyle.secondary, row=2)
+    async def _sieben(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "sieben")
+
+    @discord.ui.button(label="Baccarat", emoji="🃏", style=discord.ButtonStyle.secondary, row=2)
+    async def _baccarat(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "baccarat")
+
+    @discord.ui.button(label="D.O.N.", emoji="🪙", style=discord.ButtonStyle.danger, row=2)
+    async def _don(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._open(interaction, "don")
 
     @discord.ui.button(label="Bilanz", emoji="📊", style=discord.ButtonStyle.secondary, row=1)
     async def _bilanz(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -2379,6 +3044,149 @@ class _MinesSetup(_Setup):
         _protect(interaction.message)
 
 
+# --- Sieben / Baccarat: Einsatz + Tipp-Button = sofort spielen -------------
+class _SiebenSetup(_Setup):
+    kind = "sieben"
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🎲 Sieben",
+            description="2 Würfel. **Unter/Über 7** zahlt ×2.3 · **genau 7** zahlt ×5.8.",
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    async def _wurf(self, interaction: discord.Interaction, tip: str) -> None:
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file = await _play_sieben(self.uid, bet, tip)
+        again = _AgainView(self.uid, "sieben", {"bet": bet, "target": tip},
+                           channel_id=self.channel_id)
+        await self._finish(interaction, emb, file, again)
+
+    @discord.ui.button(label="Unter 7", emoji="🔽", style=discord.ButtonStyle.primary, row=1)
+    async def _u(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._wurf(i, "unter")
+
+    @discord.ui.button(label="Genau 7", emoji="🎯", style=discord.ButtonStyle.success, row=1)
+    async def _g(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._wurf(i, "genau")
+
+    @discord.ui.button(label="Über 7", emoji="🔼", style=discord.ButtonStyle.primary, row=1)
+    async def _o(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._wurf(i, "ueber")
+
+
+class _BaccaratSetup(_Setup):
+    kind = "baccarat"
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🃏 Baccarat",
+            description="**Spieler** ×2 · **Bank** ×1.95 · **Tie** ×9 "
+                        "(fremder Tie: Einsatz zurück).",
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+    async def _setze(self, interaction: discord.Interaction, tip: str) -> None:
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        emb, file = await _play_baccarat(self.uid, bet, tip)
+        again = _AgainView(self.uid, "baccarat", {"bet": bet, "target": tip},
+                           channel_id=self.channel_id)
+        await self._finish(interaction, emb, file, again)
+
+    @discord.ui.button(label="Spieler", emoji="🧑", style=discord.ButtonStyle.primary, row=1)
+    async def _sp(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._setze(i, "spieler")
+
+    @discord.ui.button(label="Bank", emoji="🏦", style=discord.ButtonStyle.primary, row=1)
+    async def _bk(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._setze(i, "bank")
+
+    @discord.ui.button(label="Tie", emoji="🤝", style=discord.ButtonStyle.secondary, row=1)
+    async def _tie(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._setze(i, "tie")
+
+
+# --- HiLo / Tower / DON: Einsatz + Start -----------------------------------
+class _SerienSetup(_Setup):
+    """Setup fuer die Serien-Spiele: Einsatz waehlen, Start ersetzt das Menue
+    durch die laufende Runde."""
+
+    factory = None      # staticmethod-Factory (uid, bet) -> (view, emb, file)
+
+    @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
+    async def _start(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        bet = await self._ensure_bet(interaction)
+        if bet is None:
+            return
+        economy.add_coins(self.uid, -bet)
+        view, emb, file = await type(self).factory(self.uid, bet)
+        await interaction.response.edit_message(
+            embed=emb, view=view, attachments=[file] if file else [])
+        view.message = interaction.message
+        _protect(interaction.message)
+        self.stop()
+
+
+class _HiloSetup(_SerienSetup):
+    kind = "hilo"
+    factory = staticmethod(_hilo_start)
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🃏 HiLo",
+            description="Nächste Karte **höher oder tiefer**? Jede richtige "
+                        "Antwort erhöht den Multiplikator – Cashout jederzeit.",
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+
+class _TowerSetup(_SerienSetup):
+    kind = "tower"
+    factory = staticmethod(_tower_start)
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🗼 Tower",
+            description=f"{_TOWER_LEVELS} Ebenen, je 3 Türen, 1 Bombe. "
+                        f"Ganz oben warten ×{_tower_mult(_TOWER_LEVELS):.2f}.",
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+
+class _DonSetup(_SerienSetup):
+    kind = "don"
+    factory = staticmethod(_don_start)
+
+    def _embed(self) -> discord.Embed:
+        emb = discord.Embed(
+            title="🪙 Doppelt oder nichts",
+            description="Jeder Wurf: **KOPF** verdoppelt den Pott, **ZAHL** "
+                        f"nimmt alles. Maximal {_DON_MAX} Verdopplungen.",
+            color=_C_BJ)
+        emb.set_author(name="🎰 Flo Casino")
+        emb.add_field(name="Einsatz", value=self._bet_txt(), inline=True)
+        emb.set_footer(text=_bal_footer(self.uid))
+        return emb
+
+
 _SETUPS = {
     "keno": _KenoSetup,
     "roulette": _RouletteSetup,
@@ -2387,6 +3195,11 @@ _SETUPS = {
     "wheel": _WheelSetup,
     "scratch": _ScratchSetup,
     "mines": _MinesSetup,
+    "sieben": _SiebenSetup,
+    "baccarat": _BaccaratSetup,
+    "hilo": _HiloSetup,
+    "tower": _TowerSetup,
+    "don": _DonSetup,
 }
 
 

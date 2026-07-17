@@ -98,6 +98,11 @@ _ADJ = [
     "Königlicher", "Kaiserlicher", "Teuflischer", "Engelhafter", "Wölfischer",
     "Bärenstarker", "Adlerscharfer", "Fuchsschlauer", "Schlangengleicher",
     "Sturmgeborener",
+    "Gebufffter", "Ungepatchter", "Lagfreier", "Overpowerter", "Nervloser",
+    "Koffeinierter", "Ungechillter", "Durchgedrehter", "Legendärer",
+    "Verpixelter", "Gecarrryter", "Tiltloser", "Cracked-out", "Sagenhafter",
+    "Mythischer", "Kosmischer", "Galaktischer", "Interdimensionaler",
+    "Allwissender", "Unbesiegter",
 ]
 
 _NOUN = [
@@ -121,6 +126,13 @@ _NOUN = [
     "Greif", "Basilisk", "Golem", "Koloss", "Wyvern", "Lindwurm",
     "Höllenhund", "Schreckgespenst", "Nachtmahr", "Wirbelwind", "Donnerkeil",
     "Blitzschlag", "Feuersturm", "Frostriese", "Steinwächter", "Schwarmgeist",
+    "Sigma", "Gigachad", "Hauptcharakter", "NPC-Flüsterer", "Lootgoblin",
+    "Speedrunner", "Clutchgott", "Carry", "Smurf", "Grinder", "Sweat",
+    "Bosskiller", "Endgegner", "Miniboss", "Tutorialboss", "Weltenfresser",
+    "Kaffeetrinker", "Nachtschichtler", "Snackwächter", "Couchkommandant",
+    "Pixelkrieger", "Tastenschreck", "Mausakrobat", "Serverfürst",
+    "Voicechat-Tyrann", "Memelord", "Ratiokönig", "Cringeverwalter",
+    "Lachflash", "Ehrenmann",
 ]
 
 _GEN = [
@@ -142,6 +154,8 @@ _PLACE = [
     "Goldhafen", "Schwarzwasser", "Rotfurt", "Graustein", "Weißenfels",
     "Blauenstein", "Grünmark", "Wildmark", "Ödland", "Geisterhain",
     "Drachenhort", "Titanenfeste", "Himmelsrand", "Abgrundtor", "Nimmerland",
+    "Lagland", "Spawnpoint", "Endzone", "Bugwiese", "Serverraum",
+    "Voicetal", "Memehausen", "Clutchhausen", "Tiltberg", "Ragequit-Furt",
 ]
 
 
