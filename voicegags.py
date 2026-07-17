@@ -27,10 +27,42 @@ import ai
 
 log = logging.getLogger("dcbot.voice")
 
+# Sentinel: voicegags hat selbst geantwortet (Soundboard-Menue) -> bot.py schweigt.
+HANDLED = object()
+
 _enabled: bool = False
 _bot_name: str = "Flo"
 _tts_engine: str = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
 _join_sounds: bool = False
+
+# Hintergrund-Tasks (Sound spielt bis zu 60 s - Button antwortet sofort).
+_bg: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _bg.add(task)
+    task.add_done_callback(_bg.discard)
+
+
+def _protect(msg) -> None:
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.protect_message(msg)
+    except Exception:
+        pass
+
+
+def _release(msg) -> None:
+    if msg is None:
+        return
+    try:
+        import bot
+        bot.release_message(msg)
+    except Exception:
+        pass
 
 SOUNDS_DIR = Path(os.getenv("SOUNDS_DIR", str(Path(__file__).resolve().parent / "sounds")))
 JOIN_DIR = SOUNDS_DIR / "join"
@@ -128,13 +160,7 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
         if not sounds:
             return (f"Noch keine Sounds da. Leg Dateien in `{SOUNDS_DIR.name}/` "
                     f"(mp3/wav/ogg), dann geht `{_bot_name} sound <name>`.")
-        emb = discord.Embed(
-            title="🔊 Soundboard",
-            description=" ".join(f"`{s}`" for s in sounds),
-            color=discord.Color.blurple(),
-        )
-        emb.set_footer(text=f"Abspielen: {_bot_name} sound <name>  (du musst im Voice sein)")
-        return emb
+        return await _open_soundboard(message, sounds)
 
     if first in ("sound", "sb", "soundeffekt"):
         return await _cmd_sound(message, rest)
@@ -142,6 +168,103 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
     if first in ("sprich", "tts", "say", "vorlesen"):
         return await _cmd_say(message, rest)
     return None
+
+
+# --- Soundboard-Menue: ein Button je Sound, Klick = sofort abspielen -------
+_SB_EMOJIS = ("🔊", "🎺", "📣", "💥", "🎵", "😂", "🔥", "🎉", "🥁", "📢")
+_SB_STYLES = (discord.ButtonStyle.primary, discord.ButtonStyle.success,
+              discord.ButtonStyle.danger, discord.ButtonStyle.secondary)
+
+
+def _voice_beschaeftigt(guild: discord.Guild) -> bool:
+    """Schnell-Check ohne Verbindungsaufbau: laeuft gerade Musik/Sound?"""
+    try:
+        import music
+        if music.is_voice_busy(guild.id):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    vc = guild.voice_client
+    return vc is not None and (vc.is_playing() or vc.is_paused())
+
+
+class _SoundBtn(discord.ui.Button):
+    def __init__(self, name: str, idx: int) -> None:
+        super().__init__(label=name[:20], emoji=_SB_EMOJIS[idx % len(_SB_EMOJIS)],
+                         style=_SB_STYLES[idx % len(_SB_STYLES)], row=idx // 5)
+        self.sound_name = name
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        member = interaction.user
+        vs = getattr(member, "voice", None)
+        channel = vs.channel if vs and vs.channel else None
+        if channel is None:
+            await interaction.response.send_message(
+                "Geh erst in einen Sprachkanal, dann drück nochmal. 🎧", ephemeral=True)
+            return
+        path = _find_sound(self.sound_name)
+        if path is None:
+            await interaction.response.send_message(
+                f"`{self.sound_name}` ist verschwunden. 👻", ephemeral=True)
+            return
+        if _voice_beschaeftigt(interaction.guild):
+            await interaction.response.send_message(
+                "Gerade läuft was im Voice – gleich nochmal probieren. 🎶",
+                ephemeral=True)
+            return
+        # Sofort bestaetigen (der Sound spielt bis zu 60 s im Hintergrund).
+        await interaction.response.send_message(
+            f"🔊 **{self.sound_name}**", ephemeral=True, delete_after=6)
+        _spawn(_play_and_report(interaction, interaction.guild, channel, str(path)))
+
+
+async def _play_and_report(interaction: discord.Interaction, guild, channel,
+                           source: str) -> None:
+    ok, err = await _play_path(guild, channel, source)
+    if not ok and err:
+        try:
+            await interaction.followup.send(err, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
+class SoundboardView(discord.ui.View):
+    """Bunte Sound-Buttons - JEDER darf druecken (es ist ein Soundboard 😄)."""
+
+    def __init__(self, sounds: list[str]) -> None:
+        super().__init__(timeout=600)
+        self.message: discord.Message | None = None
+        for i, name in enumerate(sounds[:25]):     # Discord: max 25 Buttons
+            self.add_item(_SoundBtn(name, i))
+
+    async def on_timeout(self) -> None:
+        for ch in self.children:
+            ch.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+            _release(self.message)
+
+
+async def _open_soundboard(message: discord.Message, sounds: list[str]) -> object:
+    emb = discord.Embed(
+        title="🔊 Flo Soundboard",
+        description="Ab in den Voice und **drücken**! 👇",
+        color=discord.Color.blurple())
+    if len(sounds) > 25:
+        emb.description += f"\n({len(sounds) - 25} weitere per `{_bot_name} sound <name>`)"
+    emb.set_footer(text=f"{len(sounds)} Sounds · eigene Dateien einfach in "
+                        f"{SOUNDS_DIR.name}/ legen")
+    view = SoundboardView(sounds)
+    try:
+        msg = await message.reply(embed=emb, view=view, mention_author=False)
+        view.message = msg
+        _protect(msg)
+    except discord.HTTPException:
+        log.exception("Soundboard konnte nicht gesendet werden")
+    return HANDLED
 
 
 async def _cmd_sound(message: discord.Message, rest: str) -> str:

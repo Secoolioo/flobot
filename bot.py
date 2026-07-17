@@ -450,7 +450,8 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
         ("Bild anhängen + Frage", "Flo schaut sich Bilder an"),
     ]),
     "voice": ("Voice", 0x1ABC9C, [
-        ("flo sounds · sound <name>", "Soundboard abspielen"),
+        ("flo soundboard", "Sound-Buttons - drücken & lachen"),
+        ("flo sound <name>", "einzelnen Sound abspielen"),
         ("flo sprich <text>", "Text-to-Speech im Voice"),
     ]),
     "mod": ("Moderation", 0xED4245, [
@@ -948,6 +949,24 @@ async def _release_after(message: discord.Message, delay: float) -> None:
         log.warning("Auto-Loeschen (Spielende) fehlgeschlagen: %s", exc)
 
 
+async def _forward_dm_to_owner(message: discord.Message) -> None:
+    """Leitet eine Fremd-DM still an den Besitzer weiter (Flo antwortet dem
+    Absender nicht). So sieht der Besitzer Antworten auf seine 'flo dm's."""
+    content = (message.content or "").strip()
+    if not content and not message.attachments:
+        return
+    try:
+        owner = client.get_user(OWNER_ID) or await client.fetch_user(OWNER_ID)
+        text = (f"📥 **DM von {message.author.display_name}** "
+                f"(`{message.author.id}`):\n{content[:1500]}")
+        if message.attachments:
+            text += f"\n📎 {len(message.attachments)} Anhang/Anhänge"
+        text += f"\n-# Antworten: `flo dm {message.author.id} <text>`"
+        await owner.send(text)
+    except Exception:  # noqa: BLE001 - Weiterleitung ist best effort
+        log.exception("DM-Weiterleitung an den Besitzer fehlgeschlagen")
+
+
 async def _send_restart_prompt(message: discord.Message) -> None:
     """Schickt die Neustart-Sicherheitsabfrage (Server ODER Owner-DM)."""
     view = RestartConfirmView(OWNER_ID)
@@ -1072,9 +1091,13 @@ async def on_message(message: discord.Message) -> None:
         return
     if message.guild is None:
         # Privatnachrichten: NUR der Besitzer bekommt Antworten (Admin-Befehle
-        # + KI-Chat). Alle anderen duerfen schreiben - Flo bleibt dort stumm.
+        # + KI-Chat). Alle anderen duerfen schreiben - Flo bleibt ihnen
+        # gegenueber stumm, LEITET die Nachricht aber an den Besitzer weiter
+        # (so werden Antworten auf 'flo dm' sichtbar).
         if OWNER_ID and message.author.id == OWNER_ID:
             await _handle_owner_dm(message)
+        elif OWNER_ID:
+            _spawn(_forward_dm_to_owner(message))
         return
 
     content = message.content or ""
@@ -1211,7 +1234,7 @@ async def on_message(message: discord.Message) -> None:
                 or antwort is casino.HANDLED or antwort is games.HANDLED
                 or antwort is economy.HANDLED or antwort is media.HANDLED
                 or antwort is food.HANDLED or antwort is words.HANDLED
-                or antwort is luxus.HANDLED):
+                or antwort is luxus.HANDLED or antwort is voicegags.HANDLED):
             return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)

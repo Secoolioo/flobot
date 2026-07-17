@@ -126,6 +126,8 @@ async def handle(message: discord.Message) -> "str | discord.Embed | None":
         return await _profile(message, rest)
     if first in ("ansage", "announce"):
         return await _announce(message, rest)
+    if first in ("dm", "flüster", "fluester"):
+        return await _dm(message, rest)
     if first in ("shopneu", "shoprefresh"):
         return await _shop_refresh()
     if first in ("admin", "adminhilfe", "adminhelp"):
@@ -252,6 +254,41 @@ async def _announce(message: discord.Message, rest: str) -> str:
     return f"✅ Gesendet in **#{getattr(channel, 'name', '?')}**."
 
 
+def _parse_dm(rest: str) -> tuple[int | None, str]:
+    """'@wer hallo du' / '1234... hallo du' -> (user_id, text)."""
+    m = _MENTION_RE.search(rest or "") or _ID_RE.search(rest or "")
+    if not m:
+        return None, ""
+    text = (rest[:m.start()] + rest[m.end():]).strip()
+    return int(m.group(1)), text
+
+
+async def _dm(message: discord.Message, rest: str) -> "str | discord.Embed":
+    """Flo schreibt jemandem privat - als waere er's selbst. Antworten der
+    Person leitet bot.py automatisch an den Besitzer zurueck (DM-Relay)."""
+    uid, text = _parse_dm(rest)
+    if uid is None or not text:
+        return (f"So: `{_bot_name} dm @wer <text>` (oder mit User-ID) - "
+                "ich stelle es privat zu; Antworten landen wieder bei dir.")
+    user = await _user_of(message, uid)
+    if user is None:
+        return f"Ich finde keinen User mit der ID {uid}."
+    if getattr(user, "bot", False):
+        return "Bots lesen keine DMs. 🤖"
+    try:
+        await user.send(text)
+    except discord.Forbidden:
+        return (f"**{user.display_name}** hat DMs zu (oder blockiert mich) - "
+                "Zustellung nicht möglich. 📪")
+    except discord.HTTPException as exc:
+        return f"Zustellung fehlgeschlagen: {exc}"
+    kurz = text if len(text) <= 150 else text[:150] + "…"
+    emb = _emb(f"📨 An **{user.display_name}** zugestellt:\n> {kurz}",
+               color=discord.Color.green())
+    emb.set_footer(text="Antworten leite ich automatisch an dich weiter.")
+    return emb
+
+
 async def _shop_refresh() -> str:
     if not economy.is_enabled():
         return "Economy (Flo Coins) ist gerade aus."
@@ -275,4 +312,7 @@ def _admin_help() -> discord.Embed:
     emb.add_field(name="Server",
                   value=(f"`{n} ansage <channel-id> <text>` · `{n} shopneu`\n"
                          f"`{n} restart`"), inline=False)
+    emb.add_field(name="DM-Relay",
+                  value=(f"`{n} dm @wer <text>` – {n} schreibt privat; "
+                         "Antworten landen automatisch bei dir."), inline=False)
     return emb

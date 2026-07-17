@@ -268,6 +268,22 @@ def test_admin_ansage_parsing() -> None:
     assert admin._parse_announce("hallo welt") == (None, "")
 
 
+def test_admin_dm_parsing() -> None:
+    # Mention + Text
+    uid, text = admin._parse_dm("<@1040135855710404659> hey na, alles fit?")
+    assert uid == 1040135855710404659 and text == "hey na, alles fit?"
+    # Rohe ID + Text (DM-Fall)
+    uid, text = admin._parse_dm("123456789012345678 komm mal Voice")
+    assert uid == 123456789012345678 and text == "komm mal Voice"
+    # Text VOR der ID geht auch
+    uid, text = admin._parse_dm("sag mal 123456789012345678")
+    assert uid == 123456789012345678 and text == "sag mal"
+    # Ohne Ziel / ohne Text -> Hinweis-Fall
+    assert admin._parse_dm("nur text ohne ziel") == (None, "")
+    uid, text = admin._parse_dm("<@123456789012345678>")
+    assert uid == 123456789012345678 and text == ""
+
+
 def test_cmdnorm_admin_sicherheit() -> None:
     # Alltagswoerter, die 1 Tippfehler von Admin-Befehlen entfernt sind,
     # duerfen NICHT gekapert werden.
