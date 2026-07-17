@@ -88,6 +88,16 @@ def setup() -> bool:
         return False
 
     SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+    # Eingebautes Soundpack: echte synthetisierte SFX (Airhorn, Boom, ...) -
+    # nur fehlende Dateien werden erzeugt, eigene Sounds bleiben unberuehrt.
+    if os.getenv("SOUND_PACK", "1").strip().lower() not in ("0", "false", "no", "off"):
+        try:
+            import soundpack
+            neu = soundpack.ensure_pack(SOUNDS_DIR)
+            if neu:
+                log.info("Soundpack: %d eingebaute Sounds generiert.", neu)
+        except Exception:  # noqa: BLE001 - Pack ist Bonus, Feature laeuft auch ohne
+            log.exception("Soundpack-Generierung fehlgeschlagen")
     _tts_engine = _detect_tts()
     _join_sounds = os.getenv("JOIN_SOUNDS", "0").strip().lower() in ("1", "true", "yes", "on")
     _enabled = True
