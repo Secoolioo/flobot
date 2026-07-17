@@ -25,6 +25,7 @@ damit der Event-Loop nie blockiert.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import random
@@ -376,14 +377,26 @@ class BlackjackView(discord.ui.View):
     def _prompt(self) -> str:
         return "Drück **Karte**, **Stand** oder **Double**. 👇"
 
-    def _payload(self, *, reveal: bool, title: str, color: discord.Color,
-                 note: str, state: str = "") -> tuple[discord.Embed, discord.File]:
+    async def _payload(self, *, reveal: bool, title: str, color: discord.Color,
+                       note: str, state: str = "", anim: str = "hit"
+                       ) -> tuple[discord.Embed, discord.File]:
+        """Baut Embed + Tisch-GIF (Deal/Slide/Flip-Animation, im Thread
+        gerendert). Faellt die Animation aus, kommt das Standbild."""
         self._n += 1
-        fname = f"bj_{self.uid}_{self._n}.png"
-        buf = render.blackjack_table(
-            self.dealer, self.player, hide_hole=not reveal,
-            dealer_value=_hand_value(self.dealer), player_value=_hand_value(self.player),
-            player_state=state)
+        kwargs = dict(hide_hole=not reveal,
+                      dealer_value=_hand_value(self.dealer),
+                      player_value=_hand_value(self.player), player_state=state)
+        try:
+            buf = await asyncio.to_thread(render.blackjack_table_anim,
+                                          self.dealer, self.player,
+                                          mode=anim, **kwargs)
+            ext = "gif"
+        except Exception:
+            log.exception("Blackjack-Animation fehlgeschlagen - nutze Standbild")
+            buf = await asyncio.to_thread(render.blackjack_table,
+                                          self.dealer, self.player, **kwargs)
+            ext = "png"
+        fname = f"bj_{self.uid}_{self._n}.{ext}"
         file = discord.File(buf, filename=fname)
         emb = discord.Embed(title=title, description=note or None, color=color)
         emb.set_author(name="🎰 Flo Casino")
@@ -398,22 +411,22 @@ class BlackjackView(discord.ui.View):
             economy.add_coins(self.uid, self.bet)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet)
-            return self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
-                                 note=f"Beide haben 21 – Einsatz ({self.bet} {economy.COIN}) zurück.",
-                                 state="push")
+            return await self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
+                                       note=f"Beide haben 21 – Einsatz ({self.bet} {economy.COIN}) zurück.",
+                                       state="push", anim="reveal")
         if pv == 21:
             payout = self.bet + (self.bet * 3) // 2     # 3:2
             economy.add_coins(self.uid, payout)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, payout)
-            return self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
-                                 note=f"Natürlicher Blackjack! +{payout - self.bet} {economy.COIN} (3:2).",
-                                 state="blackjack")
+            return await self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
+                                       note=f"Natürlicher Blackjack! +{payout - self.bet} {economy.COIN} (3:2).",
+                                       state="blackjack", anim="reveal")
         await economy.flush()
         await record(self.uid, "blackjack", self.bet, 0)
-        return self._payload(reveal=True, title="🂡 Dealer-Blackjack 😬", color=_C_LOSE,
-                             note=f"Der Dealer hat Blackjack. -{self.bet} {economy.COIN}.",
-                             state="lose")
+        return await self._payload(reveal=True, title="🂡 Dealer-Blackjack 😬", color=_C_LOSE,
+                                   note=f"Der Dealer hat Blackjack. -{self.bet} {economy.COIN}.",
+                                   state="lose", anim="reveal")
 
     async def _settle(self) -> tuple[str, str, str, discord.Color]:
         """Dealer spielt aus, Ergebnis bestimmen, auszahlen + flush.
@@ -482,7 +495,11 @@ class BlackjackView(discord.ui.View):
 
     async def _step(self, action: str) -> tuple[discord.Embed, discord.File, discord.ui.View, bool]:
         finished, state, title, color, note, reveal = await self._mutate(action)
-        emb, file = self._payload(reveal=reveal, title=title, color=color, note=note, state=state)
+        # Passende Animation: gezogene Karte slidet ein, beim Aufloesen flippt
+        # die Hole-Card und die Dealer-Karten erscheinen nacheinander.
+        anim = "hit" if action == "hit" or state == "bust" else ("reveal" if reveal else "hit")
+        emb, file = await self._payload(reveal=reveal, title=title, color=color,
+                                        note=note, state=state, anim=anim)
         if finished:
             self._unregister()
             self._disable_all()
@@ -554,8 +571,8 @@ async def _bj_deal(channel_id: int, uid: int, bet: int
         return emb, file, again, True
     await economy.flush()
     view._sync_buttons()
-    emb, file = view._payload(reveal=False, title="🂡 Blackjack",
-                              color=_C_PLAY, note=view._prompt())
+    emb, file = await view._payload(reveal=False, title="🂡 Blackjack",
+                                    color=_C_PLAY, note=view._prompt(), anim="deal")
     return emb, file, view, False
 
 
@@ -713,7 +730,9 @@ async def _play_keno(uid: int, bet: int, picks: list[int]
     await economy.flush()
     await record(uid, "keno", bet, payout)
     color, res_name, res_val = _outcome(bet, payout)
-    buf, ext = await _anim(render.keno_grid_anim, render.keno_grid, picks, draw, hits)
+    buf, ext = await _anim(
+        functools.partial(render.keno_grid_anim, big_win=(mult >= 10)),
+        render.keno_grid, picks, draw, hits)
     fn = f"keno_{uid}_{random.randint(1000, 9999)}.{ext}"
     file = discord.File(buf, filename=fn)
     emb = discord.Embed(

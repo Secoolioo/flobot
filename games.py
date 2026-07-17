@@ -342,8 +342,8 @@ async def _dice(message: discord.Message, args: list[str]) -> object:
     else:
         desc = f"{count}×W{sides}:  {' + '.join(map(str, rolls))}  =  **{sum(rolls)}**"
     emb = discord.Embed(title="🎲 Würfel", description=desc, color=discord.Color.blurple())
-    fn = f"dice_{message.author.id}_{random.randint(1000, 9999)}.png"
-    buf = await asyncio.to_thread(render.dice_roll, rolls, sides)
+    buf, ext = await _anim(render.dice_roll_anim, render.dice_roll, rolls, sides)
+    fn = f"dice_{message.author.id}_{random.randint(1000, 9999)}.{ext}"
     return await _send_image(message, emb, buf, fn)
 
 
