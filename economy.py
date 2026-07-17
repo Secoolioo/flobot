@@ -648,6 +648,13 @@ async def _card_image(member: discord.abc.User) -> "discord.File | discord.Embed
             member.display_avatar.with_size(256).read(), timeout=6)
     except Exception:  # noqa: BLE001 - Avatar ist nur Deko
         pass
+    # Luxus-Rahmen (Flo Luxus Shop) - lazy, damit kein Import-Zyklus entsteht.
+    frame = None
+    try:
+        import luxus
+        frame = luxus.get_frame(member.id)
+    except Exception:  # noqa: BLE001 - Rahmen ist nur Deko
+        pass
     try:
         buf = render.level_card(
             avatar,
@@ -656,7 +663,7 @@ async def _card_image(member: discord.abc.User) -> "discord.File | discord.Embed
             xp=prof["xp"], coins=prof["coins"], msgs=prof.get("msgs", 0),
             voice_secs=prof.get("voice_secs", 0), streak=prof.get("streak", 0),
             title=_clean_title_text(prof.get("title") or ""),
-            accent=_rarity_accent(prof),
+            accent=_rarity_accent(prof), frame=frame,
         )
         return discord.File(buf, filename="flo_level.png")
     except Exception:  # noqa: BLE001
@@ -786,6 +793,11 @@ async def _leaderboard(guild=None) -> "discord.Embed | discord.File":
     rows = leaderboard_data(10)
     if rows and leaderboard_img.is_available():
         try:
+            try:
+                import luxus
+                luxus.decorate_rows(rows)   # Thron-/Kronen-Deko (nur Optik)
+            except Exception:  # noqa: BLE001
+                pass
             await _attach_avatars(rows, guild)
             stand = datetime.now(_tz).strftime("Stand: %d.%m.%Y %H:%M")
             png = leaderboard_img.render_png(rows, subtitle=stand)

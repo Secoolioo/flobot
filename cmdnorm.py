@@ -56,6 +56,8 @@ KNOWN: set[str] = {
     # admin (nur Besitzer - schadet als Korrekturziel niemandem)
     "gib", "nimm", "setcoins", "gibxp", "profil", "ansage", "shopneu",
     "adminhilfe", "admin",
+    # luxus
+    "luxus", "luxury", "prestige", "thron", "throne",
     # fun
     "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
     "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",

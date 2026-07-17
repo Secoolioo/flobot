@@ -1163,12 +1163,26 @@ def nutrition_card(food_img: "bytes | None", data: dict) -> io.BytesIO:
 
 
 # === Level-Karte (Rank-Card als Bild) =====================================
+# Luxus-Rahmen (Flo Luxus Shop): je teurer, desto edler der Kartenrand.
+_FRAME_STYLES = {
+    "bronze": {"col": (205, 127, 50), "col2": None, "label": "BRONZE"},
+    "silber": {"col": (200, 205, 214), "col2": None, "label": "SILBER"},
+    "gold": {"col": (241, 196, 15), "col2": None, "label": "GOLD"},
+    "diamant": {"col": (120, 220, 255), "col2": (210, 245, 255), "label": "DIAMANT"},
+    "galaxie": {"col": (155, 89, 182), "col2": (87, 148, 242), "label": "GALAXIE"},
+    "imperium": {"col": (241, 196, 15), "col2": (231, 76, 60), "label": "IMPERATOR"},
+}
+_FRAME_SPARKLE = ("gold", "diamant", "galaxie", "imperium")
+
+
 def level_card(avatar: "bytes | None", *, name: str, level: int, into: int,
                step: int, place: int, total: int, xp: int, coins: int,
                msgs: int, voice_secs: int, streak: int, title: str = "",
-               accent: "tuple | None" = None) -> io.BytesIO:
+               accent: "tuple | None" = None,
+               frame: "str | None" = None) -> io.BytesIO:
     """Rank-Card: Avatar mit Ring, Name, Titel, Level + Platz, XP-Balken und
-    Stat-Zeile (Coins, Nachrichten, Voice, Streak)."""
+    Stat-Zeile (Coins, Nachrichten, Voice, Streak). ``frame``: Luxus-Rahmen
+    aus dem Flo-Luxus-Shop (bronze/silber/gold/diamant/galaxie/imperium)."""
     W, H = 1000, 320
     acc = accent or (88, 101, 242)   # Blurple, ausser eine Titel-Farbe kommt mit
     img = _vgrad(W, H, (26, 29, 38), (13, 15, 20)).convert("RGBA")
@@ -1244,7 +1258,26 @@ def level_card(avatar: "bytes | None", *, name: str, level: int, into: int,
         d.text((sx, 232), label, font=lf2, fill=(120, 126, 140))
         d.text((sx, 254), val, font=vf2, fill=(200, 205, 218))
 
-    d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18, outline=(48, 53, 63), width=2)
+    style = _FRAME_STYLES.get(frame or "")
+    if style is None:
+        d.rounded_rectangle([6, 6, W - 7, H - 7], radius=18, outline=(48, 53, 63), width=2)
+    else:
+        # Luxus-Rahmen: kraeftiger Aussenrand + feine Innenlinie (zweifarbig
+        # bei Diamant/Galaxie/Imperium), Funkeln ab Gold, Label unterm Avatar.
+        col, col2 = style["col"], style["col2"] or style["col"]
+        d.rounded_rectangle([4, 4, W - 5, H - 5], radius=20, outline=col, width=5)
+        d.rounded_rectangle([12, 12, W - 13, H - 13], radius=14, outline=col2, width=2)
+        if frame in _FRAME_SPARKLE:
+            _sparkle(d, 26, 26, 9, col2)
+            _sparkle(d, W - 28, 30, 8, col)
+            _sparkle(d, W - 44, H - 30, 9, col2)
+            _sparkle(d, 40, H - 26, 7, col)
+        lf3 = _font(15)
+        lbl = style["label"]
+        lw = int(d.textlength(lbl, font=lf3)) + 22
+        lx = ax + (AD - lw) // 2
+        d.rounded_rectangle([lx, H - 40, lx + lw, H - 16], radius=12, fill=col)
+        d.text((lx + 11, H - 36), lbl, font=lf3, fill=(18, 16, 10))
     return _png(img)
 
 

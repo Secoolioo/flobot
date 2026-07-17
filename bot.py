@@ -30,6 +30,7 @@ import economy
 import fun
 import food
 import games
+import luxus
 import media
 import moderation
 import music
@@ -136,6 +137,9 @@ WORDS_ENABLED = words.setup()
 # Admin-Befehle (nur OWNER_ID): Coins geben/nehmen/setzen, XP, Ansagen, Shop -
 # im Server UND privat per DM. Andere bekommen in DMs keine Antwort.
 ADMIN_ENABLED = admin.setup()
+# Luxus-Shop ('Flo luxus'): Prestige-Coin-Senke von 15k bis 1 MILLIARDE
+# (Level-Karten-Rahmen, Krone, Imperium) + DER THRON (Unikat, eroberbar).
+LUXUS_ENABLED = luxus.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -166,7 +170,7 @@ WEISHEITEN = [
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
-     WORDS_ENABLED, ADMIN_ENABLED]
+     WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -462,6 +466,13 @@ def _help_detail_embed(key: str) -> discord.Embed:
                    "Beim Kauf bekommst du die **farbige Rolle** dazu – und je seltener "
                    "dein Titel, desto entspannter redet Flo mit dir. 😎"),
             inline=False)
+        if LUXUS_ENABLED:
+            emb.add_field(name="Luxus & Thron 🏆",
+                value=(f"`{name} luxus` – Prestige von **15.000** bis "
+                       "**1 MILLIARDE** Coins: edle Rahmen für deine Level-Karte, "
+                       "die Königskrone … bis zum **FLO-IMPERIUM**.\n"
+                       f"`{name} thron` – es gibt nur **einen** Thron. Erobere ihn, "
+                       "bevor es ein anderer tut! ⚔️"), inline=False)
         return emb
     if key == "casino":
         emb = discord.Embed(title="🎰 Casino",
@@ -1010,6 +1021,8 @@ async def _handle_owner_dm(message: discord.Message) -> None:
     ai.note_message(message.channel.id, message.author.display_name, content)
     title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
     tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
+    if LUXUS_ENABLED:
+        tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
     image_url = _first_image_url(message)
     async with message.channel.typing():
         try:
@@ -1175,6 +1188,7 @@ async def on_message(message: discord.Message) -> None:
             (VOICE_GAGS_ENABLED, voicegags.handle),
             (GAMES_ENABLED, games.handle),
             (CASINO_ENABLED, casino.handle),
+            (LUXUS_ENABLED, luxus.handle),
             (WORDS_ENABLED, words.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FOOD_ENABLED, food.handle),
@@ -1201,7 +1215,8 @@ async def on_message(message: discord.Message) -> None:
         if (antwort is moderation.HANDLED or antwort is music.HANDLED
                 or antwort is casino.HANDLED or antwort is games.HANDLED
                 or antwort is economy.HANDLED or antwort is media.HANDLED
-                or antwort is food.HANDLED or antwort is words.HANDLED):
+                or antwort is food.HANDLED or antwort is words.HANDLED
+                or antwort is luxus.HANDLED):
             return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
         if isinstance(antwort, discord.File):
             log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1219,6 +1234,9 @@ async def on_message(message: discord.Message) -> None:
     # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
     title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
     tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
+    # Luxus-Status (Imperator/Thron) schlaegt sich im Tonfall nieder.
+    if LUXUS_ENABLED:
+        tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
     # Bild dabei (Anhang oder in der beantworteten Nachricht)? -> Flo schaut es sich
     # an (Vision), statt nur den Text zu lesen.
     image_url = _first_image_url(message)

@@ -350,8 +350,14 @@ def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
         _draw_avatar(img, d, r, safe, cy, rc or _BORDER)
 
         # --- Name + Meta-Zeile (Level · Coins · Titel) ---
-        name = _truncate(d, safe, f_name, _NAME_W)
-        d.text((_X_NAME, cy - 22), name, font=f_name, fill=_FG)
+        name = _truncate(d, safe, f_name, _NAME_W - (26 if (r.get("throne") or r.get("crown")) else 0))
+        name_col = _GOLD if r.get("throne") else _FG
+        d.text((_X_NAME, cy - 22), name, font=f_name, fill=name_col)
+        # Luxus-Deko: Thron-Besitzer goldene Krone, Koenigskronen-Kaeufer silbern.
+        if r.get("throne") or r.get("crown"):
+            kx = _X_NAME + d.textlength(name, font=f_name) + 16
+            _mini_crown(d, kx, cy - 15,
+                        _GOLD if r.get("throne") else _SILVER)
         meta = f"Lvl {r.get('level', 0)}  ·  {_fmt_num(r.get('coins', 0))} Coins"
         clean = _clean_title(r.get("title", ""))
         if clean:
@@ -376,6 +382,16 @@ def _render(rows: list[dict], title: str, subtitle: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def _mini_crown(d, cx: float, cy: float, col) -> None:
+    """Kleine Krone neben dem Namen (Thron/Koenigskrone aus dem Luxus-Shop)."""
+    s = 8
+    base = cy + s * 0.5
+    d.polygon([(cx - s, base), (cx - s, cy - s * 0.2), (cx - s * 0.5, cy + s * 0.15),
+               (cx, cy - s * 0.55), (cx + s * 0.5, cy + s * 0.15),
+               (cx + s, cy - s * 0.2), (cx + s, base)], fill=col)
+    d.rectangle([cx - s, base + 1, cx + s, base + 3], fill=col)
 
 
 def _draw_header(d, title: str, subtitle: str) -> None:

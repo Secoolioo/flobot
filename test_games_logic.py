@@ -13,6 +13,7 @@ import admin
 import casino
 import cmdnorm
 import economy
+import luxus
 import render
 import words
 
@@ -274,6 +275,52 @@ def test_cmdnorm_admin_sicherheit() -> None:
         assert cmdnorm.normalize(satz) is None, satz
     # Echte Vertipper werden weiterhin korrigiert.
     assert cmdnorm.normalize("admiin") == "admin"
+
+
+# --- Luxus-Shop ------------------------------------------------------------------
+def test_luxus_katalog() -> None:
+    preise = [i["preis"] for i in luxus.ITEMS]
+    assert preise == sorted(preise), "Katalog muss nach Preis aufsteigen"
+    assert preise[0] == 15_000                      # Einstieg erreichbar
+    assert preise[-1] == 1_000_000_000              # das 1-Mrd-Endziel
+    assert len({i["key"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
+    assert len({i["n"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
+    assert luxus.THRONE_FACTOR > 1.0                # Thron wird immer teurer
+
+
+def test_luxus_fmt_coins() -> None:
+    assert luxus.fmt_coins(1_500) == "1.500"
+    assert luxus.fmt_coins(400_000) == "400.000"
+    assert luxus.fmt_coins(2_500_000) == "2,5 Mio"
+    assert luxus.fmt_coins(20_000_000) == "20 Mio"
+    assert luxus.fmt_coins(1_000_000_000) == "1 Mrd"
+
+
+def test_luxus_besitz_und_rahmen() -> None:
+    # Fake-Store: Besitz-Logik ohne Datei/Discord testen.
+    luxus._store = type("S", (), {"data": {"users": {}, "throne": {
+        "owner": "", "preis": luxus.THRONE_START, "n": 0}}})()
+    luxus._enabled = True
+    try:
+        uid = 42
+        assert luxus.get_frame(uid) is None
+        luxus._owned(uid).extend(["bronze", "gold"])
+        assert luxus.get_frame(uid) == "gold"       # bester Rahmen zaehlt
+        assert not luxus.has_crown(uid)
+        # Imperium schaltet ALLES frei.
+        luxus._owned(uid).append("imperium")
+        assert luxus.get_frame(uid) == "imperium"
+        assert luxus.owns(uid, "krone") and luxus.has_crown(uid)
+        assert "Imperator" in luxus.get_tone_extra(uid)
+        # Thron-Deko im Leaderboard.
+        luxus.throne_state()["owner"] = "7"
+        rows = [{"id": 7}, {"id": 42}, {"id": 9}]
+        luxus.decorate_rows(rows)
+        assert rows[0].get("throne") and rows[1].get("crown")
+        assert not rows[2].get("crown") and not rows[2].get("throne")
+    finally:
+        luxus._store = None
+        luxus._enabled = False
 
 
 def run() -> None:
