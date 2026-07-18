@@ -1053,6 +1053,8 @@ async def _handle_owner_dm(message: discord.Message) -> None:
                 antwort = await ai.see_image(
                     content, image_url, author=message.author.display_name,
                     title=title, tone=tone, channel_id=message.channel.id)
+            elif DBD_ENABLED and dbd.erkennt_frage(content):
+                antwort = await dbd.beantworte(message, ai.strip_lead(content) or content)
             else:
                 antwort = await ai.ask_flo(
                     content, author=message.author.display_name, title=title,
@@ -1285,6 +1287,10 @@ async def on_message(message: discord.Message) -> None:
                     title=title, tone=tone, channel_id=message.channel.id,
                     bavarian=bavarian,
                 )
+            elif DBD_ENABLED and dbd.erkennt_frage(content):
+                # Klingt nach Dead by Daylight -> mit den echten Spieldaten
+                # antworten (Otz-Builds, Perks, Addons) statt aus dem Bauch.
+                antwort = await dbd.beantworte(message, ai.strip_lead(content) or content)
             else:
                 antwort = await ai.ask_flo(
                     content, author=message.author.display_name, title=title, tone=tone,

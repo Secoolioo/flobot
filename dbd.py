@@ -40,8 +40,18 @@ _data: dict = {}
 _killers: list[dict] = []          # {key, name_en, name_de, ...}
 _alias_to_killer: dict[str, dict] = {}
 _perk_index: dict[str, str] = {}   # norm(name de/en) -> perk-key
+_addon_index: dict[str, str] = {}  # norm(name de/en) -> addon-key
+_addons_by_parent: dict[str, list] = {}   # power/item-id -> [addon-keys]
 _meta_killer: list[str] = []       # meistgenutzte Perks in Otz-Killer-Builds
 _meta_surv: list[str] = []
+
+# Survivor-Item-Woerter -> item_type der Addons (fuer 'beste medkit addons?')
+_ITEM_TYPES = {
+    "medkit": "medkit", "verbandskasten": "medkit", "erste hilfe": "medkit",
+    "flashlight": "flashlight", "taschenlampe": "flashlight",
+    "toolbox": "toolbox", "werkzeugkasten": "toolbox",
+    "map": "map", "karte": "map", "schluessel": "key", "key": "key",
+}
 
 # Community-Spitznamen -> englischer Killer-Name.
 _NICKNAMES = {
@@ -105,6 +115,7 @@ def is_enabled() -> bool:
 def _reindex() -> None:
     """Baut alle Suchstrukturen aus _data neu."""
     global _killers, _alias_to_killer, _perk_index, _meta_killer, _meta_surv
+    global _addon_index, _addons_by_parent
     chars = _data.get("chars", {})
     otz = _data.get("otz", {})
     guides = _data.get("guides", {})
@@ -136,6 +147,14 @@ def _reindex() -> None:
     for key, p in _data.get("perks", {}).items():
         _perk_index[_norm(p["name_en"])] = key
         _perk_index[_norm(p["name_de"])] = key
+
+    _addon_index = {}
+    _addons_by_parent = {}
+    for key, a in _data.get("addons", {}).items():
+        _addon_index[_norm(a["name_en"])] = key
+        _addon_index[_norm(a["name_de"])] = key
+        for parent in a.get("parents") or []:
+            _addons_by_parent.setdefault(parent, []).append(key)
 
     # Meta = die haeufigsten Perks in Otzdarvas aktuellen Builds.
     kc: Counter = Counter()
@@ -295,37 +314,113 @@ _PROGRESSION = (
 )
 
 
+def _rarity_de(r: str) -> str:
+    return {"common": "Gewöhnlich", "uncommon": "Ungewöhnlich", "rare": "Selten",
+            "veryrare": "Sehr selten", "ultrarare": "Ultra-selten"}.get(r, r)
+
+
 def _kontext_fuer(frage: str) -> str:
-    """RAG-Kontext: erkannte Killer/Perks + Otz-Meta zur Frage zusammenstellen."""
+    """RAG-Kontext: erkannte Killer/Perks/Addons + Otz-Meta zur Frage."""
     teile: list[str] = []
+    addons = _data.get("addons", {})
     k = _find_killer(frage)
     if k is not None:
         info = [f"KILLER: {k['name_de']} ({k['name_en']}), "
                 f"Schwierigkeit {k.get('schwierigkeit', '?')}. {k.get('bio', '')}"]
         for b in k["builds"][:3]:
             info.append(f"Otz-Build '{b['name']}': " + ", ".join(b["perks"]))
+        # Seine Addons (Namen + Seltenheit) - fuer 'beste addons'-Fragen.
+        eigene_addons = _addons_by_parent.get(k.get("item") or "", [])
+        if eigene_addons:
+            namen = [f"{addons[a]['name_de']} ({_rarity_de(addons[a]['rarity'])})"
+                     for a in eigene_addons]
+            info.append(f"Addons von {k['name_de']}: " + ", ".join(namen))
         if k.get("guide"):
             info.append(f"Guide: {k['guide']}")
         teile.append("\n".join(info))
-    # bis zu 4 erwaehnte Perks aufloesen (2-3-Wort-Fenster ueber der Frage)
+    # bis zu 4 erwaehnte Perks + 3 Addons aufloesen (1-3-Wort-Fenster)
     woerter = _norm(frage).split()
-    gefunden: list[str] = []
+    perk_treffer: list[str] = []
+    addon_treffer: list[str] = []
     for laenge in (3, 2, 1):
         for i in range(len(woerter) - laenge + 1):
             kand = " ".join(woerter[i:i + laenge])
-            key = _perk_index.get(kand)
-            if key and key not in gefunden:
-                gefunden.append(key)
-    for key in gefunden[:4]:
+            pk = _perk_index.get(kand)
+            if pk and pk not in perk_treffer:
+                perk_treffer.append(pk)
+            ak = _addon_index.get(kand)
+            if ak and ak not in addon_treffer:
+                addon_treffer.append(ak)
+    for key in perk_treffer[:4]:
         p = _data["perks"][key]
         teile.append(f"PERK {p['name_de']} ({p['name_en']}, {p['role']}): "
                      f"{p['beschreibung'][:400]}")
+    for key in addon_treffer[:3]:
+        a = addons[key]
+        teile.append(f"ADDON {a['name_de']} ({_rarity_de(a['rarity'])}): "
+                     f"{a['beschreibung'][:300]}")
+    # Survivor-Item-Addons ('beste medkit addons?')
+    t = _norm(frage)
+    for wort, item_type in _ITEM_TYPES.items():
+        if wort in t:
+            passend = [a for a in addons.values()
+                       if a.get("item_type") == item_type][:16]
+            if passend:
+                namen = [f"{a['name_de']} ({_rarity_de(a['rarity'])})"
+                         for a in passend]
+                teile.append(f"{item_type.upper()}-Addons: " + ", ".join(namen))
+            break
     teile.append("Aktuelle Killer-Meta laut Otzdarvas Builds: "
                  + ", ".join(_meta_killer))
     teile.append("Aktuelle Survivor-Meta laut Otzdarvas Builds: "
                  + ", ".join(_meta_surv))
     teile.append(_PROGRESSION)
     return "\n\n".join(teile)
+
+
+# --- Erkennung fuer den KI-Fallback (bot.py) --------------------------------
+_DBD_KEYWORDS = {
+    "dbd", "daylight", "killer", "killern", "survivor", "survivors", "surv",
+    "überlebende", "ueberlebende", "perk", "perks", "build", "builds",
+    "addon", "addons", "gen", "gens", "generator", "generatoren", "haken",
+    "hook", "totem", "totems", "entität", "entitaet", "entity", "campen",
+    "campt", "camping", "tunneln", "tunnelt", "slugging", "mori",
+    "taschenlampe", "flashlight", "medkit", "toolbox", "werkzeugkasten",
+    "blutpunkte", "bloodpoints", "prestige", "prestigen", "otz", "otzdarva",
+    "skillcheck", "skillchecks", "erschöpfung", "exhaustion", "lobby",
+    "endgame", "hex", "boon", "segen", "fluch",
+}
+
+
+def erkennt_frage(text: str) -> bool:
+    """True, wenn eine freie Nachricht nach Dead by Daylight klingt - dann
+    beantwortet der KI-Fallback sie MIT den DbD-Daten statt aus dem Bauch."""
+    if not _enabled:
+        return False
+    woerter = set(_norm(text).split())
+    if woerter & _DBD_KEYWORDS:
+        return True
+    # Killer-Name/-Spitzname erwaehnt? (kurze Aliasse wie 'sm' ignorieren)
+    t = _norm(text)
+    for alias, _k in _alias_to_killer.items():
+        if len(alias) >= 4 and (alias in woerter or (" " in alias and alias in t)):
+            return True
+    # Perk-/Addon-Name erwaehnt? Mehrwort-Namen immer, Einzelwoerter erst ab
+    # 6 Zeichen (sonst kapern Allerweltswoerter wie 'karte' den Chat).
+    tokens = t.split()
+    for laenge in (3, 2):
+        for i in range(len(tokens) - laenge + 1):
+            if " ".join(tokens[i:i + laenge]) in _perk_index:
+                return True
+    for wort in tokens:
+        if len(wort) >= 6 and (wort in _perk_index or wort in _addon_index):
+            return True
+    return False
+
+
+async def beantworte(message: discord.Message, frage: str) -> str:
+    """Oeffentlich fuer bot.py: freie DbD-Frage mit Datenbasis beantworten."""
+    return await _frage(message, frage)
 
 
 async def _frage(message: discord.Message, frage: str) -> str:

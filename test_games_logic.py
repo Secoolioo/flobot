@@ -397,6 +397,24 @@ def test_dbd_daten_und_suche() -> None:
     assert len(emb.fields) >= 3
     ctx = dbd._kontext_fuer("welchen build auf nurse?")
     assert "Krankenschwester" in ctx and "Otz-Build" in ctx
+    # Addons sind verknuepft und landen im Kontext
+    trapper = dbd._find_killer("trapper")
+    assert len(dbd._addons_by_parent.get(trapper["item"], [])) >= 10
+    assert "Addons von Der Fallensteller" in dbd._kontext_fuer("beste addons für trapper?")
+    assert "MEDKIT-Addons" in dbd._kontext_fuer("welche medkit addons?")
+
+
+def test_dbd_fragen_erkennung() -> None:
+    """DbD-Fragen OHNE 'dbd'-Prefix werden erkannt - normale Fragen nicht."""
+    assert dbd.setup()
+    for frage in ("welcher killer ist der stärkste?", "lohnt sich prestige 3?",
+                  "bester build für wesker", "was macht sprint burst",
+                  "beste taschenlampen addons?", "wird nurse generft?"):
+        assert dbd.erkennt_frage(frage), frage
+    for frage in ("wie wird das wetter morgen?", "erzähl einen witz",
+                  "was gibts heute zu essen", "kannst du mir bei mathe helfen",
+                  "hast du ein rezept für pizza"):
+        assert not dbd.erkennt_frage(frage), frage
 
 
 def run() -> None:

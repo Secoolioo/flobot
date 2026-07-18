@@ -95,7 +95,28 @@ async def fetch_chars(session) -> dict:
             "name_de": c_de.get("name") or c_en.get("name", ""),
             "role": c_en.get("role", ""),
             "schwierigkeit": c_en.get("difficulty", ""),
+            "item": c_en.get("item") or "",     # Power-ID -> verknuepft Addons
             "bio": clean_desc(c_de.get("bio") or c_en.get("bio", ""), None)[:600],
+        }
+    return out
+
+
+async def fetch_addons(session) -> dict:
+    """Alle Addons (Killer-Power + Survivor-Items), DE + EN."""
+    de = await _get_json(session, f"{API}/addons?locale=de")
+    en = await _get_json(session, f"{API}/addons")
+    out = {}
+    for key, a_en in en.items():
+        a_de = de.get(key, {})
+        out[key] = {
+            "name_en": a_en.get("name", key),
+            "name_de": a_de.get("name") or a_en.get("name", key),
+            "role": a_en.get("role", ""),
+            "rarity": a_en.get("rarity", ""),
+            "parents": a_en.get("parents") or [],
+            "item_type": a_en.get("item_type") or "",
+            "beschreibung": clean_desc(a_de.get("description") or
+                                       a_en.get("description", ""), None)[:400],
         }
     return out
 
@@ -174,11 +195,13 @@ async def fetch_all() -> dict:
     import aiohttp
     timeout = aiohttp.ClientTimeout(total=60)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        perks, chars, otz_html = await asyncio.gather(
-            fetch_perks(session), fetch_chars(session), _get_text(session, OTZ_URL))
+        perks, chars, addons, otz_html = await asyncio.gather(
+            fetch_perks(session), fetch_chars(session), fetch_addons(session),
+            _get_text(session, OTZ_URL))
     return {
         "perks": perks,
         "chars": chars,
+        "addons": addons,
         "otz": parse_otz(otz_html),
         "guides": GUIDES,
     }
