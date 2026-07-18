@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import admin
 import casino
 import cmdnorm
+import dbd
 import economy
 import luxus
 import render
@@ -369,6 +370,33 @@ def test_luxus_besitz_und_rahmen() -> None:
     finally:
         luxus._store = None
         luxus._enabled = False
+
+
+# --- Dead by Daylight ------------------------------------------------------------
+def test_dbd_daten_und_suche() -> None:
+    assert dbd.setup(), "dbd_data.json muss ladbar sein"
+    # Killer-Suche: EN/DE/Spitzname/ohne Akzent/im Satz
+    for text, erwartet in [("nurse", "The Nurse"), ("billy", "The Hillbilly"),
+                           ("fallensteller", "The Trapper"),
+                           ("onryo", "The Onryō"), ("chucky", "The Good Guy"),
+                           ("build für wesker bitte", "The Mastermind")]:
+        k = dbd._find_killer(text)
+        assert k is not None and k["name_en"] == erwartet, text
+    # Perk-Suche DE + EN
+    assert dbd._find_perk("adrenalin") == dbd._find_perk("adrenaline")
+    assert dbd._find_perk("sprint burst") is not None
+    # Jeder Otz-Killer-Eintrag ist einem API-Killer zugeordnet (ausser die
+    # allerneuesten ohne Builds).
+    ohne = [k["name_en"] for k in dbd._killers
+            if not k["builds"] and k["name_en"] not in ("The First", "The Slasher")]
+    assert ohne == [], ohne
+    # Meta wird aus den Otz-Builds abgeleitet
+    assert len(dbd._meta_killer) >= 10 and len(dbd._meta_surv) >= 10
+    # Embeds + RAG-Kontext
+    emb = dbd._builds_embed_killer(dbd._find_killer("nurse"))
+    assert len(emb.fields) >= 3
+    ctx = dbd._kontext_fuer("welchen build auf nurse?")
+    assert "Krankenschwester" in ctx and "Otz-Build" in ctx
 
 
 def run() -> None:
