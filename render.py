@@ -9,7 +9,6 @@ verschickt werden koennen:
 Alles wird selbst gezeichnet (keine externen Bild-Dateien), damit es auch auf
 einem frisch aufgesetzten Server ohne zusaetzliche Assets funktioniert.
 """
-from __future__ import annotations
 
 import io
 import math
@@ -38,8 +37,8 @@ class Render:
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     ]
 
-    def __init__(self) -> None:
-        self._FONT_FILE: str | None = None
+    def __init__(self):
+        self._FONT_FILE = None
         for _p in self._FONT_PATHS:
             try:
                 ImageFont.truetype(_p, 12)
@@ -47,11 +46,11 @@ class Render:
                 break
             except OSError:
                 continue
-        self._font_cache: dict[int, ImageFont.FreeTypeFont] = {}
-        self._notdef_q: dict[int, bytes] = {}
+        self._font_cache = {}
+        self._notdef_q = {}
 
 
-    def _font(self, size: int) -> ImageFont.FreeTypeFont:
+    def _font(self, size):
         f = self._font_cache.get(size)
         if f is None:
             if self._FONT_FILE:
@@ -62,7 +61,7 @@ class Render:
         return f
 
 
-    def _png(self, img: Image.Image) -> io.BytesIO:
+    def _png(self, img):
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="PNG")
         buf.seek(0)
@@ -82,7 +81,7 @@ class Render:
 
 
     # --- kleine Zeichen-Helfer ----------------------------------------------
-    def _vgrad(self, w: int, h: int, top: tuple, bot: tuple) -> Image.Image:
+    def _vgrad(self, w, h, top, bot):
         """Vertikaler Farbverlauf (ohne numpy). Schnell: 1px-Spalte zeichnen und
         auf volle Breite skalieren statt h einzelne Linien."""
         col = Image.new("RGB", (1, h))
@@ -94,8 +93,8 @@ class Render:
         return col.resize((w, h))
 
 
-    def _pill(self, d: ImageDraw.ImageDraw, x: int, y: int, text: str, size: int,
-              bg: tuple, fg: tuple) -> int:
+    def _pill(self, d, x, y, text, size,
+              bg, fg):
         """Zeichnet eine abgerundete 'Pille' mit Text. Gibt die Breite zurueck."""
         f = self._font(size)
         tw = d.textlength(text, font=f)
@@ -106,8 +105,8 @@ class Render:
         return w
 
 
-    def _pill_c(self, d: ImageDraw.ImageDraw, cx: float, y: int, text: str, size: int,
-                bg: tuple, fg: tuple) -> int:
+    def _pill_c(self, d, cx, y, text, size,
+                bg, fg):
         """Wie _pill, aber horizontal um cx zentriert."""
         f = self._font(size)
         w = int(d.textlength(text, font=f) + 24)
@@ -118,7 +117,7 @@ class Render:
     CARD_W, CARD_H, CARD_R = 124, 174, 14
 
 
-    def _corner(self, rank: str, suit: str, color: tuple) -> Image.Image:
+    def _corner(self, rank, suit, color):
         tile = Image.new("RGBA", (48, 66), (0, 0, 0, 0))
         d = ImageDraw.Draw(tile)
         d.text((24, 0), rank, font=self._font(30), fill=color, anchor="ma")
@@ -126,7 +125,7 @@ class Render:
         return tile
 
 
-    def _draw_card(self, img: Image.Image, x: int, y: int, rank: str, suit: str) -> None:
+    def _draw_card(self, img, x, y, rank, suit):
         d = ImageDraw.Draw(img, "RGBA")
         d.rounded_rectangle([x + 4, y + 6, x + self.CARD_W + 4, y + self.CARD_H + 6],
                             radius=self.CARD_R, fill=(0, 0, 0, 70))            # Schatten
@@ -143,7 +142,7 @@ class Render:
                fill=color, anchor="mm")
 
 
-    def _draw_back(self, img: Image.Image, x: int, y: int) -> None:
+    def _draw_back(self, img, x, y):
         d = ImageDraw.Draw(img, "RGBA")
         d.rounded_rectangle([x + 4, y + 6, x + self.CARD_W + 4, y + self.CARD_H + 6],
                             radius=self.CARD_R, fill=(0, 0, 0, 70))
@@ -163,11 +162,11 @@ class Render:
                   fill=(168, 186, 240))
 
 
-    def _row_start(self, w: int, n: int, gap: int) -> int:
+    def _row_start(self, w, n, gap):
         return (w - (n * self.CARD_W + (n - 1) * gap)) // 2
 
 
-    def _card_tile(self, rank: "str | None" = None, suit: str = "") -> Image.Image:
+    def _card_tile(self, rank = None, suit = ""):
         """Eine einzelne Karte (oder Rueckseite bei rank=None) als eigenes Bild -
         so laesst sie sich fuer Flip-/Slide-Animationen skalieren und verschieben."""
         tile = Image.new("RGBA", (self.CARD_W + 6, self.CARD_H + 8), (0, 0, 0, 0))
@@ -178,13 +177,13 @@ class Render:
         return tile
 
 
-    def _bj_img(self, dealer: list, player: list, *, hide_hole: bool,
-                dealer_value: int, player_value: int, player_state: str = "",
-                n_dealer: "int | None" = None, n_player: "int | None" = None,
-                slide: "tuple[str, int] | None" = None,
-                hole_flip: "float | None" = None,
-                hide_values: bool = False,
-                labels: tuple = ("DEALER", "DU")) -> Image.Image:
+    def _bj_img(self, dealer, player, *, hide_hole,
+                dealer_value, player_value, player_state = "",
+                n_dealer = None, n_player = None,
+                slide = None,
+                hole_flip = None,
+                hide_values = False,
+                labels = ("DEALER", "DU")):
         """Blackjack-Tisch als Image. Animations-Parameter:
         ``n_dealer``/``n_player``: nur die ersten n Karten zeigen (Deal-Animation),
         ``slide``: ('player'|'dealer', dx) - letzte gezeigte Karte um dx versetzt,
@@ -202,7 +201,7 @@ class Render:
         d = ImageDraw.Draw(img, "RGBA")
         d.rounded_rectangle([6, 6, W - 6, H - 6], radius=18, outline=(255, 255, 255, 40), width=2)
 
-        def put(tile: Image.Image, x: int, y: int, squeeze: float = 1.0) -> None:
+        def put(tile, x, y, squeeze = 1.0):
             if squeeze < 1.0:
                 w = max(4, int(tile.width * squeeze))
                 tile = tile.resize((w, tile.height))
@@ -252,10 +251,10 @@ class Render:
         return img
 
 
-    def blackjack_table(self, dealer: list, player: list, *, hide_hole: bool,
-                        dealer_value: int, player_value: int,
-                        player_state: str = "",
-                        labels: tuple = ("DEALER", "DU")) -> io.BytesIO:
+    def blackjack_table(self, dealer, player, *, hide_hole,
+                        dealer_value, player_value,
+                        player_state = "",
+                        labels = ("DEALER", "DU")):
         """Rendert den Blackjack-Tisch als ein Bild (statisch - Fallback und
         Grundlage der Frames von blackjack_table_anim)."""
         return self._png(self._bj_img(dealer, player, hide_hole=hide_hole,
@@ -263,10 +262,10 @@ class Render:
                             player_state=player_state, labels=labels))
 
 
-    def blackjack_table_anim(self, dealer: list, player: list, *, hide_hole: bool,
-                             dealer_value: int, player_value: int,
-                             player_state: str = "", mode: str = "hit",
-                             labels: tuple = ("DEALER", "DU")) -> io.BytesIO:
+    def blackjack_table_anim(self, dealer, player, *, hide_hole,
+                             dealer_value, player_value,
+                             player_state = "", mode = "hit",
+                             labels = ("DEALER", "DU")):
         """Blackjack als GIF. ``mode``:
         - 'deal'   : die Startkarten werden einzeln ausgeteilt
         - 'hit'    : die zuletzt gezogene Spieler-Karte slidet ein
@@ -274,8 +273,8 @@ class Render:
         Gewinn/Blackjack endet mit Blitz + Konfetti, Bust mit rotem Blitz."""
         kw = dict(hide_hole=hide_hole, dealer_value=dealer_value,
                   player_value=player_value, labels=labels)
-        frames: list[Image.Image] = []
-        durations: list[int] = []
+        frames = []
+        durations = []
 
         if mode == "deal":
             # Reihenfolge wie am Tisch: Du, Dealer, Du, Dealer(verdeckt).
@@ -321,7 +320,7 @@ class Render:
 
 
     # --- Crash-Kurve ---------------------------------------------------------
-    def _nice_ticks(self, hi: float) -> list[float]:
+    def _nice_ticks(self, hi):
         span = hi - 1.0
         if span <= 0:
             return [1.0]
@@ -340,16 +339,16 @@ class Render:
         return ticks
 
 
-    def _dashed_h(self, d: ImageDraw.ImageDraw, y: float, x0: int, x1: int,
-                  color: tuple, dash: int = 12, gap: int = 9) -> None:
+    def _dashed_h(self, d, y, x0, x1,
+                  color, dash = 12, gap = 9):
         x = x0
         while x < x1:
             d.line([(x, y), (min(x + dash, x1), y)], fill=color, width=2)
             x += dash + gap
 
 
-    def _burst(self, d: ImageDraw.ImageDraw, cx: float, cy: float, color: tuple,
-               outline: tuple = (255, 255, 255)) -> None:
+    def _burst(self, d, cx, cy, color,
+               outline = (255, 255, 255)):
         pts = []
         for i in range(16):
             ang = math.pi * i / 8
@@ -362,8 +361,8 @@ class Render:
     _CRASH_BOT = (9, 12, 20)
 
 
-    def _glow_line(self, base: Image.Image, pts: list, color: tuple, width: int,
-                   blur: int) -> Image.Image:
+    def _glow_line(self, base, pts, color, width,
+                   blur):
         """Legt eine weiche Leucht-Linie unter die eigentliche Kurve."""
         if len(pts) < 2:
             return base
@@ -373,7 +372,7 @@ class Render:
         return Image.alpha_composite(base, glow)
 
 
-    def crash_chart(self, crash_point: float, target: float, cashed: bool) -> io.BytesIO:
+    def crash_chart(self, crash_point, target, cashed):
         """Zeichnet die Crash-Kurve: Multiplikator ueber die Zeit, Ziel-Linie,
         Cashout-Punkt bzw. Explosion - mit Verlauf, Leuchtkurve und Multiplikator-Badge."""
         W, H = 820, 420
@@ -383,10 +382,10 @@ class Render:
         ymax = max(cp, target) * 1.16
         ymax = max(ymax, 1.6)
 
-        def px(t: float) -> float:
+        def px(t):
             return x0 + t * (x1 - x0)
 
-        def py(m: float) -> float:
+        def py(m):
             f = (m - 1.0) / (ymax - 1.0)
             return y1 - f * (y1 - y0)
 
@@ -467,8 +466,8 @@ class Render:
     SLOT_KEYS = ["seven", "diamond", "star", "bar", "grape", "lemon", "cherry"]
 
 
-    def _ball(self, d: ImageDraw.ImageDraw, cx: float, cy: float, r: float,
-              col: tuple, dark: tuple, light: tuple) -> None:
+    def _ball(self, d, cx, cy, r,
+              col, dark, light):
         """Kugel mit Fake-3D: dunkler Rand, Koerper, Schattierung, Glanzpunkt."""
         d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=dark)
         d.ellipse([cx - r * 0.93, cy - r * 0.93, cx + r * 0.93, cy + r * 0.93], fill=col)
@@ -477,7 +476,7 @@ class Render:
         d.ellipse([cx - r * 0.55, cy - r * 0.62, cx - r * 0.05, cy - r * 0.12], fill=light)
 
 
-    def _slot_symbol(self, d: ImageDraw.ImageDraw, cx: float, cy: float, R: float, key: str) -> None:
+    def _slot_symbol(self, d, cx, cy, R, key):
         """Slot-Symbole mit Schattierung, Kontur und Glanz (kein Flat-Look)."""
         if key == "seven":
             f = self._font(int(R * 1.95))
@@ -498,7 +497,7 @@ class Render:
             d.text((cx + 2, cy + 2), "BAR", font=f, fill=(70, 30, 95), anchor="mm")
             d.text((cx, cy), "BAR", font=f, fill=(255, 250, 235), anchor="mm")
         elif key == "star":
-            def stern(rr_out: float, rr_in: float, off: float = 0.0) -> list:
+            def stern(rr_out, rr_in, off = 0.0):
                 pts = []
                 for i in range(10):
                     ang = -math.pi / 2 + i * math.pi / 5
@@ -567,7 +566,7 @@ class Render:
                 self._ball(d, ox, oy, rr, (148, 88, 198), (92, 46, 138), (208, 168, 235))
 
 
-    def _slot_window(self, img: Image.Image, x: int, y: int, s: int, key: str) -> None:
+    def _slot_window(self, img, x, y, s, key):
         d = ImageDraw.Draw(img, "RGBA")
         d.rounded_rectangle([x, y, x + s, y + s], radius=16, fill=(248, 249, 252),
                             outline=(60, 64, 80), width=3)
@@ -575,7 +574,7 @@ class Render:
         self._slot_symbol(d, x + s / 2, y + s / 2, s * 0.3, key)
 
 
-    def slot_machine(self, symbols: list, *, win: int = 0, jackpot: bool = False) -> io.BytesIO:
+    def slot_machine(self, symbols, *, win = 0, jackpot = False):
         """Rendert drei Slot-Walzen. ``symbols``: 3 Schluessel aus SLOT_KEYS.
         ``win``: Gewinn in Coins (0 = nichts). ``jackpot``: drei Gleiche."""
         pad, tile, gap, top_h, bot_h = 26, 150, 18, 72, 58
@@ -610,7 +609,7 @@ class Render:
 
 
     # --- Coinflip ------------------------------------------------------------
-    def _crown(self, d: ImageDraw.ImageDraw, cx: float, cy: float, s: float, col: tuple) -> None:
+    def _crown(self, d, cx, cy, s, col):
         base = cy + s * 0.45
         pts = [(cx - s, base), (cx - s, cy - s * 0.1), (cx - s * 0.5, cy + s * 0.2),
                (cx, cy - s * 0.55), (cx + s * 0.5, cy + s * 0.2), (cx + s, cy - s * 0.1),
@@ -621,7 +620,7 @@ class Render:
             d.ellipse([px_ - s * 0.12, cy - s * 0.62, px_ + s * 0.12, cy - s * 0.38], fill=col)
 
 
-    def coin_flip(self, result: str) -> io.BytesIO:
+    def coin_flip(self, result):
         """Goldmuenze, die ``kopf`` (Krone) oder ``zahl`` (Stern) zeigt."""
         W = H = 360
         img = self._vgrad(W, H, (26, 32, 52), (12, 15, 26)).convert("RGBA")
@@ -647,7 +646,7 @@ class Render:
 
 
     # --- Wuerfel -------------------------------------------------------------
-    def _pips(self, d: ImageDraw.ImageDraw, x: int, y: int, s: int, val: int) -> None:
+    def _pips(self, d, x, y, s, val):
         r = s * 0.085
         cxs = [x + s * 0.28, x + s * 0.5, x + s * 0.72]
         cys = [y + s * 0.28, y + s * 0.5, y + s * 0.72]
@@ -662,7 +661,7 @@ class Render:
             d.ellipse([ox - r, oy - r, ox + r, oy + r], fill=(40, 44, 60))
 
 
-    def _die(self, img: Image.Image, x: int, y: int, s: int, val: int, sides: int) -> None:
+    def _die(self, img, x, y, s, val, sides):
         d = ImageDraw.Draw(img, "RGBA")
         d.rounded_rectangle([x + 5, y + 7, x + s + 5, y + s + 7], radius=22, fill=(0, 0, 0, 80))
         d.rounded_rectangle([x, y, x + s, y + s], radius=22, fill=(248, 249, 252),
@@ -676,8 +675,8 @@ class Render:
                    fill=(150, 154, 170), anchor="mm")
 
 
-    def _dice_img(self, rolls: list, sides: int, *, jitter: int = 0,
-                  show_sum: bool = True, seed: int = 0) -> Image.Image:
+    def _dice_img(self, rolls, sides, *, jitter = 0,
+                  show_sum = True, seed = 0):
         """Wuerfelbild als Image. ``jitter``: max. Versatz in px (Kullern)."""
         n = max(1, len(rolls))
         die, gap, pad = 120, 20, 28
@@ -701,17 +700,17 @@ class Render:
         return img
 
 
-    def dice_roll(self, rolls: list, sides: int) -> io.BytesIO:
+    def dice_roll(self, rolls, sides):
         """Wuerfel als Bild. d6 zeigt Augen, sonst die Zahl + 'W<n>'. Bei vielen
         Wuerfeln (>8) wird in mehrere Reihen umgebrochen, damit es kompakt bleibt."""
         return self._png(self._dice_img(rolls, sides))
 
 
-    def dice_roll_anim(self, rolls: list, sides: int) -> io.BytesIO:
+    def dice_roll_anim(self, rolls, sides):
         """Wuerfeln als GIF: die Wuerfel kullern (zufaellige Zwischen-Augen +
         Wackeln), rasten dann nacheinander auf dem Ergebnis ein."""
-        frames: list[Image.Image] = []
-        durations: list[int] = []
+        frames = []
+        durations = []
         n = len(rolls)
         tumble = 6
         for f in range(tumble):
@@ -733,13 +732,13 @@ class Render:
                    10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26]
 
 
-    def _roul_color(self, num: int) -> tuple:
+    def _roul_color(self, num):
         if num == 0:
             return (39, 174, 96)
         return (192, 57, 43) if num in self._ROUL_RED else (30, 32, 40)
 
 
-    def roulette_wheel(self, spin: int, won: bool) -> io.BytesIO:
+    def roulette_wheel(self, spin, won):
         """Roulette-Kessel mit Zahlenring, Kugel am Gewinnerfach und Ergebnis-Hub."""
         W = H = 440
         img = self._vgrad(W, H, self._FELT_TOP, self._FELT_BOT).convert("RGBA")
@@ -777,20 +776,20 @@ class Render:
 
 
     # --- Keno ----------------------------------------------------------------
-    def _legend(self, d: ImageDraw.ImageDraw, x: int, y: int, col: tuple, text: str) -> int:
+    def _legend(self, d, x, y, col, text):
         f = self._font(16)
         d.rounded_rectangle([x, y, x + 22, y + 22], radius=5, fill=col)
         d.text((x + 30, y + 11), text, font=f, fill=(210, 214, 228), anchor="lm")
         return 30 + int(d.textlength(text, font=f)) + 26
 
 
-    def keno_grid(self, picks: list, draw: list, hits: list) -> io.BytesIO:
+    def keno_grid(self, picks, draw, hits):
         """Zahlenraster 1-40: Treffer (gold), eigener Tipp (blau), gezogen (grau)."""
         return self._png(self._keno_img(picks, draw, hits))
 
 
-    def _keno_img(self, picks: list, draw: list, hits: list,
-                  pop: "int | None" = None) -> Image.Image:
+    def _keno_img(self, picks, draw, hits,
+                  pop = None):
         """Zeichnet das Keno-Raster als Image (fuer PNG und GIF-Frames).
         ``pop``: diese frisch gezogene Zahl wird groesser + heller gezeichnet."""
         cols, rows = 8, 5
@@ -835,15 +834,15 @@ class Render:
 
 
     # --- Shop-Banner (v1.2) --------------------------------------------------
-    def _hex(self, value: int) -> tuple[int, int, int]:
+    def _hex(self, value):
         return ((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF)
 
 
-    def _mix(self, a: tuple, b: tuple, f: float) -> tuple:
+    def _mix(self, a, b, f):
         return tuple(round(a[i] + (b[i] - a[i]) * f) for i in range(3))
 
 
-    def _round_grad(self, w: int, h: int, radius: int, top: tuple, bot: tuple) -> Image.Image:
+    def _round_grad(self, w, h, radius, top, bot):
         """RGBA-Kachel mit vertikalem Verlauf (top->bot) und abgerundeten Ecken."""
         grad = self._vgrad(w, h, top, bot).convert("RGBA")
         mask = Image.new("L", (w, h), 0)
@@ -852,8 +851,8 @@ class Render:
         return grad
 
 
-    def _fit_font(self, d: ImageDraw.ImageDraw, text: str, max_w: int,
-                  start: int, floor: int) -> tuple[ImageFont.FreeTypeFont, str]:
+    def _fit_font(self, d, text, max_w,
+                  start, floor):
         """Groesste Schrift <= start, bei der 'text' in max_w passt; sonst kuerzen mit '…'."""
         size = start
         while size > floor and d.textlength(text, font=self._font(size)) > max_w:
@@ -866,7 +865,7 @@ class Render:
         return f, text
 
 
-    def shop_banner(self, items: list[dict], *, date: str = "") -> io.BytesIO | None:
+    def shop_banner(self, items, *, date = ""):
         """Schoenes Banner fuer den Tages-Shop: je Titel eine Zeile, eingefaerbt in
         der Seltenheits-Farbe (gruen/blau/lila/gold). Erwartet je Item ein Dict mit
         'n', 'text', 'price', 'color', 'rarity_label'. Gibt PNG (BytesIO) zurueck.
@@ -972,7 +971,7 @@ class Render:
     _RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS
 
 
-    def _renderable_char(self, font, ch: str) -> bool:
+    def _renderable_char(self, font, ch):
         """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer)."""
         if ord(ch) >= 0x1F000:               # Emoji-/Symbol-Zusatzebenen
             return False
@@ -992,11 +991,11 @@ class Render:
         return bool(b) and b != nd and any(b)
 
 
-    def _clean_text(self, s: str) -> str:
+    def _clean_text(self, s):
         """Macht Text darstellbar: NFKC, Emoji/Steuer-/Zalgo-/unbekannte Glyphen raus."""
         s = unicodedata.normalize("NFKC", s or "")
         ref = self._font(40)
-        out: list[str] = []
+        out = []
         for ch in s:
             if ch in ("\n", "\t", " "):
                 out.append(" ")
@@ -1009,9 +1008,9 @@ class Render:
         return " ".join("".join(out).split()).strip()
 
 
-    def _wrap(self, d, text: str, font, max_w: int) -> list[str]:
+    def _wrap(self, d, text, font, max_w):
         """Bricht Text auf max_w Pixel um (Wort-weise; lange Woerter hart trennen)."""
-        lines: list[str] = []
+        lines = []
         for word in text.split():
             if not lines or d.textlength(lines[-1] + " " + word, font=font) > max_w:
                 if d.textlength(word, font=font) <= max_w or not lines:
@@ -1031,7 +1030,7 @@ class Render:
         return lines or [""]
 
 
-    def quote_card(self, avatar: "bytes | None", text: str, author: str) -> io.BytesIO:
+    def quote_card(self, avatar, text, author):
         """Zitat-Bild im 'make it a quote'-Stil: links das (graustufige) Profilbild
         mit Verlauf ins Schwarze, rechts das Zitat + '- Name' darunter."""
         W, H, AVW = 1200, 630, 620
@@ -1085,7 +1084,7 @@ class Render:
 
 
     # === Ernaehrungs-Karte ("Kalorien-Channel") ===============================
-    def _round_img(self, data: bytes, w: int, h: int, radius: int = 0) -> "Image.Image | None":
+    def _round_img(self, data, w, h, radius = 0):
         """Bild-Bytes -> RGBA, auf w x h gefittet, optional mit runden Ecken."""
         try:
             im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (w, h),
@@ -1101,7 +1100,7 @@ class Render:
         return out
 
 
-    def _fnum(self, val) -> float:
+    def _fnum(self, val):
         """Robuste Zahl aus beliebigen (LLM-)Werten: 1200, "1200", "ca. 1200 kcal",
         "8/10" -> erste Zahl; sonst 0. Schuetzt die Karte unabhaengig vom Aufrufer."""
         if isinstance(val, (int, float)):
@@ -1111,7 +1110,7 @@ class Render:
         return float(m.group(0).replace(",", ".")) if m else 0.0
 
 
-    def _score_color(self, score: float) -> tuple:
+    def _score_color(self, score):
         """0 (Industrie, rot) -> 10 (natuerlich, gruen), stufenlos."""
         f = max(0.0, min(1.0, score / 10.0))
         r1, g1, b1 = (231, 76, 60)     # rot
@@ -1120,8 +1119,8 @@ class Render:
                 round(b1 + (b2 - b1) * f))
 
 
-    def _hbar(self, d, x: int, y: int, w: int, h: int, frac: float, color,
-              track=(38, 42, 50)) -> None:
+    def _hbar(self, d, x, y, w, h, frac, color,
+              track=(38, 42, 50)):
         """Horizontaler Wert-Balken mit rundem Track."""
         frac = max(0.0, min(1.0, frac))
         r = h // 2
@@ -1133,7 +1132,7 @@ class Render:
             d.rounded_rectangle([x, y, x + fw, y + h], radius=r, fill=color)
 
 
-    def nutrition_card(self, food_img: "bytes | None", data: dict) -> io.BytesIO:
+    def nutrition_card(self, food_img, data):
         """Ernaehrungs-Karte: links das Essensfoto, rechts Kalorien, Makros,
         Natuerlichkeits-Score (gruen=natuerlich, rot=Industrie) und Fazit."""
         W, H, PW = 1200, 640, 470
@@ -1240,11 +1239,11 @@ class Render:
     _FRAME_SPARKLE = ("gold", "diamant", "galaxie", "imperium")
 
 
-    def level_card(self, avatar: "bytes | None", *, name: str, level: int, into: int,
-                   step: int, place: int, total: int, xp: int, coins: int,
-                   msgs: int, voice_secs: int, streak: int, title: str = "",
-                   accent: "tuple | None" = None,
-                   frame: "str | None" = None) -> io.BytesIO:
+    def level_card(self, avatar, *, name, level, into,
+                   step, place, total, xp, coins,
+                   msgs, voice_secs, streak, title = "",
+                   accent = None,
+                   frame = None):
         """Rank-Card: Avatar mit Ring, Name, Titel, Level + Platz, XP-Balken und
         Stat-Zeile (Coins, Nachrichten, Voice, Streak). ``frame``: Luxus-Rahmen
         aus dem Flo-Luxus-Shop (bronze/silber/gold/diamant/galaxie/imperium)."""
@@ -1351,7 +1350,7 @@ class Render:
     # CPU-gebunden (Pillow) - die Aufrufer starten sie deshalb via
     # asyncio.to_thread, damit der Event-Loop nie blockiert. Frame-Anzahl und
     # Groessen sind bewusst klein gehalten (Discord spielt GIFs im Embed ab).
-    def _gif(self, frames: list, durations, *, colors: int = 144) -> io.BytesIO:
+    def _gif(self, frames, durations, *, colors = 144):
         """Frames (RGB/RGBA-Images) -> animiertes GIF. Die gemeinsame Palette wird
         aus Anfangs-, Mittel- UND Endframe gebaut - nur das Endbild wuerde Farben
         verlieren, die es selbst nicht enthaelt (z. B. Walzen-Symbole mitten im
@@ -1378,7 +1377,7 @@ class Render:
         return buf
 
 
-    def _ease_out(self, t: float) -> float:
+    def _ease_out(self, t):
         """Kubisches Aus-Bremsen: schnell starten, weich zum Stillstand."""
         return 1.0 - (1.0 - t) ** 3
 
@@ -1387,7 +1386,7 @@ class Render:
                       (231, 76, 60), (155, 89, 182), (250, 250, 252)]
 
 
-    def _confetti(self, img: Image.Image, t: float, *, seed: int = 7, n: int = 46) -> None:
+    def _confetti(self, img, t, *, seed = 7, n = 46):
         """Fallendes Konfetti ueber das ganze Bild. ``t``: 0..1 Fortschritt der
         Animation - gleiche Seed ergibt eine koherente Flugbahn ueber die Frames."""
         rng = random.Random(seed)
@@ -1409,8 +1408,8 @@ class Render:
             d.line([(x - dx, y - dy), (x + dx, y + dy)], fill=col, width=3)
 
 
-    def _sparkle(self, d: ImageDraw.ImageDraw, x: float, y: float, r: float,
-                 col: tuple = (255, 255, 255)) -> None:
+    def _sparkle(self, d, x, y, r,
+                 col = (255, 255, 255)):
         """Kleiner 4-Strahlen-Funkel-Stern."""
         d.line([(x - r, y), (x + r, y)], fill=col, width=2)
         d.line([(x, y - r), (x, y + r)], fill=col, width=2)
@@ -1419,16 +1418,16 @@ class Render:
         d.line([(x - rr, y + rr), (x + rr, y - rr)], fill=col, width=1)
 
 
-    def _flash(self, img: Image.Image, color: tuple, alpha: int) -> Image.Image:
+    def _flash(self, img, color, alpha):
         """Kurzer Vollbild-Blitz (z. B. gruen bei Gewinn, rot bei Crash)."""
         overlay = Image.new("RGBA", img.size, (*color, alpha))
         return Image.alpha_composite(img.convert("RGBA"), overlay)
 
 
     # --- Muenzwurf (animiert) --------------------------------------------------
-    def _coin_face(self, d: ImageDraw.ImageDraw, cx: float, cy: float, R: float,
-                   face: str, squash: float, *, shadow_y: float | None = None,
-                   shadow_scale: float = 1.0) -> None:
+    def _coin_face(self, d, cx, cy, R,
+                   face, squash, *, shadow_y = None,
+                   shadow_scale = 1.0):
         """Zeichnet die Muenze mit vertikaler Stauchung (squash 0..1 = Kante..voll).
         Der Schatten bleibt am Boden (shadow_y) und schrumpft, wenn die Muenze
         hoch fliegt (shadow_scale)."""
@@ -1449,7 +1448,7 @@ class Render:
                        fill=(150, 110, 10), anchor="mm")
 
 
-    def coin_flip_anim(self, result: str) -> io.BytesIO:
+    def coin_flip_anim(self, result):
         """Muenzwurf als GIF: die Muenze fliegt im Bogen hoch, flippt dabei,
         landet mit zwei kleinen Huepfern und funkelt auf dem Ergebnis."""
         W = H = 320
@@ -1469,7 +1468,7 @@ class Render:
             (0.03, 1.00, result),    # Bounce 2
             (0.00, 1.00, result),
         ]
-        frames: list[Image.Image] = []
+        frames = []
         for h, squash, face in seq:
             img = self._vgrad(W, H, (26, 32, 52), (12, 15, 26)).convert("RGBA")
             d = ImageDraw.Draw(img, "RGBA")
@@ -1492,7 +1491,7 @@ class Render:
 
 
     # --- Slots (animiert) ------------------------------------------------------
-    def _slot_scroll_tile(self, s: int, sym_now: str, sym_next: str, frac: float) -> Image.Image:
+    def _slot_scroll_tile(self, s, sym_now, sym_next, frac):
         """Ein Walzenfenster mit ECHT durchlaufenden Symbolen: das aktuelle rollt
         nach unten raus, das naechste laeuft von oben ein. frac 0..1 = Fortschritt."""
         tile = Image.new("RGBA", (s, s), (0, 0, 0, 0))
@@ -1518,7 +1517,7 @@ class Render:
         return Image.alpha_composite(tile, overlay)
 
 
-    def _slot_still_tile(self, s: int, key: str, dy: float = 0.0) -> Image.Image:
+    def _slot_still_tile(self, s, key, dy = 0.0):
         """Stehendes Walzenfenster (dy: kleiner Bounce-Versatz beim Einrasten)."""
         tile = Image.new("RGBA", (s, s), (0, 0, 0, 0))
         td = ImageDraw.Draw(tile)
@@ -1528,7 +1527,7 @@ class Render:
         return tile
 
 
-    def _slot_stage(self, f: int, *, all_lit: bool = False) -> tuple[Image.Image, int, int, int]:
+    def _slot_stage(self, f, *, all_lit = False):
         """Grundbild der Maschine: Rahmen, Titel und blinkende Marquee-Lampen.
         Rueckgabe: (bild, pad, fenster_y, tile)."""
         pad, tile, gap, top_h, bot_h = 26, 150, 18, 72, 58
@@ -1554,7 +1553,7 @@ class Render:
         return img, pad, ry, tile
 
 
-    def slot_machine_anim(self, symbols: list, *, win: int = 0, jackpot: bool = False) -> io.BytesIO:
+    def slot_machine_anim(self, symbols, *, win = 0, jackpot = False):
         """Slots als GIF: drei Walzen scrollen echt durch, stoppen nacheinander mit
         einem kleinen Bounce; bei Gewinn blitzt die Linie, beim Jackpot regnet
         Konfetti und alle Lampen leuchten."""
@@ -1563,12 +1562,12 @@ class Render:
         total = 17
         speed = (0.58, 0.66, 0.74)               # jede Walze etwas anders schnell
         # Scroll-Reihenfolge je Walze: gemischt, endet nahtlos im Zielsymbol.
-        seqs: list[list[str]] = []
+        seqs = []
         for i in range(3):
             pool = [k for k in self.SLOT_KEYS if k != symbols[i]]
             random.shuffle(pool)
             seqs.append((pool * 4) + [symbols[i]])
-        frames: list[Image.Image] = []
+        frames = []
         for f in range(total):
             img, _pad, ry, _tile = self._slot_stage(f)
             rx = pad
@@ -1595,7 +1594,7 @@ class Render:
             frames.append(img)
 
         # Ergebnis-Frames: Gewinn blitzt, Jackpot bekommt Konfetti-Regen.
-        def result_frame(lit: bool, flash_line: bool, conf_t: float | None) -> Image.Image:
+        def result_frame(lit, flash_line, conf_t):
             img, _pad, ry, _tile = self._slot_stage(0, all_lit=lit)
             rx = pad
             for i in range(3):
@@ -1639,7 +1638,7 @@ class Render:
 
 
     # --- Roulette (animiert) ---------------------------------------------------
-    def _roul_ring(self, size: int, spin: int) -> Image.Image:
+    def _roul_ring(self, size, spin):
         """Zeichnet den Zahlenring EINMAL (Gewinnerfach oben) - die Animation
         rotiert dann nur noch dieses Bild (schnell, C-Ebene)."""
         ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -1666,7 +1665,7 @@ class Render:
         return ring
 
 
-    def roulette_wheel_anim(self, spin: int, won: bool) -> io.BytesIO:
+    def roulette_wheel_anim(self, spin, won):
         """Roulette als GIF: der Kessel dreht sich aus, die KUGEL kreist gegenlaeufig
         aussen, spiralt nach innen und faellt oben ins Gewinnerfach; am Ende
         erscheint das Ergebnis-Hub (bei Gewinn mit Konfetti)."""
@@ -1678,7 +1677,7 @@ class Render:
         Ro = ring_size / 2 - 2
         Rm = (Ro + Ro * 0.765) / 2 + 6           # Zahlenkranz = Pocket-Radius
 
-        def frame(t: float, final: bool, conf_t: float | None = None) -> Image.Image:
+        def frame(t, final, conf_t = None):
             img = self._vgrad(W, H, self._FELT_TOP, self._FELT_BOT).convert("RGBA")
             d = ImageDraw.Draw(img, "RGBA")
             outline = ((46, 204, 113) if won else (231, 76, 60)) if final else (245, 197, 24)
@@ -1729,7 +1728,7 @@ class Render:
 
 
     # --- Crash (animiert) ------------------------------------------------------
-    def crash_chart_anim(self, crash_point: float, target: float, cashed: bool) -> io.BytesIO:
+    def crash_chart_anim(self, crash_point, target, cashed):
         """Crash als GIF: die Kurve waechst live mit laufendem Multiplikator-Badge,
         das Endbild ist der volle Chart (mit Glow, Ziel-Linie, Explosion/Cashout)."""
         W, H = 820, 420
@@ -1738,10 +1737,10 @@ class Render:
         cp = max(1.001, float(crash_point))
         ymax = max(max(cp, target) * 1.16, 1.6)
 
-        def px(t: float) -> float:
+        def px(t):
             return x0 + t * (x1 - x0)
 
-        def py(m: float) -> float:
+        def py(m):
             return y1 - (m - 1.0) / (ymax - 1.0) * (y1 - y0)
 
         base = self._vgrad(W, H, self._CRASH_TOP, self._CRASH_BOT).convert("RGBA")
@@ -1757,8 +1756,8 @@ class Render:
 
         N = 140
         full = [(i / N, cp ** (i / N)) for i in range(N + 1)]
-        frames: list[Image.Image] = []
-        durations: list[int] = []
+        frames = []
+        durations = []
         steps = 12
         for s in range(1, steps + 1):
             f = self._ease_out(s / steps) if s < steps else 1.0
@@ -1773,7 +1772,7 @@ class Render:
             ang = math.atan2(tip_y - prev_y, tip_x - prev_x)
             ca, sa = math.cos(ang), math.sin(ang)
 
-            def rot(dx: float, dy: float) -> tuple[float, float]:
+            def rot(dx, dy):
                 return (tip_x + dx * ca - dy * sa, tip_y + dx * sa + dy * ca)
 
             flame = 22 + (8 if s % 2 else 0)
@@ -1827,13 +1826,13 @@ class Render:
 
 
     # --- Keno (animiert) -------------------------------------------------------
-    def keno_grid_anim(self, picks: list, draw: list, hits: list, *,
-                       big_win: bool = False) -> io.BytesIO:
+    def keno_grid_anim(self, picks, draw, hits, *,
+                       big_win = False):
         """Keno-Ziehung als GIF: die 10 Zahlen ploppen nacheinander auf (Treffer
         funkeln); bei einem grossen Gewinn regnet am Ende Konfetti."""
         hitset = set(hits)
-        frames: list[Image.Image] = [self._keno_img(picks, [], [])]
-        durations: list[int] = [180]
+        frames = [self._keno_img(picks, [], [])]
+        durations = [180]
         for i in range(1, len(draw) + 1):
             part = draw[:i]
             part_hits = [n for n in part if n in hitset]
@@ -1854,7 +1853,7 @@ class Render:
 
 
     # --- Gluecksrad ------------------------------------------------------------
-    def _wheel_seg_color(self, mult: float) -> tuple:
+    def _wheel_seg_color(self, mult):
         if mult <= 0:
             return (52, 56, 68)          # Niete - dunkelgrau
         if mult < 1.0:
@@ -1866,7 +1865,7 @@ class Render:
         return (241, 196, 15)            # Jackpot - gold
 
 
-    def _wheel_ring(self, size: int, mults: list, idx: int) -> Image.Image:
+    def _wheel_ring(self, size, mults, idx):
         """Gluecksrad-Ring einmal zeichnen (Gewinnersegment oben), dann rotieren."""
         ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         d = ImageDraw.Draw(ring, "RGBA")
@@ -1890,7 +1889,7 @@ class Render:
         return ring
 
 
-    def wheel_fortune_anim(self, mults: list, idx: int) -> io.BytesIO:
+    def wheel_fortune_anim(self, mults, idx):
         """Gluecksrad als GIF: dreht aus, Gewinnersegment landet oben am Zeiger,
         am Ende zeigt die Nabe den Multiplikator."""
         W = H = 440
@@ -1902,8 +1901,8 @@ class Render:
 
         seg_deg = 360.0 / len(mults)
 
-        def frame(angle: float, final: bool, *, highlight: bool = False,
-                  conf_t: float | None = None) -> Image.Image:
+        def frame(angle, final, *, highlight = False,
+                  conf_t = None):
             img = self._vgrad(W, H, (30, 24, 52), (13, 11, 24)).convert("RGBA")
             d = ImageDraw.Draw(img, "RGBA")
             outline = ((46, 204, 113) if won else (231, 76, 60)) if final else (245, 197, 24)
@@ -1947,8 +1946,8 @@ class Render:
 
 
     # --- Rubbellos -------------------------------------------------------------
-    def _scratch_img(self, keys: list, revealed: int, win_rows: list, win: int,
-                     show_result: bool, *, sparkle: bool = False) -> Image.Image:
+    def _scratch_img(self, keys, revealed, win_rows, win,
+                     show_result, *, sparkle = False):
         """Rubbellos 3x3: ``revealed`` Felder sind schon freigerubbelt, der Rest
         zeigt die Rubbel-Schicht. ``win_rows``: Indizes (0-2) der Gewinn-Reihen."""
         pad, tile, gap, top = 26, 128, 14, 66
@@ -1991,7 +1990,7 @@ class Render:
         return img
 
 
-    def scratch_card_anim(self, keys: list, win_rows: list, win: int) -> io.BytesIO:
+    def scratch_card_anim(self, keys, win_rows, win):
         """Rubbellos als GIF: die 9 Felder werden nacheinander freigerubbelt;
         Gewinn-Reihen funkeln, grosse Gewinne bekommen Konfetti."""
         frames = [self._scratch_img(keys, i, win_rows, win, show_result=False)
@@ -2021,7 +2020,7 @@ class Render:
 
 
     # === Casino-Statistik-Karte ================================================
-    def casino_stats_card(self, name: str, avatar: "bytes | None", stats: dict) -> io.BytesIO:
+    def casino_stats_card(self, name, avatar, stats):
         """Persoenliche Casino-Bilanz: Kopf mit Avatar+Name, sechs Kennzahlen
         (inkl. Brutto-Gewonnen/-Verloren) und ein Balken je Spiel (Anzahl
         Runden, Netto eingefaerbt).
@@ -2064,7 +2063,7 @@ class Render:
         # Kennzahlen: zwei Zeilen a drei Werte. Oben die Klassiker, unten die
         # Brutto-Summen (wie viel insgesamt gewonnen bzw. verloren wurde) -
         # fehlen die Felder (Alt-Profil), werden sie aus dem Netto abgeleitet.
-        def _tsd(n: int) -> str:
+        def _tsd(n):
             return f"{n:,}".replace(",", ".")
 
         net = int(stats.get("payout", 0)) - int(stats.get("wagered", 0))
@@ -2110,8 +2109,8 @@ class Render:
         return self._png(img)
 
 
-    def handel_card(self, name: str, avatar: "bytes | None", stats: dict,
-                    balance: int = 0) -> io.BytesIO:
+    def handel_card(self, name, avatar, stats,
+                    balance = 0):
         """Coin-Handelsbuch als Bild: Kopf mit Avatar+Name+Kontostand, vier
         Kennzahlen, Netto-Chart der letzten 14 Tage, Aufschluesselung nach
         Quelle und die juengsten Einzelbuchungen.
@@ -2123,7 +2122,7 @@ class Render:
         from zoneinfo import ZoneInfo
         import os as _os
 
-        def _tsd(n: int) -> str:
+        def _tsd(n):
             return f"{n:,}".replace(",", ".")
 
         by = dict(stats.get("by") or {})
@@ -2253,8 +2252,8 @@ class Render:
 
 
     # === HiLo-Karte ============================================================
-    def hilo_card(self, rank: str, suit: str, *, streak: int, mult: float,
-                  state: str = "") -> io.BytesIO:
+    def hilo_card(self, rank, suit, *, streak, mult,
+                  state = ""):
         """Hoeher/Tiefer: grosse Spielkarte + Serie/Multiplikator.
         ``state``: '' (laeuft) / 'win' (Cashout) / 'lose'."""
         W, H = 460, 300
@@ -2281,8 +2280,8 @@ class Render:
 
 
     # === Hilfe-Karten ==========================================================
-    def help_card(self, title: str, accent: tuple, entries: list,
-                  *, subtitle: str = "") -> io.BytesIO:
+    def help_card(self, title, accent, entries,
+                  *, subtitle = ""):
         """Befehls-Uebersicht als Bild: pro Zeile links der Befehl als Code-Pille,
         rechts die Kurzbeschreibung. ``entries``: [(befehl, beschreibung)] oder
         [(befehl, beschreibung, rgb-farbe)] fuer eigene Pillen-Farben."""
@@ -2321,7 +2320,7 @@ class Render:
 
 
     # === Woerter-Top-Liste =====================================================
-    def words_card(self, rows: list, *, total_words: int = 0, total_count: int = 0) -> io.BytesIO:
+    def words_card(self, rows, *, total_words = 0, total_count = 0):
         """Top-Woerter des Servers als Balken-Karte. ``rows``: [(wort, anzahl), ...]"""
         W = 900
         head, row_h = 118, 46

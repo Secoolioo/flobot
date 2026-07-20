@@ -18,7 +18,6 @@ Effekte (sichtbar, nicht nur Zahlen):
 
 Coins laufen ueber economy (ein Topf); Besitz liegt in data/luxus.json.
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -40,7 +39,7 @@ IMPERATOR_ROLE = "🏰 Imperator"
 
 # Katalog: fest, bewusst KEIN Zufall - das sind Lebensziele. 'rang' ordnet
 # die Rahmen (der beste besessene wird angezeigt).
-ITEMS: list[dict] = [
+ITEMS = [
     {"n": 1, "key": "bronze", "name": "Bronze-Rahmen", "emoji": "🥉",
      "preis": 15_000, "art": "rahmen", "rang": 1, "farbe": 0xCD7F32,
      "desc": "Deine Level-Karte in edlem Bronze."},
@@ -71,13 +70,13 @@ _FRAME_ORDER = ["bronze", "silber", "gold", "diamant", "galaxie", "imperium"]
 class Luxus:
     """Objektorientierte Huelle: veraenderlicher Zustand lebt auf der Instanz."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         # Veraenderlicher Zustand (frueher Modul-Globals).
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._store: JsonStore | None = None
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._store = None
 
-    def fmt_coins(self, n: int) -> str:
+    def fmt_coins(self, n):
         """1500 -> '1.500', 2_500_000 -> '2,5 Mio', 1_000_000_000 -> '1 Mrd'."""
         if n >= 1_000_000_000:
             v = n / 1_000_000_000
@@ -89,7 +88,7 @@ class Luxus:
             return f"{s} Mio"
         return f"{n:,}".replace(",", ".")
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert den Luxus-Shop. Braucht economy (den Coin-Topf)."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("LUXUS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -107,21 +106,21 @@ class Luxus:
                  len(ITEMS), self.fmt_coins(THRONE_START))
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Besitz-API (auch fuer economy/render/leaderboard) ----------------------
-    def _owned(self, uid: int) -> list[str]:
+    def _owned(self, uid):
         if self._store is None:
             return []
         return self._store.data.setdefault("users", {}).setdefault(str(uid), [])
 
-    def owns(self, uid: int, key: str) -> bool:
+    def owns(self, uid, key):
         if key in self._owned(uid):
             return True
         return key != "imperium" and "imperium" in self._owned(uid)   # Imperium = alles
 
-    def get_frame(self, uid: int) -> "str | None":
+    def get_frame(self, uid):
         """Bester besessener Rahmen fuer die Level-Karte (oder None)."""
         if not self._enabled:
             return None
@@ -134,21 +133,21 @@ class Luxus:
                 best = key
         return best
 
-    def has_crown(self, uid: int) -> bool:
+    def has_crown(self, uid):
         return self._enabled and (self.owns(uid, "krone"))
 
-    def throne_state(self) -> dict:
+    def throne_state(self):
         assert self._store is not None
         return self._store.data.setdefault(
             "throne", {"owner": "", "preis": THRONE_START, "n": 0})
 
-    def throne_owner(self) -> "int | None":
+    def throne_owner(self):
         if not self._enabled or self._store is None:
             return None
         raw = self.throne_state().get("owner") or ""
         return int(raw) if raw.isdigit() else None
 
-    def decorate_rows(self, rows: list[dict]) -> None:
+    def decorate_rows(self, rows):
         """Markiert Leaderboard-Zeilen: 'throne' (goldene Krone) / 'crown'."""
         if not self._enabled:
             return
@@ -160,11 +159,11 @@ class Luxus:
             if uid and self.has_crown(uid):
                 row["crown"] = True
 
-    def get_tone_extra(self, uid: int) -> str:
+    def get_tone_extra(self, uid):
         """Zusatz fuer den KI-Tonfall (bot.py haengt das an economy.get_tone an)."""
         if not self._enabled:
             return ""
-        teile: list[str] = []
+        teile = []
         if self.owns(uid, "imperium"):
             teile.append("WICHTIG: Diese Person besitzt das FLO-IMPERIUM (fuer "
                          "1 MILLIARDE Coins gekauft). Sprich sie ehrfuerchtig als "
@@ -175,12 +174,12 @@ class Luxus:
         return " ".join(teile)
 
     # --- Kauf-Logik --------------------------------------------------------------
-    async def _flush_all(self) -> None:
+    async def _flush_all(self):
         assert self._store is not None
         await self._store.save()
         await economy.flush()
 
-    async def _buy(self, member: discord.abc.User, item: dict) -> str:
+    async def _buy(self, member, item):
         """Kauft ein Katalog-Item. Gibt die Antwort als Text zurueck."""
         uid = member.id
         if self.owns(uid, item["key"]):
@@ -202,7 +201,7 @@ class Luxus:
                 f"(-{self.fmt_coins(preis)} {economy.COIN}). "
                 f"Kontostand: {self.fmt_coins(economy.get_coins(uid))}.")
 
-    async def _grant_imperator_role(self, member) -> None:
+    async def _grant_imperator_role(self, member):
         """Imperator-Rolle anlegen + zuweisen (fehlertolerant, nur Deko)."""
         guild = getattr(member, "guild", None)
         if guild is None:
@@ -217,7 +216,7 @@ class Luxus:
         except Exception:  # noqa: BLE001 - Rolle ist Bonus, Kauf zaehlt trotzdem
             log.exception("Imperator-Rolle konnte nicht vergeben werden")
 
-    async def _seize_throne(self, member: discord.abc.User) -> tuple[str, bool]:
+    async def _seize_throne(self, member):
         """Erobert den Thron. Rueckgabe: (text, erfolgreich)."""
         uid = member.id
         st = self.throne_state()
@@ -240,7 +239,7 @@ class Luxus:
                 f"Nächste Eroberung kostet **{self.fmt_coins(st['preis'])}**. 👑"), True
 
     # --- Befehle -----------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> "str | object | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
@@ -261,7 +260,7 @@ class Luxus:
             return await self._throne_overview(message)
         return None
 
-    def _luxus_embed(self, uid: int) -> discord.Embed:
+    def _luxus_embed(self, uid):
         emb = discord.Embed(
             title="🏆 Flo Luxus",
             description=("Hier verbrennst du Coins für **Status**. "
@@ -287,7 +286,7 @@ class Luxus:
         emb.set_footer(text=f"Kontostand: {self.fmt_coins(economy.get_coins(uid))} {economy.COIN}")
         return emb
 
-    async def _luxus_overview(self, message: discord.Message) -> object:
+    async def _luxus_overview(self, message):
         view = _LuxusView(message.author.id)
         try:
             msg = await message.reply(embed=self._luxus_embed(message.author.id),
@@ -298,7 +297,7 @@ class Luxus:
             log.exception("Luxus-Katalog konnte nicht gesendet werden")
         return HANDLED
 
-    def _throne_embed(self) -> discord.Embed:
+    def _throne_embed(self):
         st = self.throne_state()
         king = self.throne_owner()
         if king:
@@ -317,7 +316,7 @@ class Luxus:
         emb.set_footer(text=f"Bisher {int(st.get('n', 0))} Eroberung(en)")
         return emb
 
-    async def _throne_overview(self, message: discord.Message) -> object:
+    async def _throne_overview(self, message):
         view = _ThroneView()
         try:
             msg = await message.reply(embed=self._throne_embed(), view=view,
@@ -329,7 +328,7 @@ class Luxus:
         return HANDLED
 
     # --- Auto-Loesch-Schutz (wie in den anderen Modulen) -------------------------
-    def _protect(self, msg) -> None:
+    def _protect(self, msg):
         if msg is None:
             return
         try:
@@ -338,7 +337,7 @@ class Luxus:
         except Exception:
             pass
 
-    def _release(self, msg) -> None:
+    def _release(self, msg):
         if msg is None:
             return
         try:
@@ -349,7 +348,7 @@ class Luxus:
 
 
 class _LuxusSelect(discord.ui.Select):
-    def __init__(self, uid: int) -> None:
+    def __init__(self, uid):
         options = []
         for item in ITEMS:
             besitzt = instance.owns(uid, item["key"])
@@ -360,12 +359,12 @@ class _LuxusSelect(discord.ui.Select):
         super().__init__(placeholder="🛍️ Was gönnst du dir?", min_values=1,
                          max_values=1, options=options, row=0)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         item = _BY_KEY[self.values[0]]
         text = await instance._buy(interaction.user, item)
         await interaction.response.send_message(text, ephemeral=True)
         # Uebersicht aktualisieren (Besitz-Haken, Kontostand).
-        view: "_LuxusView" = self.view  # type: ignore[assignment]
+        view = self.view  # type: ignore[assignment]
         if view.message is not None:
             try:
                 await view.message.edit(embed=instance._luxus_embed(view.uid))
@@ -376,20 +375,20 @@ class _LuxusSelect(discord.ui.Select):
 class _LuxusView(discord.ui.View):
     """Luxus-Katalog: Dropdown kauft direkt (Antwort ephemeral)."""
 
-    def __init__(self, uid: int) -> None:
+    def __init__(self, uid):
         super().__init__(timeout=180)
         self.uid = uid
-        self.message: discord.Message | None = None
+        self.message = None
         self.add_item(_LuxusSelect(uid))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
             f"Öffne deinen eigenen Katalog mit `{instance._bot_name} luxus`. 🛍️", ephemeral=True)
         return False
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             ch.disabled = True
         if self.message is not None:
@@ -403,14 +402,14 @@ class _LuxusView(discord.ui.View):
 class _ThroneConfirm(discord.ui.View):
     """Ephemere Sicherheitsabfrage - ein Fehlklick waere teuer."""
 
-    def __init__(self, uid: int, panel: "_ThroneView") -> None:
+    def __init__(self, uid, panel):
         super().__init__(timeout=30)
         self.uid = uid
         self.panel = panel
 
     @discord.ui.button(label="Ja, Thron erobern!", emoji="⚔️",
                        style=discord.ButtonStyle.danger)
-    async def _yes(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _yes(self, interaction, _b):
         text, ok = await instance._seize_throne(interaction.user)
         for ch in self.children:
             ch.disabled = True
@@ -425,19 +424,19 @@ class _ThroneConfirm(discord.ui.View):
 
 
 class _ThroneView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(timeout=180)
-        self.message: discord.Message | None = None
+        self.message = None
 
     @discord.ui.button(label="Erobern", emoji="⚔️", style=discord.ButtonStyle.danger)
-    async def _seize(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _seize(self, interaction, _b):
         st = instance.throne_state()
         preis = int(st.get("preis", THRONE_START))
         await interaction.response.send_message(
             f"Den Thron für **{instance.fmt_coins(preis)}** {economy.COIN} erobern?",
             view=_ThroneConfirm(interaction.user.id, self), ephemeral=True)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             ch.disabled = True
         if self.message is not None:

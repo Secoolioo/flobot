@@ -14,7 +14,6 @@ Persistenz: data/words.json ueber JsonStore. Gespeichert wird DEBOUNCED
 (alle FLUSH_SECONDS, nur wenn sich etwas geaendert hat) - so schreibt der Bot
 nicht bei jeder Chat-Nachricht auf die Platte.
 """
-from __future__ import annotations
 
 import asyncio
 import heapq
@@ -54,21 +53,21 @@ _MARKUP_RE = re.compile(r"<a?:\w+:\d+>|<[@#][&!]?\d+>")
 
 
 class Words:
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._store: JsonStore | None = None
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._store = None
 
-        self._dirty: bool = False
-        self._flush_task: asyncio.Task | None = None
-        self._backfill_running: bool = False
+        self._dirty = False
+        self._flush_task = None
+        self._backfill_running = False
         # Waehrend json.dumps im Thread laeuft, darf NIEMAND das words-dict anfassen
         # (sonst 'dictionary changed size during iteration'). Neue Nachrichten landen
         # solange im _backlog und werden direkt nach dem Speichern nachgezaehlt.
-        self._saving: bool = False
-        self._backlog: list[tuple[str, str]] = []
+        self._saving = False
+        self._backlog = []
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert den Wort-Zaehler und laedt data/words.json."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("WORDS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -89,18 +88,18 @@ class Words:
                  len(self._store.data.get("words", {})), "an" if BACKFILL else "aus")
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Zaehlen ---------------------------------------------------------------
-    def _tokenize(self, text: str) -> list[str]:
+    def _tokenize(self, text):
         """Zerlegt eine Nachricht in zaehlbare Woerter: URLs/Mentions/Custom-Emojis
         raus, alles klein, nur Buchstaben-Woerter mit 2-32 Zeichen."""
         text = _URL_RE.sub(" ", text or "")
         text = _MARKUP_RE.sub(" ", text)
         return _WORD_RE.findall(text.lower())
 
-    def _count_text(self, text: str, uid: str) -> int:
+    def _count_text(self, text, uid):
         """Zaehlt alle Woerter einer Nachricht. Gibt die Anzahl gezaehlter Woerter
         zurueck. Reine dict-Arbeit - bewusst synchron (Mikrosekunden)."""
         assert self._store is not None
@@ -118,14 +117,14 @@ class Words:
         self._store.data["msgs"] = self._store.data.get("msgs", 0) + 1
         return len(tokens)
 
-    def _count_guarded(self, text: str, uid: str) -> None:
+    def _count_guarded(self, text, uid):
         """Zaehlt sofort - oder puffert, falls gerade gespeichert wird."""
         if self._saving:
             self._backlog.append((text, uid))
         else:
             self._count_text(text, uid)
 
-    def note_message(self, message: discord.Message) -> None:
+    def note_message(self, message):
         """Passiver Hook: bot.py ruft das fuer jede Nicht-Bot-Guild-Nachricht auf.
         Synchron und billig - das Speichern passiert gesammelt im Hintergrund."""
         if not self._enabled:
@@ -133,7 +132,7 @@ class Words:
         self._count_guarded(message.content or "", str(message.author.id))
         self._mark_dirty()
 
-    def _mark_dirty(self) -> None:
+    def _mark_dirty(self):
         """Merkt sich 'es gibt Ungespeichertes' und sorgt fuer einen (einzigen)
         Hintergrund-Task, der debounced auf die Platte schreibt."""
         self._dirty = True
@@ -143,7 +142,7 @@ class Words:
             except RuntimeError:
                 pass  # kein laufender Event-Loop (Tests) - naechster Aufruf probiert's neu
 
-    async def _save_store(self) -> None:
+    async def _save_store(self):
         """Speichert words.json, OHNE den Event-Loop zu blockieren: json.dumps
         laeuft (anders als beim Standard-JsonStore) im Thread - das lohnt sich,
         weil der Wort-Index mit dem Server waechst. Waehrenddessen setzt _saving
@@ -159,7 +158,7 @@ class Words:
                 self._saving = False
                 self._replay_backlog()
 
-    def _replay_backlog(self) -> None:
+    def _replay_backlog(self):
         """Zaehlt Nachrichten nach, die waehrend eines Speicher-/Sortier-Laufs
         aufgelaufen sind."""
         if self._backlog:
@@ -167,7 +166,7 @@ class Words:
             for text, uid in pending:
                 self._count_text(text, uid)
 
-    async def _flush_later(self) -> None:
+    async def _flush_later(self):
         try:
             while self._dirty:
                 self._dirty = False
@@ -182,12 +181,12 @@ class Words:
         except Exception:
             log.exception("Wort-Zaehler: Speichern fehlgeschlagen")
 
-    async def flush_now(self) -> None:
+    async def flush_now(self):
         """Ungespeicherte Zaehlungen sofort sichern (bot.py ruft das z. B. vor
         einem Neustart, damit keine Minute Zaehlung verloren geht)."""
         await self._flush_now()
 
-    async def _flush_now(self) -> None:
+    async def _flush_now(self):
         """Sofort speichern (vor Abfragen), damit die Zahlen frisch sind."""
         if self._store is None or not self._dirty or self._backfill_running:
             return
@@ -198,13 +197,13 @@ class Words:
             log.exception("Wort-Zaehler: Sofort-Speichern fehlgeschlagen")
 
     # --- Einmaliger History-Backfill --------------------------------------------
-    def is_scanning(self) -> bool:
+    def is_scanning(self):
         """True, solange der einmalige History-Einleser noch nicht durch ist."""
         if not self._enabled or self._store is None or not BACKFILL:
             return False
         return not self._store.data.get("scan", {}).get("done", False)
 
-    async def backfill(self, guild: discord.Guild) -> None:
+    async def backfill(self, guild):
         """Liest einmalig die komplette Channel-History ein (nur beim ersten Start;
         neustart-sicher per Checkpoint je Channel). Laeuft gemuetlich im Hintergrund
         und schont die Discord-API (Pause je _BACKFILL_BATCH Nachrichten).
@@ -270,7 +269,7 @@ class Words:
             self._backfill_running = False
 
     # --- Befehle ----------------------------------------------------------------
-    async def _send(self, message: discord.Message, *, embed=None, file=None):
+    async def _send(self, message, *, embed=None, file=None):
         kwargs = {"mention_author": False}
         if embed is not None:
             kwargs["embed"] = embed
@@ -282,11 +281,11 @@ class Words:
             log.exception("Wort-Zaehler: Antwort konnte nicht gesendet werden")
             return None
 
-    def _scan_hint(self) -> str:
+    def _scan_hint(self):
         return ("\n⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen "
                 "wachsen eventuell noch.*" if self.is_scanning() else "")
 
-    async def handle(self, message: discord.Message) -> "str | object | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
@@ -302,7 +301,7 @@ class Words:
             return await self._top_command(message)
         return await self._word_query(message, " ".join(args))
 
-    async def _word_query(self, message: discord.Message, raw: str) -> "str | object":
+    async def _word_query(self, message, raw):
         assert self._store is not None
         tokens = self._tokenize(raw)
         if not tokens:
@@ -352,7 +351,7 @@ class Words:
         await self._send(message, embed=emb)
         return HANDLED
 
-    def _build_top(self, words_dict: dict, total: int) -> tuple[list, "object"]:
+    def _build_top(self, words_dict, total):
         """Sortiert + rendert die Top-Liste (laeuft im Thread - der Wortschatz
         kann gross sein). Der Aufrufer friert waehrenddessen das dict ein."""
         rows = sorted(words_dict.items(), key=lambda kv: int(kv[1]["n"]), reverse=True)[:15]
@@ -360,7 +359,7 @@ class Words:
                                 total_words=len(words_dict), total_count=total)
         return rows, buf
 
-    async def _top_command(self, message: discord.Message) -> object:
+    async def _top_command(self, message):
         assert self._store is not None
         words_dict = self._store.data.get("words", {})
         if not words_dict:

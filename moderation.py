@@ -24,7 +24,6 @@ Rueckgabe von handle():
 - Embed     -> Erfolg; bot.py schickt das Embed (zusaetzlich Mod-Log).
 - HANDLED   -> schon selbst geantwortet (Purge-Bestaetigung), bot.py sendet nichts.
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -122,10 +121,10 @@ _ROUTES = (
 
 
 class Moderation:
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._store: JsonStore | None = None
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._store = None
 
         # Label -> Handler (Purge laeuft gesondert, da es den ganzen Befehl braucht).
         self._HANDLERS = {
@@ -139,7 +138,7 @@ class Moderation:
             "ban": self._do_ban,
         }
 
-    def classify(self, cmd: str) -> "str | None":
+    def classify(self, cmd):
         """Welche Moderations-Aktion steckt im (schon um den Botnamen bereinigten)
         Text? Gibt das Label zurueck oder None. Pur testbar - handle() nutzt es."""
         for label, rx in _ROUTES:
@@ -147,7 +146,7 @@ class Moderation:
                 return label
         return None
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert das Moderation-Feature. Keine externen Voraussetzungen - die
         noetigen Rechte werden erst beim jeweiligen Befehl geprueft."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
@@ -164,11 +163,11 @@ class Moderation:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Routing -------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> "object | str | discord.Embed | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
@@ -185,21 +184,21 @@ class Moderation:
         return await self._HANDLERS[label](message, rest)
 
     # --- gemeinsame Helfer ---------------------------------------------------
-    def _need(self, label: str) -> str:
+    def _need(self, label):
         return f"Dafür brauchst du das Recht **{label}**. 🔒"
 
-    def _bot_need(self, label: str) -> str:
+    def _bot_need(self, label):
         return f"Mir fehlt das Recht **{label}** auf dem Server – das muss mir ein Admin geben. 🔒"
 
-    def _actor_can(self, message: discord.Message, attr: str) -> bool:
+    def _actor_can(self, message, attr):
         p = getattr(message.author, "guild_permissions", None)
         return bool(p and (getattr(p, attr, False) or p.administrator))
 
-    def _bot_can(self, guild: discord.Guild, attr: str) -> bool:
+    def _bot_can(self, guild, attr):
         p = guild.me.guild_permissions
         return bool(getattr(p, attr, False) or p.administrator)
 
-    def _resolve_target(self, message: discord.Message, rest: str):
+    def _resolve_target(self, message, rest):
         """Findet das Ziel: erst eine echte @-Erwaehnung (ausser Flo selbst), sonst
         eine rohe 15-20-stellige ID. Gibt (member_or_user|None, id|None, rest_ohne_ziel).
         Bei reiner ID kann member None sein (z. B. fuer Ban/Unban von Nicht-Mitgliedern)."""
@@ -216,7 +215,7 @@ class Moderation:
             return message.guild.get_member(uid), uid, rest2
         return None, None, rest
 
-    def _clean_reason(self, rest: str) -> str:
+    def _clean_reason(self, rest):
         r = _MENTION_RE.sub("", rest or "").strip()
         r = re.sub(r"^(?:wegen|weil|f(?:ü|ue)r|for|grund|reason)\b[:\s]*", "", r,
                    flags=re.IGNORECASE).strip()
@@ -224,7 +223,7 @@ class Moderation:
         # Embed-Feld max. 1024 - so kann ein Mega-Grund den Kick/Ban nicht crashen.
         return r.strip(" :–-")[:500]
 
-    def _parse_duration(self, text: str):
+    def _parse_duration(self, text):
         """Liest die erste Zeitangabe (z. B. '10m', '2 stunden') und gibt
         (sekunden, rest_ohne_dauer). Ohne Treffer: (None, text)."""
         m = _DURATION_RE.search(text)
@@ -234,9 +233,9 @@ class Moderation:
         rest = (text[:m.start()] + text[m.end():]).strip()
         return secs, rest
 
-    def _fmt_duration(self, secs: int) -> str:
+    def _fmt_duration(self, secs):
         secs = int(secs)
-        parts: list[str] = []
+        parts = []
         for one, many, size in (("Tag", "Tage", 86400), ("Stunde", "Stunden", 3600),
                                 ("Minute", "Minuten", 60), ("Sekunde", "Sekunden", 1)):
             if secs >= size:
@@ -246,7 +245,7 @@ class Moderation:
                 break
         return " ".join(parts) if parts else "0 Sekunden"
 
-    def _hierarchy_problem(self, message: discord.Message, member, full: bool = True) -> "str | None":
+    def _hierarchy_problem(self, message, member, full = True):
         """Gibt einen Klartext-Grund zurueck, WARUM die Aktion nicht erlaubt ist,
         sonst None. 'full' schaltet die Rollen-Rang-Pruefung dazu (fuer harte
         Aktionen); fuer Verwarnungen reicht der leichte Check (self/bot/owner)."""
@@ -267,14 +266,14 @@ class Moderation:
             return "Diese Person steht in der Rollen-Rangordnung über mir – da komme ich nicht ran. ⛔"
         return None
 
-    def _bot_hierarchy_ok(self, guild: discord.Guild, member: discord.Member) -> bool:
+    def _bot_hierarchy_ok(self, guild, member):
         """Reicht Flos Rolle, um gegen 'member' vorzugehen? (Fuer den Auto-Timeout.)"""
         if member.id in (guild.me.id, guild.owner_id):
             return False
         return guild.me.top_role > member.top_role
 
-    def _action_embed(self, emoji: str, titel: str, color: discord.Color, target, by,
-                      reason: str, extra: "list[tuple[str, str]] | None" = None) -> discord.Embed:
+    def _action_embed(self, emoji, titel, color, target, by,
+                      reason, extra = None):
         if isinstance(target, (discord.Member, discord.User)):
             who = f"{target.mention}\n`{target}` · ID `{target.id}`"
             avatar = target.display_avatar.url
@@ -296,7 +295,7 @@ class Moderation:
         emb.set_footer(text=f"{self._bot_name} · Moderation")
         return emb
 
-    async def _modlog(self, message: discord.Message, embed: discord.Embed) -> None:
+    async def _modlog(self, message, embed):
         """Schreibt das Aktions-Embed zusaetzlich ins Mod-Log (falls eingerichtet und
         nicht ohnehin derselbe Channel, in dem der Befehl kam)."""
         if not MOD_LOG_CHANNEL_ID:
@@ -311,8 +310,8 @@ class Moderation:
         except discord.HTTPException:
             pass
 
-    async def _apply_timeout(self, guild: discord.Guild, member: discord.Member,
-                             secs: int, reason: str) -> bool:
+    async def _apply_timeout(self, guild, member,
+                             secs, reason):
         secs = max(1, min(DISCORD_TIMEOUT_MAX, int(secs)))
         try:
             await member.timeout(timedelta(seconds=secs), reason=reason)
@@ -322,10 +321,10 @@ class Moderation:
             return False
 
     # --- Verwarnungen --------------------------------------------------------
-    def _warns_for(self, guild_id: int) -> dict:
+    def _warns_for(self, guild_id):
         return self._store.data.setdefault("warns", {}).setdefault(str(guild_id), {})
 
-    async def _do_warn(self, message: discord.Message, rest: str):
+    async def _do_warn(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
             return self._need("Mitglieder moderieren")
@@ -361,7 +360,7 @@ class Moderation:
         await self._modlog(message, emb)
         return emb
 
-    async def _do_warns(self, message: discord.Message, rest: str):
+    async def _do_warns(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
             return self._need("Mitglieder moderieren")
@@ -384,7 +383,7 @@ class Moderation:
         emb.set_footer(text=f"{self._bot_name} · Moderation")
         return emb
 
-    async def _do_unwarn(self, message: discord.Message, rest: str):
+    async def _do_unwarn(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
             return self._need("Mitglieder moderieren")
@@ -411,7 +410,7 @@ class Moderation:
         return emb
 
     # --- Timeout -------------------------------------------------------------
-    async def _do_timeout(self, message: discord.Message, rest: str):
+    async def _do_timeout(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
             return self._need("Mitglieder moderieren")
@@ -434,7 +433,7 @@ class Moderation:
         await self._modlog(message, emb)
         return emb
 
-    async def _do_untimeout(self, message: discord.Message, rest: str):
+    async def _do_untimeout(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
             return self._need("Mitglieder moderieren")
@@ -453,7 +452,7 @@ class Moderation:
         return emb
 
     # --- Kick ----------------------------------------------------------------
-    async def _do_kick(self, message: discord.Message, rest: str):
+    async def _do_kick(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "kick_members"):
             return self._need("Mitglieder kicken")
@@ -478,7 +477,7 @@ class Moderation:
         return emb
 
     # --- Bann ----------------------------------------------------------------
-    async def _do_ban(self, message: discord.Message, rest: str):
+    async def _do_ban(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "ban_members"):
             return self._need("Mitglieder bannen")
@@ -506,7 +505,7 @@ class Moderation:
         await self._modlog(message, emb)
         return emb
 
-    async def _do_unban(self, message: discord.Message, rest: str):
+    async def _do_unban(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "ban_members"):
             return self._need("Mitglieder bannen")
@@ -528,11 +527,11 @@ class Moderation:
         return emb
 
     # --- Aufraeumen / Purge --------------------------------------------------
-    def _keep(self, message: discord.Message) -> bool:
+    def _keep(self, message):
         """True = diese Nachricht NICHT loeschen (angepinnte schuetzen wir)."""
         return bool(message.pinned)
 
-    async def _do_purge(self, message: discord.Message, cmd: str):
+    async def _do_purge(self, message, cmd):
         """Erkennt einen Loesch-Befehl und fuehrt ihn aus (gibt nie None zurueck)."""
         rest = _CMD_RE.sub("", cmd, count=1).strip()
 
@@ -579,7 +578,7 @@ class Moderation:
         )
         return HANDLED
 
-    async def _confirm(self, channel: discord.abc.Messageable, text: str) -> None:
+    async def _confirm(self, channel, text):
         """Kurze Bestaetigung, die sich nach CONFIRM_TTL Sekunden selbst loescht."""
         try:
             await channel.send(text, delete_after=CONFIRM_TTL)

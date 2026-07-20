@@ -10,7 +10,6 @@ Ohne aktive KI ist das Feature aus (Roast/Hype/Spruch brauchen das LLM).
 Die Reactions koennten auch ohne KI laufen - der Einfachheit halber haengt aber
 das ganze Modul an der KI.
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -30,7 +29,7 @@ INTERJECT_COOLDOWN = float(os.getenv("FUN_INTERJECT_COOLDOWN", "600"))  # min. A
 REACT_CHANCE = float(os.getenv("FUN_REACT_CHANCE", "0.05"))           # 5 % je Nachricht
 
 # Emoji-Reaktionen: passend zu Stichwoertern, sonst eine zufaellige aus dem Pool.
-_REACT_KEYWORDS: list[tuple[re.Pattern, list[str]]] = [
+_REACT_KEYWORDS = [
     (re.compile(r"\b(gg|ggs|sieg|gewonnen|win|cracked)\b", re.I), ["🔥", "🏆", "💪"]),
     (re.compile(r"\b(lol|lmao|haha+|xd|rofl)\b", re.I), ["😂", "💀"]),
     (re.compile(r"\b(rip|tot|verloren|lost|fail|verkackt)\b", re.I), ["💀", "🫡", "😔"]),
@@ -68,15 +67,15 @@ _HYPE_FALLBACKS = [
 class Fun:
     """Kapselt das Chaos-Feature (Befehle, Reactions, Einwuerfe) als Klasse."""
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._last_interject: float = 0.0
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._last_interject = 0.0
 
-    def _looks_like_refusal(self, text: str | None) -> bool:
+    def _looks_like_refusal(self, text):
         return bool(text) and bool(_REFUSAL_RE.search(text))
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiv, wenn die KI laeuft (Roast/Hype/Spruch brauchen das LLM)."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if not ai.is_enabled():
@@ -89,15 +88,15 @@ class Fun:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         # Zentral in ai.strip_lead: entfernt @-Mentions + fuehrenden Namen/Alias
         # ('Florian roast @x' -> 'roast @x').
         return ai.strip_lead(text)
 
-    def _target_name(self, message: discord.Message, rest: str) -> str:
+    def _target_name(self, message, rest):
         """Wen meint der Befehl? Erste Mention, 'mich' -> Autor, sonst der Rest-Text."""
         if message.mentions:
             return message.mentions[0].display_name
@@ -107,7 +106,7 @@ class Fun:
         return rest.strip() or message.author.display_name
 
     # --- Befehle -------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> str | None:
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = self._clean_lead(message.content or "")
@@ -127,7 +126,7 @@ class Fun:
             return await self._spruch(message, first, rest)
         return None
 
-    async def _roast(self, message: discord.Message, rest: str) -> str:
+    async def _roast(self, message, rest):
         name = self._target_name(message, rest)
         system = (
             f"Du bist {self._bot_name}, ein gnadenlos schlagfertiger Roast-Bot. Das hier ist "
@@ -144,7 +143,7 @@ class Fun:
             return random.choice(_ROAST_FALLBACKS).format(name=name)
         return out
 
-    async def _hype(self, message: discord.Message, rest: str) -> str:
+    async def _hype(self, message, rest):
         name = self._target_name(message, rest)
         system = (
             f"Du bist {self._bot_name}, der groesste Cheerleader im Discord. Hype die genannte "
@@ -157,7 +156,7 @@ class Fun:
             return random.choice(_HYPE_FALLBACKS).format(name=name)
         return out
 
-    async def _rate(self, message: discord.Message, kind: str, rest: str) -> str:
+    async def _rate(self, message, kind, rest):
         name = self._target_name(message, rest)
         labels = {
             "rizz": ("Rizz", "😏"), "sigma": ("Sigma", "🗿"), "aura": ("Aura", "✨"),
@@ -177,7 +176,7 @@ class Fun:
         line = f"{emoji} **{name}** — {label}: **{score}/100**\n`{bar}`"
         return f"{line}\n{quip}" if quip else line
 
-    async def _spruch(self, message: discord.Message, kind: str, rest: str) -> str:
+    async def _spruch(self, message, kind, rest):
         if kind in ("horoskop", "fortune"):
             system = (
                 f"Du bist {self._bot_name}. Schreib ein kurzes, lustiges, leicht absurdes "
@@ -196,7 +195,7 @@ class Fun:
         return out or "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
 
     # --- Passiver Hook: Reactions & Einwuerfe --------------------------------
-    async def on_message_passive(self, message: discord.Message) -> None:
+    async def on_message_passive(self, message):
         """Reagiert selten/zufaellig auf eine Nachricht (Emoji + ganz selten ein
         kurzer KI-Einwurf). Wird in bot.py fuer Nicht-Bot-Nachrichten aufgerufen."""
         if not self._enabled or message.guild is None:
@@ -221,7 +220,7 @@ class Fun:
         self._last_interject = now
         await self._interject(message, content)
 
-    async def _maybe_react(self, message: discord.Message, content: str) -> None:
+    async def _maybe_react(self, message, content):
         emoji = None
         for pattern, pool in _REACT_KEYWORDS:
             if pattern.search(content):
@@ -234,7 +233,7 @@ class Fun:
         except discord.HTTPException:
             pass
 
-    async def _interject(self, message: discord.Message, content: str) -> None:
+    async def _interject(self, message, content):
         system = (
             f"Du bist {self._bot_name}, ein frecher Discord-Kumpel mit losem Mundwerk. Wirf einen "
             "SEHR kurzen (max. 1 Satz), spontanen, schlagfertigen Spruch zur Nachricht ein - "

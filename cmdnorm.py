@@ -10,7 +10,6 @@ So reagieren ALLE Feature-Module tolerant, ohne dass jedes einzeln angepasst
 werden muss. bot.py setzt danach message.content kurz auf die korrigierte Form
 und stellt sie nach dem Befehls-Durchlauf wieder her (die KI bekommt immer den
 Originaltext, falls kein Befehl passte)."""
-from __future__ import annotations
 
 
 class CmdNorm:
@@ -18,7 +17,7 @@ class CmdNorm:
 
     # Alle Befehls-Trigger-Woerter, die IRGENDEIN Modul am Satzanfang versteht.
     # (Aus dem Inventar aller Module - dorthin wird korrigiert.)
-    KNOWN: set[str] = {
+    KNOWN = {
         # music
         "skip", "ueberspring", "überspring", "naechst", "nächst", "next", "pause",
         "pausier", "resume", "weiter", "fortsetz", "weiterspiel", "stop", "stopp",
@@ -85,7 +84,7 @@ class CmdNorm:
     }
 
     # Bayrisch/oesterreichischer Dialekt -> anerkanntes Befehlswort.
-    DIALECT: dict[str, str] = {
+    DIALECT = {
         "spui": "spiel", "spuih": "spiel", "spü": "spiel", "spöi": "spiel",
         "spöl": "spiel", "spuis": "spiel", "spün": "spiel",
         "hoit": "stop", "hoid": "stop", "aus": "stop",
@@ -103,7 +102,7 @@ class CmdNorm:
 
     # Haeufige normale Woerter, die NICHT als vertippter Befehl gelten sollen
     # (Distanz 1 zu einem Befehl, aber im Chat gaengig).
-    STOPWORDS: set[str] = {
+    STOPWORDS = {
         # Gaengige Chat-Woerter (nur relevant, wenn sie per Einfuegen/Loeschen/
         # Vertauschung auf einen Befehl fallen wuerden - Ersetzungen sind eh gesperrt).
         "hallo", "danke", "bitte", "gerne", "kannst", "machst", "willst", "musst",
@@ -126,7 +125,7 @@ class CmdNorm:
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
 
-    def _one_typo(self, a: str, b: str) -> bool:
+    def _one_typo(self, a, b):
         """True, wenn b aus a durch GENAU EINEN typischen Tippfehler entsteht:
         eine Einfuegung, eine Loeschung ODER eine Nachbar-Vertauschung.
 
@@ -159,7 +158,7 @@ class CmdNorm:
                 i += 1
         return True
 
-    def _fuzzy(self, word: str) -> "str | None":
+    def _fuzzy(self, word):
         """Naechstgelegenes bekanntes Befehlswort bei genau einem Vertipper
         (Einfuegen/Loeschen/Nachbar-Vertauschung) - nur wenn EINDEUTIG und das Wort
         lang genug ist (kurze Woerter sind zu mehrdeutig)."""
@@ -171,7 +170,7 @@ class CmdNorm:
         hits = {w for w in self.KNOWN if len(w) >= 4 and self._one_typo(word, w)}
         return next(iter(hits)) if len(hits) == 1 else None
 
-    def normalize(self, cleaned: str) -> "str | None":
+    def normalize(self, cleaned):
         """Nimmt den (schon vom Botnamen befreiten) Text. Gibt die korrigierte Form
         zurueck, falls das erste Wort per Dialekt/Tippfehler ersetzt wurde - sonst
         None (dann bleibt alles wie es ist)."""

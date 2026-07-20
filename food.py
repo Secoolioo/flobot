@@ -9,7 +9,6 @@ schlechter. Ergebnis kommt als gerenderte Ernaehrungs-Karte (render.py).
 Funktioniert auch per Befehl ueberall: "Flo kalorien" mit angehaengtem Bild
 (oder als Antwort auf ein Bild).
 """
-from __future__ import annotations
 
 import asyncio
 import io
@@ -62,13 +61,13 @@ class Food:
     _NUM_FIELDS = ("kcal", "kcal_min", "kcal_max", "protein_g", "carbs_g",
                    "fett_g", "zucker_g", "natur_score")
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
         # Nie mehr als 2 Analysen gleichzeitig (schont das kostenlose Vision-Limit).
         self._sem = asyncio.Semaphore(2)
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert die Kalorien-Analyse (braucht die KI/Vision)."""
         self._bot_name = ai.bot_name()
         if not ai.is_enabled():
@@ -78,17 +77,17 @@ class Food:
         log.info("Kalorien-Feature aktiv (Auto-Channel: %s).", self.CHANNEL_ID or "-")
         return self._enabled
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _image_of(self, message: discord.Message) -> "discord.Attachment | None":
+    def _image_of(self, message):
         for att in message.attachments:
             ct = (att.content_type or "").lower()
             if ct.startswith("image/") or att.filename.lower().endswith(self._IMAGE_EXTS):
                 return att
         return None
 
-    def _parse_json(self, text: str) -> "dict | None":
+    def _parse_json(self, text):
         """Zieht das erste JSON-Objekt aus der Antwort (auch wenn Zaeune/Text
         drumherum stehen) und parst es tolerant."""
         if not text:
@@ -102,7 +101,7 @@ class Food:
             return None
         return self._sanitize(data) if isinstance(data, dict) else None
 
-    def _num(self, val) -> float:
+    def _num(self, val):
         """Macht aus LLM-Werten robuste Zahlen: 1200, "1200", "ca. 1200 kcal",
         "8/10" -> erste Zahl; alles andere -> 0."""
         if isinstance(val, (int, float)):
@@ -110,7 +109,7 @@ class Food:
         m = re.search(r"-?\d+(?:[.,]\d+)?", str(val or ""))
         return float(m.group(0).replace(",", ".")) if m else 0.0
 
-    def _sanitize(self, data: dict) -> dict:
+    def _sanitize(self, data):
         """Zahlenfelder hart normalisieren, damit der Renderer nie an Strings
         wie '8/10' oder 'ca. 500' scheitert."""
         for k in self._NUM_FIELDS:
@@ -118,11 +117,11 @@ class Food:
         data["natur_score"] = max(0.0, min(10.0, data["natur_score"]))
         return data
 
-    async def _analyze(self, att: discord.Attachment) -> "dict | None":
+    async def _analyze(self, att):
         raw = await ai.see_image_raw(self._PROMPT, att.url, temperature=0.3, max_tokens=500)
         return self._parse_json(raw or "")
 
-    async def _download(self, att: discord.Attachment) -> "bytes | None":
+    async def _download(self, att):
         """Laedt das Foto fuer die Karte (Groessen-Deckel, geteilte Session)."""
         if att.size and att.size > 12_000_000:
             return None
@@ -136,16 +135,16 @@ class Food:
         except Exception:  # noqa: BLE001
             return None
 
-    async def _deliver(self, message: discord.Message, *, content: "str | None" = None,
-                       embed: "discord.Embed | None" = None,
-                       buf: "io.BytesIO | None" = None) -> bool:
+    async def _deliver(self, message, *, content = None,
+                       embed = None,
+                       buf = None):
         """Stellt die Antwort robust zu: erst als Reply, und falls das scheitert
         (Ursprungsnachricht geloescht, Reply-Rechte) direkt in den Channel."""
         senders = (lambda **kw: message.reply(mention_author=False, **kw),
                    message.channel.send)
         for send in senders:
             try:
-                kw: dict = {}
+                kw = {}
                 if content:
                     kw["content"] = content
                 if embed is not None:
@@ -160,7 +159,7 @@ class Food:
         log.warning("Kalorien-Antwort nicht sendbar (Rechte im Channel? Datei zu gross?)")
         return False
 
-    async def _respond(self, message: discord.Message, att: discord.Attachment) -> None:
+    async def _respond(self, message, att):
         """Analysiert das Bild und antwortet mit der Ernaehrungs-Karte."""
         async with self._sem:
             try:
@@ -190,7 +189,7 @@ class Food:
             # Karte kam nicht durch (Render ODER Senden) -> wenigstens das Embed.
             await self._deliver(message, embed=self._fallback_embed(data, att.url))
 
-    def _fallback_embed(self, data: dict, image_url: str) -> discord.Embed:
+    def _fallback_embed(self, data, image_url):
         # _num statt float()/int(): auch hier duerfen LLM-Ausreisser nie crashen.
         score = max(0.0, min(10.0, self._num(data.get("natur_score"))))
         color = 0x2ECC71 if score >= 7 else (0xF1C40F if score >= 4 else 0xE74C3C)
@@ -208,7 +207,7 @@ class Food:
             emb.set_footer(text=spruch)
         return emb
 
-    async def on_message_passive(self, message: discord.Message) -> None:
+    async def on_message_passive(self, message):
         """bot.py ruft das fuer jede Nachricht auf: Bild im Kalorien-Channel ->
         automatisch analysieren (ohne dass man Flo ansprechen muss)."""
         if not self._enabled or self.CHANNEL_ID == 0 or message.channel.id != self.CHANNEL_ID:
@@ -217,7 +216,7 @@ class Food:
         if att is not None:
             await self._respond(message, att)
 
-    async def handle(self, message: discord.Message):
+    async def handle(self, message):
         """Expliziter Befehl: 'Flo kalorien' mit Bild (angehaengt oder als Reply)."""
         if not self._enabled or message.guild is None:
             return None

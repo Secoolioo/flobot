@@ -22,7 +22,6 @@ Blackjack-/Mines-Runden leben im Speicher und verfallen nach Timeout.
 Alle GIF-/PNG-Renderings der Spielergebnisse laufen via asyncio.to_thread,
 damit der Event-Loop nie blockiert.
 """
-from __future__ import annotations
 
 import asyncio
 import functools
@@ -61,7 +60,7 @@ _RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 _SUITS = ["♠", "♥", "♦", "♣"]
 
 # Keno-Auszahlungstabelle: (getippt, getroffen) -> Faktor
-_KENO_TABLE: dict[tuple[int, int], int] = {
+_KENO_TABLE = {
     (1, 1): 3,
     (2, 1): 1, (2, 2): 9,
     (3, 2): 2, (3, 3): 16,
@@ -140,16 +139,16 @@ class Casino:
     Modul-Aliase unterhalb der Klasse halten die bisherige Modul-API
     (bot.py, games.py, Tests, discord.ui-Klassen) unveraendert am Leben."""
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._stats: JsonStore | None = None   # Casino-Bilanz je Spieler (data/casino.json)
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._stats = None   # Casino-Bilanz je Spieler (data/casino.json)
         # Aktive Blackjack-Runden je (channel_id, user_id) -> BlackjackView. Nur im Speicher.
-        self._bj_views: "dict[tuple[int, int], BlackjackView]" = {}
+        self._bj_views = {}
         # Aktive Mines-Runden je (channel_id, user_id) -> MinesView. Nur im Speicher.
-        self._mines_views: "dict[tuple[int, int], MinesView]" = {}
+        self._mines_views = {}
 
-    def _protect(self, msg) -> None:
+    def _protect(self, msg):
         """Meldet eine laufende Spiel-Nachricht beim Auto-Loesch-Schutz an (damit sie
         im #commands-Channel nicht mitten im Spiel verschwindet). Lazy-Import von bot,
         um Zirkel-Importe zu vermeiden; faellt der Bot weg (Tests), passiert nichts."""
@@ -161,7 +160,7 @@ class Casino:
         except Exception:
             pass
 
-    def _release(self, msg) -> None:
+    def _release(self, msg):
         """Gibt eine Spiel-Nachricht wieder frei (Runde vorbei / kein Reagieren mehr)
         -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
         if msg is None:
@@ -172,7 +171,7 @@ class Casino:
         except Exception:
             pass
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert das Casino. Voraussetzung: economy (Flo Coins) ist aktiv."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("CASINO_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -187,18 +186,18 @@ class Casino:
                  MIN_BET, MAX_BET, economy.COIN)
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Einsatz- & Embed-Helfer ---------------------------------------------
-    def _resolve_bet(self, token: str, uid: int) -> int | None:
+    def _resolve_bet(self, token, uid):
         """Einsatz-Token -> Zahl. 'alles'/'max' = Kontostand; '1k'/'2,5k'/'1m' gehen auch."""
         token = (token or "").strip().lower()
         if token in ("all", "alles", "max", "allin", "all-in"):
             return min(economy.get_coins(uid), MAX_BET)
         return economy.parse_amount(token)
 
-    def _check_bet(self, uid: int, bet: int | None) -> tuple[int, str | None]:
+    def _check_bet(self, uid, bet):
         """Prueft einen Einsatz. Rueckgabe: (gepruefter Einsatz, Fehlertext oder None)."""
         if bet is None:
             return 0, "Wie viel setzt du? z. B. `50` oder `alles`."
@@ -211,7 +210,7 @@ class Casino:
             return 0, f"Dafür reicht's nicht – du hast {bal} {economy.COIN}."
         return bet, None
 
-    def _take(self, uid: int, raw_bet: int | None) -> tuple[int, str | None]:
+    def _take(self, uid, raw_bet):
         """Prueft den Einsatz und zieht ihn sofort ein. (bet, fehler)."""
         bet, err = self._check_bet(uid, raw_bet)
         if err:
@@ -219,10 +218,10 @@ class Casino:
         economy.add_coins(uid, -bet)
         return bet, None
 
-    def _bal_footer(self, uid: int) -> str:
+    def _bal_footer(self, uid):
         return f"Kontostand: {economy.get_coins(uid)} {economy.COIN}"
 
-    def _outcome(self, bet: int, payout: int) -> tuple[discord.Color, str, str]:
+    def _outcome(self, bet, payout):
         """Farbe + Ergebnis-Feld aus Einsatz und Auszahlung (Auszahlung inkl. Einsatz)."""
         net = payout - bet
         if net > 0:
@@ -231,14 +230,14 @@ class Casino:
             return _C_PUSH, "Ergebnis", "±0 – Einsatz zurück"
         return _C_LOSE, "Verlust", f"-{bet} {economy.COIN}"
 
-    def _err(self, text: str) -> discord.Embed:
+    def _err(self, text):
         return discord.Embed(description=f"⚠️ {text}", color=_C_LOSE)
 
-    def _info(self, text: str) -> discord.Embed:
+    def _info(self, text):
         return discord.Embed(description=text, color=_C_BJ)
 
     # --- Casino-Bilanz (Stats) ------------------------------------------------
-    def _stats_profile(self, uid: int) -> dict:
+    def _stats_profile(self, uid):
         assert self._stats is not None
         prof = self._stats.data.setdefault("stats", {}).setdefault(
             str(uid), {"games": 0, "wagered": 0, "payout": 0, "best_win": 0,
@@ -253,7 +252,7 @@ class Casino:
             prof.setdefault("lost", max(-net, 0))
         return prof
 
-    async def record(self, uid: int, game: str, bet: int, payout: int) -> None:
+    async def record(self, uid, game, bet, payout):
         """Verbucht eine gespielte Runde in der Casino-Bilanz (auch games.py nutzt
         das fuer Slots/Coinflip). Speichert asynchron; Fehler bleiben lokal."""
         if not self._enabled or self._stats is None or bet <= 0:
@@ -280,7 +279,7 @@ class Casino:
             log.exception("Casino-Bilanz konnte nicht gespeichert werden")
 
     # --- Render-Helfer: Animation in Thread, Standbild als Fallback ------------
-    async def _anim(self, anim_fn, static_fn, *args) -> tuple:
+    async def _anim(self, anim_fn, static_fn, *args):
         """Rendert das Spielergebnis als GIF in einem Thread (Event-Loop bleibt
         frei). Faellt die Animation aus, kommt das Standbild (PNG). Rueckgabe:
         (BytesIO, dateiendung)."""
@@ -292,7 +291,7 @@ class Casino:
                 raise
             return await asyncio.to_thread(static_fn, *args), "png"
 
-    async def _send(self, message: discord.Message, *, embed=None, file=None, view=None):
+    async def _send(self, message, *, embed=None, file=None, view=None):
         """Sendet eine Casino-Antwort als Reply. Gibt die Nachricht zurueck (oder None)."""
         kwargs = {"mention_author": False}
         if embed is not None:
@@ -310,19 +309,19 @@ class Casino:
             self._protect(msg)   # aktives Spiel -> vorm Auto-Loeschen schuetzen
         return msg
 
-    def _new_deck(self) -> list[tuple[str, str]]:
+    def _new_deck(self):
         deck = [(r, s) for s in _SUITS for r in _RANKS]
         random.shuffle(deck)
         return deck
 
-    def _card_value(self, rank: str) -> int:
+    def _card_value(self, rank):
         if rank in ("J", "Q", "K"):
             return 10
         if rank == "A":
             return 11
         return int(rank)
 
-    def _hand_value(self, hand: list[tuple[str, str]]) -> int:
+    def _hand_value(self, hand):
         total = sum(self._card_value(r) for r, _ in hand)
         aces = sum(1 for r, _ in hand if r == "A")
         while total > 21 and aces:
@@ -331,7 +330,7 @@ class Casino:
         return total
 
     # --- Befehls-Einstieg ----------------------------------------------------
-    async def handle(self, message: discord.Message) -> "object | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
@@ -408,7 +407,7 @@ class Casino:
             return await self._stats_command(message)
         return None
 
-    def _menu(self, uid: int) -> discord.Embed:
+    def _menu(self, uid):
         c = economy.COIN
         emb = discord.Embed(
             title="🎰 Flo Casino",
@@ -433,8 +432,8 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb
 
-    async def _bj_deal(self, channel_id: int, uid: int, bet: int
-                       ) -> tuple[discord.Embed, discord.File, discord.ui.View, bool]:
+    async def _bj_deal(self, channel_id, uid, bet
+                       ):
         """Teilt eine neue Runde aus (Einsatz ist bereits eingezogen).
         Rueckgabe: (embed, file, view, ended)."""
         view = BlackjackView(channel_id, uid, bet)
@@ -449,7 +448,7 @@ class Casino:
                                         color=_C_PLAY, note=view._prompt(), anim="deal")
         return emb, file, view, False
 
-    async def _bj_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _bj_command(self, message, args):
         uid = message.author.id
         ch = message.channel.id
         existing = self._bj_views.get((ch, uid))
@@ -475,7 +474,7 @@ class Casino:
             await economy.flush()
         return HANDLED
 
-    async def _bj_text_action(self, message: discord.Message, action: str) -> object | None:
+    async def _bj_text_action(self, message, action):
         uid = message.author.id
         ch = message.channel.id
         view = self._bj_views.get((ch, uid))
@@ -493,7 +492,7 @@ class Casino:
         return HANDLED
 
     # --- Crash ---------------------------------------------------------------
-    def _parse_mult(self, token: str) -> float | None:
+    def _parse_mult(self, token):
         token = (token or "").lower().rstrip("x").replace(",", ".").strip()
         try:
             v = float(token)
@@ -501,7 +500,7 @@ class Casino:
             return None
         return v if v > 0 else None
 
-    def _crash_point(self) -> float:
+    def _crash_point(self):
         """Zufaelliger Absturzpunkt. ~2% Sofort-Crash, sonst exponentiell verteilt
         mit kleinem Hausvorteil (Faktor 0.97)."""
         if random.random() < 0.02:
@@ -509,8 +508,8 @@ class Casino:
         cp = 0.97 / (1.0 - random.random())
         return max(1.00, min(round(cp, 2), 1000.0))
 
-    async def _play_crash(self, uid: int, bet: int, target: float
-                          ) -> tuple[discord.Embed, discord.File]:
+    async def _play_crash(self, uid, bet, target
+                          ):
         """Spielt eine Crash-Runde (Einsatz bereits eingezogen)."""
         cp = self._crash_point()
         payout = int(bet * target) if cp >= target else 0
@@ -535,7 +534,7 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb, file
 
-    def _crash_target(self, args: list[str], bet: int) -> tuple[float | None, str | None]:
+    def _crash_target(self, args, bet):
         target = self._parse_mult(args[1]) if len(args) > 1 else None
         if target is None:
             return None, f"Bei welchem Faktor steigst du aus? z. B. `{self._bot_name} crash {bet} 2.0`"
@@ -543,7 +542,7 @@ class Casino:
             return None, "Das Ziel muss über 1.0 liegen (z. B. 1.5, 2.0, 5.0)."
         return min(target, 100.0), None
 
-    async def _crash_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _crash_command(self, message, args):
         uid = message.author.id
         raw = self._resolve_bet(args[0], uid) if args else None
         bet0, err = self._check_bet(uid, raw)
@@ -563,8 +562,8 @@ class Casino:
         return HANDLED
 
     # --- Keno ----------------------------------------------------------------
-    def _parse_picks(self, s: str) -> list[int]:
-        picks: list[int] = []
+    def _parse_picks(self, s):
+        picks = []
         for t in (s or "").replace(",", " ").split():
             if t.isdigit():
                 n = int(t)
@@ -572,8 +571,8 @@ class Casino:
                     picks.append(n)
         return picks[:8]
 
-    async def _play_keno(self, uid: int, bet: int, picks: list[int]
-                         ) -> tuple[discord.Embed, discord.File]:
+    async def _play_keno(self, uid, bet, picks
+                         ):
         draw = random.sample(range(1, 41), 10)
         hits = sorted(set(picks) & set(draw))
         mult = _KENO_TABLE.get((len(picks), len(hits)), 0)
@@ -598,7 +597,7 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb, file
 
-    async def _keno_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _keno_command(self, message, args):
         uid = message.author.id
         if not args:
             await self._send(message, embed=self._info(
@@ -624,7 +623,7 @@ class Casino:
         return HANDLED
 
     # --- Roulette ------------------------------------------------------------
-    def _roulette_payout(self, target: str, bet: int, spin: int) -> tuple[int | None, str]:
+    def _roulette_payout(self, target, bet, spin):
         """Auszahlung (inkl. Einsatz) fuer einen Roulette-Tipp. (None, ...) = ungueltig."""
         if target in _EVEN_MONEY:
             check, label = _EVEN_MONEY[target]
@@ -636,8 +635,8 @@ class Casino:
                 return (bet * 36 if spin == n else 0), f"Zahl {n}"
         return None, target
 
-    async def _play_roulette(self, uid: int, bet: int, target: str
-                             ) -> tuple[discord.Embed, discord.File]:
+    async def _play_roulette(self, uid, bet, target
+                             ):
         spin = random.randint(0, 36)
         payout, label = self._roulette_payout(target, bet, spin)
         if payout:
@@ -661,7 +660,7 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb, file
 
-    async def _roulette_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _roulette_command(self, message, args):
         uid = message.author.id
         if len(args) < 2:
             await self._send(message, embed=self._info(
@@ -689,7 +688,7 @@ class Casino:
         return HANDLED
 
     # --- Gluecksrad ------------------------------------------------------------
-    async def _play_wheel(self, uid: int, bet: int) -> tuple[discord.Embed, discord.File]:
+    async def _play_wheel(self, uid, bet):
         """Dreht das Gluecksrad (Einsatz bereits eingezogen)."""
         idx = random.randrange(len(_WHEEL_SEGMENTS))
         mult = _WHEEL_SEGMENTS[idx]
@@ -720,7 +719,7 @@ class Casino:
             log.exception("Gluecksrad-Animation fehlgeschlagen - Ergebnis als Text")
         return emb, file
 
-    async def _wheel_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _wheel_command(self, message, args):
         uid = message.author.id
         bet0, err = self._take(uid, self._resolve_bet(args[0], uid) if args else None)
         if err:
@@ -734,14 +733,14 @@ class Casino:
         return HANDLED
 
     # --- Rubbellos -------------------------------------------------------------
-    def _scratch_roll(self) -> tuple[list[str], list[int], int]:
+    def _scratch_roll(self):
         """Wuerfelt ein 3x3-Los. Rueckgabe: (9 Symbole, Gewinn-Reihen, Multiplikator)."""
         keys = [random.choice(render.SLOT_KEYS) for _ in range(9)]
         rows = [r for r in range(3) if keys[3 * r] == keys[3 * r + 1] == keys[3 * r + 2]]
         mult = sum(_SCRATCH_PAYOUT[keys[3 * r]] for r in rows)
         return keys, rows, mult
 
-    async def _play_scratch(self, uid: int, bet: int) -> tuple[discord.Embed, discord.File]:
+    async def _play_scratch(self, uid, bet):
         """Rubbelt ein Los frei (Einsatz bereits eingezogen)."""
         keys, rows, mult = self._scratch_roll()
         payout = bet * mult
@@ -769,7 +768,7 @@ class Casino:
             log.exception("Rubbellos-Animation fehlgeschlagen - Ergebnis als Text")
         return emb, file
 
-    async def _scratch_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _scratch_command(self, message, args):
         uid = message.author.id
         bet0, err = self._take(uid, self._resolve_bet(args[0], uid) if args else None)
         if err:
@@ -783,7 +782,7 @@ class Casino:
         return HANDLED
 
     # --- Mines -----------------------------------------------------------------
-    def _mines_mult(self, picked: int, mines: int) -> float:
+    def _mines_mult(self, picked, mines):
         """Multiplikator nach ``picked`` sicheren Feldern bei ``mines`` Bomben."""
         if picked <= 0:
             return 1.0
@@ -792,7 +791,7 @@ class Casino:
             m *= (_MINES_TILES - i) / (_MINES_TILES - mines - i)
         return round(0.97 * m, 2)
 
-    async def _mines_text_cashout(self, message: discord.Message) -> "object | None":
+    async def _mines_text_cashout(self, message):
         """`flo cashout` als Text: zahlt die laufende Mines-Runde aus (Fallback,
         falls die Buttons haken). Ohne offene Runde: None -> andere Handler/KI."""
         view = self._mines_views.get((message.channel.id, message.author.id))
@@ -815,13 +814,13 @@ class Casino:
                 log.exception("Mines-Text-Cashout: Nachricht konnte nicht editiert werden")
         return HANDLED
 
-    def _parse_mines_count(self, args: list[str]) -> int:
+    def _parse_mines_count(self, args):
         for a in args[1:]:
             if a.isdigit():
                 return max(1, min(int(a), _MINES_MAX))
         return _MINES_DEFAULT
 
-    async def _mines_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _mines_command(self, message, args):
         uid = message.author.id
         ch = message.channel.id
         existing = self._mines_views.get((ch, uid))
@@ -847,7 +846,7 @@ class Casino:
             await economy.flush()
         return HANDLED
 
-    async def _duel_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _duel_command(self, message, args):
         uid = message.author.id
         target = next((m for m in message.mentions if not m.bot), None)
         if target is None:
@@ -875,13 +874,13 @@ class Casino:
         return HANDLED
 
     # --- Casino-Bilanz anzeigen -------------------------------------------------
-    async def _fetch_avatar(self, user) -> "bytes | None":
+    async def _fetch_avatar(self, user):
         try:
             return await asyncio.wait_for(user.display_avatar.with_size(128).read(), 6)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
             return None
 
-    async def _stats_command(self, message: discord.Message) -> object:
+    async def _stats_command(self, message):
         target = next((m for m in message.mentions if not m.bot), None) or message.author
         prof = ((self._stats.data.get("stats") or {}).get(str(target.id))
                 if self._stats is not None else None)
@@ -913,8 +912,8 @@ class Casino:
         return HANDLED
 
     # --- Sieben (2 Wuerfel: unter / ueber / genau 7) ---------------------------
-    async def _play_sieben(self, uid: int, bet: int, tip: str
-                           ) -> tuple[discord.Embed, discord.File]:
+    async def _play_sieben(self, uid, bet, tip
+                           ):
         w1, w2 = random.randint(1, 6), random.randint(1, 6)
         total = w1 + w2
         hit = (total < 7 if tip == "unter" else total > 7 if tip == "ueber"
@@ -937,7 +936,7 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb, discord.File(buf, filename=fn)
 
-    async def _sieben_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _sieben_command(self, message, args):
         uid = message.author.id
         tip = next((_SIEBEN_TIPS[a.lower()] for a in args[1:]
                     if a.lower() in _SIEBEN_TIPS), None)
@@ -958,13 +957,13 @@ class Casino:
         return HANDLED
 
     # --- Baccarat (Punto Banco) ------------------------------------------------
-    def _bac_val(self, hand: list) -> int:
+    def _bac_val(self, hand):
         total = 0
         for r, _s in hand:
             total += 1 if r == "A" else (0 if r in ("10", "J", "Q", "K") else int(r))
         return total % 10
 
-    def _bac_deal(self) -> tuple[list, list]:
+    def _bac_deal(self):
         """Teilt nach den Standard-Punto-Banco-Regeln aus (inkl. dritter Karte)."""
         deck = self._new_deck()
         sp = [deck.pop(), deck.pop()]
@@ -988,8 +987,8 @@ class Casino:
             bk.append(deck.pop())
         return sp, bk
 
-    async def _play_baccarat(self, uid: int, bet: int, tip: str
-                             ) -> tuple[discord.Embed, discord.File]:
+    async def _play_baccarat(self, uid, bet, tip
+                             ):
         sp, bk = self._bac_deal()
         sv, bv = self._bac_val(sp), self._bac_val(bk)
         winner = "tie" if sv == bv else ("spieler" if sv > bv else "bank")
@@ -1025,7 +1024,7 @@ class Casino:
         emb.set_footer(text=self._bal_footer(uid))
         return emb, discord.File(buf, filename=fn)
 
-    async def _baccarat_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _baccarat_command(self, message, args):
         uid = message.author.id
         tip = next((_BAC_TIPS[a.lower()] for a in args[1:]
                     if a.lower() in _BAC_TIPS), None)
@@ -1046,11 +1045,11 @@ class Casino:
         return HANDLED
 
     # --- HiLo (Hoeher/Tiefer) --------------------------------------------------
-    def _hilo_p(self, rank_i: int, hoeher: bool) -> float:
+    def _hilo_p(self, rank_i, hoeher):
         """Trefferchance fuer hoeher/tiefer ab Kartenindex 0..12 (gleich = verloren)."""
         return ((12 - rank_i) if hoeher else rank_i) / 13.0
 
-    async def _hilo_start(self, uid: int, bet: int):
+    async def _hilo_start(self, uid, bet):
         """Factory: (view, embed, file) fuer eine frische HiLo-Runde."""
         view = HiloView(uid, bet)
         file = await view._file()
@@ -1058,7 +1057,7 @@ class Casino:
         emb.set_image(url=f"attachment://{file.filename}")
         return view, emb, file
 
-    async def _hilo_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _hilo_command(self, message, args):
         uid = message.author.id
         bet, err = self._take(uid, self._resolve_bet(args[0], uid) if args else None)
         if err:
@@ -1071,14 +1070,14 @@ class Casino:
         return HANDLED
 
     # --- Tower (Turm hochklettern) ---------------------------------------------
-    def _tower_mult(self, level: int) -> float:
+    def _tower_mult(self, level):
         return round(_TOWER_STEP ** level, 2)
 
-    async def _tower_start(self, uid: int, bet: int):
+    async def _tower_start(self, uid, bet):
         view = TowerView(uid, bet)
         return view, view._embed(), None
 
-    async def _tower_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _tower_command(self, message, args):
         uid = message.author.id
         bet, err = self._take(uid, self._resolve_bet(args[0], uid) if args else None)
         if err:
@@ -1091,11 +1090,11 @@ class Casino:
         return HANDLED
 
     # --- D.O.N. (Doppelt oder nichts) ------------------------------------------
-    async def _don_start(self, uid: int, bet: int):
+    async def _don_start(self, uid, bet):
         view = DonView(uid, bet)
         return view, view._embed(), None
 
-    async def _don_command(self, message: discord.Message, args: list[str]) -> object:
+    async def _don_command(self, message, args):
         uid = message.author.id
         bet, err = self._take(uid, self._resolve_bet(args[0], uid) if args else None)
         if err:
@@ -1107,8 +1106,8 @@ class Casino:
             view.message = msg
         return HANDLED
 
-    async def _replay(self, uid: int, kind: str, params: dict
-                      ) -> tuple[discord.Embed, discord.File | None]:
+    async def _replay(self, uid, kind, params
+                      ):
         if kind == "crash":
             return await self._play_crash(uid, params["bet"], params["target"])
         if kind == "keno":
@@ -1125,7 +1124,7 @@ class Casino:
             return await self._play_baccarat(uid, params["bet"], params["target"])
         raise ValueError(kind)
 
-    async def _open_setup(self, message: discord.Message, kind: str) -> object:
+    async def _open_setup(self, message, kind):
         """Antwortet auf `Flo <spiel>` mit dem interaktiven Aufbau-Menue."""
         view = _SETUPS[kind](message.author.id, channel_id=message.channel.id)
         msg = await self._send(message, embed=view._embed(), view=view)
@@ -1212,7 +1211,7 @@ _mines_views = instance._mines_views
 class BlackjackView(discord.ui.View):
     """Eine laufende Blackjack-Runde mit Buttons. State lebt im View."""
 
-    def __init__(self, channel_id: int, uid: int, bet: int) -> None:
+    def __init__(self, channel_id, uid, bet):
         super().__init__(timeout=BJ_TIMEOUT)
         self.channel_id = channel_id
         self.uid = uid
@@ -1221,7 +1220,7 @@ class BlackjackView(discord.ui.View):
         self.player = [self.deck.pop(), self.deck.pop()]
         self.dealer = [self.deck.pop(), self.deck.pop()]
         self.doubled = False
-        self.message: discord.Message | None = None
+        self.message = None
         self._n = 0
         # Terminal-Guard gegen Doppel-Settlement: wird SYNCHRON gesetzt, bevor
         # eine Runde ausgezahlt wird. Ein zweiter Klick/Text-Befehl im selben
@@ -1230,25 +1229,25 @@ class BlackjackView(discord.ui.View):
         self._sync_buttons()
 
     # -- Hilfen --
-    def _sync_buttons(self) -> None:
+    def _sync_buttons(self):
         can_double = (len(self.player) == 2 and economy.get_coins(self.uid) >= self.bet)
         self._double.disabled = not can_double
 
-    def _disable_all(self) -> None:
+    def _disable_all(self):
         for ch in self.children:
             if isinstance(ch, discord.ui.Button):
                 ch.disabled = True
 
-    def _unregister(self) -> None:
+    def _unregister(self):
         if _bj_views.get((self.channel_id, self.uid)) is self:
             _bj_views.pop((self.channel_id, self.uid), None)
 
-    def _prompt(self) -> str:
+    def _prompt(self):
         return "Drück **Karte**, **Stand** oder **Double**. 👇"
 
-    async def _payload(self, *, reveal: bool, title: str, color: discord.Color,
-                       note: str, state: str = "", anim: str = "hit"
-                       ) -> tuple[discord.Embed, discord.File]:
+    async def _payload(self, *, reveal, title, color,
+                       note, state = "", anim = "hit"
+                       ):
         """Baut Embed + Tisch-GIF (Deal/Slide/Flip-Animation, im Thread
         gerendert). Faellt die Animation aus, kommt das Standbild."""
         self._n += 1
@@ -1273,7 +1272,7 @@ class BlackjackView(discord.ui.View):
         emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet} {economy.COIN}")
         return emb, file
 
-    async def natural_payload(self) -> tuple[discord.Embed, discord.File]:
+    async def natural_payload(self):
         """Sofort-Entscheidung bei Natural (21 auf der Hand). Zahlt aus + flush."""
         pv, dv = _hand_value(self.player), _hand_value(self.dealer)
         if pv == 21 and dv == 21:
@@ -1297,7 +1296,7 @@ class BlackjackView(discord.ui.View):
                                    note=f"Der Dealer hat Blackjack. -{self.bet} {economy.COIN}.",
                                    state="lose", anim="reveal")
 
-    async def _settle(self) -> tuple[str, str, str, discord.Color]:
+    async def _settle(self):
         """Dealer spielt aus, Ergebnis bestimmen, auszahlen + flush.
         Rueckgabe: (state, note, title, color)."""
         pv = _hand_value(self.player)
@@ -1326,7 +1325,7 @@ class BlackjackView(discord.ui.View):
         return ("push", f"Beide {pv} – Einsatz ({self.bet} {economy.COIN}) zurück.",
                 "🂡 Push", _C_PUSH)
 
-    async def _mutate(self, action: str) -> tuple:
+    async def _mutate(self, action):
         """Fuehrt eine Aktion aus. Rueckgabe:
         (finished, state, title, color, note, reveal).
 
@@ -1362,7 +1361,7 @@ class BlackjackView(discord.ui.View):
         state, note, title, color = await self._settle()
         return (True, state, title, color, note, True)
 
-    async def _step(self, action: str) -> tuple[discord.Embed, discord.File, discord.ui.View, bool]:
+    async def _step(self, action):
         finished, state, title, color, note, reveal = await self._mutate(action)
         # Passende Animation: gezogene Karte slidet ein, beim Aufloesen flippt
         # die Hole-Card und die Dealer-Karten erscheinen nacheinander.
@@ -1377,19 +1376,19 @@ class BlackjackView(discord.ui.View):
             return emb, file, again, True
         return emb, file, self, False
 
-    def _original_bet(self) -> int:
+    def _original_bet(self):
         # Nach einem Double ist self.bet verdoppelt – fuer 'Nochmal' den Grundeinsatz.
         return self.bet // 2 if self.doubled else self.bet
 
     # -- Buttons --
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
             "Das ist nicht deine Blackjack-Runde. 🃏", ephemeral=True)
         return False
 
-    async def _do(self, interaction: discord.Interaction, action: str) -> None:
+    async def _do(self, interaction, action):
         # settled-Check VOR allem anderen: die Runde ist evtl. schon abgerechnet,
         # waehrend ein zweiter Klick noch in der Warteschlange hing.
         if self.settled or self.is_finished():
@@ -1402,18 +1401,18 @@ class BlackjackView(discord.ui.View):
             self.stop()
 
     @discord.ui.button(label="Karte", emoji="🃏", style=discord.ButtonStyle.primary)
-    async def _karte(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _karte(self, interaction, _b):
         await self._do(interaction, "hit")
 
     @discord.ui.button(label="Stand", emoji="✋", style=discord.ButtonStyle.secondary)
-    async def _stand(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _stand(self, interaction, _b):
         await self._do(interaction, "stand")
 
     @discord.ui.button(label="Double", emoji="💰", style=discord.ButtonStyle.success)
-    async def _double(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _double(self, interaction, _b):
         await self._do(interaction, "double")
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         self._unregister()
         self._disable_all()
         if not self.settled:
@@ -1431,31 +1430,31 @@ class BlackjackView(discord.ui.View):
 class _MineTile(discord.ui.Button):
     """Ein Feld im Mines-Raster."""
 
-    def __init__(self, idx: int) -> None:
+    def __init__(self, idx):
         super().__init__(emoji="❓", style=discord.ButtonStyle.secondary, row=idx // 5)
         self.idx = idx
         self.safe_open = False
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._pick(interaction, self)
 
 
 class _MinesCashout(discord.ui.Button):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(label="Cashout", emoji="💰",
                          style=discord.ButtonStyle.success, row=4, disabled=True)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._cashout(interaction)
 
 
 class _MinesAgainBtn(discord.ui.Button):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(label="Nochmal", emoji="🔁",
                          style=discord.ButtonStyle.success, row=4)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        v: "MinesView" = self.view  # type: ignore[assignment]
+    async def callback(self, interaction):
+        v = self.view  # type: ignore[assignment]
         if v.is_finished():          # Doppelklick: nur der erste Klick startet neu
             await interaction.response.defer()
             return
@@ -1484,12 +1483,12 @@ class _MinesAgainBtn(discord.ui.Button):
 
 
 class _MinesBetBtn(discord.ui.Button):
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(label="Einsatz ändern", emoji="✏️",
                          style=discord.ButtonStyle.secondary, row=4)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        v: "MinesView" = self.view  # type: ignore[assignment]
+    async def callback(self, interaction):
+        v = self.view  # type: ignore[assignment]
         await interaction.response.send_modal(
             _BetModal("mines", v.uid, title=_MODAL_TITLES["mines"],
                       params={"bet": v.bet, "mines": v.mines}))
@@ -1499,7 +1498,7 @@ class MinesView(discord.ui.View):
     """Eine laufende Mines-Runde: 20 Feld-Buttons + Cashout. Der Einsatz ist
     beim Erzeugen bereits eingezogen."""
 
-    def __init__(self, channel_id: int, uid: int, bet: int, mines: int) -> None:
+    def __init__(self, channel_id, uid, bet, mines):
         super().__init__(timeout=MINES_TIMEOUT)
         self.channel_id = channel_id
         self.uid = uid
@@ -1508,7 +1507,7 @@ class MinesView(discord.ui.View):
         self.mine_set = set(random.sample(range(_MINES_TILES), self.mines))
         self.picked = 0
         self.settled = False
-        self.message: discord.Message | None = None
+        self.message = None
         self.tiles = [_MineTile(i) for i in range(_MINES_TILES)]
         for t in self.tiles:
             self.add_item(t)
@@ -1516,8 +1515,8 @@ class MinesView(discord.ui.View):
         self.add_item(self.cash)
 
     # -- Anzeige --
-    def _embed(self, *, color: discord.Color | None = None,
-               note: str | None = None) -> discord.Embed:
+    def _embed(self, *, color = None,
+               note = None):
         cur = _mines_mult(self.picked, self.mines)
         nxt = _mines_mult(self.picked + 1, self.mines)
         emb = discord.Embed(
@@ -1538,7 +1537,7 @@ class MinesView(discord.ui.View):
         emb.set_footer(text=_bal_footer(self.uid))
         return emb
 
-    def _reveal_all(self, boom_idx: int | None = None) -> None:
+    def _reveal_all(self, boom_idx = None):
         for t in self.tiles:
             t.disabled = True
             if t.idx in self.mine_set:
@@ -1552,17 +1551,17 @@ class MinesView(discord.ui.View):
                 t.emoji = "▪️"
         self.cash.disabled = True
 
-    def _finish_buttons(self) -> None:
+    def _finish_buttons(self):
         """Ergebnis steht -> Nochmal/Einsatz-aendern anbieten (Feld bleibt sichtbar)."""
         self.add_item(_MinesAgainBtn())
         self.add_item(_MinesBetBtn())
 
-    def _unregister(self) -> None:
+    def _unregister(self):
         if _mines_views.get((self.channel_id, self.uid)) is self:
             _mines_views.pop((self.channel_id, self.uid), None)
 
     # -- Spielzuege --
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
@@ -1570,7 +1569,7 @@ class MinesView(discord.ui.View):
             ephemeral=True)
         return False
 
-    async def _pick(self, interaction: discord.Interaction, tile: _MineTile) -> None:
+    async def _pick(self, interaction, tile):
         if self.settled or tile.disabled:
             await interaction.response.defer()
             return
@@ -1599,7 +1598,7 @@ class MinesView(discord.ui.View):
         self.cash.label = f"Cashout {int(self.bet * cur)}"
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    async def _settle_cashout(self) -> tuple[int, float]:
+    async def _settle_cashout(self):
         """Zahlt den aktuellen Stand aus. Rueckgabe: (payout, multiplikator)."""
         mult = _mines_mult(self.picked, self.mines)
         payout = int(self.bet * mult)
@@ -1608,7 +1607,7 @@ class MinesView(discord.ui.View):
         await record(self.uid, "mines", self.bet, payout)
         return payout, mult
 
-    async def _cashout(self, interaction: discord.Interaction) -> None:
+    async def _cashout(self, interaction):
         if self.settled or self.picked <= 0:
             await interaction.response.defer()
             return
@@ -1624,7 +1623,7 @@ class MinesView(discord.ui.View):
                                f"**{'+' if net >= 0 else ''}{net} {economy.COIN}**.")
         await interaction.response.edit_message(embed=emb, view=self)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         # Keine Reaktion mehr: laufende Runde fair beenden - mit mind. einem
         # aufgedeckten Feld wird automatisch ausgezahlt, sonst Einsatz zurueck.
         if not self.settled:
@@ -1668,16 +1667,16 @@ class DuelView(discord.ui.View):
     """Herausforderung: nur der Herausgeforderte darf annehmen/ablehnen, der
     Herausforderer darf zurueckziehen. Coins fliessen erst bei Annahme."""
 
-    def __init__(self, challenger: discord.Member, target: discord.Member,
-                 bet: int) -> None:
+    def __init__(self, challenger, target,
+                 bet):
         super().__init__(timeout=120)
         self.challenger = challenger
         self.target = target
         self.bet = bet
         self.done = False
-        self.message: discord.Message | None = None
+        self.message = None
 
-    def embed(self) -> discord.Embed:
+    def embed(self):
         emb = discord.Embed(
             title="⚔️ Münz-Duell",
             description=(f"{self.challenger.mention} fordert {self.target.mention} "
@@ -1689,20 +1688,20 @@ class DuelView(discord.ui.View):
         emb.set_author(name="🎰 Flo Casino")
         return emb
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id in (self.target.id, self.challenger.id):
             return True
         await interaction.response.send_message(
             "Das Duell geht nur die beiden an. 🍿", ephemeral=True)
         return False
 
-    def _disable(self) -> None:
+    def _disable(self):
         for ch in self.children:
             if isinstance(ch, discord.ui.Button):
                 ch.disabled = True
 
     @discord.ui.button(label="Annehmen", emoji="⚔️", style=discord.ButtonStyle.success)
-    async def _accept(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _accept(self, interaction, _b):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message(
                 "Annehmen kann nur der Herausgeforderte. 😉", ephemeral=True)
@@ -1752,7 +1751,7 @@ class DuelView(discord.ui.View):
         _release(self.message)
 
     @discord.ui.button(label="Ablehnen", emoji="✖️", style=discord.ButtonStyle.secondary)
-    async def _decline(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _decline(self, interaction, _b):
         if self.done:
             await interaction.response.defer()
             return
@@ -1769,7 +1768,7 @@ class DuelView(discord.ui.View):
         self.stop()
         _release(self.message)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         self._disable()
         if self.message is not None:
             try:
@@ -1793,14 +1792,14 @@ class _SerienView(discord.ui.View):
     spiel = ""          # record()-Schluessel
     timeout_s = 120
 
-    def __init__(self, uid: int, bet: int) -> None:
+    def __init__(self, uid, bet):
         super().__init__(timeout=self.timeout_s)
         self.uid = uid
         self.bet = bet
         self.settled = False
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
@@ -1808,22 +1807,22 @@ class _SerienView(discord.ui.View):
             ephemeral=True)
         return False
 
-    def _disable_all(self) -> None:
+    def _disable_all(self):
         for ch in self.children:
             if isinstance(ch, (discord.ui.Button, discord.ui.Select)):
                 ch.disabled = True
 
-    async def _payout(self, betrag: int) -> None:
+    async def _payout(self, betrag):
         if betrag:
             economy.add_coins(self.uid, betrag)
         await economy.flush()
         await record(self.uid, self.spiel, self.bet, betrag)
 
     # Von den Unterklassen: aktueller Auszahlungswert bei Timeout (0 = weg).
-    def _timeout_wert(self) -> int:
+    def _timeout_wert(self):
         return self.bet
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         if not self.settled:
             self.settled = True
             wert = self._timeout_wert()
@@ -1855,14 +1854,14 @@ class _SerienView(discord.ui.View):
 class _SerienRestart(discord.ui.Button):
     """'Nochmal' unter einem beendeten Serien-Spiel: startet frisch."""
 
-    def __init__(self, factory, bet: int, row: int = 2) -> None:
+    def __init__(self, factory, bet, row = 2):
         super().__init__(label="Nochmal", emoji="🔁",
                          style=discord.ButtonStyle.success, row=row)
         self.factory = factory
         self.bet = bet
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        v: _SerienView = self.view  # type: ignore[assignment]
+    async def callback(self, interaction):
+        v = self.view  # type: ignore[assignment]
         if v.is_finished():
             await interaction.response.defer()
             return
@@ -1882,7 +1881,7 @@ class _SerienRestart(discord.ui.Button):
 class HiloView(_SerienView):
     spiel = "hilo"
 
-    def __init__(self, uid: int, bet: int) -> None:
+    def __init__(self, uid, bet):
         super().__init__(uid, bet)
         self.rank_i = random.randrange(13)
         self.suit = random.choice(_SUITS)
@@ -1891,18 +1890,18 @@ class HiloView(_SerienView):
         self._cash.disabled = True
         self._sync()
 
-    def _sync(self) -> None:
+    def _sync(self):
         self._hoch.disabled = self.rank_i >= 12     # ueber Ass geht nichts
         self._tief.disabled = self.rank_i <= 0
 
-    async def _file(self, state: str = "") -> discord.File:
+    async def _file(self, state = ""):
         buf = await asyncio.to_thread(render.hilo_card, _RANKS[self.rank_i],
                                       self.suit, streak=self.streak,
                                       mult=self.mult, state=state)
         fn = f"hilo_{self.uid}_{random.randint(1000, 9999)}.png"
         return discord.File(buf, filename=fn)
 
-    def _embed(self, color=None, note=None) -> discord.Embed:
+    def _embed(self, color=None, note=None):
         emb = discord.Embed(
             title="🃏 HiLo",
             description=note or (f"Kommt die nächste Karte **höher** oder **tiefer**? "
@@ -1912,13 +1911,13 @@ class HiloView(_SerienView):
         emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
         return emb
 
-    async def _zeige(self, interaction, emb: discord.Embed, state: str = "") -> None:
+    async def _zeige(self, interaction, emb, state = ""):
         file = await self._file(state)
         emb.set_image(url=f"attachment://{file.filename}")
         await interaction.response.edit_message(embed=emb, view=self,
                                                 attachments=[file])
 
-    async def _guess(self, interaction: discord.Interaction, hoeher: bool) -> None:
+    async def _guess(self, interaction, hoeher):
         if self.settled:
             await interaction.response.defer()
             return
@@ -1945,7 +1944,7 @@ class HiloView(_SerienView):
             return
         await self._zeige(interaction, self._embed())
 
-    async def _cashout(self, interaction: discord.Interaction) -> None:
+    async def _cashout(self, interaction):
         if self.settled or self.streak < 1:
             await interaction.response.defer()
             return
@@ -1958,33 +1957,33 @@ class HiloView(_SerienView):
             _C_WIN, f"💰 Cashout bei ×{self.mult:.2f} → "
                     f"**+{payout - self.bet} {economy.COIN}**."), state="win")
 
-    def _timeout_wert(self) -> int:
+    def _timeout_wert(self):
         return int(self.bet * self.mult) if self.streak >= 1 else self.bet
 
     @discord.ui.button(label="Höher", emoji="🔼", style=discord.ButtonStyle.primary, row=0)
-    async def _hoch(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _hoch(self, i, _b):
         await self._guess(i, True)
 
     @discord.ui.button(label="Tiefer", emoji="🔽", style=discord.ButtonStyle.primary, row=0)
-    async def _tief(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _tief(self, i, _b):
         await self._guess(i, False)
 
     @discord.ui.button(label="Cashout", emoji="💰", style=discord.ButtonStyle.success, row=0)
-    async def _cash(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _cash(self, i, _b):
         await self._cashout(i)
 
 
 class TowerView(_SerienView):
     spiel = "tower"
 
-    def __init__(self, uid: int, bet: int) -> None:
+    def __init__(self, uid, bet):
         super().__init__(uid, bet)
         self.traps = [random.randrange(_TOWER_DOORS) for _ in range(_TOWER_LEVELS)]
         self.level = 0                      # geschaffte Ebenen
-        self.wahl: list[int] = []
+        self.wahl = []
         self._cash.disabled = True
 
-    def _turm_text(self, boom_door: "int | None" = None) -> str:
+    def _turm_text(self, boom_door = None):
         zeilen = []
         for lv in range(_TOWER_LEVELS - 1, -1, -1):
             tueren = []
@@ -2001,7 +2000,7 @@ class TowerView(_SerienView):
             zeilen.append(f"`×{_tower_mult(lv + 1):>5.2f}`  {' '.join(tueren)}")
         return "\n".join(zeilen)
 
-    def _embed(self, color=None, note=None, boom_door=None) -> discord.Embed:
+    def _embed(self, color=None, note=None, boom_door=None):
         cash = int(self.bet * _tower_mult(self.level))
         emb = discord.Embed(
             title="🗼 Tower",
@@ -2013,7 +2012,7 @@ class TowerView(_SerienView):
         emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
         return emb
 
-    async def _pick(self, interaction: discord.Interaction, door: int) -> None:
+    async def _pick(self, interaction, door):
         if self.settled:
             await interaction.response.defer()
             return
@@ -2036,7 +2035,7 @@ class TowerView(_SerienView):
             return
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    async def _cashout(self, interaction: discord.Interaction) -> None:
+    async def _cashout(self, interaction):
         if self.settled or self.level < 1:
             await interaction.response.defer()
             return
@@ -2051,35 +2050,35 @@ class TowerView(_SerienView):
         emb = self._embed(_C_WIN, note + f"**+{payout - self.bet} {economy.COIN}**.")
         await interaction.response.edit_message(embed=emb, view=self)
 
-    def _timeout_wert(self) -> int:
+    def _timeout_wert(self):
         return int(self.bet * _tower_mult(self.level)) if self.level >= 1 else self.bet
 
     @discord.ui.button(label="Links", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
-    async def _t1(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t1(self, i, _b):
         await self._pick(i, 0)
 
     @discord.ui.button(label="Mitte", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
-    async def _t2(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t2(self, i, _b):
         await self._pick(i, 1)
 
     @discord.ui.button(label="Rechts", emoji="🚪", style=discord.ButtonStyle.primary, row=0)
-    async def _t3(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t3(self, i, _b):
         await self._pick(i, 2)
 
     @discord.ui.button(label="Cashout", emoji="💰", style=discord.ButtonStyle.success, row=1)
-    async def _cash(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _cash(self, i, _b):
         await self._cashout(i)
 
 
 class DonView(_SerienView):
     spiel = "don"
 
-    def __init__(self, uid: int, bet: int) -> None:
+    def __init__(self, uid, bet):
         super().__init__(uid, bet)
         self.pot = bet
         self.runde = 0
 
-    def _embed(self, color=None, note=None) -> discord.Embed:
+    def _embed(self, color=None, note=None):
         emb = discord.Embed(
             title="🪙 Doppelt oder nichts",
             description=note or (f"Pott: **{self.pot} {economy.COIN}** "
@@ -2090,7 +2089,7 @@ class DonView(_SerienView):
         emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
         return emb
 
-    async def _zeige(self, interaction, emb: discord.Embed, face: str) -> None:
+    async def _zeige(self, interaction, emb, face):
         buf, ext = await _anim(render.coin_flip_anim, render.coin_flip, face)
         fn = f"don_{self.uid}_{random.randint(1000, 9999)}.{ext}"
         emb.set_image(url=f"attachment://{fn}")
@@ -2099,7 +2098,7 @@ class DonView(_SerienView):
 
     @discord.ui.button(label="Verdoppeln", emoji="🎲",
                        style=discord.ButtonStyle.danger, row=0)
-    async def _flip(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _flip(self, interaction, _b):
         if self.settled:
             await interaction.response.defer()
             return
@@ -2129,7 +2128,7 @@ class DonView(_SerienView):
 
     @discord.ui.button(label="Cashout", emoji="💰",
                        style=discord.ButtonStyle.success, row=0)
-    async def _cash(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _cash(self, interaction, _b):
         if self.settled:
             await interaction.response.defer()
             return
@@ -2144,7 +2143,7 @@ class DonView(_SerienView):
         await interaction.response.edit_message(embed=emb, view=self,
                                                 attachments=[])
 
-    def _timeout_wert(self) -> int:
+    def _timeout_wert(self):
         return self.pot
 
 
@@ -2154,7 +2153,7 @@ class DonView(_SerienView):
 class _BetModal(discord.ui.Modal):
     """Formular fuer Einsatz (+ Spiel-Extra). Startet das jeweilige Spiel."""
 
-    def __init__(self, kind: str, uid: int, *, title: str, params: dict | None = None) -> None:
+    def __init__(self, kind, uid, *, title, params = None):
         super().__init__(title=title)
         self.kind = kind
         self.uid = uid
@@ -2163,7 +2162,7 @@ class _BetModal(discord.ui.Modal):
             label="Einsatz", placeholder="z. B. 50 oder alles",
             default=str(params["bet"]) if params.get("bet") else None, max_length=12)
         self.add_item(self.bet)
-        self.extra: discord.ui.TextInput | None = None
+        self.extra = None
         if kind == "crash":
             self.extra = discord.ui.TextInput(
                 label="Ziel-Faktor", placeholder="z. B. 2.0",
@@ -2191,7 +2190,7 @@ class _BetModal(discord.ui.Modal):
         if self.extra is not None:
             self.add_item(self.extra)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+    async def on_submit(self, interaction):
         uid = self.uid
         bet, err = _check_bet(uid, _resolve_bet(self.bet.value, uid))
         if err:
@@ -2343,15 +2342,15 @@ _MODAL_TITLES = {
 class _AgainView(discord.ui.View):
     """'Nochmal'-Buttons unter einem Ergebnis. Nur der Spieler darf klicken."""
 
-    def __init__(self, uid: int, kind: str, params: dict, *, channel_id: int | None = None) -> None:
+    def __init__(self, uid, kind, params, *, channel_id = None):
         super().__init__(timeout=120)
         self.uid = uid
         self.kind = kind
         self.params = params
         self.channel_id = channel_id
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
@@ -2359,7 +2358,7 @@ class _AgainView(discord.ui.View):
         return False
 
     @discord.ui.button(label="Nochmal", emoji="🔁", style=discord.ButtonStyle.success)
-    async def _again(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _again(self, interaction, _b):
         uid = self.uid
         # Doppelklick-Fenster schliessen: der zweite (bereits dispatchte) Klick
         # sieht is_finished() und tut nichts - sonst wuerde er ERNEUT abbuchen.
@@ -2413,12 +2412,12 @@ class _AgainView(discord.ui.View):
         _protect(interaction.message)
 
     @discord.ui.button(label="Einsatz ändern", emoji="✏️", style=discord.ButtonStyle.secondary)
-    async def _change(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _change(self, interaction, _b):
         await interaction.response.send_modal(
             _BetModal(self.kind, self.uid, title=_MODAL_TITLES.get(self.kind, "Einsatz"),
                       params=self.params))
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             if isinstance(ch, discord.ui.Button):
                 ch.disabled = True
@@ -2433,19 +2432,19 @@ class _AgainView(discord.ui.View):
 class CasinoHubView(discord.ui.View):
     """Casino-Uebersicht: ein Button je Spiel, der ein Formular oeffnet."""
 
-    def __init__(self, uid: int) -> None:
+    def __init__(self, uid):
         super().__init__(timeout=180)
         self.uid = uid
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
             f"Öffne dir dein eigenes Casino mit `{instance._bot_name} casino`. 🎰", ephemeral=True)
         return False
 
-    async def _open(self, interaction: discord.Interaction, kind: str) -> None:
+    async def _open(self, interaction, kind):
         """Oeffnet den interaktiven Aufbau (Einsatz-Auswahl + Spiel-Buttons) als
         eigene Nachricht – kein Tippen noetig."""
         view = _SETUPS[kind](self.uid, channel_id=interaction.channel_id)
@@ -2457,55 +2456,55 @@ class CasinoHubView(discord.ui.View):
             log.exception("Casino-Hub: Spielaufbau konnte nicht geoeffnet werden")
 
     @discord.ui.button(label="Blackjack", emoji="🂡", style=discord.ButtonStyle.primary, row=0)
-    async def _bj(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _bj(self, interaction, _b):
         await self._open(interaction, "blackjack")
 
     @discord.ui.button(label="Crash", emoji="🚀", style=discord.ButtonStyle.primary, row=0)
-    async def _crash(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _crash(self, interaction, _b):
         await self._open(interaction, "crash")
 
     @discord.ui.button(label="Keno", emoji="🎱", style=discord.ButtonStyle.secondary, row=0)
-    async def _keno(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _keno(self, interaction, _b):
         await self._open(interaction, "keno")
 
     @discord.ui.button(label="Roulette", emoji="🎡", style=discord.ButtonStyle.secondary, row=0)
-    async def _roulette(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _roulette(self, interaction, _b):
         await self._open(interaction, "roulette")
 
     @discord.ui.button(label="Mines", emoji="💣", style=discord.ButtonStyle.primary, row=1)
-    async def _mines(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _mines(self, interaction, _b):
         await self._open(interaction, "mines")
 
     @discord.ui.button(label="Glücksrad", emoji="🍀", style=discord.ButtonStyle.primary, row=1)
-    async def _wheel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _wheel(self, interaction, _b):
         await self._open(interaction, "wheel")
 
     @discord.ui.button(label="Rubbellos", emoji="🎫", style=discord.ButtonStyle.secondary, row=1)
-    async def _scratch(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _scratch(self, interaction, _b):
         await self._open(interaction, "scratch")
 
     @discord.ui.button(label="HiLo", emoji="🃏", style=discord.ButtonStyle.primary, row=2)
-    async def _hilo(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _hilo(self, interaction, _b):
         await self._open(interaction, "hilo")
 
     @discord.ui.button(label="Tower", emoji="🗼", style=discord.ButtonStyle.primary, row=2)
-    async def _tower(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _tower(self, interaction, _b):
         await self._open(interaction, "tower")
 
     @discord.ui.button(label="Sieben", emoji="🎲", style=discord.ButtonStyle.secondary, row=2)
-    async def _sieben(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _sieben(self, interaction, _b):
         await self._open(interaction, "sieben")
 
     @discord.ui.button(label="Baccarat", emoji="🃏", style=discord.ButtonStyle.secondary, row=2)
-    async def _baccarat(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _baccarat(self, interaction, _b):
         await self._open(interaction, "baccarat")
 
     @discord.ui.button(label="D.O.N.", emoji="🪙", style=discord.ButtonStyle.danger, row=2)
-    async def _don(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _don(self, interaction, _b):
         await self._open(interaction, "don")
 
     @discord.ui.button(label="Bilanz", emoji="📊", style=discord.ButtonStyle.secondary, row=1)
-    async def _bilanz(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _bilanz(self, interaction, _b):
         """Zeigt die eigene Casino-Bilanz ephemer (nur fuer den Klicker)."""
         uid = interaction.user.id
         prof = ((instance._stats.data.get("stats") or {}).get(str(uid))
@@ -2531,7 +2530,7 @@ class CasinoHubView(discord.ui.View):
         await interaction.followup.send(
             file=discord.File(buf, filename=f"stats_{uid}.png"), ephemeral=True)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             if isinstance(ch, discord.ui.Button):
                 ch.disabled = True
@@ -2555,7 +2554,7 @@ _BET_CHOICES = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
 class _BetSelect(discord.ui.Select):
     """Dropdown fuer den Einsatz (feste Stufen + 'Alles')."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         options = [discord.SelectOption(label=f"{v} {economy.COIN}", value=str(v), emoji="🪙")
                    for v in _BET_CHOICES]
         options.append(discord.SelectOption(
@@ -2563,7 +2562,7 @@ class _BetSelect(discord.ui.Select):
         super().__init__(placeholder="💰 Einsatz wählen …", min_values=1, max_values=1,
                          options=options, row=0)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._set_bet(interaction, self.values[0])
 
 
@@ -2573,23 +2572,23 @@ class _Setup(discord.ui.View):
 
     kind = ""
 
-    def __init__(self, uid: int, *, channel_id: int | None = None,
-                 bet: int | None = None) -> None:
+    def __init__(self, uid, *, channel_id = None,
+                 bet = None):
         super().__init__(timeout=120)
         self.uid = uid
         self.channel_id = channel_id
         self.bet = bet
-        self.message: discord.Message | None = None
+        self.message = None
         self.add_item(_BetSelect())
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
             f"Mach dir deine eigene Runde mit `{instance._bot_name} {self.kind}`. 😉", ephemeral=True)
         return False
 
-    async def _set_bet(self, interaction: discord.Interaction, token: str) -> None:
+    async def _set_bet(self, interaction, token):
         self.bet = _resolve_bet(token, self.uid)
         # Auswahl im Dropdown sichtbar halten (sonst 'vergisst' es die Optik
         # bei jedem Re-Render der View).
@@ -2599,7 +2598,7 @@ class _Setup(discord.ui.View):
                     opt.default = (opt.value == token)
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    async def _ensure_bet(self, interaction: discord.Interaction) -> "int | None":
+    async def _ensure_bet(self, interaction):
         """Prueft den gewaehlten Einsatz. Bei Problem: kurzer ephemerer Hinweis."""
         bet, err = _check_bet(self.uid, self.bet)
         if err:
@@ -2607,7 +2606,7 @@ class _Setup(discord.ui.View):
             return None
         return bet
 
-    async def _claim_bet(self, interaction: discord.Interaction) -> "int | None":
+    async def _claim_bet(self, interaction):
         """Doppelklick-sicher spielen: prueft den Einsatz, entwertet das Menue
         (stop) und zieht ein - alles SYNCHRON am Stueck, damit ein zweiter,
         parallel dispatchter Klick nie ein zweites Mal abbuchen kann."""
@@ -2625,8 +2624,8 @@ class _Setup(discord.ui.View):
         economy.add_coins(self.uid, -bet)
         return bet
 
-    async def _finish(self, interaction: discord.Interaction, emb: discord.Embed,
-                      file: "discord.File | None", again: "_AgainView") -> None:
+    async def _finish(self, interaction, emb,
+                      file, again):
         """Ersetzt das Aufbau-Menue durch das Ergebnis (+ Nochmal-Buttons)."""
         attachments = [file] if file is not None else []
         await interaction.response.edit_message(embed=emb, attachments=attachments, view=again)
@@ -2634,13 +2633,13 @@ class _Setup(discord.ui.View):
         _protect(again.message)
         self.stop()
 
-    def _bet_txt(self) -> str:
+    def _bet_txt(self):
         return f"**{self.bet} {economy.COIN}**" if self.bet else "_noch nichts gewählt_"
 
-    def _embed(self) -> discord.Embed:    # von den Unterklassen gefuellt
+    def _embed(self):    # von den Unterklassen gefuellt
         raise NotImplementedError
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             if isinstance(ch, (discord.ui.Button, discord.ui.Select)):
                 ch.disabled = True
@@ -2656,18 +2655,18 @@ class _Setup(discord.ui.View):
 class _NumberSelect(discord.ui.Select):
     """Mehrfach-Auswahl fuer einen Zahlenblock (z. B. 1–20)."""
 
-    def __init__(self, lo: int, hi: int, label: str, *, row: int) -> None:
-        self.chosen: list[int] = []
+    def __init__(self, lo, hi, label, *, row):
+        self.chosen = []
         options = [discord.SelectOption(label=str(n), value=str(n)) for n in range(lo, hi + 1)]
         super().__init__(placeholder=f"🔢 {label}", min_values=0, max_values=8,
                          options=options, row=row)
 
-    def set_chosen(self, nums: list[int]) -> None:
+    def set_chosen(self, nums):
         self.chosen = list(nums)
         for opt in self.options:
             opt.default = int(opt.value) in self.chosen
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         self.set_chosen([int(v) for v in self.values])
         self.view._recalc()
         await interaction.response.edit_message(embed=self.view._embed())
@@ -2676,19 +2675,19 @@ class _NumberSelect(discord.ui.Select):
 class _KenoSetup(_Setup):
     kind = "keno"
 
-    def __init__(self, uid: int, *, channel_id: int | None = None,
-                 bet: int | None = None) -> None:
+    def __init__(self, uid, *, channel_id = None,
+                 bet = None):
         super().__init__(uid, channel_id=channel_id, bet=bet)
-        self.picks: list[int] = []
+        self.picks = []
         self._lo = _NumberSelect(1, 20, "Zahlen 1–20", row=1)
         self._hi = _NumberSelect(21, 40, "Zahlen 21–40", row=2)
         self.add_item(self._lo)
         self.add_item(self._hi)
 
-    def _recalc(self) -> None:
+    def _recalc(self):
         self.picks = sorted(set(self._lo.chosen) | set(self._hi.chosen))[:8]
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         nums = "  ".join(f"`{n}`" for n in self.picks) if self.picks else "_keine_"
         emb = discord.Embed(
             title="🎱 Keno",
@@ -2702,7 +2701,7 @@ class _KenoSetup(_Setup):
         return emb
 
     @discord.ui.button(label="Zufall", emoji="🎲", style=discord.ButtonStyle.secondary, row=3)
-    async def _rng(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _rng(self, interaction, _b):
         pick = random.sample(range(1, 41), 5)
         self._lo.set_chosen([n for n in pick if n <= 20])
         self._hi.set_chosen([n for n in pick if n > 20])
@@ -2710,7 +2709,7 @@ class _KenoSetup(_Setup):
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
     @discord.ui.button(label="Spielen", emoji="▶️", style=discord.ButtonStyle.success, row=3)
-    async def _go(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _go(self, interaction, _b):
         self._recalc()
         if not self.picks:
             await interaction.response.send_message(
@@ -2729,13 +2728,13 @@ class _KenoSetup(_Setup):
 class _NumberBetModal(discord.ui.Modal):
     """Kleines Formular fuer eine exakte Roulette-Zahl (0–36)."""
 
-    def __init__(self, setup: "_RouletteSetup") -> None:
+    def __init__(self, setup):
         super().__init__(title="Roulette – Zahl 0–36")
         self.setup = setup
         self.num = discord.ui.TextInput(label="Zahl", placeholder="0–36", max_length=2)
         self.add_item(self.num)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+    async def on_submit(self, interaction):
         s = self.setup
         if s.is_finished():   # Menue wurde inzwischen anders benutzt/geschlossen
             await interaction.response.send_message(
@@ -2772,7 +2771,7 @@ class _NumberBetModal(discord.ui.Modal):
 class _RouletteSetup(_Setup):
     kind = "roulette"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🎡 Roulette",
             description=("**Einsatz** wählen, dann **worauf** du tippst – die Kugel rollt sofort.\n"
@@ -2783,7 +2782,7 @@ class _RouletteSetup(_Setup):
         emb.set_footer(text=_bal_footer(self.uid))
         return emb
 
-    async def _spin(self, interaction: discord.Interaction, target: str) -> None:
+    async def _spin(self, interaction, target):
         bet = await self._claim_bet(interaction)
         if bet is None:
             return
@@ -2793,31 +2792,31 @@ class _RouletteSetup(_Setup):
         await self._finish(interaction, emb, file, again)
 
     @discord.ui.button(label="Rot", emoji="🔴", style=discord.ButtonStyle.danger, row=1)
-    async def _red(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _red(self, i, _b):
         await self._spin(i, "rot")
 
     @discord.ui.button(label="Schwarz", emoji="⚫", style=discord.ButtonStyle.secondary, row=1)
-    async def _black(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _black(self, i, _b):
         await self._spin(i, "schwarz")
 
     @discord.ui.button(label="Gerade", style=discord.ButtonStyle.primary, row=1)
-    async def _even(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _even(self, i, _b):
         await self._spin(i, "gerade")
 
     @discord.ui.button(label="Ungerade", style=discord.ButtonStyle.primary, row=1)
-    async def _odd(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _odd(self, i, _b):
         await self._spin(i, "ungerade")
 
     @discord.ui.button(label="Zahl", emoji="🔢", style=discord.ButtonStyle.success, row=1)
-    async def _number(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _number(self, i, _b):
         await i.response.send_modal(_NumberBetModal(self))
 
     @discord.ui.button(label="1–18", style=discord.ButtonStyle.secondary, row=2)
-    async def _low(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _low(self, i, _b):
         await self._spin(i, "1-18")
 
     @discord.ui.button(label="19–36", style=discord.ButtonStyle.secondary, row=2)
-    async def _high(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _high(self, i, _b):
         await self._spin(i, "19-36")
 
 
@@ -2828,13 +2827,13 @@ _CRASH_TARGETS = (1.5, 2.0, 3.0, 5.0, 10.0)
 class _CrashTargetModal(discord.ui.Modal):
     """Formular fuer einen eigenen Crash-Ziel-Faktor."""
 
-    def __init__(self, setup: "_CrashSetup") -> None:
+    def __init__(self, setup):
         super().__init__(title="Crash – eigenes Ziel")
         self.setup = setup
         self.target = discord.ui.TextInput(label="Ziel-Faktor", placeholder="z. B. 2.5", max_length=8)
         self.add_item(self.target)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+    async def on_submit(self, interaction):
         s = self.setup
         if s.is_finished():   # Menue wurde inzwischen anders benutzt/geschlossen
             await interaction.response.send_message(
@@ -2873,7 +2872,7 @@ class _CrashTargetModal(discord.ui.Modal):
 class _CrashSetup(_Setup):
     kind = "crash"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🚀 Crash",
             description=("**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort.\n"
@@ -2884,7 +2883,7 @@ class _CrashSetup(_Setup):
         emb.set_footer(text=_bal_footer(self.uid))
         return emb
 
-    async def _launch(self, interaction: discord.Interaction, target: float) -> None:
+    async def _launch(self, interaction, target):
         bet = await self._claim_bet(interaction)
         if bet is None:
             return
@@ -2894,27 +2893,27 @@ class _CrashSetup(_Setup):
         await self._finish(interaction, emb, file, again)
 
     @discord.ui.button(label="1.5×", style=discord.ButtonStyle.primary, row=1)
-    async def _t15(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t15(self, i, _b):
         await self._launch(i, 1.5)
 
     @discord.ui.button(label="2×", style=discord.ButtonStyle.primary, row=1)
-    async def _t2(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t2(self, i, _b):
         await self._launch(i, 2.0)
 
     @discord.ui.button(label="3×", style=discord.ButtonStyle.primary, row=1)
-    async def _t3(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t3(self, i, _b):
         await self._launch(i, 3.0)
 
     @discord.ui.button(label="5×", style=discord.ButtonStyle.primary, row=1)
-    async def _t5(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t5(self, i, _b):
         await self._launch(i, 5.0)
 
     @discord.ui.button(label="10×", style=discord.ButtonStyle.primary, row=1)
-    async def _t10(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _t10(self, i, _b):
         await self._launch(i, 10.0)
 
     @discord.ui.button(label="Eigenes Ziel", emoji="✏️", style=discord.ButtonStyle.secondary, row=2)
-    async def _custom(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _custom(self, i, _b):
         await i.response.send_modal(_CrashTargetModal(self))
 
 
@@ -2922,7 +2921,7 @@ class _CrashSetup(_Setup):
 class _BlackjackSetup(_Setup):
     kind = "blackjack"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🂡 Blackjack",
             description=("**Einsatz** wählen, dann **Deal**. Danach steuerst du mit "
@@ -2934,7 +2933,7 @@ class _BlackjackSetup(_Setup):
         return emb
 
     @discord.ui.button(label="Deal", emoji="🂡", style=discord.ButtonStyle.success, row=1)
-    async def _deal(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _deal(self, interaction, _b):
         if self.is_finished():        # Doppelklick: nur der erste Klick dealt
             await interaction.response.defer()
             return
@@ -2966,7 +2965,7 @@ class _BlackjackSetup(_Setup):
 class _WheelSetup(_Setup):
     kind = "wheel"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         segs = " · ".join("0" if m <= 0 else f"×{m:g}"
                           for m in sorted(set(_WHEEL_SEGMENTS)))
         emb = discord.Embed(
@@ -2980,7 +2979,7 @@ class _WheelSetup(_Setup):
         return emb
 
     @discord.ui.button(label="Drehen", emoji="🍀", style=discord.ButtonStyle.success, row=1)
-    async def _spin(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _spin(self, interaction, _b):
         bet = await self._claim_bet(interaction)
         if bet is None:
             return
@@ -2993,7 +2992,7 @@ class _WheelSetup(_Setup):
 class _ScratchSetup(_Setup):
     kind = "scratch"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🎫 Rubbellos",
             description=("**Einsatz** wählen, dann **Rubbeln**.\n"
@@ -3006,7 +3005,7 @@ class _ScratchSetup(_Setup):
         return emb
 
     @discord.ui.button(label="Rubbeln", emoji="🎫", style=discord.ButtonStyle.success, row=1)
-    async def _go(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _go(self, interaction, _b):
         bet = await self._claim_bet(interaction)
         if bet is None:
             return
@@ -3017,7 +3016,7 @@ class _ScratchSetup(_Setup):
 
 # --- Mines: Einsatz + Bombenzahl, dann Start -------------------------------
 class _MinesCountSelect(discord.ui.Select):
-    def __init__(self) -> None:
+    def __init__(self):
         options = [
             discord.SelectOption(label=f"{n} Bomben", value=str(n), emoji="💣",
                                  description=f"1. Feld zahlt ×{_mines_mult(1, n):.2f}",
@@ -3027,7 +3026,7 @@ class _MinesCountSelect(discord.ui.Select):
         super().__init__(placeholder="💣 Bomben wählen …", min_values=1, max_values=1,
                          options=options, row=1)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         self.view.mines = int(self.values[0])
         for opt in self.options:
             opt.default = (opt.value == self.values[0])
@@ -3037,13 +3036,13 @@ class _MinesCountSelect(discord.ui.Select):
 class _MinesSetup(_Setup):
     kind = "mines"
 
-    def __init__(self, uid: int, *, channel_id: int | None = None,
-                 bet: int | None = None) -> None:
+    def __init__(self, uid, *, channel_id = None,
+                 bet = None):
         super().__init__(uid, channel_id=channel_id, bet=bet)
         self.mines = _MINES_DEFAULT
         self.add_item(_MinesCountSelect())
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="💣 Mines",
             description=("**Einsatz** und **Bombenzahl** wählen, dann **Start**.\n"
@@ -3059,7 +3058,7 @@ class _MinesSetup(_Setup):
         return emb
 
     @discord.ui.button(label="Start", emoji="💣", style=discord.ButtonStyle.success, row=2)
-    async def _start(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _start(self, interaction, _b):
         if self.is_finished():        # Doppelklick: nur der erste Klick startet
             await interaction.response.defer()
             return
@@ -3095,7 +3094,7 @@ class _MinesSetup(_Setup):
 class _SiebenSetup(_Setup):
     kind = "sieben"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🎲 Sieben",
             description="2 Würfel. **Unter/Über 7** zahlt ×2.3 · **genau 7** zahlt ×5.8.",
@@ -3105,7 +3104,7 @@ class _SiebenSetup(_Setup):
         emb.set_footer(text=_bal_footer(self.uid))
         return emb
 
-    async def _wurf(self, interaction: discord.Interaction, tip: str) -> None:
+    async def _wurf(self, interaction, tip):
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
@@ -3116,22 +3115,22 @@ class _SiebenSetup(_Setup):
         await self._finish(interaction, emb, file, again)
 
     @discord.ui.button(label="Unter 7", emoji="🔽", style=discord.ButtonStyle.primary, row=1)
-    async def _u(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _u(self, i, _b):
         await self._wurf(i, "unter")
 
     @discord.ui.button(label="Genau 7", emoji="🎯", style=discord.ButtonStyle.success, row=1)
-    async def _g(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _g(self, i, _b):
         await self._wurf(i, "genau")
 
     @discord.ui.button(label="Über 7", emoji="🔼", style=discord.ButtonStyle.primary, row=1)
-    async def _o(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _o(self, i, _b):
         await self._wurf(i, "ueber")
 
 
 class _BaccaratSetup(_Setup):
     kind = "baccarat"
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🃏 Baccarat",
             description="**Spieler** ×2 · **Bank** ×1.95 · **Tie** ×9 "
@@ -3142,7 +3141,7 @@ class _BaccaratSetup(_Setup):
         emb.set_footer(text=_bal_footer(self.uid))
         return emb
 
-    async def _setze(self, interaction: discord.Interaction, tip: str) -> None:
+    async def _setze(self, interaction, tip):
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
@@ -3153,15 +3152,15 @@ class _BaccaratSetup(_Setup):
         await self._finish(interaction, emb, file, again)
 
     @discord.ui.button(label="Spieler", emoji="🧑", style=discord.ButtonStyle.primary, row=1)
-    async def _sp(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _sp(self, i, _b):
         await self._setze(i, "spieler")
 
     @discord.ui.button(label="Bank", emoji="🏦", style=discord.ButtonStyle.primary, row=1)
-    async def _bk(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _bk(self, i, _b):
         await self._setze(i, "bank")
 
     @discord.ui.button(label="Tie", emoji="🤝", style=discord.ButtonStyle.secondary, row=1)
-    async def _tie(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _tie(self, i, _b):
         await self._setze(i, "tie")
 
 
@@ -3173,7 +3172,7 @@ class _SerienSetup(_Setup):
     factory = None      # staticmethod-Factory (uid, bet) -> (view, emb, file)
 
     @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
-    async def _start(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _start(self, interaction, _b):
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
@@ -3190,7 +3189,7 @@ class _HiloSetup(_SerienSetup):
     kind = "hilo"
     factory = staticmethod(_hilo_start)
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🃏 HiLo",
             description="Nächste Karte **höher oder tiefer**? Jede richtige "
@@ -3206,7 +3205,7 @@ class _TowerSetup(_SerienSetup):
     kind = "tower"
     factory = staticmethod(_tower_start)
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🗼 Tower",
             description=f"{_TOWER_LEVELS} Ebenen, je 3 Türen, 1 Bombe. "
@@ -3222,7 +3221,7 @@ class _DonSetup(_SerienSetup):
     kind = "don"
     factory = staticmethod(_don_start)
 
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🪙 Doppelt oder nichts",
             description="Jeder Wurf: **KOPF** verdoppelt den Pott, **ZAHL** "

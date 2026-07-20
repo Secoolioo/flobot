@@ -7,7 +7,6 @@ ensure_pack() einmal auf: fehlende Dateien werden erzeugt, vorhandene
 (auch eigene mp3s mit gleichem Namen) NIE ueberschrieben. Abschaltbar per
 SOUND_PACK=0.
 """
-from __future__ import annotations
 
 import math
 import random
@@ -19,7 +18,7 @@ RATE = 32000            # Mono, 16 Bit - reicht fuer Discord-Voice locker
 
 
 class Soundpack:
-    def __init__(self) -> None:
+    def __init__(self):
         self.PACK = {
             "airhorn": self._airhorn, "boom": self._boom,
             "badumtss": self._badumtss, "trompete": self._trompete,
@@ -29,11 +28,11 @@ class Soundpack:
         }
 
     # --- Synthese-Helfer ---------------------------------------------------
-    def _silence(self, dauer: float) -> list[float]:
+    def _silence(self, dauer):
         return [0.0] * int(RATE * dauer)
 
-    def _env(self, n: int, attack: float = 0.005, release: float = 0.05
-             ) -> list[float]:
+    def _env(self, n, attack = 0.005, release = 0.05
+             ):
         """Lineare Attack/Release-Huellkurve ueber n Samples."""
         a, r = max(1, int(RATE * attack)), max(1, int(RATE * release))
         out = [1.0] * n
@@ -43,17 +42,17 @@ class Soundpack:
             out[n - 1 - i] = min(out[n - 1 - i], i / r)
         return out
 
-    def _exp_decay(self, n: int, tau: float) -> list[float]:
+    def _exp_decay(self, n, tau):
         k = 1.0 / (RATE * tau)
         return [math.exp(-i * k) for i in range(n)]
 
-    def _saw(self, phase: float) -> float:
+    def _saw(self, phase):
         return 2.0 * (phase - math.floor(phase + 0.5))
 
-    def _square(self, phase: float) -> float:
+    def _square(self, phase):
         return 1.0 if (phase % 1.0) < 0.5 else -1.0
 
-    def _smooth(self, samples: list[float], breite: int = 3) -> list[float]:
+    def _smooth(self, samples, breite = 3):
         """Billiger Tiefpass: gleitender Mittelwert (macht Saegezahn 'blechig-weich')."""
         out = samples[:]
         acc = sum(samples[:breite])
@@ -62,9 +61,9 @@ class Soundpack:
             acc += samples[i] - samples[i - breite]
         return out
 
-    def _ton(self, dauer: float, freq, *, wellen=("saw",), vibrato: float = 0.0,
-             vib_hz: float = 6.0, attack: float = 0.005, release: float = 0.05
-             ) -> list[float]:
+    def _ton(self, dauer, freq, *, wellen=("saw",), vibrato = 0.0,
+             vib_hz = 6.0, attack = 0.005, release = 0.05
+             ):
         """Ein Ton. ``freq``: Zahl ODER Funktion t->Hz (Sweeps). ``wellen``:
         Mischung aus 'sine'/'saw'/'square'."""
         n = int(RATE * dauer)
@@ -88,8 +87,8 @@ class Soundpack:
             out.append(s / len(wellen) * env[i])
         return out
 
-    def _mix_at(self, ziel: list[float], teil: list[float], start_s: float,
-                gain: float = 1.0) -> None:
+    def _mix_at(self, ziel, teil, start_s,
+                gain = 1.0):
         o = int(RATE * start_s)
         fehlt = o + len(teil) - len(ziel)
         if fehlt > 0:
@@ -97,7 +96,7 @@ class Soundpack:
         for i, s in enumerate(teil):
             ziel[o + i] += s * gain
 
-    def _write(self, path: Path, samples: list[float]) -> None:
+    def _write(self, path, samples):
         """Normalisiert auf -1.4 dB und schreibt 16-Bit-Mono-WAV."""
         peak = max(1e-6, max(abs(s) for s in samples))
         g = 0.85 / peak
@@ -109,22 +108,22 @@ class Soundpack:
             fh.writeframes(data.tobytes())
 
     # --- Die Sounds --------------------------------------------------------
-    def _airhorn(self) -> list[float]:
+    def _airhorn(self):
         """MLG-Airhorn: dreckiger Saegezahn mit Vibrato, kurz-kurz-laaang."""
-        def blast(dauer: float) -> list[float]:
+        def blast(dauer):
             raw = self._ton(dauer, 466.0, wellen=("saw", "saw", "square"),
                             vibrato=0.035, vib_hz=7.0, release=0.04)
             det = self._ton(dauer, 466.0 * 1.012, wellen=("saw",), vibrato=0.03,
                             vib_hz=6.3, release=0.04)
             return [max(-0.9, min(0.9, (a + 0.6 * b) * 1.6))   # leichte Verzerrung
                     for a, b in zip(raw, det)]
-        out: list[float] = []
+        out = []
         for dauer, pause in ((0.18, 0.07), (0.18, 0.07), (1.0, 0.0)):
             out.extend(blast(dauer))
             out.extend(self._silence(pause))
         return out
 
-    def _boom(self) -> list[float]:
+    def _boom(self):
         """Vine-Boom: tiefer Sinus-Sweep mit Punch und langem Ausklang."""
         n = int(RATE * 1.5)
         dec = self._exp_decay(n, 0.4)
@@ -140,10 +139,10 @@ class Soundpack:
             out[i] += random.uniform(-0.5, 0.5) * (1 - i / (RATE * 0.006))
         return out
 
-    def _badumtss(self) -> list[float]:
-        out: list[float] = []
+    def _badumtss(self):
+        out = []
 
-        def tom(f0: float, f1: float, dauer: float) -> list[float]:
+        def tom(f0, f1, dauer):
             return [s * d for s, d in zip(
                 self._ton(dauer, lambda t, a=f0, b=f1: a + (b - a) * (t * 4),
                           wellen=("sine",)),
@@ -159,9 +158,9 @@ class Soundpack:
         self._mix_at(out, [h * d for h, d in zip(hell, dec)], 0.48, gain=0.8)
         return out
 
-    def _trompete(self) -> list[float]:
+    def _trompete(self):
         """Traurige Trompete: waaah waaah waaah waaaaaah (faellt am Ende ab)."""
-        out: list[float] = []
+        out = []
         t0 = 0.0
         for f, dauer in ((233.0, 0.38), (220.0, 0.38), (208.0, 0.38)):
             ton = self._ton(dauer, f, wellen=("saw", "square"), vibrato=0.02,
@@ -176,7 +175,7 @@ class Soundpack:
         self._mix_at(out, self._smooth(ton, 4), t0)
         return out
 
-    def _applaus(self) -> list[float]:
+    def _applaus(self):
         """~2 s Applaus: viele kleine Klatscher (helle Rauschimpulse)."""
         out = self._silence(2.2)
         t = 0.05
@@ -192,7 +191,7 @@ class Soundpack:
             t += random.uniform(0.008, 0.03)
         return out
 
-    def _buzzer(self) -> list[float]:
+    def _buzzer(self):
         """Falsche-Antwort-Buzzer: fies, rau, unmissverstaendlich."""
         a = self._ton(0.85, 112.0, wellen=("square", "saw"), attack=0.004,
                       release=0.1)
@@ -200,7 +199,7 @@ class Soundpack:
         return [(x + 0.7 * y) * (0.8 + 0.2 * math.sin(2 * math.pi * 16 * i / RATE))
                 for i, (x, y) in enumerate(zip(a, b))]
 
-    def _ding(self) -> list[float]:
+    def _ding(self):
         """Heller Glocken-Ding (Service-Bell)."""
         n = int(RATE * 1.3)
         out = [0.0] * n
@@ -215,14 +214,14 @@ class Soundpack:
             out[i] *= i / 64
         return out
 
-    def _tada(self) -> list[float]:
+    def _tada(self):
         """Fanfare: C-E-G hoch, dann Akkord mit Glitzer."""
-        out: list[float] = []
+        out = []
         for i, f in enumerate((523.25, 659.26, 783.99)):
             ton = self._ton(0.14, f, wellen=("saw", "sine"), attack=0.01,
                             release=0.04)
             self._mix_at(out, self._smooth(ton, 3), i * 0.10, gain=0.8)
-        akkord: list[float] = []
+        akkord = []
         for f in (523.25, 659.26, 783.99, 1046.5):
             ton = self._ton(1.3, f, wellen=("saw", "sine"), vibrato=0.012,
                             vib_hz=5.5, attack=0.02, release=0.5)
@@ -233,7 +232,7 @@ class Soundpack:
         self._mix_at(out, self._smooth(akkord, 3), 0.30)
         return out
 
-    def _pups(self) -> list[float]:
+    def _pups(self):
         """Der Klassiker. Wobbelnder Tiefton + Rauschen = Comedy-Gold."""
         n = int(RATE * 1.0)
         out = []
@@ -250,11 +249,11 @@ class Soundpack:
             out.append(s * env)
         return self._smooth(out, 6)
 
-    def _pew(self) -> list[float]:
+    def _pew(self):
         """Zwei schnelle Laser-Pews."""
-        out: list[float] = []
+        out = []
 
-        def pew() -> list[float]:
+        def pew():
             return [s * d for s, d in zip(
                 self._ton(0.22, lambda t: 1400.0 * math.exp(-t * 10.0) + 160.0,
                           wellen=("square", "sine"), attack=0.002),
@@ -264,7 +263,7 @@ class Soundpack:
         self._mix_at(out, pew(), 0.3)
         return out
 
-    def _gong(self) -> list[float]:
+    def _gong(self):
         """Tiefer Tempel-Gong mit unharmonischen Teiltoenen und Schwebung."""
         n = int(RATE * 2.8)
         out = [0.0] * n
@@ -280,7 +279,7 @@ class Soundpack:
             out[i] += random.uniform(-0.4, 0.4) * (1 - i / (RATE * 0.01))
         return out
 
-    def ensure_pack(self, sounds_dir: Path) -> int:
+    def ensure_pack(self, sounds_dir):
         """Erzeugt fehlende Pack-Sounds als WAV. Vorhandene Dateien (egal welche
         Endung) werden NIE angefasst. Rueckgabe: Anzahl neu erzeugter Dateien."""
         sounds_dir.mkdir(parents=True, exist_ok=True)

@@ -16,7 +16,6 @@ Befehle (nach 'Flo' - in der DM geht's auch ohne 'Flo' davor):
 Ziel-Angabe: @-Mention ODER rohe User-ID (in der DM gibt es keine Mentions,
 da ist die ID der Weg). Betraege duerfen bei 'gib' auch negativ sein.
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -39,12 +38,12 @@ class Admin:
     _ID_RE = re.compile(r"\b(\d{15,20})\b")
     _AMOUNT_RE = re.compile(r"-?\d{1,12}")
 
-    def __init__(self) -> None:
+    def __init__(self):
         # Veraenderlicher Modulzustand (frueher per 'global' neu zugewiesen).
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
+        self._enabled = False
+        self._bot_name = "Flo"
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert die Admin-Befehle (braucht nur eine OWNER_ID)."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if not OWNER_ID:
@@ -54,15 +53,15 @@ class Admin:
         log.info("Admin-Befehle aktiv (Besitzer %d).", OWNER_ID)
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Parsen ----------------------------------------------------------------
-    def _extract(self, rest: str) -> tuple[int | None, int | None]:
+    def _extract(self, rest):
         """Zieht (ziel_user_id, betrag) aus dem Resttext: erst @-Mention, sonst
         rohe 15-20-stellige ID; der Betrag ist die erste verbleibende Zahl."""
         text = rest or ""
-        uid: int | None = None
+        uid = None
         m = self._MENTION_RE.search(text)
         if m:
             uid = int(m.group(1))
@@ -76,7 +75,7 @@ class Admin:
         amount = int(m3.group(0)) if m3 else None
         return uid, amount
 
-    async def _user_of(self, message: discord.Message, uid: int):
+    async def _user_of(self, message, uid):
         """Bestmoegliches User-Objekt zur ID (Mention > Guild-Cache > API)."""
         for m in message.mentions:
             if m.id == uid:
@@ -91,17 +90,17 @@ class Admin:
         except Exception:  # noqa: BLE001 - unbekannte ID o. Ae.
             return None
 
-    async def _name_of(self, message: discord.Message, uid: int) -> str:
+    async def _name_of(self, message, uid):
         user = await self._user_of(message, uid)
         return user.display_name if user is not None else f"User {uid}"
 
-    def _emb(self, text: str, *, color: discord.Color | None = None) -> discord.Embed:
+    def _emb(self, text, *, color = None):
         emb = discord.Embed(description=text, color=color or discord.Color.gold())
         emb.set_author(name="🛠️ Flo Admin")
         return emb
 
     # --- Befehle ----------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> "str | discord.Embed | None":
+    async def handle(self, message):
         """Owner-only. None = kein Admin-Befehl -> naechster Handler ist dran."""
         if not self._enabled or message.author.id != OWNER_ID:
             return None
@@ -139,8 +138,8 @@ class Admin:
             return self._admin_help()
         return None
 
-    async def _give(self, message: discord.Message, rest: str, *, sign: int
-                    ) -> "str | discord.Embed | None":
+    async def _give(self, message, rest, *, sign
+                    ):
         uid, amount = self._extract(rest)
         if uid is None and amount is None:
             # 'gib mir mal einen Tipp' u. Ae.: kein Admin-Befehl, sondern Chat ->
@@ -161,7 +160,7 @@ class Admin:
         return self._emb(f"🪙 **{name}** verliert **{delta} {economy.COIN}** "
                          f"→ neuer Stand: **{neu}**.", color=discord.Color.orange())
 
-    async def _set_coins(self, message: discord.Message, rest: str) -> "str | discord.Embed":
+    async def _set_coins(self, message, rest):
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
         uid, amount = self._extract(rest)
@@ -173,7 +172,7 @@ class Admin:
         name = await self._name_of(message, uid)
         return self._emb(f"🎯 Kontostand von **{name}** auf **{neu} {economy.COIN}** gesetzt.")
 
-    async def _give_xp(self, message: discord.Message, rest: str) -> "str | discord.Embed | None":
+    async def _give_xp(self, message, rest):
         uid, amount = self._extract(rest)
         if uid is None and amount is None:
             return None   # Chat, kein Befehl - weiterreichen an die KI
@@ -189,7 +188,7 @@ class Admin:
         extra = f" → **Level {level}**! 🎉" if level else ""
         return self._emb(f"⭐ **{user.display_name}** bekommt **+{amount} XP**{extra}")
 
-    async def _profile(self, message: discord.Message, rest: str) -> "str | discord.Embed":
+    async def _profile(self, message, rest):
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
         uid, _ = self._extract(rest)
@@ -214,7 +213,7 @@ class Admin:
             emb.add_field(name="Titel", value=row["title"], inline=False)
         return emb
 
-    def _parse_announce(self, rest: str) -> tuple[int | None, str]:
+    def _parse_announce(self, rest):
         """Zerlegt 'ansage ...' in (channel_id, text). Akzeptiert die rohe ID
         UND eine Channel-Erwaehnung wie <#1234...>."""
         m = re.match(r"\s*(?:<#)?(\d{15,20})>?\s+(.+)", rest or "", re.DOTALL)
@@ -222,7 +221,7 @@ class Admin:
             return None, ""
         return int(m.group(1)), m.group(2).strip()
 
-    async def _announce(self, message: discord.Message, rest: str) -> str:
+    async def _announce(self, message, rest):
         cid, text = self._parse_announce(rest)
         if cid is None or not text:
             return (f"So: `{self._bot_name} ansage <channel-id> <text>` "
@@ -252,7 +251,7 @@ class Admin:
             return f"Senden fehlgeschlagen: {exc}"
         return f"✅ Gesendet in **#{getattr(channel, 'name', '?')}**."
 
-    def _parse_dm(self, rest: str) -> tuple[int | None, str]:
+    def _parse_dm(self, rest):
         """'@wer hallo du' / '1234... hallo du' -> (user_id, text)."""
         m = self._MENTION_RE.search(rest or "") or self._ID_RE.search(rest or "")
         if not m:
@@ -260,7 +259,7 @@ class Admin:
         text = (rest[:m.start()] + rest[m.end():]).strip()
         return int(m.group(1)), text
 
-    async def _dm(self, message: discord.Message, rest: str) -> "str | discord.Embed":
+    async def _dm(self, message, rest):
         """Flo schreibt jemandem privat - als waere er's selbst. Antworten der
         Person leitet bot.py automatisch an den Besitzer zurueck (DM-Relay)."""
         uid, text = self._parse_dm(rest)
@@ -285,7 +284,7 @@ class Admin:
         emb.set_footer(text="Antworten leite ich automatisch an dich weiter.")
         return emb
 
-    async def _toggle_soundboard(self, an: bool) -> "str | discord.Embed":
+    async def _toggle_soundboard(self, an):
         """Soundboard serverweit an-/abschalten (persistiert ueber Neustarts)."""
         try:
             import voicegags
@@ -302,14 +301,14 @@ class Admin:
                          f"(wieder an: `{self._bot_name} soundboard an`).",
                          color=discord.Color.orange())
 
-    async def _shop_refresh(self) -> str:
+    async def _shop_refresh(self):
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
         st = await economy.refresh_shop_async(force=True)
         return (f"✅ Shop neu gewürfelt: {len(st.get('items', []))} Titel "
                 f"für {st.get('date', '?')}.")
 
-    def _admin_help(self) -> discord.Embed:
+    def _admin_help(self):
         n = self._bot_name
         emb = discord.Embed(
             title="🛠️ Admin-Befehle (nur für dich)",

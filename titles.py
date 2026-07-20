@@ -16,7 +16,6 @@ Flo mit dem Traeger (siehe 'tone'). Andere Module nutzen:
     rarity_of(text), price_of(text), entry(text), random_titles(n)
 und die Metadaten in RARITY.
 """
-from __future__ import annotations
 
 import hashlib
 import random
@@ -30,7 +29,7 @@ class Titles:
     # pool_pct: Anteil ALLER Titel in dieser Stufe (mehr normal als legendary).
     # shop_weight: Gewicht bei der taeglichen Shop-Auswahl (gleiche Tendenz).
     # tone: wie Flo mit Traegern dieser Stufe spricht (ai.py liest das).
-    RARITY: dict[str, dict] = {
+    RARITY = {
         "normal": {
             "label": "Normal", "emoji": "🟢", "color": 0x57F287,
             "role": "Flo · Normal", "price": (150, 600),
@@ -163,17 +162,17 @@ class Titles:
         "Voicetal", "Memehausen", "Clutchhausen", "Tiltberg", "Ragequit-Furt",
     ]
 
-    def __init__(self) -> None:
+    def __init__(self):
         # --- Titel-Pool (lazy gebaut, dann gecacht) ------------------------------
-        self._POOL: dict[str, list[str]] | None = None   # rarity -> [titel, ...]
-        self._ALL: list[str] | None = None               # alle Titel (flach)
+        self._POOL = None   # rarity -> [titel, ...]
+        self._ALL = None               # alle Titel (flach)
 
     # --- Hash-Helfer (deterministische Eigenschaften je Titel) ---------------
-    def _h(self, text: str, salt: str) -> int:
+    def _h(self, text, salt):
         digest = hashlib.sha256(f"{salt}|{text}".encode("utf-8")).hexdigest()
         return int(digest[:12], 16)
 
-    def rarity_of(self, text: str) -> str:
+    def rarity_of(self, text):
         """Feste Seltenheit eines Titels (per Hash, Verteilung via pool_pct)."""
         r = self._h(text, "rarity") % 100
         if r < 62:
@@ -184,25 +183,25 @@ class Titles:
             return "mythisch"    # 9 %
         return "legendary"       # 3 %
 
-    def price_of(self, text: str) -> int:
+    def price_of(self, text):
         """Fester Preis (deterministisch in der Preisspanne der Stufe, auf 10 gerundet)."""
         lo, hi = self.RARITY[self.rarity_of(text)]["price"]
         steps = (hi - lo) // 10
         return lo + (self._h(text, "price") % (steps + 1)) * 10
 
-    def emoji_of(self, text: str) -> str:
+    def emoji_of(self, text):
         """Themen-Emoji des Titels (deterministisch)."""
         bank = self._EMOJI[self.rarity_of(text)]
         return bank[self._h(text, "emoji") % len(bank)]
 
-    def label_of(self, text: str) -> str:
+    def label_of(self, text):
         """Anzeigename inkl. Emoji, z. B. '👑 Goldener König'."""
         return f"{self.emoji_of(text)} {text}"
 
-    def color_of(self, text: str) -> int:
+    def color_of(self, text):
         return self.RARITY[self.rarity_of(text)]["color"]
 
-    def entry(self, text: str) -> dict:
+    def entry(self, text):
         """Vollstaendiger Datensatz zu einem Titel."""
         rar = self.rarity_of(text)
         meta = self.RARITY[rar]
@@ -217,10 +216,10 @@ class Titles:
             "role": meta["role"],
         }
 
-    def _generate(self) -> list[str]:
+    def _generate(self):
         """Erzeugt ALLE Titel aus den Templates (deterministisch, ohne Duplikate)."""
-        out: list[str] = []
-        seen: set[str] = set()
+        out = []
+        seen = set()
         for adj in self._ADJ:                  # Template 1: 'Adj Noun'
             for noun in self._NOUN:
                 t = f"{adj} {noun}"
@@ -241,32 +240,32 @@ class Titles:
                     out.append(t)
         return out
 
-    def _build(self) -> None:
+    def _build(self):
         if self._POOL is not None:
             return
         self._ALL = self._generate()
-        pool: dict[str, list[str]] = {r: [] for r in self.RARITY_ORDER}
+        pool = {r: [] for r in self.RARITY_ORDER}
         for t in self._ALL:
             pool[self.rarity_of(t)].append(t)
         self._POOL = pool
 
-    def pool(self) -> dict[str, list[str]]:
+    def pool(self):
         self._build()
         assert self._POOL is not None
         return self._POOL
 
-    def total(self) -> int:
+    def total(self):
         self._build()
         assert self._ALL is not None
         return len(self._ALL)
 
-    def counts(self) -> dict[str, int]:
+    def counts(self):
         """Anzahl Titel je Seltenheit (fuer Diagnose/Tests)."""
         return {r: len(v) for r, v in self.pool().items()}
 
     # --- Tagesauswahl fuer den Shop -----------------------------------------
-    def random_titles(self, n: int, *, rng: random.Random | None = None,
-                       exclude: set[str] | None = None) -> list[dict]:
+    def random_titles(self, n, *, rng = None,
+                       exclude = None):
         """Waehlt n verschiedene Titel fuer den Shop – seltenheits-gewichtet
         (mehr normale, selten mal ein legendaerer). Gibt entry()-Dicts zurueck."""
         rng = rng or random
@@ -274,8 +273,8 @@ class Titles:
         p = self.pool()
         rarities = self.RARITY_ORDER
         weights = [self.RARITY[r]["shop_weight"] for r in rarities]
-        picked: list[str] = []
-        picked_set: set[str] = set()
+        picked = []
+        picked_set = set()
         guard = 0
         while len(picked) < n and guard < n * 60:
             guard += 1

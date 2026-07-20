@@ -218,7 +218,7 @@ class GuildPlayer:
     # damit nie zwei channel.connect() gleichzeitig laufen.
     _voice_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    async def connect(self, channel: discord.VoiceChannel) -> discord.VoiceClient:
+    async def connect(self, channel):
         # Lock: nie gleichzeitig mit einem Watchdog-_reconnect verbinden.
         async with self._voice_lock:
             vc = self.voice if (self.voice and self.voice.is_connected()) else channel.guild.voice_client
@@ -236,7 +236,7 @@ class GuildPlayer:
             self._reconnect_fails = 0
         return self.voice
 
-    async def _fresh_connect(self, channel: "discord.VoiceChannel") -> None:
+    async def _fresh_connect(self, channel):
         """Raeumt einen evtl. haengenden Client weg und verbindet frisch.
         NUR aus gehaltenem _voice_lock heraus aufrufen."""
         stale = self.voice or channel.guild.voice_client
@@ -248,10 +248,10 @@ class GuildPlayer:
         self.voice = None
         self.voice = await channel.connect(self_deaf=True, reconnect=True)
 
-    def is_active(self) -> bool:
+    def is_active(self):
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
 
-    def start(self, track: Track, *, seek: float = 0.0, keep_speed: bool = False) -> None:
+    def start(self, track, *, seek = 0.0, keep_speed = False):
         """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL).
 
         seek = Song-Sekunde, ab der gespielt wird (fuer nahtlosen Tempo-Wechsel).
@@ -297,25 +297,25 @@ class GuildPlayer:
             self.history.append(track)
             del self.history[:-30]   # nur die letzten 30 behalten
 
-    def position(self) -> float:
+    def position(self):
         """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
         pos = self._played
         if self._seg_start is not None:
             pos += (time.monotonic() - self._seg_start) * self.speed
         return max(0.0, pos)
 
-    def _clock_pause(self) -> None:
+    def _clock_pause(self):
         """Positions-Uhr beim Pausieren einfrieren."""
         if self._seg_start is not None:
             self._played += (time.monotonic() - self._seg_start) * self.speed
             self._seg_start = None
 
-    def _clock_resume(self) -> None:
+    def _clock_resume(self):
         """Positions-Uhr beim Fortsetzen weiterlaufen lassen."""
         if self._seg_start is None:
             self._seg_start = time.monotonic()
 
-    async def apply_speed(self, new_speed: float) -> bool:
+    async def apply_speed(self, new_speed):
         """Setzt die Geschwindigkeit und startet den laufenden Song an der aktuellen
         Stelle mit neuem Tempo neu. True = live umgestellt, False = nur gemerkt
         (gilt dann fuer den naechsten Song)."""
@@ -346,7 +346,7 @@ class GuildPlayer:
                 return False
         return True
 
-    def _after(self, error: Exception | None, gen: int) -> None:
+    def _after(self, error, gen):
         # Laeuft in einem FFmpeg-Thread -> Arbeit zurueck in den Event-Loop schieben.
         # Alles abfangen: ein Fehler hier darf den Player-Thread NICHT mitreissen.
         if error:
@@ -358,7 +358,7 @@ class GuildPlayer:
         except Exception:
             log.exception("Konnte naechsten Track nach Songende nicht einplanen")
 
-    async def _advance(self) -> None:
+    async def _advance(self):
         """Spielt den naechsten abspielbaren Track. Kaputte/altersbeschraenkte
         Eintraege (yt-dlp DownloadError, 'keine Treffer', tote Links) werden
         UEBERSPRUNGEN statt den Player anzuhalten - so bleibt die Musik bei einem
@@ -391,7 +391,7 @@ class GuildPlayer:
         finally:
             self._advancing = False
 
-    async def disconnect(self) -> None:
+    async def disconnect(self):
         self.queue.clear()
         self.current = None
         self.speed = 1.0           # frische Session startet wieder mit Normaltempo
@@ -409,7 +409,7 @@ class GuildPlayer:
             self.voice = None
 
     # --- Selbstheilung: haelt die Voice-Verbindung am Leben ---------------
-    async def heal(self, guild: "discord.Guild") -> None:
+    async def heal(self, guild):
         """Periodischer Watchdog (bot.py-Loop). Sorgt dafuer, dass der Bot in
         SEINEM Kanal verbunden bleibt und repariert Desyncs/Zombies selbst.
         Tut nichts, wenn der Bot bewusst draussen ist, gerade ein Songwechsel
@@ -437,7 +437,7 @@ class GuildPlayer:
         else:
             self._stall_ticks = 0
 
-    async def _reconnect(self, channel: "discord.VoiceChannel") -> None:
+    async def _reconnect(self, channel):
         """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
         laufenden Song fort. Loop-gebremst (Mindestabstand) und mit Aufgabe-
         Schwelle gegen Endlos-Versuche; alles mit Timeouts gegen Haenger."""
@@ -496,7 +496,7 @@ class GuildPlayer:
                 await self._advance()
             log.info("Voice in '%s' wiederhergestellt.", channel.name)
 
-    def _note_reconnect_fail(self, channel: "discord.VoiceChannel") -> None:
+    def _note_reconnect_fail(self, channel):
         """Zaehlt fehlgeschlagene Reconnects; nach zu vielen am Stueck gibt der
         Watchdog auf (Marker loeschen), damit kein Endlos-Loop entsteht. Ein neues
         'Flo spiel' startet sauber neu."""
@@ -515,7 +515,7 @@ class GuildPlayer:
 class _PositionModal(discord.ui.Modal):
     """Tippfeld fuer eine konkrete Wunsch-Position."""
 
-    def __init__(self, view: "QueuePositionView") -> None:
+    def __init__(self, view):
         super().__init__(title="Position in der Warteschlange")
         self._view = view
         self.feld = discord.ui.TextInput(
@@ -525,7 +525,7 @@ class _PositionModal(discord.ui.Modal):
         )
         self.add_item(self.feld)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
+    async def on_submit(self, interaction):
         raw = (self.feld.value or "").strip()
         if not raw.lstrip("+").isdigit():
             await interaction.response.send_message(
@@ -543,15 +543,15 @@ class _PositionModal(discord.ui.Modal):
 class QueuePositionView(discord.ui.View):
     """Buttons unter einem frisch hinzugefuegten Song: an Position vorziehen."""
 
-    def __init__(self, player: "GuildPlayer", track: "Track", owner_id: int,
-                *, timeout: float = 120.0) -> None:
+    def __init__(self, player, track, owner_id,
+                *, timeout = 120.0):
         super().__init__(timeout=timeout)
         self.player = player
         self.track = track
         self.owner_id = owner_id
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         perms = getattr(interaction.user, "guild_permissions", None)
         if interaction.user.id == self.owner_id or (perms and perms.manage_messages):
             return True
@@ -560,14 +560,14 @@ class QueuePositionView(discord.ui.View):
             ephemeral=True)
         return False
 
-    def _index(self) -> int | None:
+    def _index(self):
         """Aktuelle Stelle des Tracks (per Identitaet, da er weiterrueckt)."""
         for i, t in enumerate(self.player.queue):
             if t is self.track:
                 return i
         return None
 
-    def apply_move(self, target_index: int) -> discord.Embed | None:
+    def apply_move(self, target_index):
         """Verschiebt den Track an target_index (0-basiert). None = nicht mehr da."""
         idx = self._index()
         if idx is None:
@@ -584,7 +584,7 @@ class QueuePositionView(discord.ui.View):
         )
 
     @discord.ui.button(label="Als Nächstes", emoji="⏭️", style=discord.ButtonStyle.primary)
-    async def _next(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+    async def _next(self, interaction, _button):
         emb = self.apply_move(0)
         if emb is None:
             await interaction.response.edit_message(embed=_gone_embed(self.track), view=None)
@@ -593,14 +593,14 @@ class QueuePositionView(discord.ui.View):
         await interaction.response.edit_message(embed=emb, view=self)
 
     @discord.ui.button(label="Position wählen", emoji="📍", style=discord.ButtonStyle.secondary)
-    async def _choose(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+    async def _choose(self, interaction, _button):
         if self._index() is None:
             await interaction.response.edit_message(embed=_gone_embed(self.track), view=None)
             self.stop()
             return
         await interaction.response.send_modal(_PositionModal(self))
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -612,21 +612,21 @@ class QueuePositionView(discord.ui.View):
 
 
 # Auswaehlbare Geschwindigkeiten (atempo deckt 0.5-2.0 ab).
-_SPEEDS: tuple[float, ...] = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+_SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 
 
 class _SpeedSelect(discord.ui.Select):
     """Dropdown im Panel: Songgeschwindigkeit waehlen. Stellt den laufenden Song
     sofort an der aktuellen Stelle mit dem neuen Tempo um (FFmpeg atempo)."""
 
-    def __init__(self, player: "GuildPlayer") -> None:
+    def __init__(self, player):
         self.player = player
         super().__init__(placeholder="🎚️ Geschwindigkeit wählen …",
                          min_values=1, max_values=1, options=self._opts(), row=1)
 
-    def _opts(self) -> "list[discord.SelectOption]":
+    def _opts(self):
         cur = self.player.speed
-        out: list[discord.SelectOption] = []
+        out = []
         for s in _SPEEDS:
             if s < 1.0:
                 emoji, label = "🌌", f"{s:g}× · slowed + reverb"
@@ -639,11 +639,11 @@ class _SpeedSelect(discord.ui.Select):
                                             description=desc, default=abs(s - cur) < 1e-3))
         return out
 
-    def refresh(self) -> None:
+    def refresh(self):
         """Optionen neu aufbauen, damit das aktuelle Tempo als ausgewaehlt erscheint."""
         self.options = self._opts()
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         v = self.player.voice
         if v is None or not (v.is_playing() or v.is_paused()):
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
@@ -670,15 +670,15 @@ class PlaybackControlView(discord.ui.View):
     eines neuen Panels wird das alte ueber _send_panel sauber entschaerft.
     """
 
-    def __init__(self, player: "GuildPlayer") -> None:
+    def __init__(self, player):
         super().__init__(timeout=None)
         self.player = player
-        self.message: discord.Message | None = None
+        self.message = None
         self._sync_pause()
         self._speed_select = _SpeedSelect(player)   # eigene Zeile unter den Buttons
         self.add_item(self._speed_select)
 
-    def _sync_pause(self) -> None:
+    def _sync_pause(self):
         """Pause-Button passend zum aktuellen Zustand beschriften."""
         v = self.player.voice
         paused = bool(v and v.is_paused())
@@ -688,7 +688,7 @@ class PlaybackControlView(discord.ui.View):
                              else discord.ButtonStyle.secondary)
 
     @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.secondary)
-    async def _pause(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _pause(self, interaction, _b):
         v = self.player.voice
         if v is None or not (v.is_playing() or v.is_paused()):
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
@@ -703,7 +703,7 @@ class PlaybackControlView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary)
-    async def _skip(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _skip(self, interaction, _b):
         if not self.player.is_active():
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
             return
@@ -713,7 +713,7 @@ class PlaybackControlView(discord.ui.View):
         await interaction.response.defer()
 
     @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
-    async def _stop(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _stop(self, interaction, _b):
         if self.player.voice is None or not self.player.voice.is_connected():
             await interaction.response.send_message("Ich bin in keinem Sprachkanal.", ephemeral=True)
             return
@@ -731,7 +731,7 @@ class PlaybackControlView(discord.ui.View):
         self.stop()
 
     @discord.ui.button(label="Queue", emoji="🎶", style=discord.ButtonStyle.secondary)
-    async def _queue(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _queue(self, interaction, _b):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
 
 
@@ -739,18 +739,18 @@ class Music:
     """Buendelt Zustand und Logik des Musik-Features (frueher freie
     Modul-Funktionen und globale Variablen dieses Moduls)."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         # --- Konfiguration (in setup() aus der .env gelesen) ---------------------
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._spotify_id: str = ""
-        self._spotify_secret: str = ""
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._spotify_id = ""
+        self._spotify_secret = ""
         # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
         self._sp_token = {"value": "", "exp": 0.0}
         # Player-/Queue-Zustand pro Server (guild_id -> GuildPlayer).
-        self._players: dict[int, GuildPlayer] = {}
+        self._players = {}
 
-    def _fmt_dur(self, secs: int | None) -> str:
+    def _fmt_dur(self, secs):
         """Sekunden -> 'm:ss' bzw. 'h:mm:ss' (leer, wenn unbekannt)."""
         if not secs or secs <= 0:
             return ""
@@ -759,12 +759,12 @@ class Music:
         m, s = divmod(rem, 60)
         return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
-    def _short(self, text: str, limit: int = 60) -> str:
+    def _short(self, text, limit = 60):
         """Kuerzt lange Titel fuer Listen (haelt Embed-Felder unter dem 1024er-Limit)."""
         text = (text or "").strip()
         return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
-    def _embed(self, desc: str = "", *, title: str | None = None, color: int = _COL_INFO) -> discord.Embed:
+    def _embed(self, desc = "", *, title = None, color = _COL_INFO):
         """Kleiner Embed-Baukasten fuer einzeilige Antworten."""
         e = discord.Embed(color=color)
         if title:
@@ -773,7 +773,7 @@ class Music:
             e.description = desc
         return e
 
-    def _build_audio_filter(self, speed: float) -> str | None:
+    def _build_audio_filter(self, speed):
         """Baut die -filter:a-Kette fuer die gewuenschte Geschwindigkeit.
 
         None  -> Normaltempo, kein Filter.
@@ -786,7 +786,7 @@ class Music:
         rate = round(_AUDIO_RATE * speed)   # 0.5 -> 24000 (Oktave tiefer), 0.75 -> 36000
         return f"aresample={_AUDIO_RATE},asetrate={rate},aresample={_AUDIO_RATE},{_REVERB_SUFFIX}"
 
-    def _is_volume_word(self, word: str) -> bool:
+    def _is_volume_word(self, word):
         """True, wenn das Wort 'Lautstaerke' meint - inkl. Kurzform (ls) und Tippfehler."""
         w = word.lower().strip(".:!?")
         if w in ("lauter", "louder", "lautr", "leiser", "quieter", "leise"):
@@ -798,7 +798,7 @@ class Music:
             difflib.get_close_matches(w, _VOLUME_CANON, n=1, cutoff=0.8)
         )
 
-    def setup(self) -> bool:
+    def setup(self):
         """Liest die Konfiguration und prueft die Voraussetzungen.
 
         Rueckgabe: True, wenn das Musik-Feature aktiv ist.
@@ -827,24 +827,24 @@ class Music:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _player_for(self, guild_id: int) -> GuildPlayer:
+    def _player_for(self, guild_id):
         player = self._players.get(guild_id)
         if player is None:
             player = GuildPlayer(loop=asyncio.get_running_loop())
             self._players[guild_id] = player
         return player
 
-    async def heal_voice(self, guild: "discord.Guild") -> None:
+    async def heal_voice(self, guild):
         """Vom bot.py-Watchdog-Loop aufgerufen: haelt die Voice-Verbindung dieses
         Servers am Leben und repariert Desyncs selbst. No-op, wenn kein Player aktiv."""
         player = self._players.get(guild.id)
         if player is not None:
             await player.heal(guild)
 
-    def is_voice_busy(self, guild_id: int) -> bool:
+    def is_voice_busy(self, guild_id):
         """True, wenn die Musik den Voice-Channel dieses Servers belegt - auch in
         Songpausen, beim Tempo-Wechsel oder waehrend eines Reconnects. voicegags
         fragt das, um nicht in den Musik-Voice-Client reinzugraetschen."""
@@ -857,11 +857,11 @@ class Music:
 
     # --- yt-dlp / Spotify Helfer ---------------------------------------------
 
-    async def _extract(self, query_or_url: str) -> Track:
+    async def _extract(self, query_or_url):
         """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf."""
         loop = asyncio.get_running_loop()
 
-        def work() -> dict:
+        def work():
             with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:  # type: ignore[union-attr]
                 info = ydl.extract_info(query_or_url, download=False)
             if info and "entries" in info:  # Suche/Playlist -> ersten Treffer nehmen
@@ -883,7 +883,7 @@ class Music:
             thumbnail=info.get("thumbnail") or "",
         )
 
-    async def _resolve_track(self, track: Track) -> Track:
+    async def _resolve_track(self, track):
         """Loest einen vorgemerkten Track auf. track.query = komplette yt-dlp-Eingabe
         (direkte URL ODER 'ytsearch1:Kuenstler - Titel')."""
         resolved = await self._extract(track.query)
@@ -891,7 +891,7 @@ class Music:
         resolved.query = track.query
         return resolved
 
-    def _lazy_track(self, extract_input: str, title: str, requested_by: str) -> Track:
+    def _lazy_track(self, extract_input, title, requested_by):
         """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
         extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename.
         """
@@ -899,7 +899,7 @@ class Music:
             title=title, stream_url="", query=extract_input, requested_by=requested_by
         )
 
-    async def _youtube_playlist(self, url: str) -> list[tuple[str, str]] | None:
+    async def _youtube_playlist(self, url):
         """YouTube-Playlist -> Liste (video_url, titel). Schnell via extract_flat;
         die einzelnen Videos werden erst beim Abspielen aufgeloest."""
         loop = asyncio.get_running_loop()
@@ -909,7 +909,7 @@ class Music:
         opts["playlistend"] = MAX_QUEUE
         opts["ignoreerrors"] = True  # einzelne kaputte Videos ueberspringen, nicht crashen
 
-        def work() -> dict | None:
+        def work():
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
                 return ydl.extract_info(url, download=False)
 
@@ -922,7 +922,7 @@ class Music:
         entries = info.get("entries") if info else None
         if not entries:
             return None
-        out: list[tuple[str, str]] = []
+        out = []
         for e in entries:
             if not e:
                 continue
@@ -934,7 +934,7 @@ class Music:
             out.append((vid, e.get("title", "Unbekannter Titel")))
         return out or None
 
-    async def _spotify_token(self) -> str:
+    async def _spotify_token(self):
         """Holt (und cached) ein Spotify-App-Token (Client-Credentials-Flow)."""
         if not (self._spotify_id and self._spotify_secret):
             return ""
@@ -963,7 +963,7 @@ class Music:
         self._sp_token["exp"] = now + float(data.get("expires_in", 3600))
         return self._sp_token["value"]  # type: ignore[return-value]
 
-    async def _spotify_to_query(self, url: str) -> str | None:
+    async def _spotify_to_query(self, url):
         """Spotify-Track-Link -> 'Kuenstler - Titel' (fuer die YouTube-Suche)."""
         m = _SPOTIFY_TRACK_RE.search(url)
         if not m:
@@ -992,7 +992,7 @@ class Music:
         query = f"{artists} - {name}".strip(" -")
         return query or None
 
-    async def _spotify_list_tracks(self, url: str) -> list[str] | None:
+    async def _spotify_list_tracks(self, url):
         """Spotify-Playlist-/Album-Link -> Liste 'Kuenstler - Titel' (max. MAX_QUEUE)."""
         m = _SPOTIFY_LIST_RE.search(url)
         if not m:
@@ -1011,7 +1011,7 @@ class Music:
         else:  # album
             next_url = f"https://api.spotify.com/v1/albums/{list_id}/tracks?limit=50"
 
-        queries: list[str] = []
+        queries = []
         headers = {"Authorization": f"Bearer {token}"}
         timeout = aiohttp.ClientTimeout(total=15)
         try:
@@ -1037,7 +1037,7 @@ class Music:
             return None
         return queries
 
-    def _deep_find(self, obj: object, key: str) -> object:
+    def _deep_find(self, obj, key):
         """Sucht rekursiv den ersten Wert zu 'key' in verschachtelten dict/list."""
         if isinstance(obj, dict):
             if key in obj:
@@ -1053,7 +1053,7 @@ class Music:
                     return found
         return None
 
-    async def _spotify_playlist_via_embed(self, url: str) -> list[str] | None:
+    async def _spotify_playlist_via_embed(self, url):
         """Spotify-Playlist -> Liste 'Kuenstler - Titel' ueber das oeffentliche Embed.
 
         Die Web-API verbietet Client-Credentials-Apps den Playlist-Track-Zugriff
@@ -1098,7 +1098,7 @@ class Music:
             log.error("Spotify-Embed: keine Songliste im JSON gefunden.")
             return None
 
-        queries: list[str] = []
+        queries = []
         for entry in track_list:
             if not isinstance(entry, dict):
                 continue
@@ -1113,13 +1113,13 @@ class Music:
 
     # --- Befehls-Erkennung ---------------------------------------------------
 
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         """Entfernt @-Mentions und den fuehrenden Botnamen/Alias ('Florian, spiel ...'
         -> 'spiel ...'). Zentral in ai.strip_lead, damit alle Module gleich reagieren
         (so gehen Musik-Befehle auch mit dem Alias 'Florian', nicht nur 'Flo')."""
         return ai.strip_lead(text)
 
-    def parse_command(self, text: str) -> tuple[str, str] | None:
+    def parse_command(self, text):
         """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
 
         Aktionen: play, search, spotify_album, spotify_playlist, yt_playlist,
@@ -1177,13 +1177,13 @@ class Music:
 
     async def _play_many(
         self,
-        player: GuildPlayer,
-        channel: discord.VoiceChannel,
-        items: list[tuple[str, str]],
-        requested_by: str,
-        label: str,
-        reply_to: "discord.Message | None" = None,
-    ) -> "discord.Embed | object":
+        player,
+        channel,
+        items,
+        requested_by,
+        label,
+        reply_to = None,
+    ):
         """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
 
         items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
@@ -1232,14 +1232,14 @@ class Music:
 
     # --- Optik: groessere Embeds ---------------------------------------------
 
-    def _title_value(self, track: "Track") -> str:
+    def _title_value(self, track):
         """Titel als Link (falls webpage_url bekannt), sonst fett."""
         if track.webpage_url:
             return f"**[{self._short(track.title, 90)}]({track.webpage_url})**"
         return f"**{self._short(track.title, 90)}**"
 
-    def _now_playing_embed(self, track: "Track", queue_len: int = 0, extra: str = "",
-                           speed: float = 1.0) -> discord.Embed:
+    def _now_playing_embed(self, track, queue_len = 0, extra = "",
+                           speed = 1.0):
         """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
         e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=self._title_value(track),
                           color=_COL_PLAY)
@@ -1271,9 +1271,9 @@ class Music:
             e.set_thumbnail(url=track.thumbnail)
         return e
 
-    def _added_embed(self, track: "Track", position: int, total: int, *,
-                    title: str = "➕  Zur Warteschlange hinzugefügt",
-                    footer: str | None = None) -> discord.Embed:
+    def _added_embed(self, track, position, total, *,
+                    title = "➕  Zur Warteschlange hinzugefügt",
+                    footer = None):
         """Embed fuer einen frisch eingereihten Song."""
         e = discord.Embed(title=title, description=self._title_value(track), color=_COL_QUEUE)
         e.add_field(name="Position", value=f"**#{position}** von {total}", inline=True)
@@ -1288,11 +1288,11 @@ class Music:
             e.set_thumbnail(url=track.thumbnail)
         return e
 
-    def _gone_embed(self, track: "Track") -> discord.Embed:
+    def _gone_embed(self, track):
         return self._embed(f"**{self._short(track.title, 90)}** ist nicht mehr in der Warteschlange.",
                            title="⌛  Schon durch", color=_COL_INFO)
 
-    def _queue_embed(self, player: "GuildPlayer") -> discord.Embed:
+    def _queue_embed(self, player):
         """Uebersichtliche Warteschlange: aktueller Song + naechste 10."""
         e = discord.Embed(title="🎶  Warteschlange", color=_COL_QUEUE)
         if player.current:
@@ -1320,7 +1320,7 @@ class Music:
             e.set_thumbnail(url=player.current.thumbnail)
         return e
 
-    async def _retire_panel(self, player: "GuildPlayer") -> None:
+    async def _retire_panel(self, player):
         """Loescht das zuletzt gepostete Steuer-Panel selbst - der Song dazu ist vorbei
         bzw. wird gleich durch ein neues ersetzt. Das AKTUELLE Panel ist beim Auto-
         Loeschen ausgenommen (bot.py, ueber NOWPLAYING_EMBED_TITLE); alte raeumen wir
@@ -1333,8 +1333,8 @@ class Music:
             except discord.HTTPException:
                 pass
 
-    async def _send_panel(self, player: "GuildPlayer", track: "Track", *,
-                         reply_to: "discord.Message | None" = None, extra: str = "") -> None:
+    async def _send_panel(self, player, track, *,
+                         reply_to = None, extra = ""):
         """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
         Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
         vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
@@ -1356,7 +1356,7 @@ class Music:
 
     # --- Oeffentlicher Einstieg ----------------------------------------------
 
-    async def handle(self, message: discord.Message) -> "str | discord.Embed | object | None":
+    async def handle(self, message):
         """Prueft, ob die Nachricht ein Musik-Befehl ist, und fuehrt ihn aus.
 
         Rueckgabe:

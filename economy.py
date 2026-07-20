@@ -10,7 +10,6 @@ Dieses Modul ist die EINZIGE Quelle fuer den Coin-Kontostand. Andere Module
 (z. B. games.py) vergeben Coins ueber economy.add_coins(), damit es nur einen
 Topf gibt.
 """
-from __future__ import annotations
 
 import asyncio
 import io
@@ -71,7 +70,7 @@ class Economy:
 
     # Alte, fest verdrahtete Titel von vor v1.2 - nur noch fuer die Migration alter
     # Profile (wer sie schon besitzt, behaelt sie). Werden nicht mehr verkauft.
-    LEGACY_SHOP: dict[str, dict] = {
+    LEGACY_SHOP = {
         "sigma":    {"preis": 1000, "titel": "🗿 Sigma",      "info": "Der Klassiker."},
         "gigachad": {"preis": 2500, "titel": "💪 Gigachad",   "info": "Maximale Aura."},
         "rizzler":  {"preis": 1500, "titel": "😏 Rizzler",    "info": "Unwiderstehlich."},
@@ -123,19 +122,19 @@ class Economy:
     _AVATAR_TTL = 1800.0       # 30 Minuten
     _AVATAR_FAIL_TTL = 600.0   # 10 Minuten
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
         # Cooldowns nur im Speicher (gehen bei Neustart verloren - egal, sind kurz).
-        self._last_msg_xp: dict[str, float] = {}
-        self._store: JsonStore | None = None
+        self._last_msg_xp = {}
+        self._store = None
         # Avatar-Cache (positiv) und Negativ-Cache: IDs, deren Aufloesung/Download
         # gerade erst fehlschlug (geloeschter Account, CDN-Huster) - nicht bei
         # jedem 'top' neu versuchen.
-        self._AVATAR_CACHE: dict[int, tuple[bytes, float]] = {}
-        self._AVATAR_FAIL: dict[int, float] = {}
+        self._AVATAR_CACHE = {}
+        self._AVATAR_FAIL = {}
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert das Feature. Laeuft immer (keine externen Voraussetzungen)."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("ECONOMY_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -146,19 +145,19 @@ class Economy:
         log.info("Level/Coins-Feature aktiv (%d Profile geladen).", len(self._users()))
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Datenzugriff --------------------------------------------------------
-    def _users(self) -> dict:
+    def _users(self):
         assert self._store is not None
         return self._store.data.setdefault("users", {})
 
-    def _strip_emoji(self, label: str) -> str:
+    def _strip_emoji(self, label):
         """'👑 Goldener König' -> 'Goldener König' (fuehrendes Emoji/Symbol weg)."""
         return re.sub(r"^\W+\s*", "", label or "").strip()
 
-    def _owned_entry_from_legacy(self, key: str) -> dict:
+    def _owned_entry_from_legacy(self, key):
         it = self.LEGACY_SHOP.get(key)
         if it:
             return {"text": self._strip_emoji(it["titel"]), "label": it["titel"],
@@ -166,7 +165,7 @@ class Economy:
         # Unbekannter String -> als generierter Titel-Text behandeln.
         return {"text": key, "label": titles.label_of(key), "rarity": titles.rarity_of(key)}
 
-    def _migrate_profile(self, prof: dict) -> None:
+    def _migrate_profile(self, prof):
         """Bringt ein Profil auf das v1.2-Schema (owned = Liste von Dicts mit
         text/label/rarity, plus title_rarity). Idempotent."""
         prof.setdefault("owned", [])
@@ -191,7 +190,7 @@ class Economy:
                     prof["title_rarity"] = o.get("rarity", "")
                     break
 
-    def _profile(self, user_id: int) -> dict:
+    def _profile(self, user_id):
         """Holt (oder erstellt) das Profil eines Nutzers."""
         users = self._users()
         key = str(user_id)
@@ -204,12 +203,12 @@ class Economy:
         self._migrate_profile(prof)
         return prof
 
-    def _owned_list(self, prof: dict) -> list[dict]:
+    def _owned_list(self, prof):
         """Inventar als Liste von Dicts (text/label/rarity)."""
         return prof.setdefault("owned", [])
 
     # --- Auto-Loesch-Schutz (fuer die Shop-/Inventar-Views) ------------------
-    def _protect(self, msg) -> None:
+    def _protect(self, msg):
         if msg is None:
             return
         try:
@@ -218,7 +217,7 @@ class Economy:
         except Exception:  # noqa: BLE001
             pass
 
-    def _release(self, msg) -> None:
+    def _release(self, msg):
         if msg is None:
             return
         try:
@@ -227,17 +226,17 @@ class Economy:
         except Exception:  # noqa: BLE001
             pass
 
-    async def _flush(self) -> None:
+    async def _flush(self):
         if self._store is not None:
             await self._store.save()
 
-    async def flush(self) -> None:
+    async def flush(self):
         """Oeffentliches Speichern - andere Module (z. B. games) rufen das nach
         einer Coin-Aenderung auf, damit der Gewinn die Platte erreicht."""
         await self._flush()
 
     # --- Level-Mathematik ----------------------------------------------------
-    def _level_for_xp(self, xp: int) -> tuple[int, int, int]:
+    def _level_for_xp(self, xp):
         """Rechnet Gesamt-XP in (Level, XP-im-Level, XP-bis-naechstes-Level) um.
 
         Stufe L -> L+1 kostet 100 + L*55 XP (wird mit jedem Level teurer).
@@ -253,11 +252,11 @@ class Economy:
             if level > 1000:  # Sicherheitsnetz
                 return level, 0, step
 
-    def _level_only(self, xp: int) -> int:
+    def _level_only(self, xp):
         return self._level_for_xp(xp)[0]
 
     # --- XP vergeben ---------------------------------------------------------
-    async def add_xp(self, member: discord.abc.User, amount: int) -> int | None:
+    async def add_xp(self, member, amount):
         """Gibt einem Mitglied XP. Rueckgabe: neues Level, falls ein Level-Up
         passiert ist, sonst None."""
         if not self._enabled or amount <= 0:
@@ -277,7 +276,7 @@ class Economy:
     # Huebsche Quellen-Labels fuers Handelsbuch (Modulname -> Anzeige).
     _TRADE_SOURCES = {"games": "spiele", "fun": "chaos", "voicegags": "voice"}
 
-    def add_coins(self, user_id: int, amount: int, reason: str = "") -> int:
+    def add_coins(self, user_id, amount, reason = ""):
         """Aendert den Kontostand (auch negativ) und gibt den neuen Stand zurueck.
         Geht nie unter 0. Jede Bewegung landet im Handelsbuch (handel.py):
         'reason' benennt die Quelle; ohne reason wird das aufrufende Modul
@@ -297,7 +296,7 @@ class Economy:
         self._record_trade(user_id, prof["coins"] - alt, reason, prof["coins"])
         return prof["coins"]
 
-    def _record_trade(self, uid: int, delta: int, source: str, balance: int) -> None:
+    def _record_trade(self, uid, delta, source, balance):
         """Meldet eine Coin-Bewegung ans Handelsbuch. Lazy-Import (kein
         Import-Zyklus) und niemals fatal - Buchhaltung sprengt kein Spiel."""
         if not delta:
@@ -308,10 +307,10 @@ class Economy:
         except Exception:  # noqa: BLE001
             pass
 
-    def get_coins(self, user_id: int) -> int:
+    def get_coins(self, user_id):
         return self._profile(user_id)["coins"] if self._enabled else 0
 
-    def parse_amount(self, token: str) -> "int | None":
+    def parse_amount(self, token):
         """'1k' -> 1000, '2,5k' -> 2500, '1m' -> 1000000. None wenn keine Zahl."""
         m = self._AMOUNT_TOKEN_RE.match((token or "").strip().lower())
         if not m:
@@ -320,7 +319,7 @@ class Economy:
         betrag = int(round(wert * self._AMOUNT_MULT[(m.group(2) or "").lower()]))
         return betrag if betrag > 0 else None
 
-    def display_name_of(self, user_id: int) -> "str | None":
+    def display_name_of(self, user_id):
         """Zuletzt bekannter Anzeigename aus dem Profil-Cache (wird bei jeder
         Nachricht aktualisiert), sonst None. Praktisch als Fallback, wenn
         guild.get_member() ohne Members-Intent nichts liefert."""
@@ -329,18 +328,18 @@ class Economy:
         prof = self._users().get(str(user_id))
         return (prof or {}).get("name") or None
 
-    def get_title(self, user_id: int) -> str:
+    def get_title(self, user_id):
         """Aktuell getragener Titel (Label inkl. Emoji), z. B. '🤖 NPC', sonst ''.
         bot.py reicht das an die KI weiter, damit Flo den Nutzer damit anspricht."""
         if not self._enabled:
             return ""
         return self._profile(user_id).get("title", "") or ""
 
-    def get_user_rarity(self, user_id: int) -> str | None:
+    def get_user_rarity(self, user_id):
         """Hoechste Seltenheit, die der Nutzer BESITZT (fuer die Rollen-Farbe)."""
         if not self._enabled:
             return None
-        best: str | None = None
+        best = None
         best_rank = -1
         for o in self._owned_list(self._profile(user_id)):
             rank = titles.RANK.get(o.get("rarity", "normal"), 0)
@@ -348,7 +347,7 @@ class Economy:
                 best_rank, best = rank, o.get("rarity", "normal")
         return best
 
-    def get_tone(self, user_id: int) -> str:
+    def get_tone(self, user_id):
         """Tonfall-Hinweis fuer die KI: je seltener der GETRAGENE Titel, desto
         entspannter spricht Flo. Leerer String = normaler Ton."""
         if not self._enabled:
@@ -357,11 +356,11 @@ class Economy:
         return titles.RARITY.get(rar, {}).get("tone", "") if rar else ""
 
     # --- Taeglicher Shop -----------------------------------------------------
-    def _shop_state(self) -> dict:
+    def _shop_state(self):
         assert self._store is not None
         return self._store.data.setdefault("shop", {"date": "", "items": []})
 
-    def refresh_shop(self, force: bool = False) -> dict:
+    def refresh_shop(self, force = False):
         """Wuerfelt die Tagesauswahl neu, falls noetig (neuer Tag, leer oder force).
         Speichert NICHT selbst – Aufrufer ruft danach flush()."""
         st = self._shop_state()
@@ -375,16 +374,16 @@ class Economy:
         log.info("Flo Shop neu gewuerfelt (%d Titel, %s).", len(items), st["date"])
         return st
 
-    async def refresh_shop_async(self, force: bool = False) -> dict:
+    async def refresh_shop_async(self, force = False):
         st = self.refresh_shop(force=force)
         await self._flush()
         return st
 
-    def get_shop_items(self) -> list[dict]:
+    def get_shop_items(self):
         return self._shop_state().get("items", [])
 
     # --- Seltenheits-Rollen --------------------------------------------------
-    async def _find_or_create_role(self, guild: discord.Guild, rarity: str):
+    async def _find_or_create_role(self, guild, rarity):
         """Sucht die Rarity-Rolle oder legt sie in der passenden Farbe an.
         Gibt None zurueck, wenn das nicht klappt (fehlende Rechte o. Ae.)."""
         meta = titles.RARITY[rarity]
@@ -400,12 +399,12 @@ class Economy:
             log.warning("Konnte Rolle '%s' nicht anlegen (Rechte?).", name)
             return None
 
-    async def ensure_roles(self, guild: discord.Guild) -> dict:
+    async def ensure_roles(self, guild):
         """Legt beim Start ALLE vier Rarity-Rollen (in ihren Farben) im Server an,
         falls sie noch fehlen. Idempotent: vorhandene Rollen bleiben unangetastet.
         Fehlertolerant – fehlende Rechte sprengen nie den Start. Gibt eine Statistik
         {'created'|'existed'|'failed': [Rollennamen]} zurueck."""
-        stats: dict[str, list[str]] = {"created": [], "existed": [], "failed": []}
+        stats = {"created": [], "existed": [], "failed": []}
         if not self._enabled or guild is None:
             return stats
         for rarity in titles.RARITY_ORDER:
@@ -424,7 +423,7 @@ class Economy:
                         guild.name, ", ".join(stats["failed"]))
         return stats
 
-    async def _sync_role(self, member) -> None:
+    async def _sync_role(self, member):
         """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
         besessenen Seltenheit (die anderen werden entfernt). Alles fehlertolerant –
         ein Rechteproblem darf den Kauf nie sprengen."""
@@ -449,7 +448,7 @@ class Economy:
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-    async def _do_buy(self, member, item: dict) -> str:
+    async def _do_buy(self, member, item):
         """Kauft (oder legt an) den Titel 'item' fuer 'member', vergibt die Rolle und
         gibt eine Antwort als Text zurueck."""
         prof = self._profile(member.id)
@@ -483,7 +482,7 @@ class Economy:
                 f"**{meta['role']}** bekommen – {chill}.")
 
     # --- Passiver Hook: XP pro Nachricht -------------------------------------
-    async def on_message(self, message: discord.Message) -> None:
+    async def on_message(self, message):
         """Vergibt XP/Coins fuer eine Nachricht (mit Cooldown) und sagt Level-Ups an.
         Wird in bot.py fuer JEDE Nicht-Bot-Nachricht aufgerufen."""
         if not self._enabled or message.guild is None or message.author.bot:
@@ -518,7 +517,7 @@ class Economy:
                     return ch
         return fallback
 
-    async def _levelup_text(self, member, level: int) -> str:
+    async def _levelup_text(self, member, level):
         """Holt einen frischen, unhinged Roast von der KI; faellt sonst auf eine
         derbe Standardzeile zurueck. Bricht NIE die Ansage ab."""
         if ai.is_enabled():
@@ -536,7 +535,7 @@ class Economy:
                 return out.strip().strip('"').strip()
         return random.choice(self._LEVELUP_FALLBACK).format(lvl=level)
 
-    async def _announce_levelup(self, guild, member, level: int, fallback=None) -> None:
+    async def _announce_levelup(self, guild, member, level, fallback=None):
         channel = self._levelup_target(guild, fallback)
         if channel is None:
             return
@@ -558,7 +557,7 @@ class Economy:
             pass
 
     # --- Voice-XP (bot.py ruft das periodisch pro Guild auf) -----------------
-    async def tick_voice(self, guild: discord.Guild) -> None:
+    async def tick_voice(self, guild):
         """Gibt allen aktiven Mitgliedern in Sprachkanaelen XP. AFK/stumm/Bots
         bekommen nichts. bot.py ruft das im Takt VOICE_TICK_SECONDS auf."""
         if not self._enabled:
@@ -584,16 +583,16 @@ class Economy:
             await self._flush()
 
     # --- Befehls-Erkennung ---------------------------------------------------
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         """Entfernt @-Mentions und den fuehrenden Botnamen/Alias ('Florian, level' ->
         'level'). Zentral in ai.strip_lead, damit alle Module gleich reagieren."""
         return ai.strip_lead(text)
 
-    def _bar(self, into: int, step: int, width: int = 12) -> str:
+    def _bar(self, into, step, width = 12):
         filled = 0 if step <= 0 else max(0, min(width, round(into / step * width)))
         return "█" * filled + "░" * (width - filled)
 
-    def _rank_of(self, user_id: int) -> tuple[int, int]:
+    def _rank_of(self, user_id):
         """Platz (1-basiert) nach XP und Gesamtzahl der Profile."""
         ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
         total = len(ranking)
@@ -602,10 +601,10 @@ class Economy:
                 return i, total
         return total, total
 
-    def _today(self) -> str:
+    def _today(self):
         return datetime.now(self._tz).strftime("%Y-%m-%d")
 
-    async def handle(self, message: discord.Message) -> "str | discord.Embed | discord.File | None":
+    async def handle(self, message):
         """Erkennt Level-/Coin-Befehle. Rueckgabe: Antworttext, Embed, Bild oder None."""
         if not self._enabled or message.guild is None:
             return None
@@ -644,7 +643,7 @@ class Economy:
             return await self._equip(message.author, low)
         return None
 
-    def _rarity_accent(self, prof: dict) -> "tuple | None":
+    def _rarity_accent(self, prof):
         """RGB-Akzentfarbe der Titel-Seltenheit (fuer die Level-Karte)."""
         rar = prof.get("title_rarity") or ""
         hexcol = titles.RARITY.get(rar, {}).get("color")
@@ -652,7 +651,7 @@ class Economy:
             return None
         return ((hexcol >> 16) & 255, (hexcol >> 8) & 255, hexcol & 255)
 
-    async def _card_image(self, member: discord.abc.User) -> "discord.File | discord.Embed":
+    async def _card_image(self, member):
         """Level-/Rank-Karte als gerendertes Bild; faellt bei Problemen aufs
         bewaehrte Embed zurueck (niemals ein Crash)."""
         prof = self._profile(member.id)
@@ -686,11 +685,11 @@ class Economy:
             log.exception("Level-Karte fehlgeschlagen - nutze Embed")
             return self._card(member)
 
-    def _clean_title_text(self, title: str) -> str:
+    def _clean_title_text(self, title):
         """Titel ohne fuehrendes Emoji (das kann die Karte nicht zeichnen)."""
         return re.sub(r"^\W+", "", title or "").strip()
 
-    def _card(self, member: discord.abc.User) -> discord.Embed:
+    def _card(self, member):
         prof = self._profile(member.id)
         level, into, step = self._level_for_xp(prof["xp"])
         place, total = self._rank_of(member.id)
@@ -715,11 +714,11 @@ class Economy:
         emb.set_footer(text=f"{self._bot_name} top   ·   {self._bot_name} daily   ·   {self._bot_name} shop")
         return emb
 
-    def leaderboard_data(self, limit: int = 10) -> list[dict]:
+    def leaderboard_data(self, limit = 10):
         """Aufbereitete Bestenliste fuers Leaderboard-Bild (sortiert nach XP).
         'id' = Discord-User-ID (fuers Laden des Profilbilds)."""
         ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
-        out: list[dict] = []
+        out = []
         for key, prof in ranking[:limit]:
             try:
                 uid = int(key)
@@ -737,7 +736,7 @@ class Economy:
             })
         return out
 
-    async def _resolve_avatar_user(self, guild, uid: int):
+    async def _resolve_avatar_user(self, guild, uid):
         """Member-/User-Objekt fuer die Avatar-URL. WICHTIG: Ohne das privilegierte
         Members-Intent ist guild.get_member() unzuverlaessig - im Cache stehen nur
         Mitglieder, die gerade geschrieben haben oder im Voice sind. Deshalb die
@@ -755,12 +754,12 @@ class Economy:
         except Exception:  # noqa: BLE001 - unbekannte/geloeschte ID, API-Huster
             return None
 
-    async def _attach_avatars(self, rows: list[dict], guild) -> None:
+    async def _attach_avatars(self, rows, guild):
         """Laedt die Discord-Profilbilder der Top-Spieler (parallel, mit Cache &
         Timeout) und haengt die Bytes als row['avatar'] an. Faellt etwas aus, bleibt
         es leer - das Bild zeigt dann einen Initial-Platzhalter (nie ein Crash)."""
 
-        async def one(row: dict) -> None:
+        async def one(row):
             uid = int(row.get("id") or 0)
             if not uid:
                 return
@@ -786,7 +785,7 @@ class Economy:
 
         await asyncio.gather(*(one(r) for r in rows), return_exceptions=True)
 
-    async def _leaderboard(self, guild=None) -> "discord.Embed | discord.File":
+    async def _leaderboard(self, guild=None):
         """Bestenliste als Grafana-artiges PNG (wenn Pillow da ist), sonst als Embed.
         Laedt die Profilbilder der Top-Spieler mit ins Bild."""
         rows = self.leaderboard_data(10)
@@ -806,7 +805,7 @@ class Economy:
                 log.exception("Leaderboard-Bild fehlgeschlagen - nutze Embed")
         return self._leaderboard_embed()
 
-    def _leaderboard_embed(self) -> discord.Embed:
+    def _leaderboard_embed(self):
         ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
         emb = discord.Embed(title="🏆 Bestenliste (XP)", color=discord.Color.gold())
         if not ranking:
@@ -826,7 +825,7 @@ class Economy:
         emb.set_footer(text=f"Schreiben & Voice bringt XP   ·   {self._bot_name} level für deine Karte")
         return emb
 
-    def _inventory_embed(self, member, prof: dict, owned: list[dict]) -> discord.Embed:
+    def _inventory_embed(self, member, prof, owned):
         current = prof.get("title") or "—"
         color = discord.Color.blurple()
         if owned:
@@ -845,7 +844,7 @@ class Economy:
             emb.add_field(name="Noch leer",
                           value=f"Kauf dir einen Titel im `{self._bot_name} shop`!", inline=False)
             return emb
-        by: dict[str, list[dict]] = {r: [] for r in titles.RARITY_ORDER}
+        by = {r: [] for r in titles.RARITY_ORDER}
         for o in owned:
             by.setdefault(o.get("rarity", "normal"), []).append(o)
         for r in reversed(titles.RARITY_ORDER):   # legendaer zuerst
@@ -864,7 +863,7 @@ class Economy:
         emb.set_footer(text=f"Titel wechseln: Dropdown unten  ·  Ablegen: {self._bot_name} titel ab")
         return emb
 
-    async def _inventory(self, message: discord.Message) -> object:
+    async def _inventory(self, message):
         member = message.author
         prof = self._profile(member.id)
         owned = self._owned_list(prof)
@@ -881,7 +880,7 @@ class Economy:
         self._protect(msg)
         return HANDLED
 
-    async def _daily(self, member: discord.abc.User) -> str:
+    async def _daily(self, member):
         prof = self._profile(member.id)
         today = self._today()
         if prof.get("last_daily") == today:
@@ -903,7 +902,7 @@ class Economy:
         return (f"🎁 Tagesbonus: **+{total} {self.COIN}**! "
                 f"(Streak: {prof['streak']} Tag(e), Bonus +{bonus})")
 
-    async def _pay(self, message: discord.Message) -> str:
+    async def _pay(self, message):
         if not message.mentions:
             return f"So geht's: `{self._bot_name} pay @jemand 100`"
         ziel = message.mentions[0]
@@ -924,14 +923,14 @@ class Economy:
         await self._flush()
         return f"✅ {message.author.display_name} → {ziel.display_name}: **{betrag} {self.COIN}**."
 
-    async def _ensure_shop(self) -> dict:
+    async def _ensure_shop(self):
         """Sorgt dafuer, dass der heutige Shop existiert (sonst neu wuerfeln+speichern)."""
         st = self._shop_state()
         if st.get("date") != self._today() or not st.get("items"):
             return await self.refresh_shop_async(force=False)
         return st
 
-    def _shop_embed(self, items: list[dict], *, with_fields: bool = False) -> discord.Embed:
+    def _shop_embed(self, items, *, with_fields = False):
         """Shop-Embed. Normalfall: schlank – die Titel zeigt das Banner-BILD. Nur als
         Notfall (Bild liess sich nicht rendern) werden die Titel als Textfelder
         nachgereicht (with_fields=True)."""
@@ -956,7 +955,7 @@ class Economy:
         emb.set_footer(text=f"{len(items)} Titel heute · beim Kauf gibt's die farbige Rarity-Rolle")
         return emb
 
-    def _shop_banner_file(self, items: list[dict], date: str):
+    def _shop_banner_file(self, items, date):
         """Optionales Shop-Banner (render.shop_banner). Faellt sauber aus, wenn der
         Renderer (noch) nicht da ist."""
         fn = getattr(render, "shop_banner", None)
@@ -971,7 +970,7 @@ class Economy:
             return None
         return discord.File(buf, filename="shop.png")
 
-    async def _shop(self, message: discord.Message) -> object:
+    async def _shop(self, message):
         st = await self._ensure_shop()
         items = st.get("items", [])
         if not items:
@@ -996,7 +995,7 @@ class Economy:
         self._protect(msg)
         return HANDLED
 
-    async def _buy_text(self, member, parts: list[str]) -> str:
+    async def _buy_text(self, member, parts):
         st = await self._ensure_shop()
         items = st.get("items", [])
         arg = parts[1] if len(parts) > 1 else ""
@@ -1009,7 +1008,7 @@ class Economy:
             return f"Nummer {n} gibt's heute nicht. Schau in den `{self._bot_name} shop`."
         return await self._do_buy(member, e)
 
-    async def _equip(self, member, low: str) -> str:
+    async def _equip(self, member, low):
         parts = low.split()
         name = " ".join(parts[1:]).strip()
         prof = self._profile(member.id)
@@ -1039,7 +1038,7 @@ class Economy:
 
 # --- Interaktive Shop-/Inventar-Views ------------------------------------
 class _ShopBuySelect(discord.ui.Select):
-    def __init__(self, items: list[dict]) -> None:
+    def __init__(self, items):
         opts = []
         for e in items:
             meta = titles.RARITY[e["rarity"]]
@@ -1051,20 +1050,20 @@ class _ShopBuySelect(discord.ui.Select):
         super().__init__(placeholder="Titel kaufen…", min_values=1, max_values=1,
                          options=opts, row=0)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._buy(interaction, int(self.values[0]))
 
 
 class _ShopView(discord.ui.View):
     """Geteilter Tages-Shop: jeder kann fuer sich selbst kaufen."""
 
-    def __init__(self, items: list[dict]) -> None:
+    def __init__(self, items):
         super().__init__(timeout=180)
         self.message = None
         self.items = {e["n"]: e for e in items}
         self.add_item(_ShopBuySelect(items))
 
-    async def _buy(self, interaction: discord.Interaction, n: int) -> None:
+    async def _buy(self, interaction, n):
         e = self.items.get(n)
         if not e:
             await interaction.response.send_message(
@@ -1078,7 +1077,7 @@ class _ShopView(discord.ui.View):
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label="Luxus", emoji="🏆", style=discord.ButtonStyle.primary, row=1)
-    async def _luxus(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _luxus(self, interaction, _b):
         """Bruecke in den Luxus-Shop (Prestige-Katalog + Thron)."""
         try:
             import luxus
@@ -1097,7 +1096,7 @@ class _ShopView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             child.disabled = True
         if self.message is not None:
@@ -1109,9 +1108,9 @@ class _ShopView(discord.ui.View):
 
 
 class _EquipSelect(discord.ui.Select):
-    def __init__(self, owned: list[dict]) -> None:
+    def __init__(self, owned):
         opts = []
-        seen: set[str] = set()
+        seen = set()
         for o in owned:
             t = o.get("text", "")
             if not t or t in seen:
@@ -1125,31 +1124,31 @@ class _EquipSelect(discord.ui.Select):
         super().__init__(placeholder="Titel anlegen…", min_values=1, max_values=1,
                          options=opts, row=0)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._equip(interaction, self.values[0])
 
 
 class _InventoryView(discord.ui.View):
-    def __init__(self, uid: int, owned: list[dict]) -> None:
+    def __init__(self, uid, owned):
         super().__init__(timeout=180)
         self.uid = uid
         self.message = None
         self._owned = {o.get("text"): o for o in owned}
         self.add_item(_EquipSelect(owned))
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id != self.uid:
             await interaction.response.send_message(
                 "Das ist nicht dein Inventar. 🙂", ephemeral=True)
             return False
         return True
 
-    async def _refresh(self, interaction: discord.Interaction) -> None:
+    async def _refresh(self, interaction):
         prof = instance._profile(self.uid)
         emb = instance._inventory_embed(interaction.user, prof, instance._owned_list(prof))
         await interaction.response.edit_message(embed=emb, view=self)
 
-    async def _equip(self, interaction: discord.Interaction, text: str) -> None:
+    async def _equip(self, interaction, text):
         prof = instance._profile(self.uid)
         o = self._owned.get(text)
         if not o:
@@ -1164,8 +1163,8 @@ class _InventoryView(discord.ui.View):
 
     @discord.ui.button(label="Titel ablegen", emoji="🫥",
                        style=discord.ButtonStyle.secondary, row=1)
-    async def _unequip(self, interaction: discord.Interaction,
-                       button: discord.ui.Button) -> None:
+    async def _unequip(self, interaction,
+                       button):
         prof = instance._profile(self.uid)
         prof["title"] = ""
         prof["title_rarity"] = ""
@@ -1173,7 +1172,7 @@ class _InventoryView(discord.ui.View):
         await instance._flush()
         await self._refresh(interaction)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             child.disabled = True
         if self.message is not None:

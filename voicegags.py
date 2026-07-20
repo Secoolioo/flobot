@@ -12,7 +12,6 @@ Voraussetzungen wie bei der Musik: ffmpeg + PyNaCl (+ davey bei discord.py >= 2.
 Laeuft schon ein anderer Sound/Musik im Kanal, weicht das Modul hoeflich aus,
 statt die Musik abzuwuergen. Die Sound-Dateien legt der Nutzer selbst in sounds/ ab.
 """
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -45,12 +44,12 @@ _SB_STYLES = (discord.ButtonStyle.primary, discord.ButtonStyle.success,
 
 
 class _SoundBtn(discord.ui.Button):
-    def __init__(self, name: str, idx: int) -> None:
+    def __init__(self, name, idx):
         super().__init__(label=name[:20], emoji=_SB_EMOJIS[idx % len(_SB_EMOJIS)],
                          style=_SB_STYLES[idx % len(_SB_STYLES)], row=idx // 5)
         self.sound_name = name
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         if not instance.soundboard_enabled():
             await interaction.response.send_message(
                 "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
@@ -82,13 +81,13 @@ class _SoundBtn(discord.ui.Button):
 class SoundboardView(discord.ui.View):
     """Bunte Sound-Buttons - JEDER darf druecken (es ist ein Soundboard 😄)."""
 
-    def __init__(self, sounds: list[str]) -> None:
+    def __init__(self, sounds):
         super().__init__(timeout=600)
-        self.message: discord.Message | None = None
+        self.message = None
         for i, name in enumerate(sounds[:25]):     # Discord: max 25 Buttons
             self.add_item(_SoundBtn(name, i))
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for ch in self.children:
             ch.disabled = True
         if self.message is not None:
@@ -100,22 +99,22 @@ class SoundboardView(discord.ui.View):
 
 
 class VoiceGags:
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._tts_engine: str = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
-        self._join_sounds: bool = False
-        self._store: JsonStore | None = None   # persistente Schalter (Soundboard an/aus)
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._tts_engine = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
+        self._join_sounds = False
+        self._store = None   # persistente Schalter (Soundboard an/aus)
 
         # Hintergrund-Tasks (Sound spielt bis zu 60 s - Button antwortet sofort).
-        self._bg: set[asyncio.Task] = set()
+        self._bg = set()
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro):
         task = asyncio.create_task(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
-    def _protect(self, msg) -> None:
+    def _protect(self, msg):
         if msg is None:
             return
         try:
@@ -124,7 +123,7 @@ class VoiceGags:
         except Exception:
             pass
 
-    def _release(self, msg) -> None:
+    def _release(self, msg):
         if msg is None:
             return
         try:
@@ -133,7 +132,7 @@ class VoiceGags:
         except Exception:
             pass
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiv, wenn Voice moeglich ist (ffmpeg + PyNaCl). TTS-Engine wird erkannt."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("VOICE_GAGS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -169,10 +168,10 @@ class VoiceGags:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _detect_tts(self) -> str:
+    def _detect_tts(self):
         try:
             import gtts  # noqa: F401
             return "gtts"
@@ -183,31 +182,31 @@ class VoiceGags:
                 return binary
         return ""
 
-    def soundboard_enabled(self) -> bool:
+    def soundboard_enabled(self):
         """Owner-Schalter: darf das Soundboard gerade benutzt werden?"""
         if self._store is None:
             return True
         return bool(self._store.data.get("soundboard", True))
 
-    async def set_soundboard(self, an: bool) -> None:
+    async def set_soundboard(self, an):
         """Schaltet das Soundboard an/aus (persistiert; nur admin.py ruft das)."""
         if self._store is None:
             return
         self._store.data["soundboard"] = bool(an)
         await self._store.save()
 
-    def _count_sounds(self) -> int:
+    def _count_sounds(self):
         if not SOUNDS_DIR.exists():
             return 0
         return sum(1 for p in SOUNDS_DIR.iterdir()
                    if p.is_file() and p.suffix.lower() in _AUDIO_EXTS)
 
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         # Zentral in ai.strip_lead: entfernt @-Mentions + fuehrenden Namen/Alias
         # ('Florian sound nice' -> 'sound nice').
         return ai.strip_lead(text)
 
-    def _find_sound(self, name: str) -> Path | None:
+    def _find_sound(self, name):
         name = name.strip().lower()
         if not name or "/" in name or "\\" in name or ".." in name:
             return None  # kein Pfad-Ausbruch
@@ -216,14 +215,14 @@ class VoiceGags:
                 return p
         return None
 
-    def _list_sounds(self) -> list[str]:
+    def _list_sounds(self):
         if not SOUNDS_DIR.exists():
             return []
         return sorted(p.stem for p in SOUNDS_DIR.iterdir()
                       if p.is_file() and p.suffix.lower() in _AUDIO_EXTS)
 
     # --- Befehle -------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> "str | discord.Embed | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = self._clean_lead(message.content or "")
@@ -251,7 +250,7 @@ class VoiceGags:
             return await self._cmd_say(message, rest)
         return None
 
-    def _voice_beschaeftigt(self, guild: discord.Guild) -> bool:
+    def _voice_beschaeftigt(self, guild):
         """Schnell-Check ohne Verbindungsaufbau: laeuft gerade Musik/Sound?"""
         try:
             import music
@@ -262,8 +261,8 @@ class VoiceGags:
         vc = guild.voice_client
         return vc is not None and (vc.is_playing() or vc.is_paused())
 
-    async def _play_and_report(self, interaction: discord.Interaction, guild, channel,
-                               source: str) -> None:
+    async def _play_and_report(self, interaction, guild, channel,
+                               source):
         ok, err = await self._play_path(guild, channel, source)
         if not ok and err:
             try:
@@ -271,7 +270,7 @@ class VoiceGags:
             except discord.HTTPException:
                 pass
 
-    async def _open_soundboard(self, message: discord.Message, sounds: list[str]) -> object:
+    async def _open_soundboard(self, message, sounds):
         emb = discord.Embed(
             title="🔊 Flo Soundboard",
             description="Ab in den Voice und **drücken**! 👇",
@@ -289,7 +288,7 @@ class VoiceGags:
             log.exception("Soundboard konnte nicht gesendet werden")
         return HANDLED
 
-    async def _cmd_sound(self, message: discord.Message, rest: str) -> str:
+    async def _cmd_sound(self, message, rest):
         if not rest.strip():
             return f"Welchen Sound? `{self._bot_name} sounds` zeigt alle."
         path = self._find_sound(rest)
@@ -303,7 +302,7 @@ class VoiceGags:
             return err
         return f"🔊 **{path.stem}**"
 
-    async def _cmd_say(self, message: discord.Message, text: str) -> str:
+    async def _cmd_say(self, message, text):
         if not self._tts_engine:
             return ("TTS ist nicht eingerichtet. Installier `espeak-ng` "
                     "(`apt install espeak-ng`) oder das Python-Paket `gTTS`.")
@@ -330,12 +329,12 @@ class VoiceGags:
             return err
         return f"🗣️ \"{text}\""
 
-    def _user_voice_channel(self, message: discord.Message):
+    def _user_voice_channel(self, message):
         vs = getattr(message.author, "voice", None)
         return vs.channel if vs and vs.channel else None
 
     # --- TTS-Synthese --------------------------------------------------------
-    async def _synthesize(self, text: str) -> str | None:
+    async def _synthesize(self, text):
         """Erzeugt eine Audiodatei aus Text. Rueckgabe: Pfad (Aufrufer loescht sie)."""
         if self._tts_engine == "gtts":
             return await asyncio.to_thread(self._gtts_to_file, text)
@@ -352,7 +351,7 @@ class VoiceGags:
             self._safe_unlink(path)
         return None
 
-    def _gtts_to_file(self, text: str) -> str | None:
+    def _gtts_to_file(self, text):
         try:
             from gtts import gTTS
             fd, path = tempfile.mkstemp(suffix=".mp3")
@@ -363,14 +362,14 @@ class VoiceGags:
             log.exception("gTTS fehlgeschlagen")
             return None
 
-    def _safe_unlink(self, path: str) -> None:
+    def _safe_unlink(self, path):
         try:
             os.unlink(path)
         except OSError:
             pass
 
     # --- Voice-Wiedergabe (vertraegt sich mit der Musik) ---------------------
-    async def _play_path(self, guild: discord.Guild, channel, source: str) -> tuple[bool, str]:
+    async def _play_path(self, guild, channel, source):
         """Spielt eine Datei. Reagiert ruecksichtsvoll auf einen schon laufenden
         Voice-Client (z. B. Musik): wird gerade gespielt, lehnt es hoeflich ab."""
         # Belegt die Musik den Voice-Channel (auch in Songpausen / beim Tempo-Wechsel /
@@ -409,7 +408,7 @@ class VoiceGags:
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
 
-        def _after(err: Exception | None) -> None:
+        def _after(err):
             if err:
                 log.error("Gag-Wiedergabe-Fehler: %s", err)
             loop.call_soon_threadsafe(done.set)
@@ -431,14 +430,14 @@ class VoiceGags:
             await self._safe_disconnect(vc)
         return (True, "")
 
-    async def _safe_disconnect(self, vc: discord.VoiceClient) -> None:
+    async def _safe_disconnect(self, vc):
         try:
             await vc.disconnect(force=True)
         except Exception:  # noqa: BLE001
             pass
 
     # --- Join-Sounds (bot.py ruft on_voice_state_update auf) -----------------
-    def _find_join_sound(self, user_id: int) -> Path | None:
+    def _find_join_sound(self, user_id):
         if not JOIN_DIR.exists():
             return None
         for stem in (str(user_id), "default"):
@@ -448,7 +447,7 @@ class VoiceGags:
                     return p
         return None
 
-    async def on_voice_state_update(self, member, before, after) -> None:
+    async def on_voice_state_update(self, member, before, after):
         """Spielt einen Join-Sound, wenn jemand NEU einen Sprachkanal betritt."""
         if not self._enabled or not self._join_sounds or member.bot:
             return

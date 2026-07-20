@@ -10,7 +10,6 @@ Bewusst OHNE externe Abhaengigkeit - nur Standardbibliothek. Eigenschaften:
 Jedes Feature legt sich einen eigenen JsonStore an (z. B. 'economy.json',
 'games.json') und verwaltet die Struktur seiner Daten selbst.
 """
-from __future__ import annotations
 
 import asyncio
 import json
@@ -27,13 +26,13 @@ DATA_DIR = Path(os.getenv("DATA_DIR", str(Path(__file__).resolve().parent / "dat
 class JsonStore:
     """Ein einfacher Schluessel-Wert-Speicher, der als JSON-Datei persistiert."""
 
-    def __init__(self, name: str, default: dict | None = None) -> None:
+    def __init__(self, name, default = None):
         self.path = DATA_DIR / name
         self._lock = asyncio.Lock()
-        self.data: dict = dict(default or {})
+        self.data = dict(default or {})
         self._load()
 
-    def _load(self) -> None:
+    def _load(self):
         try:
             with self.path.open("r", encoding="utf-8") as fh:
                 loaded = json.load(fh)
@@ -47,7 +46,7 @@ class JsonStore:
         else:
             log.warning("Inhalt von %s ist kein Objekt - ignoriere.", self.path)
 
-    async def save(self) -> None:
+    async def save(self):
         """Schreibt den aktuellen Stand atomar auf die Platte.
 
         Wichtig: json.dumps laeuft SYNCHRON im Event-Loop (kein await), damit es
@@ -59,7 +58,7 @@ class JsonStore:
             payload = json.dumps(self.data, ensure_ascii=False, indent=2)
             await asyncio.to_thread(self._write_text, payload)
 
-    def _write_text(self, payload: str) -> None:
+    def _write_text(self, payload):
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")

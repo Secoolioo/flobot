@@ -5,7 +5,6 @@ Start:
     python bot.py --once     # einmalig setzen und beenden (z. B. fuer cron)
     python bot.py --check    # nur pruefen (Login, Rechte, Bilder), nichts aendern
 """
-from __future__ import annotations
 
 import asyncio
 import io
@@ -197,10 +196,10 @@ if MUSIC_ENABLED or VOICE_GAGS_ENABLED or ECONOMY_ENABLED:
     intents.voice_states = True
 
 
-def _split_message(text: str, limit: int = 1900) -> list[str]:
+def _split_message(text, limit = 1900):
     """Zerlegt lange KI-Antworten in Discord-taugliche Stuecke (<2000 Zeichen)."""
     text = text.strip() or "..."
-    chunks: list[str] = []
+    chunks = []
     while len(text) > limit:
         cut = text.rfind("\n", 0, limit)
         if cut <= 0:
@@ -218,7 +217,7 @@ _HELP_RE = re.compile(
 )
 
 
-def _is_help(content: str) -> bool:
+def _is_help(content):
     """True, wenn jemand 'Flo hilfe' / 'Florian befehle' o. Ae. schreibt."""
     return bool(_HELP_RE.match(ai.strip_lead(content)))
 
@@ -235,7 +234,7 @@ _HELP_CATEGORY_ALIASES = {
 }
 
 
-def _help_category_key(content: str) -> "str | None":
+def _help_category_key(content):
     """Kategorie-Schluessel, wenn die Nachricht NUR aus einem Kategorie-Wort
     besteht ('Flo moderation?'), sonst None."""
     word = ai.strip_lead(content).lower().strip(" ?!.,")
@@ -249,7 +248,7 @@ _RESTART_RE = re.compile(
 )
 
 
-def _is_restart(content: str) -> bool:
+def _is_restart(content):
     """True bei 'Flo restart' / 'Flo neustarten' / 'Flo neu starten' usw."""
     return bool(_RESTART_RE.match(ai.strip_lead(content)))
 
@@ -257,12 +256,12 @@ def _is_restart(content: str) -> bool:
 class RestartConfirmView(discord.ui.View):
     """Sicherheitsabfrage vor dem Neustart - nur der Bot-Besitzer darf klicken."""
 
-    def __init__(self, owner_id: int) -> None:
+    def __init__(self, owner_id):
         super().__init__(timeout=30)
         self.owner_id = owner_id
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.owner_id:
             return True
         await interaction.response.send_message(
@@ -270,7 +269,7 @@ class RestartConfirmView(discord.ui.View):
         return False
 
     @discord.ui.button(label="Ja, neu starten", emoji="🔄", style=discord.ButtonStyle.danger)
-    async def _yes(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _yes(self, interaction, _b):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -286,7 +285,7 @@ class RestartConfirmView(discord.ui.View):
         client._spawn(client._restart_bot())
 
     @discord.ui.button(label="Abbrechen", emoji="✖️", style=discord.ButtonStyle.secondary)
-    async def _no(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _no(self, interaction, _b):
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="Abgebrochen",
@@ -295,7 +294,7 @@ class RestartConfirmView(discord.ui.View):
             view=None)
         self.stop()
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -309,7 +308,7 @@ class RestartConfirmView(discord.ui.View):
 # --- Interaktives Hilfe-Menue --------------------------------------------
 # Hilfe-Inhalte: (Titel, Farbe, [(befehl, kurz-beschreibung), ...]).
 # Bewusst KOMPAKT - die Details stecken im gerenderten Bild, nicht im Text.
-_HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
+_HELP_DATA = {
     "musik": ("Musik", 0x1DB954, [
         ("flo spiel <song/link>", "YouTube & Spotify abspielen"),
         ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
@@ -396,30 +395,30 @@ _HELP_HINTS = {
 }
 
 
-def _rgb(farbe: int) -> tuple:
+def _rgb(farbe):
     return ((farbe >> 16) & 0xFF, (farbe >> 8) & 0xFF, farbe & 0xFF)
 
 
 class _HelpNavButton(discord.ui.Button):
     """Ein Navigations-Button im Hilfe-Menue. key=None => Übersicht."""
 
-    def __init__(self, key: "str | None", emoji: str, label: str, *,
-                 style: discord.ButtonStyle) -> None:
+    def __init__(self, key, emoji, label, *,
+                 style):
         super().__init__(label=label, emoji=emoji, style=style)
         self.key = key
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        view: "HelpView" = self.view  # type: ignore[assignment]
+    async def callback(self, interaction):
+        view = self.view  # type: ignore[assignment]
         await view.show(interaction, self.key)
 
 
 class HelpView(discord.ui.View):
     """Interaktives Hilfe-Menue: Kategorie-Buttons wechseln das Embed in-place."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         super().__init__(timeout=180)
-        self.message: discord.Message | None = None
-        self.active: str | None = None
+        self.message = None
+        self.active = None
         self.add_item(_HelpNavButton(None, "🏠", "Übersicht",
                                      style=discord.ButtonStyle.primary))
         for key, emoji, label in client._help_categories():
@@ -427,7 +426,7 @@ class HelpView(discord.ui.View):
                                          style=discord.ButtonStyle.secondary))
         self._sync()
 
-    def _sync(self) -> None:
+    def _sync(self):
         """Hebt den aktiven Bereich hervor (grün + deaktiviert)."""
         for child in self.children:
             if isinstance(child, _HelpNavButton):
@@ -437,14 +436,14 @@ class HelpView(discord.ui.View):
                                (discord.ButtonStyle.primary if child.key is None
                                 else discord.ButtonStyle.secondary))
 
-    async def show(self, interaction: discord.Interaction, key: "str | None") -> None:
+    async def show(self, interaction, key):
         self.active = key
         self._sync()
         emb, file = await client._help_payload(key)
         await interaction.response.edit_message(
             embed=emb, view=self, attachments=[file] if file else [])
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -455,7 +454,7 @@ class HelpView(discord.ui.View):
                 pass
 
 
-def invite_url() -> str:
+def invite_url():
     """OAuth2-Einladungslink mit den noetigen Rechten.
 
     permissions=1099511704614 = Kanal ansehen (1024) + Nachrichten senden (2048)
@@ -473,10 +472,10 @@ def invite_url() -> str:
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
-def _first_image_url(message: discord.Message) -> "str | None":
+def _first_image_url(message):
     """URL des ersten Bildes - im Anhang der Nachricht ODER in der Nachricht,
     auf die geantwortet wurde. Sonst None (dann normale Text-KI)."""
-    def _scan(msg) -> "str | None":
+    def _scan(msg):
         for att in getattr(msg, "attachments", None) or []:
             ct = (att.content_type or "").lower()
             if ct.startswith("image/") or att.filename.lower().endswith(_IMAGE_EXTS):
@@ -501,32 +500,32 @@ class FloBot(discord.Client):
     """Der Bot als Klasse: Event-Handler, Hintergrund-Loops und Hilfslogik als
     Methoden, der veraenderliche Zustand als Instanzattribute."""
 
-    def __init__(self, **options) -> None:
+    def __init__(self, **options):
         super().__init__(**options)
         # Merkt sich das zuletzt gesetzte Bild, damit nicht unnoetig editiert wird
         # (Discord limitiert Server-Aenderungen).
-        self._current_filename: str | None = None
-        self._weisheit_index: int = 0
+        self._current_filename = None
+        self._weisheit_index = 0
         # Zwischenspeicher der gerenderten Hilfe-Karten (PNG je Kategorie).
-        self._help_png_cache: dict[str, bytes] = {}
+        self._help_png_cache = {}
         # Schutz aktiver Spiele vorm Auto-Loeschen (siehe PROTECT_RELEASE_GRACE oben).
-        self._protected_msg_ids: set[int] = set()   # IDs aktiver Spiel-Nachrichten (nicht loeschen)
-        self._releasing_ids: set[int] = set()       # laufen gerade durch ihre Gnadenfrist
+        self._protected_msg_ids = set()   # IDs aktiver Spiel-Nachrichten (nicht loeschen)
+        self._releasing_ids = set()       # laufen gerade durch ihre Gnadenfrist
         # Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
         # vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
-        self._bg_tasks: set[asyncio.Task] = set()
+        self._bg_tasks = set()
         # Sammel-Loeschung: Ein Timer + einzelner DELETE-Call PRO Nachricht hat bei
         # Chat-Bursts das Rate-Limit gerissen (60 s spaeter feuerten Dutzende DELETEs
         # gleichzeitig -> 429). Stattdessen sammeln wir faellige Nachrichten je Channel
         # und loeschen sie gebuendelt (Bulk-Delete: bis 100 Nachrichten = 1 API-Call).
-        self._pending_deletes: "dict[int, list[tuple[float, discord.Message]]]" = {}
+        self._pending_deletes = {}
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro):
         task = asyncio.create_task(coro)
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
 
-    async def _reply_chunks(self, message: discord.Message, text: str) -> None:
+    async def _reply_chunks(self, message, text):
         """Schickt eine (ggf. lange) Antwort: erstes Stueck als Reply, Rest normal."""
         for i, teil in enumerate(_split_message(text)):
             try:
@@ -539,8 +538,8 @@ class FloBot(discord.Client):
                 break
 
     async def _send_reply(
-        self, message: discord.Message, payload: "str | discord.Embed | discord.File"
-    ) -> None:
+        self, message, payload
+    ):
         """Sendet eine Antwort - Bilder (File) als Anhang, Menues (Embed) als Embed,
         normale Antworten als Text."""
         if isinstance(payload, discord.File):
@@ -557,7 +556,7 @@ class FloBot(discord.Client):
             return
         await self._reply_chunks(message, payload)
 
-    async def _restart_bot(self) -> None:
+    async def _restart_bot(self):
         """Startet den GANZEN Prozess neu (re-exec) - funktioniert lokal und unter
         systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
         schliessen, damit ffmpeg-Subprozesse nicht verwaisen."""
@@ -581,7 +580,7 @@ class FloBot(discord.Client):
             log.exception("Re-exec fehlgeschlagen - beende stattdessen mit Code 42.")
             os._exit(42)
 
-    def _help_categories(self) -> "list[tuple[str, str, str]]":
+    def _help_categories(self):
         """Liefert (key, emoji, label) je AKTIVEM Bereich - Reihenfolge = Button-Reihenfolge."""
         cats = [
             ("musik", "🎵", "Musik", MUSIC_ENABLED),
@@ -597,7 +596,7 @@ class FloBot(discord.Client):
         ]
         return [(k, e, l) for k, e, l, on in cats if on]
 
-    async def _help_file(self, key: str) -> "discord.File | None":
+    async def _help_file(self, key):
         """Hilfe-Karte als Bild (einmal gerendert, dann aus dem Cache)."""
         png = self._help_png_cache.get(key)
         if png is None:
@@ -620,7 +619,7 @@ class FloBot(discord.Client):
         fname = "help_uebersicht.png" if key == "_overview" else f"help_{key}.png"
         return discord.File(io.BytesIO(png), filename=fname)
 
-    async def _help_payload(self, key: "str | None") -> "tuple[discord.Embed, discord.File | None]":
+    async def _help_payload(self, key):
         """Embed + Karten-Bild fuer eine Kategorie (None = Uebersicht)."""
         if key is None or key not in _HELP_DATA:
             emb = self._help_overview_embed()
@@ -637,7 +636,7 @@ class FloBot(discord.Client):
             emb.description = "\n".join(f"`{c}` – {d}" for c, d in entries)
         return emb, file
 
-    def _help_overview_embed(self) -> discord.Embed:
+    def _help_overview_embed(self):
         """Startansicht des Hilfe-Menues - kompakt, die Karte zeigt die Details."""
         name = ai.bot_name()
         emb = discord.Embed(
@@ -653,7 +652,7 @@ class FloBot(discord.Client):
         emb.set_footer(text=f"{name} <frage> geht immer · Titel im Shop ändern die Anrede")
         return emb
 
-    async def update_icon(self, *, force: bool = False) -> bool:
+    async def update_icon(self, *, force = False):
         """Setzt das Server-Icon, falls ein anderes Bild faellig ist."""
         now = datetime.now(TIMEZONE)
         filename = schedule_logic.get_image_filename(now)
@@ -695,7 +694,7 @@ class FloBot(discord.Client):
         )
         return True
 
-    async def run_check(self) -> None:
+    async def run_check(self):
         """Diagnose: Login, Server, Rechte und Bilder pruefen - ohne Aenderung."""
         now = datetime.now(TIMEZONE)
         target = schedule_logic.get_image_filename(now)
@@ -721,7 +720,7 @@ class FloBot(discord.Client):
             log.info("   [%s] %s", "vorhanden" if exists else "  FEHLT  ", fn)
 
     @tasks.loop(seconds=CHECK_INTERVAL_SECONDS)
-    async def icon_loop(self) -> None:
+    async def icon_loop(self):
         # Prueft regelmaessig (Standard: jede Minute), ob ein anderes Bild faellig
         # ist. Discord wird nur angesprochen, wenn sich das Bild wirklich aendert.
         # try/except, damit eine einzelne Fehlrunde die Schleife NICHT stoppt.
@@ -731,7 +730,7 @@ class FloBot(discord.Client):
             log.exception("Fehler im Icon-Check - Loop laeuft weiter")
 
     @tasks.loop(seconds=STATUS_INTERVAL_SECONDS)
-    async def status_loop(self) -> None:
+    async def status_loop(self):
         """Wechselt alle paar Sekunden den Status-Text (Bot bleibt 'idle')."""
         weisheit = WEISHEITEN[self._weisheit_index % len(WEISHEITEN)]
         self._weisheit_index += 1
@@ -745,7 +744,7 @@ class FloBot(discord.Client):
             log.error("Status-Update fehlgeschlagen: %s", exc)
 
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
-    async def voice_xp_loop(self) -> None:
+    async def voice_xp_loop(self):
         """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit)."""
         guild = self.get_guild(GUILD_ID)
         if guild is None:
@@ -756,7 +755,7 @@ class FloBot(discord.Client):
             log.exception("Voice-XP-Loop Fehler - laeuft weiter")
 
     @tasks.loop(seconds=music.VOICE_HEAL_SECONDS)
-    async def voice_heal_loop(self) -> None:
+    async def voice_heal_loop(self):
         """Voice-Watchdog: haelt den Musik-Bot in seinem Sprachkanal und repariert
         Desyncs/Zombie-Verbindungen selbst (siehe music.heal_voice)."""
         guild = self.get_guild(GUILD_ID)
@@ -768,7 +767,7 @@ class FloBot(discord.Client):
             log.exception("Voice-Heal-Loop Fehler - laeuft weiter")
 
     @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
-    async def event_loop(self) -> None:
+    async def event_loop(self):
         """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
         guild = self.get_guild(GUILD_ID)
         if guild is None:
@@ -779,7 +778,7 @@ class FloBot(discord.Client):
             log.exception("Event-Loop Fehler - laeuft weiter")
 
     @tasks.loop(time=SHOP_REFRESH_TIME)
-    async def shop_refresh_loop(self) -> None:
+    async def shop_refresh_loop(self):
         """Wuerfelt jede Nacht um 2 Uhr die Tagesauswahl des Flo Shops neu (random,
         seltenheits-gewichtet). Ist ein LEGENDAERER Titel dabei, wird das im
         Level-Up-Channel ausgerufen. Faengt alle Fehler ab."""
@@ -794,7 +793,7 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
 
-    async def _announce_legendary(self, items: list[dict]) -> None:
+    async def _announce_legendary(self, items):
         """Ruft legendaere Shop-Titel oeffentlich aus (nur heute im Angebot!)."""
         guild = self.get_guild(GUILD_ID)
         if guild is None:
@@ -816,7 +815,7 @@ class FloBot(discord.Client):
         except discord.HTTPException:
             log.warning("Legendary-Ansage konnte nicht gesendet werden")
 
-    def _keep_bot_msg(self, m: discord.Message) -> bool:
+    def _keep_bot_msg(self, m):
         """True = diese Bot-Nachricht ist vom Auto-Loeschen ausgenommen: Level-Up-
         Ansagen (Erfolge sollen sichtbar bleiben) und das aktuelle Musik-Panel
         'Jetzt laeuft' (die Steuer-Buttons muessen den ganzen Song erreichbar bleiben).
@@ -826,7 +825,7 @@ class FloBot(discord.Client):
         title = m.embeds[0].title
         return title in (economy.LEVELUP_EMBED_TITLE, music.NOWPLAYING_EMBED_TITLE)
 
-    def _sweepable(self, m: discord.Message) -> bool:
+    def _sweepable(self, m):
         """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen,
         das Musik-Panel, angepinnte Nachrichten und aktive Spiele bleiben (wie beim
         Einzel-Auto-Loeschen)."""
@@ -839,7 +838,7 @@ class FloBot(discord.Client):
         return True
 
     @tasks.loop(seconds=AUTODELETE_SWEEP_SECONDS)
-    async def autodelete_sweep_loop(self) -> None:
+    async def autodelete_sweep_loop(self):
         """Sicherheitsnetz fuers Auto-Loeschen: raeumt in den konfigurierten Channels
         ALLES weg, was aelter als AUTODELETE_SECONDS ist - auch Altlasten von vor dem
         Start oder Nachrichten, die einen Neustart ueberlebt haben. So bleibt der
@@ -870,13 +869,13 @@ class FloBot(discord.Client):
             except Exception:
                 log.exception("Auto-Loesch-Sweep Fehler - laeuft weiter")
 
-    def _queue_delete(self, message: discord.Message, delay: float) -> None:
+    def _queue_delete(self, message, delay):
         """Merkt eine Nachricht fuers gebuendelte Auto-Loeschen vor."""
         self._pending_deletes.setdefault(message.channel.id, []).append(
             (time.monotonic() + delay, message))
 
     @tasks.loop(seconds=5.0)
-    async def autodelete_batch_loop(self) -> None:
+    async def autodelete_batch_loop(self):
         """Loescht faellige Auto-Loesch-Nachrichten im Buendel. Geschuetzte
         Nachrichten (aktive Spiele) fallen raus - release_message() raeumt die
         spaeter selbst auf. Schon geloeschte Nachrichten ignoriert der Bulk-Call."""
@@ -909,7 +908,7 @@ class FloBot(discord.Client):
                 except discord.HTTPException as exc:
                     log.warning("Auto-Loeschen (Buendel) fehlgeschlagen: %s", exc)
 
-    def protect_message(self, message: "discord.Message | None") -> None:
+    def protect_message(self, message):
         """Meldet eine aktive Spiel-Nachricht beim Auto-Loesch-Schutz an. Nur in den
         Auto-Loesch-Channels noetig (woanders wird ohnehin nichts geloescht). Von den
         Spiel-Modulen (casino, games) aufgerufen, sobald eine Runde startet."""
@@ -917,7 +916,7 @@ class FloBot(discord.Client):
             return
         self._protected_msg_ids.add(message.id)
 
-    def release_message(self, message: "discord.Message | None", *, delay: float | None = None) -> None:
+    def release_message(self, message, *, delay = None):
         """Spiel vorbei / keine Reaktion mehr -> Schutz nach kurzer Gnadenfrist
         aufheben und die Nachricht dann wegraeumen. Bis dahin bleibt sie geschuetzt
         (kein Sweep, kein vorzeitiges Loeschen). Mehrfachaufruf ist ungefaehrlich."""
@@ -929,7 +928,7 @@ class FloBot(discord.Client):
         grace = PROTECT_RELEASE_GRACE if delay is None else delay
         self._spawn(self._release_after(message, grace))
 
-    async def _release_after(self, message: discord.Message, delay: float) -> None:
+    async def _release_after(self, message, delay):
         """Wartet die Gnadenfrist ab, hebt dann den Schutz auf und loescht die
         Nachricht (best effort)."""
         try:
@@ -949,7 +948,7 @@ class FloBot(discord.Client):
         except discord.HTTPException as exc:
             log.warning("Auto-Loeschen (Spielende) fehlgeschlagen: %s", exc)
 
-    async def _forward_dm_to_owner(self, message: discord.Message) -> None:
+    async def _forward_dm_to_owner(self, message):
         """Leitet eine Fremd-DM still an den Besitzer weiter (Flo antwortet dem
         Absender nicht). So sieht der Besitzer Antworten auf seine 'flo dm's."""
         content = (message.content or "").strip()
@@ -966,7 +965,7 @@ class FloBot(discord.Client):
         except Exception:  # noqa: BLE001 - Weiterleitung ist best effort
             log.exception("DM-Weiterleitung an den Besitzer fehlgeschlagen")
 
-    async def _send_restart_prompt(self, message: discord.Message) -> None:
+    async def _send_restart_prompt(self, message):
         """Schickt die Neustart-Sicherheitsabfrage (Server ODER Owner-DM)."""
         view = RestartConfirmView(OWNER_ID)
         emb = discord.Embed(
@@ -979,7 +978,7 @@ class FloBot(discord.Client):
         except discord.HTTPException:
             log.exception("Restart-Abfrage konnte nicht gesendet werden")
 
-    async def _handle_owner_dm(self, message: discord.Message) -> None:
+    async def _handle_owner_dm(self, message):
         """Privatnachrichten des BESITZERS: Admin-Befehle, Restart, Hilfe und
         normaler KI-Chat - ganz ohne 'Flo' davor. Alle anderen DMs beantwortet
         der Bot bewusst nicht (der Aufrufer filtert schon auf OWNER_ID)."""
@@ -1009,7 +1008,7 @@ class FloBot(discord.Client):
         if _norm is not None:
             message.content = f"{ai.bot_name()} {_norm}"
 
-        antwort: "str | discord.Embed | None" = None
+        antwort = None
         if ADMIN_ENABLED:
             try:
                 antwort = await admin.handle(message)
@@ -1048,7 +1047,7 @@ class FloBot(discord.Client):
         ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
         await self._reply_chunks(message, antwort)
 
-    async def on_message(self, message: discord.Message) -> None:
+    async def on_message(self, message):
         """Zentrale Nachrichten-Verarbeitung: Auto-Loeschen, passive Spass-Hooks
         (XP, Spiele, Reactions) und - wenn 'Flo' angesprochen wird - Befehle + KI."""
         # Auto-Loeschen: in konfigurierten Channels ALLE Nachrichten nach kurzer Zeit
@@ -1172,7 +1171,7 @@ class FloBot(discord.Client):
         # BEWUSST OHNE channel.typing(): das war ein zusaetzlicher API-Roundtrip VOR
         # jedem Befehl (~100-200 ms Extra-Latenz) - die Spiele antworten schnell
         # genug; nur der (langsame) KI-Fallback tippt weiterhin.
-        antwort: "str | discord.Embed | discord.File | None" = None
+        antwort = None
         for enabled, handler in (
             (BAYERN_ENABLED, bayern.handle),
             (MOD_ENABLED, moderation.handle),
@@ -1260,12 +1259,12 @@ class FloBot(discord.Client):
         ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
         await self._reply_chunks(message, antwort)
 
-    async def on_voice_state_update(self, member: discord.Member, before, after) -> None:
+    async def on_voice_state_update(self, member, before, after):
         """Join-Sounds: spielt einen Sound, wenn jemand einen Sprachkanal betritt."""
         if VOICE_GAGS_ENABLED:
             self._spawn(voicegags.on_voice_state_update(member, before, after))
 
-    async def on_ready(self) -> None:
+    async def on_ready(self):
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)
         if MODE in ("check", "once"):
             try:
@@ -1340,17 +1339,17 @@ class FloBot(discord.Client):
                 log.exception("Shop-Start-Refresh fehlgeschlagen - egal, Loop folgt")
             self.shop_refresh_loop.start()
 
-    async def on_disconnect(self) -> None:
+    async def on_disconnect(self):
         """Gateway-Verbindung weg (Internet-Hickup o. Ae.). discord.py versucht
         automatisch, sich wieder zu verbinden - wir loggen es nur leise."""
         log.debug("Discord-Verbindung getrennt - versuche automatisch erneut.")
 
-    async def on_resumed(self) -> None:
+    async def on_resumed(self):
         """Sitzung nach einem Verbindungsabbruch wieder aufgenommen - Flo ist zurueck,
         ohne dass der Prozess neu starten musste."""
         log.info("Discord-Sitzung wieder aufgenommen - Flo ist zurueck online.")
 
-    async def on_error(self, event_method: str, *args, **kwargs) -> None:
+    async def on_error(self, event_method, *args, **kwargs):
         """Faengt JEDE unbehandelte Ausnahme aus einem Event-Handler ab und loggt sie,
         statt den Bot abstuerzen zu lassen. So bleibt Flo bei einem einzelnen Fehler
         online."""
@@ -1375,7 +1374,7 @@ release_message = client.release_message
 RECONNECT_REEXEC_DELAY = float(os.getenv("RECONNECT_REEXEC_DELAY", "15"))
 
 
-def _reexec_self() -> None:
+def _reexec_self():
     """Startet den GANZEN Prozess frisch neu (frischer Client, frische Event-Loop) -
     der robusteste Weg zurueck online, falls discord.py die Verbindung gar nicht
     erst aufbauen konnte (z. B. kein Internet beim Start)."""
@@ -1388,7 +1387,7 @@ def _reexec_self() -> None:
         os._exit(42)
 
 
-def main() -> None:
+def main():
     if not TOKEN:
         log.error("DISCORD_TOKEN fehlt in der .env-Datei.")
         sys.exit(1)

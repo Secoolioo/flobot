@@ -11,7 +11,6 @@ Gewinne werden als Flo Coins ueber economy.add_coins() ausgezahlt (ein Topf).
 Quiz nutzt die KI (ai.generate); faellt sie aus, greift ein kleiner fester
 Fragenkatalog. Alles andere laeuft auch ganz ohne KI.
 """
-from __future__ import annotations
 
 import asyncio
 import difflib
@@ -159,7 +158,7 @@ _BET_CHOICES = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
 class _GameBetSelect(discord.ui.Select):
     """Dropdown zum Einsatz waehlen (inkl. 'ohne Einsatz')."""
 
-    def __init__(self) -> None:
+    def __init__(self):
         options = [discord.SelectOption(label="Ohne Einsatz (nur Spaß)", value="0",
                                         emoji="🎈", default=True)]
         options += [discord.SelectOption(label=f"{b} Flo Coins", value=str(b))
@@ -167,7 +166,7 @@ class _GameBetSelect(discord.ui.Select):
         super().__init__(placeholder="Einsatz wählen…", min_values=1, max_values=1,
                          options=options, row=0)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction):
         await self.view._set_bet(interaction, self.values[0])
 
 
@@ -175,7 +174,7 @@ class _GameView(discord.ui.View):
     """Basis fuer Slot/Coinflip-Menues: Einsatz-Dropdown, Besitzer-Check,
     In-place-Update nach jedem Spiel, Freigabe beim Timeout."""
 
-    def __init__(self, uid: int, *, channel_id: int | None = None) -> None:
+    def __init__(self, uid, *, channel_id = None):
         super().__init__(timeout=180)
         self.uid = uid
         self.channel_id = channel_id
@@ -184,7 +183,7 @@ class _GameView(discord.ui.View):
         self._bet_select = _GameBetSelect()
         self.add_item(self._bet_select)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id != self.uid:
             await interaction.response.send_message(
                 "Das ist nicht dein Spiel — schreib selbst z. B. `Flo slot` 🙂",
@@ -192,21 +191,21 @@ class _GameView(discord.ui.View):
             return False
         return True
 
-    async def _set_bet(self, interaction: discord.Interaction, raw: str) -> None:
+    async def _set_bet(self, interaction, raw):
         self.bet = int(raw)
         for opt in self._bet_select.options:
             opt.default = (opt.value == raw)
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
-    def _has_funds(self) -> bool:
+    def _has_funds(self):
         return not (self.bet > 0 and economy.is_enabled()
                     and economy.get_coins(self.uid) < self.bet)
 
-    def _bet_txt(self) -> str:
+    def _bet_txt(self):
         return f"**{self.bet}** Flo Coins" if self.bet > 0 else "ohne Einsatz (nur Spaß)"
 
-    async def _show(self, interaction: discord.Interaction, emb: discord.Embed,
-                    buf, fn: str) -> None:
+    async def _show(self, interaction, emb,
+                    buf, fn):
         """Aktualisiert die Menue-Nachricht mit Ergebnis-Embed + neuem Bild und
         laesst die View stehen (man kann gleich nochmal klicken)."""
         emb.set_image(url=f"attachment://{fn}")
@@ -215,12 +214,12 @@ class _GameView(discord.ui.View):
         self.message = interaction.message or self.message
         _protect(self.message)
 
-    async def _warn_funds(self, interaction: discord.Interaction) -> None:
+    async def _warn_funds(self, interaction):
         await interaction.response.send_message(
             f"Du hast nicht genug. Konto: {economy.get_coins(self.uid)} Flo Coins.",
             ephemeral=True)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         for child in self.children:
             child.disabled = True
         if self.message is not None:
@@ -232,7 +231,7 @@ class _GameView(discord.ui.View):
 
 
 class _SlotView(_GameView):
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🎰 Slot-Machine",
             description=("Wähle deinen Einsatz und drück **Drehen**!\n"
@@ -244,8 +243,8 @@ class _SlotView(_GameView):
 
     @discord.ui.button(label="Drehen", emoji="🎰",
                        style=discord.ButtonStyle.success, row=1)
-    async def _spin(self, interaction: discord.Interaction,
-                    button: discord.ui.Button) -> None:
+    async def _spin(self, interaction,
+                    button):
         if not self._has_funds():
             await self._warn_funds(interaction)
             return
@@ -254,7 +253,7 @@ class _SlotView(_GameView):
 
 
 class _CoinView(_GameView):
-    def _embed(self) -> discord.Embed:
+    def _embed(self):
         emb = discord.Embed(
             title="🪙 Münzwurf",
             description=("Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**.\n"
@@ -266,7 +265,7 @@ class _CoinView(_GameView):
             emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
         return emb
 
-    async def _toss(self, interaction: discord.Interaction, tip: str) -> None:
+    async def _toss(self, interaction, tip):
         if not self._has_funds():
             await self._warn_funds(interaction)
             return
@@ -275,14 +274,14 @@ class _CoinView(_GameView):
 
     @discord.ui.button(label="Kopf", emoji="🙂",
                        style=discord.ButtonStyle.primary, row=1)
-    async def _kopf(self, interaction: discord.Interaction,
-                    button: discord.ui.Button) -> None:
+    async def _kopf(self, interaction,
+                    button):
         await self._toss(interaction, "kopf")
 
     @discord.ui.button(label="Zahl", emoji="🔢",
                        style=discord.ButtonStyle.primary, row=1)
-    async def _zahl(self, interaction: discord.Interaction,
-                    button: discord.ui.Button) -> None:
+    async def _zahl(self, interaction,
+                    button):
         await self._toss(interaction, "zahl")
 
 
@@ -294,15 +293,15 @@ class _ReaktionView(discord.ui.View):
     """Button wird nach Zufalls-Delay scharf - je schneller der Klick, desto
     hoeher der Multiplikator."""
 
-    def __init__(self, uid: int, bet: int) -> None:
+    def __init__(self, uid, bet):
         super().__init__(timeout=30)
         self.uid = uid
         self.bet = bet
-        self.armed_at: float | None = None
+        self.armed_at = None
         self.settled = False
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id == self.uid:
             return True
         await interaction.response.send_message(
@@ -310,7 +309,7 @@ class _ReaktionView(discord.ui.View):
             ephemeral=True)
         return False
 
-    async def arm(self) -> None:
+    async def arm(self):
         await asyncio.sleep(random.uniform(1.5, 4.0))
         if self.settled or self.is_finished() or self.message is None:
             return
@@ -325,7 +324,7 @@ class _ReaktionView(discord.ui.View):
 
     @discord.ui.button(label="Warte …", emoji="⚡",
                        style=discord.ButtonStyle.secondary, disabled=True)
-    async def _btn(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _btn(self, interaction, _b):
         if self.settled or self.armed_at is None:
             await interaction.response.defer()
             return
@@ -357,7 +356,7 @@ class _ReaktionView(discord.ui.View):
         self.stop()
         _release(self.message)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         if not self.settled:
             self.settled = True
             if self.armed_at is None:      # nie scharf geworden -> Einsatz zurueck
@@ -377,23 +376,23 @@ class _ReaktionView(discord.ui.View):
 
 # --- Quiz-Duell (PvP um den Pot) -------------------------------------------
 class _QDuelChallenge(discord.ui.View):
-    def __init__(self, herausforderer: discord.Member, gegner: discord.Member,
-                 bet: int) -> None:
+    def __init__(self, herausforderer, gegner,
+                 bet):
         super().__init__(timeout=60)
         self.a = herausforderer
         self.b = gegner
         self.bet = bet
         self.done = False
-        self.message: discord.Message | None = None
+        self.message = None
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id in (self.a.id, self.b.id):
             return True
         await interaction.response.send_message("Nicht dein Duell. 🍿", ephemeral=True)
         return False
 
     @discord.ui.button(label="Annehmen", emoji="🧠", style=discord.ButtonStyle.success)
-    async def _ja(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _ja(self, interaction, _b):
         if interaction.user.id != self.b.id:
             await interaction.response.send_message(
                 "Annehmen kann nur der Herausgeforderte. 😉", ephemeral=True)
@@ -435,7 +434,7 @@ class _QDuelChallenge(discord.ui.View):
         _spawn(_qduel_timeout(interaction.channel, tok))
 
     @discord.ui.button(label="Ablehnen", emoji="✖️", style=discord.ButtonStyle.secondary)
-    async def _nein(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _nein(self, interaction, _b):
         if self.done:
             await interaction.response.defer()
             return
@@ -447,7 +446,7 @@ class _QDuelChallenge(discord.ui.View):
         self.stop()
         _release(self.message)
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         if not self.done and self.message is not None:
             try:
                 await self.message.edit(
@@ -463,29 +462,29 @@ class _QDuelChallenge(discord.ui.View):
 class _SSPDuel(discord.ui.View):
     """Beide waehlen geheim per Button; Gleichstand = neue Runde."""
 
-    def __init__(self, a: discord.Member, b: discord.Member, bet: int) -> None:
+    def __init__(self, a, b, bet):
         super().__init__(timeout=90)
         self.a = a
         self.b = b
         self.bet = bet
         self.paid = False              # Einsaetze erst nach Annahme
-        self.picks: dict[int, str] = {}
+        self.picks = {}
         self.done = False
-        self.message: discord.Message | None = None
+        self.message = None
 
-    def _emb(self, text: str, color=None) -> discord.Embed:
+    def _emb(self, text, color=None):
         emb = discord.Embed(title="✂️ SSP-Duell", description=text,
                             color=color or discord.Color.blurple())
         emb.set_footer(text=f"Pot: {self.bet * 2} Flo Coins")
         return emb
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+    async def interaction_check(self, interaction):
         if interaction.user.id in (self.a.id, self.b.id):
             return True
         await interaction.response.send_message("Nicht dein Duell. 🍿", ephemeral=True)
         return False
 
-    async def _pick(self, interaction: discord.Interaction, wahl: str) -> None:
+    async def _pick(self, interaction, wahl):
         if self.done:
             await interaction.response.defer()
             return
@@ -540,18 +539,18 @@ class _SSPDuel(discord.ui.View):
         _release(self.message)
 
     @discord.ui.button(label="Schere", emoji="✂️", style=discord.ButtonStyle.primary)
-    async def _s(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _s(self, i, _b):
         await self._pick(i, "schere")
 
     @discord.ui.button(label="Stein", emoji="🪨", style=discord.ButtonStyle.primary)
-    async def _st(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _st(self, i, _b):
         await self._pick(i, "stein")
 
     @discord.ui.button(label="Papier", emoji="📄", style=discord.ButtonStyle.primary)
-    async def _p(self, i: discord.Interaction, _b: discord.ui.Button) -> None:
+    async def _p(self, i, _b):
         await self._pick(i, "papier")
 
-    async def on_timeout(self) -> None:
+    async def on_timeout(self):
         if not self.done:
             self.done = True
             if self.paid:                  # halbe Runde -> beide zurueck
@@ -573,29 +572,29 @@ class Games:
     """Spiel-Logik als Objekt: der komplette veraenderliche Zustand (laufende
     Runden, Store, Wortliste) lebt auf der Instanz statt in Modul-Globals."""
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._store: JsonStore | None = None
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._store = None
         # Laufende Runden je Channel (nur im Speicher).
-        self._quiz: dict[int, dict] = {}
-        self._guess: dict[int, dict] = {}
-        self._event: dict[int, dict] = {}
-        self._round_token: dict[int, int] = {}
-        self._bg: set[asyncio.Task] = set()
+        self._quiz = {}
+        self._guess = {}
+        self._event = {}
+        self._round_token = {}
+        self._bg = set()
         # in setup() befuellt (System-Liste oder Fallback)
-        self._event_words: list[str] = []
-        self._mathe: dict[int, dict] = {}      # channel_id -> laufende Mathe-Runde
-        self._ana: dict[int, dict] = {}        # channel_id -> laufende Anagramm-Runde
-        self._qduel: dict[int, dict] = {}      # channel_id -> laufendes Quiz-Duell
+        self._event_words = []
+        self._mathe = {}      # channel_id -> laufende Mathe-Runde
+        self._ana = {}        # channel_id -> laufende Anagramm-Runde
+        self._qduel = {}      # channel_id -> laufendes Quiz-Duell
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro):
         task = asyncio.create_task(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
     # --- Auto-Loesch-Schutz + Bild-/Text-Versand ----------------------------
-    def _protect(self, msg) -> None:
+    def _protect(self, msg):
         """Meldet eine laufende Spiel-Nachricht (Quiz/Zahlenraten) beim Auto-Loesch-
         Schutz an, damit sie im #commands-Channel nicht mitten in der Runde
         verschwindet. Lazy-Import von bot wegen Zirkel-Import."""
@@ -607,7 +606,7 @@ class Games:
         except Exception:
             pass
 
-    def _release(self, msg) -> None:
+    def _release(self, msg):
         """Gibt eine geschuetzte Spiel-Nachricht wieder frei (Runde vorbei / keine
         Reaktion mehr) -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
         if msg is None:
@@ -618,7 +617,7 @@ class Games:
         except Exception:
             pass
 
-    async def _say(self, message: discord.Message, text: str):
+    async def _say(self, message, text):
         """Schickt eine Text-Antwort als Reply und gibt die Nachricht zurueck."""
         try:
             return await message.reply(text, mention_author=False)
@@ -626,8 +625,8 @@ class Games:
             log.exception("Spiel-Nachricht konnte nicht gesendet werden")
             return None
 
-    async def _send_image(self, message: discord.Message, emb: discord.Embed,
-                          buf, fname: str) -> object:
+    async def _send_image(self, message, emb,
+                          buf, fname):
         """Schickt ein Spiel-Bild als Reply (Embed mit Anhang). Gibt HANDLED zurueck,
         damit bot.py nicht zusaetzlich antwortet."""
         emb.set_image(url=f"attachment://{fname}")
@@ -638,7 +637,7 @@ class Games:
             log.exception("Spiel-Bild konnte nicht gesendet werden")
         return HANDLED
 
-    def setup(self) -> bool:
+    def setup(self):
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("GAMES_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Spiele-Feature aus (GAMES_ENABLED=0).")
@@ -653,21 +652,21 @@ class Games:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         # Zentral in ai.strip_lead: entfernt @-Mentions + fuehrenden Namen/Alias
         # ('Florian quiz' -> 'quiz').
         return ai.strip_lead(text)
 
-    def _new_token(self, channel_id: int) -> int:
+    def _new_token(self, channel_id):
         tok = self._round_token.get(channel_id, 0) + 1
         self._round_token[channel_id] = tok
         return tok
 
     # --- Befehle -------------------------------------------------------------
-    async def handle(self, message: discord.Message) -> "str | object | None":
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cmd = self._clean_lead(message.content or "")
@@ -705,7 +704,7 @@ class Games:
             return await self._dice(message, args)
         return None
 
-    async def _ssp(self, message: discord.Message, args: list[str]) -> str:
+    async def _ssp(self, message, args):
         if not args:
             return f"Womit? `{self._bot_name} ssp schere` (oder stein/papier)."
         raw = args[0].lower()
@@ -724,7 +723,7 @@ class Games:
         return f"{ub} vs {bb} — **Ich gewinne!** 😎"
 
     # --- Render-Helfer: Animation in Thread, Standbild als Fallback ------------
-    async def _anim(self, anim_fn, static_fn, *args, **kwargs) -> tuple:
+    async def _anim(self, anim_fn, static_fn, *args, **kwargs):
         """Rendert ein Spielergebnis als GIF in einem Thread (Event-Loop bleibt
         frei); faellt die Animation aus, kommt das Standbild. (BytesIO, endung)."""
         try:
@@ -734,7 +733,7 @@ class Games:
             return await asyncio.to_thread(static_fn, *args, **kwargs), "png"
 
     # --- Coinflip ------------------------------------------------------------
-    async def _flip_result(self, uid: int, bet: int, tip: "str | None"):
+    async def _flip_result(self, uid, bet, tip):
         """Wirft die Muenze, verrechnet (bei Einsatz + Tipp) Coins und baut Embed +
         animiertes Bild. tip: 'kopf'/'zahl' oder None (freier Wurf). Gibt
         (embed, buffer, name) zurueck – Text-Befehl UND Button-Menue nutzen das."""
@@ -762,7 +761,7 @@ class Games:
         fn = f"coin_{uid}_{random.randint(1000, 9999)}.{ext}"
         return emb, buf, fn
 
-    async def _coinflip(self, message: discord.Message, args: list[str]) -> object:
+    async def _coinflip(self, message, args):
         uid = message.author.id
         bet = self._extract_int(args) or 0
         seite = next((a.lower() for a in args
@@ -777,7 +776,7 @@ class Games:
         return await self._send_image(message, emb, buf, fn)
 
     # --- Slot-Machine --------------------------------------------------------
-    async def _spin_slot(self, uid: int, bet: int):
+    async def _spin_slot(self, uid, bet):
         """Dreht die Walzen, verrechnet (bei Einsatz) Coins und baut Embed + Bild.
         Gibt (embed, buffer, name) zurueck – wird vom Text-Befehl UND vom
         Button-Menue genutzt. Das Bild ist noch OHNE set_image (macht der Aufrufer)."""
@@ -821,7 +820,7 @@ class Games:
         fn = f"slot_{uid}_{random.randint(1000, 9999)}.{ext}"
         return emb, buf, fn
 
-    async def _slot(self, message: discord.Message, args: list[str]) -> object:
+    async def _slot(self, message, args):
         uid = message.author.id
         bet = self._extract_int(args) or 0
         if bet > 0 and economy.is_enabled() and economy.get_coins(uid) < bet:
@@ -830,7 +829,7 @@ class Games:
         return await self._send_image(message, emb, buf, fn)
 
     # --- Wuerfel -------------------------------------------------------------
-    async def _dice(self, message: discord.Message, args: list[str]) -> object:
+    async def _dice(self, message, args):
         count, sides = 1, 6
         if args:
             m = re.fullmatch(r"(\d*)d(\d+)", args[0].lower())
@@ -851,7 +850,7 @@ class Games:
         fn = f"dice_{message.author.id}_{random.randint(1000, 9999)}.{ext}"
         return await self._send_image(message, emb, buf, fn)
 
-    def _extract_int(self, args: list[str]) -> int | None:
+    def _extract_int(self, args):
         """Erster Betrag in den Args - versteht auch '1k'/'2,5k'/'1m'."""
         for a in args:
             n = economy.parse_amount(a)
@@ -859,7 +858,7 @@ class Games:
                 return n
         return None
 
-    async def _open_game(self, message: discord.Message, kind: str) -> object:
+    async def _open_game(self, message, kind):
         """Oeffnet das interaktive Menue (Einsatz-Dropdown + Buttons) fuer 'kind'."""
         view = _GAME_VIEWS[kind](message.author.id, channel_id=message.channel.id)
         try:
@@ -872,7 +871,7 @@ class Games:
         return HANDLED
 
     # --- Quiz ----------------------------------------------------------------
-    async def _gen_quiz_frage(self) -> tuple[str, str]:
+    async def _gen_quiz_frage(self):
         """Eine Quizfrage (KI, sonst Fragenkatalog). Rueckgabe: (frage, antwort)."""
         frage = antwort = ""
         if ai.is_enabled():
@@ -890,7 +889,7 @@ class Games:
             frage, antwort = random.choice(_QUIZ_BANK)
         return frage, antwort
 
-    async def _start_quiz(self, message: discord.Message) -> object:
+    async def _start_quiz(self, message):
         cid = message.channel.id
         if cid in self._quiz and self._quiz[cid]["expires"] > time.monotonic():
             return "Hier läuft schon ein Quiz - erst antworten! 🤓"
@@ -914,7 +913,7 @@ class Games:
         self._spawn(self._quiz_timeout(message.channel, tok))
         return HANDLED
 
-    def _parse_quiz_json(self, raw: str | None) -> tuple[str, str]:
+    def _parse_quiz_json(self, raw):
         if not raw:
             return "", ""
         m = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -926,13 +925,13 @@ class Games:
         except (json.JSONDecodeError, AttributeError):
             return "", ""
 
-    def _norm(self, text: str) -> str:
+    def _norm(self, text):
         text = text.lower().strip()
         text = re.sub(r"[^\wäöüß ]", "", text)
         text = re.sub(r"\b(der|die|das|ein|eine|the|a|an)\b", " ", text)
         return re.sub(r"\s+", " ", text).strip()
 
-    async def _quiz_timeout(self, channel, token: int) -> None:
+    async def _quiz_timeout(self, channel, token):
         await asyncio.sleep(QUIZ_TIMEOUT)
         cid = channel.id
         runde = self._quiz.get(cid)
@@ -945,7 +944,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    async def _check_quiz(self, message: discord.Message) -> bool:
+    async def _check_quiz(self, message):
         cid = message.channel.id
         runde = self._quiz.get(cid)
         if not runde:
@@ -975,7 +974,7 @@ class Games:
         return True
 
     # --- Zahlenraten ---------------------------------------------------------
-    async def _start_guess(self, message: discord.Message) -> object:
+    async def _start_guess(self, message):
         cid = message.channel.id
         if cid in self._guess and self._guess[cid]["expires"] > time.monotonic():
             return "Hier läuft schon eine Raterunde - rate weiter! 🔢"
@@ -999,7 +998,7 @@ class Games:
         self._spawn(self._guess_timeout(message.channel, tok))
         return HANDLED
 
-    async def _guess_timeout(self, channel, token: int) -> None:
+    async def _guess_timeout(self, channel, token):
         """Beendet eine Raterunde nach GUESS_TIMEOUT, falls niemand getroffen hat:
         sagt die Zahl an und gibt die geschuetzte Start-Nachricht wieder frei."""
         await asyncio.sleep(GUESS_TIMEOUT)
@@ -1014,7 +1013,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    async def _check_guess(self, message: discord.Message) -> bool:
+    async def _check_guess(self, message):
         cid = message.channel.id
         runde = self._guess.get(cid)
         if not runde:
@@ -1054,7 +1053,7 @@ class Games:
         return False  # weiter raten lassen (Nachricht nicht "verbraucht")
 
     # --- Counting-Channel ----------------------------------------------------
-    async def _check_counting(self, message: discord.Message) -> bool:
+    async def _check_counting(self, message):
         if not COUNTING_CHANNEL_ID or message.channel.id != COUNTING_CHANNEL_ID:
             return False
         assert self._store is not None
@@ -1095,7 +1094,7 @@ class Games:
             pass
         return True
 
-    def _fold(self, text: str) -> str:
+    def _fold(self, text):
         """Vereinheitlicht fuer den Vergleich: alles klein, Umlaute -> ae/oe/ue/ss,
         nur noch Buchstaben. So gewinnt 'Loewe' auch, wenn jemand 'löwe!' tippt
         (und umgekehrt) - Gross-/Kleinschreibung und Satzzeichen sind egal."""
@@ -1104,12 +1103,12 @@ class Games:
                     .replace("ü", "ue").replace("ß", "ss"))
         return re.sub(r"[^a-z]", "", text)
 
-    def _load_event_words(self) -> list[str]:
+    def _load_event_words(self):
         """Echte deutsche Woerter laden: erst eine System-Wortliste, sonst die
         eingebaute Fallback-Liste. Gefiltert auf reine Buchstaben-Woerter mit
         sinnvoller Laenge."""
         for path in _EVENT_DICT_PATHS:
-            woerter: list[str] = []
+            woerter = []
             try:
                 with open(path, encoding="utf-8", errors="ignore") as fh:
                     for line in fh:
@@ -1129,7 +1128,7 @@ class Games:
                  len(_EVENT_FALLBACK_WORDS))
         return list(_EVENT_FALLBACK_WORDS)
 
-    async def maybe_event(self, guild: discord.Guild) -> None:
+    async def maybe_event(self, guild):
         """bot.py ruft das periodisch. Mit kleiner Chance startet ein Schnell-Event
         im passenden Channel."""
         if not self._enabled or random.random() >= EVENT_CHANCE:
@@ -1155,7 +1154,7 @@ class Games:
         # Watchdog: meldet 'Zeit vorbei', falls bis zum Ablauf niemand getroffen hat.
         self._spawn(self._event_timeout(channel, tok))
 
-    async def _event_timeout(self, channel: discord.abc.Messageable, token: int) -> None:
+    async def _event_timeout(self, channel, token):
         """Wartet die Event-Dauer ab. Ist die Runde dann noch offen (niemand hat das
         Wort getippt) und gehoert sie noch zu diesem Aufruf (gleicher Token), wird sie
         geschlossen und 'Zeit vorbei' angesagt. Ein zwischenzeitlicher Gewinner hat das
@@ -1174,7 +1173,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    def _pick_event_channel(self, guild: discord.Guild):
+    def _pick_event_channel(self, guild):
         if EVENT_CHANNEL_ID:
             ch = guild.get_channel(EVENT_CHANNEL_ID)
             if ch is not None:
@@ -1186,7 +1185,7 @@ class Games:
                 return ch
         return None
 
-    async def _check_event(self, message: discord.Message) -> bool:
+    async def _check_event(self, message):
         cid = message.channel.id
         runde = self._event.get(cid)
         if not runde:
@@ -1240,16 +1239,16 @@ class Games:
     #  Coin-Spiele: Mathe-Blitz, Anagramm, Reaktionstest, Quiz-Duell, SSP-Duell.
     #  Einsatz kommt vorab, Gewinn haengt von Koennen/Tempo ab.
     # ==========================================================================
-    def _bet_hint(self, cmd: str) -> str:
+    def _bet_hint(self, cmd):
         return f"Mit Einsatz: `{self._bot_name} {cmd} 100` (auch `1k`)."
 
-    async def _record(self, uid: int, spiel: str, bet: int, payout: int) -> None:
+    async def _record(self, uid, spiel, bet, payout):
         try:
             await casino.record(uid, spiel, bet, payout)
         except Exception:  # noqa: BLE001 - Statistik ist Bonus
             log.exception("Spiel-Statistik fehlgeschlagen")
 
-    def _take_bet(self, uid: int, args: list[str]) -> "tuple[int, str | None]":
+    def _take_bet(self, uid, args):
         """Einsatz pruefen + abbuchen. (bet, fehlertext|None) - flusht NICHT."""
         if not economy.is_enabled():
             return 0, "Coins sind gerade aus - das Spiel braucht Einsatz."
@@ -1262,7 +1261,7 @@ class Games:
         return bet, None
 
     # --- Mathe-Blitz -----------------------------------------------------------
-    def _mathe_aufgabe(self) -> tuple[str, int]:
+    def _mathe_aufgabe(self):
         art = random.choice(("mal_plus", "mal_minus", "plus_mal"))
         a, b = random.randint(3, 12), random.randint(3, 12)
         c = random.randint(11, 99)
@@ -1272,7 +1271,7 @@ class Games:
             return f"{a} × {b} − {c}", a * b - c
         return f"{c} + {a} × {b}", c + a * b
 
-    async def _start_mathe(self, message: discord.Message, args: list[str]) -> object:
+    async def _start_mathe(self, message, args):
         cid = message.channel.id
         if cid in self._mathe and self._mathe[cid]["expires"] > time.monotonic():
             return "Hier rechnet schon jemand. 🧮"
@@ -1302,7 +1301,7 @@ class Games:
         self._spawn(self._mathe_timeout(message.channel, tok))
         return HANDLED
 
-    async def _mathe_timeout(self, channel, token: int) -> None:
+    async def _mathe_timeout(self, channel, token):
         await asyncio.sleep(MATHE_TIMEOUT)
         runde = self._mathe.get(channel.id)
         if not runde or runde.get("token") != token:
@@ -1316,7 +1315,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    async def _check_mathe(self, message: discord.Message) -> bool:
+    async def _check_mathe(self, message):
         runde = self._mathe.get(message.channel.id)
         if not runde or message.author.id != runde["uid"]:
             return False
@@ -1341,7 +1340,7 @@ class Games:
         return True
 
     # --- Anagramm --------------------------------------------------------------
-    async def _start_anagramm(self, message: discord.Message, args: list[str]) -> object:
+    async def _start_anagramm(self, message, args):
         cid = message.channel.id
         if cid in self._ana and self._ana[cid]["expires"] > time.monotonic():
             return "Hier wird schon entwirrt. 🔀"
@@ -1379,7 +1378,7 @@ class Games:
         self._spawn(self._ana_timeout(message.channel, tok))
         return HANDLED
 
-    async def _ana_timeout(self, channel, token: int) -> None:
+    async def _ana_timeout(self, channel, token):
         await asyncio.sleep(ANA_TIMEOUT)
         runde = self._ana.get(channel.id)
         if not runde or runde.get("token") != token:
@@ -1393,7 +1392,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    async def _check_anagramm(self, message: discord.Message) -> bool:
+    async def _check_anagramm(self, message):
         runde = self._ana.get(message.channel.id)
         if not runde or message.author.id != runde["uid"]:
             return False
@@ -1418,7 +1417,7 @@ class Games:
         return True
 
     # --- Reaktionstest ---------------------------------------------------------
-    async def _start_reaktion(self, message: discord.Message, args: list[str]) -> object:
+    async def _start_reaktion(self, message, args):
         uid = message.author.id
         bet, err = self._take_bet(uid, args)
         if err:
@@ -1445,7 +1444,7 @@ class Games:
         return HANDLED
 
     # --- Quiz-Duell (PvP um den Pot) -------------------------------------------
-    async def _qduel_timeout(self, channel, token: int) -> None:
+    async def _qduel_timeout(self, channel, token):
         await asyncio.sleep(QDUEL_TIMEOUT)
         runde = self._qduel.get(channel.id)
         if not runde or runde.get("token") != token:
@@ -1461,7 +1460,7 @@ class Games:
         except discord.HTTPException:
             pass
 
-    async def _check_qduel(self, message: discord.Message) -> bool:
+    async def _check_qduel(self, message):
         runde = self._qduel.get(message.channel.id)
         if not runde or message.author.id not in runde["players"]:
             return False
@@ -1484,7 +1483,7 @@ class Games:
                                  f"(**+{runde['bet']}** Flo Coins)! Antwort: {runde['answer']}")
         return True
 
-    async def _quizduell(self, message: discord.Message, args: list[str]) -> "str | object":
+    async def _quizduell(self, message, args):
         gegner = next((m for m in message.mentions if not m.bot), None)
         if gegner is None or gegner.id == message.author.id:
             return f"So: `{self._bot_name} quizduell @wer 100` – schnellste richtige Antwort gewinnt."
@@ -1513,8 +1512,8 @@ class Games:
         return HANDLED
 
     # --- SSP-Duell (PvP um den Pot) --------------------------------------------
-    async def _ssp_duell(self, message: discord.Message, gegner: discord.Member,
-                         args: list[str]) -> object:
+    async def _ssp_duell(self, message, gegner,
+                         args):
         if not economy.is_enabled():
             return "Coins sind gerade aus."
         bet = self._extract_int(args)
@@ -1537,7 +1536,7 @@ class Games:
         return HANDLED
 
     # --- Passiver Hook (bot.py ruft das fuer JEDE Nicht-Bot-Nachricht) -------
-    async def on_message_passive(self, message: discord.Message) -> bool:
+    async def on_message_passive(self, message):
         """Prueft laufende Spiele/Events fuer diese Nachricht.
         Rueckgabe True = Nachricht wurde 'verbraucht' (bot.py stoppt die Verarbeitung)."""
         if not self._enabled or message.guild is None:

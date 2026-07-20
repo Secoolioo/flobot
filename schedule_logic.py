@@ -5,7 +5,6 @@ Bewusst ohne Discord-Abhaengigkeit, damit es isoliert getestet werden kann.
 Tagesablauf:  Nacht -> Morgen -> Tag -> Abend -> Nacht
 Tagsueber wird zusaetzlich nach Jahreszeit unterschieden.
 """
-from __future__ import annotations
 
 from datetime import datetime, time
 
@@ -34,7 +33,7 @@ SEASON_IMAGES = {
 class ScheduleLogic:
     """Objektorientierte Kapselung der Zeit-/Jahreszeit-Logik."""
 
-    def get_period(self, t: time) -> str:
+    def get_period(self, t):
         """Liefert 'nacht' | 'morgen' | 'tag' | 'abend' fuer eine Uhrzeit."""
         if MORGEN_START <= t < TAG_START:
             return "morgen"
@@ -44,7 +43,7 @@ class ScheduleLogic:
             return "abend"
         return "nacht"  # 22:00-06:00, laeuft ueber Mitternacht
 
-    def get_season(self, month: int) -> str:
+    def get_season(self, month):
         """Meteorologische Jahreszeit fuer einen Monat (Nordhalbkugel)."""
         if month in (12, 1, 2):
             return "winter"
@@ -54,7 +53,7 @@ class ScheduleLogic:
             return "sommer"
         return "herbst"  # 9, 10, 11
 
-    def get_image_filename(self, now: datetime) -> str:
+    def get_image_filename(self, now):
         """Bestimmt den Dateinamen des passenden Icons fuer 'now'."""
         period = self.get_period(now.time())
         if period == "tag":
@@ -65,7 +64,7 @@ class ScheduleLogic:
             "abend": ABEND_IMAGE,
         }[period]
 
-    def all_image_filenames(self) -> list[str]:
+    def all_image_filenames(self):
         """Alle Bilddateien, die der Bot ueber das Jahr braucht (fuer Checks)."""
         return [NACHT_IMAGE, MORGEN_IMAGE, ABEND_IMAGE, *SEASON_IMAGES.values()]
 

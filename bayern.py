@@ -7,7 +7,6 @@
 
 Reine Deko - faellt nie technisch aus.
 """
-from __future__ import annotations
 
 import logging
 import random
@@ -58,27 +57,27 @@ class Bayern:
         "'freili', 'moanst'. Bleib inhaltlich gleich - nur der Dialekt aendert sich."
     )
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
 
         # Server-IDs, in denen die KI gerade boarisch antwortet.
-        self._on: set[int] = set()
+        self._on = set()
 
-    def setup(self) -> bool:
+    def setup(self):
         self._bot_name = ai.bot_name()
         self._enabled = True
         log.info("Bayrisch-Feature aktiv (Begruessungen + Dialekt-Toggle).")
         return self._enabled
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def is_on(self, guild_id: "int | None") -> bool:
+    def is_on(self, guild_id):
         """True, wenn die KI in diesem Server gerade boarisch antworten soll."""
         return bool(guild_id) and guild_id in self._on
 
-    async def handle(self, message: discord.Message):
+    async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
         cleaned = ai.strip_lead(message.content or "")

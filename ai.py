@@ -10,7 +10,6 @@ Das Modul ist bewusst von Discord entkoppelt, damit es einzeln testbar ist.
 Ohne gueltige Konfiguration ist das Feature einfach aus - der restliche Bot
 (Icon/Status) laeuft dann normal weiter.
 """
-from __future__ import annotations
 
 import asyncio
 import json
@@ -141,24 +140,24 @@ class FloAI:
     _HIST_MAX = 12          # so viele letzte Nachrichten je Channel behalten
     _HIST_TTL = 1200.0      # 20 min - aelteres ist kein lebendiger Kontext mehr
 
-    def __init__(self) -> None:
+    def __init__(self):
         # --- Konfiguration (wird in setup() aus der .env gelesen) ----------------
-        self._client: "AsyncOpenAI | None" = None
-        self._model: str = self.DEFAULT_MODEL
-        self._vision_model: str = self.DEFAULT_VISION_MODEL
-        self._default_city: str = "Regensburg"
-        self._bot_name: str = "Flo"
+        self._client = None
+        self._model = self.DEFAULT_MODEL
+        self._vision_model = self.DEFAULT_VISION_MODEL
+        self._default_city = "Regensburg"
+        self._bot_name = "Flo"
         # Hoehere Temperatur = lockerer, spontaner, weniger Lehrbuch. Per LLM_TEMPERATURE
         # in der .env feintunbar (0 = brav/vorhersehbar, ~1.2 = sehr frei/chaotisch).
-        self.TEMPERATURE: float = 0.9
+        self.TEMPERATURE = 0.9
         # --- Geteilte HTTP-Session (Performance) ----------------------------------
         # Eine Session pro Prozess statt pro Anfrage: spart TCP/TLS-Handshakes und
         # haelt Verbindungen offen (Keep-Alive). Alle Module holen sie sich hier.
-        self._http: "aiohttp.ClientSession | None" = None
+        self._http = None
         # Kurzzeit-Gedaechtnis pro Channel (deque je Channel-ID).
-        self._HISTORY: "dict[int, deque]" = {}
+        self._HISTORY = {}
 
-    def setup(self) -> bool:
+    def setup(self):
         """Liest die Konfiguration aus der Umgebung und baut den LLM-Client auf.
 
         Muss aufgerufen werden, nachdem load_dotenv() gelaufen ist.
@@ -194,15 +193,15 @@ class FloAI:
         )
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         """True, wenn der LLM-Client einsatzbereit ist."""
         return self._client is not None
 
-    def bot_name(self) -> str:
+    def bot_name(self):
         """Name, auf den der Bot hoert (fuer den Trigger in bot.py)."""
         return self._bot_name
 
-    def names(self) -> list[str]:
+    def names(self):
         """Alle Namen, auf die der Bot hoert: Hauptname + Aliasse aus BOT_ALIASES
         (Standard: 'Florian'). Dadurch reagiert Flo auch auf 'Florian ...' wie eine
         Alexa. Mehrere Aliasse per Komma/Leerzeichen trennen; BOT_ALIASES='' = nur Flo."""
@@ -214,19 +213,19 @@ class FloAI:
                 out.append(a)
         return out
 
-    def _names_alt(self) -> str:
+    def _names_alt(self):
         """Regex-Alternation der Namen, laengster zuerst ('Florian|Flo')."""
         return "|".join(re.escape(n) for n in sorted(self.names(), key=len, reverse=True))
 
-    def trigger_re(self) -> "re.Pattern[str]":
+    def trigger_re(self):
         """Erkennt, ob der Bot angesprochen wird (Name/Alias als ganzes Wort)."""
         return re.compile(rf"\b(?:{self._names_alt()})\b", re.IGNORECASE)
 
-    def lead_re(self) -> "re.Pattern[str]":
+    def lead_re(self):
         """Matcht einen fuehrenden Namen/Alias samt Satzzeichen am Zeilenanfang."""
         return re.compile(rf"^\s*(?:{self._names_alt()})\b[\s,:!.\-]*", re.IGNORECASE)
 
-    def strip_lead(self, text: str) -> str:
+    def strip_lead(self, text):
         """Entfernt @-Mentions und einen fuehrenden Botnamen/Alias.
         'Florian, level' -> 'level'. Die Feature-Module nutzen das fuer ihre
         Befehlserkennung, damit Befehle auch mit 'Florian' davor funktionieren."""
@@ -234,12 +233,12 @@ class FloAI:
         t = self.lead_re().sub("", t)
         return t.strip()
 
-    def _clean_title(self, title: str) -> str:
+    def _clean_title(self, title):
         """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🤖 NPC' -> 'NPC')."""
         return re.sub(r"^\W+", "", title or "").strip()
 
-    def _system_prompt(self, author: str = "", title: str = "", tone: str = "",
-                       bavarian: bool = False) -> str:
+    def _system_prompt(self, author = "", title = "", tone = "",
+                       bavarian = False):
         persona = os.getenv("BOT_PERSONA", "").strip() or self._DEFAULT_PERSONA.format(name=self._bot_name)
         base = f"{persona} {self._HARD_RULES.format(city=self._default_city)} {self._GUARDRAIL}"
         # Kurzzeit-Gedaechtnis: die letzten Chat-Nachrichten kommen als Kontext mit.
@@ -266,14 +265,14 @@ class FloAI:
                 pass
         return base
 
-    def http_session(self) -> aiohttp.ClientSession:
+    def http_session(self):
         """Liefert die geteilte aiohttp-Session (lazy erstellt, Prozess-Lebensdauer).
         Timeout bitte pro Anfrage setzen: session.get(url, timeout=ClientTimeout(...))."""
         if self._http is None or self._http.closed:
             self._http = aiohttp.ClientSession()
         return self._http
 
-    async def get_weather(self, city: str) -> dict:
+    async def get_weather(self, city):
         """Holt aktuelles Wetter + heutige Vorhersage von Open-Meteo (ohne API-Key)."""
         timeout = aiohttp.ClientTimeout(total=12)
         session = self.http_session()   # geteilte Session (Keep-Alive) statt eigener pro Abruf
@@ -349,7 +348,7 @@ class FloAI:
             },
         }
 
-    async def _run_tool(self, name: str, arguments: str) -> dict:
+    async def _run_tool(self, name, arguments):
         """Fuehrt das angeforderte Werkzeug aus (arguments ist ein JSON-String)."""
         try:
             args = json.loads(arguments or "{}")
@@ -362,12 +361,12 @@ class FloAI:
 
     async def generate(
         self,
-        prompt: str,
+        prompt,
         *,
-        system: str | None = None,
-        temperature: float = 0.8,
-        max_tokens: int = 300,
-    ) -> str | None:
+        system = None,
+        temperature = 0.8,
+        max_tokens = 300,
+    ):
         """Einzelne LLM-Antwort OHNE Werkzeuge/Persona (fuer Spass-Module wie Roast,
         Hype, Bewertung, Spruch, Quiz). Gibt den Text zurueck oder None bei Fehler/aus.
 
@@ -376,7 +375,7 @@ class FloAI:
         """
         if self._client is None:
             return None
-        messages: list[dict] = []
+        messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -392,7 +391,7 @@ class FloAI:
             log.exception("LLM generate() fehlgeschlagen")
             return None
 
-    def note_message(self, channel_id: int, name: str, content: str, *, is_bot: bool = False) -> None:
+    def note_message(self, channel_id, name, content, *, is_bot = False):
         """Merkt sich eine Chat-Nachricht (pro Channel, begrenzt), damit Flo dem
         Gespraech folgen kann. bot.py ruft das fuer JEDE Nachricht im Chat auf -
         auch fuer Flos eigene Antworten (is_bot=True)."""
@@ -412,7 +411,7 @@ class FloAI:
             "t": time.monotonic(),
         })
 
-    def _recent(self, channel_id: "int | None", skip_content: str = "") -> list[dict]:
+    def _recent(self, channel_id, skip_content = ""):
         """Baut den juengsten Gespraechsverlauf als LLM-Nachrichten. 'skip_content'
         laesst die aktuelle Frage weg (die wird separat als letzte user-Nachricht
         angehaengt), damit sie nicht doppelt drinsteht."""
@@ -426,7 +425,7 @@ class FloAI:
         if skip_content and items and items[-1]["role"] == "user" \
                 and items[-1]["content"] == skip_content[:500]:
             items = items[:-1]
-        out: list[dict] = []
+        out = []
         for e in items:
             if e["role"] == "assistant":
                 out.append({"role": "assistant", "content": e["content"]})
@@ -434,9 +433,9 @@ class FloAI:
                 out.append({"role": "user", "content": f'{e["name"]}: {e["content"]}'})
         return out
 
-    async def ask_flo(self, user_message: str, *, author: str = "", title: str = "",
-                      tone: str = "", channel_id: "int | None" = None,
-                      bavarian: bool = False) -> str:
+    async def ask_flo(self, user_message, *, author = "", title = "",
+                      tone = "", channel_id = None,
+                      bavarian = False):
         """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
         Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
@@ -452,7 +451,7 @@ class FloAI:
             text = f"{author} schreibt: {text}"
 
         history = self._recent(channel_id, skip_content=user_message.strip())
-        messages: list[dict] = [
+        messages = [
             {"role": "system", "content": self._system_prompt(author, title, tone, bavarian)},
             *history,
             {"role": "user", "content": text},
@@ -507,9 +506,9 @@ class FloAI:
 
         return "Das war mir gerade zu kompliziert - frag mich nochmal einfacher."
 
-    async def see_image(self, user_message: str, image_url: str, *, author: str = "",
-                        title: str = "", tone: str = "",
-                        channel_id: "int | None" = None, bavarian: bool = False) -> str:
+    async def see_image(self, user_message, image_url, *, author = "",
+                        title = "", tone = "",
+                        channel_id = None, bavarian = False):
         """Schaut sich ein Bild an (Vision-Modell) und antwortet in Flos Persoenlichkeit.
         image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL."""
         if self._client is None:
@@ -519,7 +518,7 @@ class FloAI:
         if author:
             text = f"{author} schreibt: {text}"
         history = self._recent(channel_id, skip_content=(user_message or "").strip())
-        messages: list[dict] = [
+        messages = [
             {"role": "system", "content": self._system_prompt(author, title, tone, bavarian)},
             *history,
             {"role": "user", "content": [
@@ -540,8 +539,8 @@ class FloAI:
             log.exception("Vision-Aufruf fehlgeschlagen")
             return "Das Bild konnte ich mir gerade nicht anschauen - versuch's gleich nochmal."
 
-    async def see_image_raw(self, prompt: str, image_url: str, *, temperature: float = 0.3,
-                            max_tokens: int = 500) -> "str | None":
+    async def see_image_raw(self, prompt, image_url, *, temperature = 0.3,
+                            max_tokens = 500):
         """Nuechterner Vision-Aufruf OHNE Persona/Verlauf - fuer strukturierte
         Analysen (z. B. JSON). Gibt den rohen Text zurueck oder None bei Fehler."""
         if self._client is None:

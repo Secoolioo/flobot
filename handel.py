@@ -12,7 +12,6 @@ Gefuehrt werden pro Nutzer:
 
 Befehl: handel [@wer]  ->  Statistik-Karte als Bild (render.handel_card).
 """
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -43,12 +42,12 @@ class Handel:
     _CMDS = ("handel", "handelsbuch", "transaktionen", "transaktion",
              "verlauf", "trades")
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
-        self._store: JsonStore | None = None
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
+        self._store = None
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert das Handelsbuch. Braucht economy (dort liegt der Coin-Topf)."""
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("HANDEL_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
@@ -63,16 +62,16 @@ class Handel:
                  len(self._store.data.get("users", {})))
         return True
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
     # --- Buchung ----------------------------------------------------------
-    def _user(self, uid: int) -> dict:
+    def _user(self, uid):
         assert self._store is not None
         return self._store.data.setdefault("users", {}).setdefault(
             str(uid), {"in": 0, "out": 0, "n": 0, "by": {}, "days": {}, "last": []})
 
-    def record(self, uid: int, amount: int, source: str, balance: int) -> None:
+    def record(self, uid, amount, source, balance):
         """Verbucht EINE Coin-Bewegung (amount: echtes Delta, +/-). economy ruft
         das fuer jede Bewegung auf; Fehler bleiben lokal (nie fatal fuers Spiel)."""
         if not self._enabled or self._store is None or not amount:
@@ -109,7 +108,7 @@ class Handel:
         except Exception:  # noqa: BLE001 - Buchhaltung darf nie ein Spiel sprengen
             log.exception("Handelsbuch-Buchung fehlgeschlagen")
 
-    def _save_soon(self) -> None:
+    def _save_soon(self):
         """Speichert asynchron (JsonStore serialisiert selbst per Lock). Ohne
         laufenden Event-Loop (Tests) passiert nichts - der naechste Lauf im Bot
         schreibt den Stand mit."""
@@ -119,13 +118,13 @@ class Handel:
             pass
 
     # --- Befehl -----------------------------------------------------------
-    async def _fetch_avatar(self, user) -> "bytes | None":
+    async def _fetch_avatar(self, user):
         try:
             return await asyncio.wait_for(user.display_avatar.with_size(128).read(), 6)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
             return None
 
-    async def handle(self, message: discord.Message) -> "str | discord.File | None":
+    async def handle(self, message):
         """Erkennt 'handel [@wer]' und liefert die Handels-Karte als Bild."""
         if not self._enabled or message.guild is None:
             return None

@@ -3,7 +3,6 @@
 Laufen OHNE Discord-Verbindung und ohne Zusatzpakete (gleicher Runner wie
 test_logic.py):  python test_games_logic.py
 """
-from __future__ import annotations
 
 import asyncio
 import random
@@ -19,7 +18,7 @@ import words
 
 
 # --- Blackjack -------------------------------------------------------------
-def test_blackjack_handwert() -> None:
+def test_blackjack_handwert():
     assert casino._hand_value([("A", "♠"), ("K", "♥")]) == 21
     assert casino._hand_value([("A", "♠"), ("A", "♥")]) == 12          # 11 + 1
     assert casino._hand_value([("A", "♠"), ("9", "♥"), ("5", "♦")]) == 15
@@ -27,7 +26,7 @@ def test_blackjack_handwert() -> None:
 
 
 # --- Einsatz-Parsing ---------------------------------------------------------
-def test_resolve_bet() -> None:
+def test_resolve_bet():
     assert casino._resolve_bet("50", 0) == 50
     assert casino._resolve_bet("abc", 0) is None
     assert casino._resolve_bet("", 0) is None
@@ -36,7 +35,7 @@ def test_resolve_bet() -> None:
 
 
 # --- Mines -------------------------------------------------------------------
-def test_mines_multiplikator() -> None:
+def test_mines_multiplikator():
     # Ohne Pick kein Bonus.
     assert casino._mines_mult(0, 3) == 1.0
     # Streng steigend mit jedem sicheren Feld.
@@ -55,7 +54,7 @@ def test_mines_multiplikator() -> None:
 
 
 # --- Gluecksrad ---------------------------------------------------------------
-def test_wheel_hausvorteil() -> None:
+def test_wheel_hausvorteil():
     segs = casino._WHEEL_SEGMENTS
     assert len(segs) == 12
     ev = sum(segs) / len(segs)
@@ -65,7 +64,7 @@ def test_wheel_hausvorteil() -> None:
 
 
 # --- Rubbellos -----------------------------------------------------------------
-def test_scratch_roll_konsistent() -> None:
+def test_scratch_roll_konsistent():
     rng = random.Random(42)
     random.seed(42)
     for _ in range(200):
@@ -79,7 +78,7 @@ def test_scratch_roll_konsistent() -> None:
     _ = rng  # nur zur Klarheit: Test nutzt globales random mit festem Seed
 
 
-def test_scratch_hausvorteil() -> None:
+def test_scratch_hausvorteil():
     # Exakter Erwartungswert: 3 unabhaengige Reihen, P(Reihe aus Symbol s) = 1/343.
     n = len(render.SLOT_KEYS)
     ev = 3 * sum(casino._SCRATCH_PAYOUT[s] for s in render.SLOT_KEYS) / (n ** 3)
@@ -87,7 +86,7 @@ def test_scratch_hausvorteil() -> None:
 
 
 # --- Crash ---------------------------------------------------------------------
-def test_crash_point_grenzen() -> None:
+def test_crash_point_grenzen():
     random.seed(7)
     for _ in range(2000):
         cp = casino._crash_point()
@@ -95,7 +94,7 @@ def test_crash_point_grenzen() -> None:
 
 
 # --- Roulette --------------------------------------------------------------------
-def test_roulette_auszahlung() -> None:
+def test_roulette_auszahlung():
     payout, label = casino._roulette_payout("rot", 10, 1)      # 1 ist rot
     assert payout == 20 and label == "Rot"
     payout, _ = casino._roulette_payout("rot", 10, 2)          # 2 ist schwarz
@@ -109,14 +108,14 @@ def test_roulette_auszahlung() -> None:
 
 
 # --- Keno-Tabelle -----------------------------------------------------------------
-def test_keno_tabelle() -> None:
+def test_keno_tabelle():
     assert casino._KENO_TABLE[(1, 1)] == 3
     assert casino._KENO_TABLE[(8, 8)] == 1000
     assert (3, 1) not in casino._KENO_TABLE   # zu wenig Treffer -> nichts
 
 
 # --- Wort-Zaehler ------------------------------------------------------------------
-def test_words_tokenizer() -> None:
+def test_words_tokenizer():
     toks = words._tokenize(
         "Hallo WELT! https://beispiel.de/pfad <@123> <#456> <a:emo:789> "
         "Pizza-Party äöüß 42 a zu")
@@ -125,7 +124,7 @@ def test_words_tokenizer() -> None:
     assert words._tokenize("1234 !!! ...") == []
 
 
-def test_words_zaehlen() -> None:
+def test_words_zaehlen():
     # Fake-Store: reine dict-Logik testen, ohne Datei (Zustand lebt in der Instanz).
     words.instance._store = type("S", (), {"data": {"words": {}, "total": 0, "msgs": 0}})()
     n = words._count_text("pizza pizza salat", "111")
@@ -141,7 +140,7 @@ def test_words_zaehlen() -> None:
 
 
 # --- Befehls-Normalisierung ----------------------------------------------------------
-def test_cmdnorm_neue_befehle() -> None:
+def test_cmdnorm_neue_befehle():
     # Tippfehler-Korrektur auf die neuen Trigger.
     assert cmdnorm.normalize("woerterr pizza") == "woerter pizza"
     assert cmdnorm.normalize("minees 50") == "mines 50"
@@ -154,13 +153,13 @@ def test_cmdnorm_neue_befehle() -> None:
 
 
 # --- Admin-Befehle (nur Besitzer) -----------------------------------------------------
-def _fake_msg(uid: int, content: str) -> SimpleNamespace:
+def _fake_msg(uid, content):
     return SimpleNamespace(
         author=SimpleNamespace(id=uid, bot=False, display_name="Tester"),
         content=content, mentions=[], guild=None)
 
 
-def test_admin_extract() -> None:
+def test_admin_extract():
     # Mention + Betrag
     uid, amount = admin._extract("<@1040135855710404659> 250")
     assert uid == 1040135855710404659 and amount == 250
@@ -177,7 +176,7 @@ def test_admin_extract() -> None:
     assert uid is None and amount == 500
 
 
-def test_admin_owner_gate() -> None:
+def test_admin_owner_gate():
     admin.setup()
     # Fremde bekommen von admin.handle grundsaetzlich None (kein Befehl, keine Antwort).
     fremd = asyncio.run(admin.handle(_fake_msg(999, "gib 123456789012345678 100")))
@@ -200,7 +199,7 @@ def test_admin_owner_gate() -> None:
 
 
 # --- Leaderboard-Avatare ---------------------------------------------------------
-def test_attach_avatars_cache_und_fallback() -> None:
+def test_attach_avatars_cache_und_fallback():
     """Avatar-Laden: Erfolg fuellt Cache, Fehlschlag landet im Negativ-Cache,
     zweiter Aufruf kommt ohne Resolver aus dem Cache."""
     orig = economy._resolve_avatar_user
@@ -248,12 +247,12 @@ def test_attach_avatars_cache_und_fallback() -> None:
         economy.instance._AVATAR_FAIL.clear()
 
 
-def test_economy_display_name_of() -> None:
+def test_economy_display_name_of():
     # economy ist im Test nicht aktiviert -> None statt Crash.
     assert economy.display_name_of(123456789012345678) is None
 
 
-def test_admin_ansage_parsing() -> None:
+def test_admin_ansage_parsing():
     # Rohe Channel-ID
     cid, text = admin._parse_announce("1453881901738889351 Servus Leute!")
     assert cid == 1453881901738889351 and text == "Servus Leute!"
@@ -268,7 +267,7 @@ def test_admin_ansage_parsing() -> None:
     assert admin._parse_announce("hallo welt") == (None, "")
 
 
-def test_admin_dm_parsing() -> None:
+def test_admin_dm_parsing():
     # Mention + Text
     uid, text = admin._parse_dm("<@1040135855710404659> hey na, alles fit?")
     assert uid == 1040135855710404659 and text == "hey na, alles fit?"
@@ -284,7 +283,7 @@ def test_admin_dm_parsing() -> None:
     assert uid == 123456789012345678 and text == ""
 
 
-def test_admin_soundboard_toggle() -> None:
+def test_admin_soundboard_toggle():
     import voicegags
     admin.setup()
 
@@ -316,7 +315,7 @@ def test_admin_soundboard_toggle() -> None:
         voicegags.instance._store, voicegags.instance._enabled = alt_store, alt_enabled
 
 
-def test_cmdnorm_admin_sicherheit() -> None:
+def test_cmdnorm_admin_sicherheit():
     # Alltagswoerter, die 1 Tippfehler von Admin-Befehlen entfernt sind,
     # duerfen NICHT gekapert werden.
     for satz in ("nimmt das ernst", "profi tipp", "ansagen bitte"):
@@ -326,7 +325,7 @@ def test_cmdnorm_admin_sicherheit() -> None:
 
 
 # --- Luxus-Shop ------------------------------------------------------------------
-def test_luxus_katalog() -> None:
+def test_luxus_katalog():
     preise = [i["preis"] for i in luxus.ITEMS]
     assert preise == sorted(preise), "Katalog muss nach Preis aufsteigen"
     assert preise[0] == 15_000                      # Einstieg erreichbar
@@ -336,7 +335,7 @@ def test_luxus_katalog() -> None:
     assert luxus.THRONE_FACTOR > 1.0                # Thron wird immer teurer
 
 
-def test_luxus_fmt_coins() -> None:
+def test_luxus_fmt_coins():
     assert luxus.fmt_coins(1_500) == "1.500"
     assert luxus.fmt_coins(400_000) == "400.000"
     assert luxus.fmt_coins(2_500_000) == "2,5 Mio"
@@ -344,7 +343,7 @@ def test_luxus_fmt_coins() -> None:
     assert luxus.fmt_coins(1_000_000_000) == "1 Mrd"
 
 
-def test_luxus_besitz_und_rahmen() -> None:
+def test_luxus_besitz_und_rahmen():
     # Fake-Store: Besitz-Logik ohne Datei/Discord testen (Zustand lebt in der Instanz).
     luxus.instance._store = type("S", (), {"data": {"users": {}, "throne": {
         "owner": "", "preis": luxus.THRONE_START, "n": 0}}})()
@@ -372,7 +371,7 @@ def test_luxus_besitz_und_rahmen() -> None:
 
 
 # --- Coin-Handelsbuch ------------------------------------------------------------
-def test_handel_buchhaltung() -> None:
+def test_handel_buchhaltung():
     """record() fuehrt Gesamtsummen, Quellen, Tages-Buckets und Einzelbuchungen;
     economy.add_coins bucht mit echtem Delta und erkanntem Quell-Modul."""
     import handel
@@ -424,7 +423,7 @@ def test_handel_buchhaltung() -> None:
 
 
 # --- Casino-Bilanz: Gewonnen/Verloren-Summen -----------------------------------
-def test_casino_bilanz_gewonnen_verloren() -> None:
+def test_casino_bilanz_gewonnen_verloren():
     """record() zaehlt Brutto-Gewinne und -Verluste getrennt; Alt-Profile ohne
     die neuen Felder werden aus dem Netto geseedet; die Karte rendert damit."""
     class FakeStore:
@@ -462,7 +461,7 @@ def test_casino_bilanz_gewonnen_verloren() -> None:
         casino.instance._stats, casino.instance._enabled = alt_stats, alt_enabled
 
 
-def run() -> None:
+def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
         globals()[name]()

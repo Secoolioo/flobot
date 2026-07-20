@@ -7,7 +7,6 @@ Braucht Pillow. Fehlt das Paket, gibt ``render_png()`` ``None`` zurueck und
 ``is_available()`` meldet ``False`` - der Bot faellt dann automatisch auf die
 normale Embed-Bestenliste zurueck (kein Absturz).
 """
-from __future__ import annotations
 
 import io
 import logging
@@ -80,17 +79,17 @@ _X_VOICE = 712        # Balken-Start Voice
 class LeaderboardImg:
     """Rendert das Grafana-artige Leaderboard-PNG (objektorientierte Fassung)."""
 
-    def __init__(self) -> None:
-        self._font_cache: dict = {}
+    def __init__(self):
+        self._font_cache = {}
         # --- Namen darstellbar machen (Emoji/Fancy-Unicode/Zalgo abfangen) -------
-        self._notdef_cache: dict = {}
-        self._glyph_cache: dict = {}
+        self._notdef_cache = {}
+        self._glyph_cache = {}
 
-    def is_available(self) -> bool:
+    def is_available(self):
         """True, wenn Pillow installiert ist (sonst nutzt der Bot das Embed)."""
         return _PIL_OK
 
-    def _font(self, size: int, bold: bool = False):
+    def _font(self, size, bold = False):
         """Laedt (und cached) eine Schrift der gewuenschten Groesse."""
         key = (size, bold)
         if key in self._font_cache:
@@ -108,11 +107,11 @@ class LeaderboardImg:
         self._font_cache[key] = font
         return font
 
-    def _clean_title(self, title: str) -> str:
+    def _clean_title(self, title):
         """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🗿 Sigma' -> 'Sigma')."""
         return re.sub(r"^\W+", "", title or "").strip()
 
-    def _fmt_num(self, n: int) -> str:
+    def _fmt_num(self, n):
         """1234 -> '1.2k', 2500000 -> '2.5M' (kompakt fuer enge Spalten)."""
         n = int(n)
         if n >= 1_000_000:
@@ -121,7 +120,7 @@ class LeaderboardImg:
             return f"{n / 1000:.1f}k".replace(".0k", "k")
         return str(n)
 
-    def _fmt_voice(self, secs: int) -> str:
+    def _fmt_voice(self, secs):
         """Sekunden -> '3h 20m' / '12m' / '45s'."""
         secs = int(secs)
         h, rem = divmod(secs, 3600)
@@ -132,7 +131,7 @@ class LeaderboardImg:
             return f"{m}m"
         return f"{s}s"
 
-    def _truncate(self, draw, text: str, font, max_w: int) -> str:
+    def _truncate(self, draw, text, font, max_w):
         """Kuerzt Text mit '…', bis er in max_w Pixel passt."""
         if draw.textlength(text, font=font) <= max_w:
             return text
@@ -140,13 +139,13 @@ class LeaderboardImg:
             text = text[:-1]
         return (text + "…") if text else "…"
 
-    def _chbytes(self, font, ch: str) -> bytes:
+    def _chbytes(self, font, ch):
         """Rendert EIN Zeichen auf eine kleine Canvas und gibt die Pixel zurueck."""
         im = Image.new("L", (48, 48), 0)
         ImageDraw.Draw(im).text((6, 6), ch, font=font, fill=255)
         return im.tobytes()
 
-    def _glyph_ok(self, font, ch: str) -> bool:
+    def _glyph_ok(self, font, ch):
         """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer)."""
         fid = id(font)
         ck = (fid, ch)
@@ -167,14 +166,14 @@ class LeaderboardImg:
         self._glyph_cache[ck] = ok
         return ok
 
-    def _safe_name(self, font, name: str, fallback: str = "Spieler") -> str:
+    def _safe_name(self, font, name, fallback = "Spieler"):
         """Macht einen Discord-Namen darstellbar:
         - NFKC-Normalisierung (fancy 𝓒𝓸𝓸𝓵 -> Cool, vollbreite ＡＢ -> AB),
         - kombinierende Zeichen (Zalgo), Steuer-/Format-/Emoji-Glyphen raus,
         - alles, wofuer die Schrift kein Glyph hat (CJK etc.), faellt weg.
         Bleibt nichts Lesbares uebrig, kommt der Fallback (z. B. der Rang)."""
         name = unicodedata.normalize("NFKC", name or "")
-        out: list[str] = []
+        out = []
         for ch in name:
             if ch == " ":
                 out.append(" ")
@@ -191,7 +190,7 @@ class LeaderboardImg:
         res = " ".join("".join(out).split()).strip()
         return res or fallback
 
-    def _avatar_circle(self, data: bytes, diam: int) -> "Image.Image | None":
+    def _avatar_circle(self, data, diam):
         """Macht aus den Avatar-Bytes ein rundes RGBA-Bild (diam x diam)."""
         try:
             im = Image.open(io.BytesIO(data)).convert("RGBA")
@@ -205,7 +204,7 @@ class LeaderboardImg:
         out.paste(im, (0, 0), mask)
         return out
 
-    def _draw_avatar(self, img, d, row: dict, name: str, cy: int, ring) -> None:
+    def _draw_avatar(self, img, d, row, name, cy, ring):
         """Zeichnet das Profilbild (oder einen Initial-Platzhalter) mit farbigem Ring."""
         ax = _X_AVATAR
         ay = cy - _AVA_D // 2
@@ -227,7 +226,7 @@ class LeaderboardImg:
         d.ellipse([ax - 2, ay - 2, ax + _AVA_D + 1, ay + _AVA_D + 1],
                   outline=ring, width=3)
 
-    def _vgrad(self, w: int, h: int, top: tuple, bot: tuple) -> "Image.Image":
+    def _vgrad(self, w, h, top, bot):
         """Senkrechter Farbverlauf (oben 'top' -> unten 'bot') als Hintergrund."""
         col = Image.new("RGB", (1, h))
         px = col.load()
@@ -237,7 +236,7 @@ class LeaderboardImg:
             px[0, y] = tuple(int(top[c] + (bot[c] - top[c]) * f) for c in range(3))
         return col.resize((w, h))
 
-    def _trophy(self, d, x: int, y: int, s: float, color) -> None:
+    def _trophy(self, d, x, y, s, color):
         """Zeichnet einen kleinen Pokal (fuer den Header)."""
         cup_w = s
         # Henkel
@@ -250,7 +249,7 @@ class LeaderboardImg:
         d.rectangle([x + cup_w * 0.44, y + s * 0.5, x + cup_w * 0.56, y + s * 0.72], fill=color)
         d.rectangle([x + cup_w * 0.30, y + s * 0.72, x + cup_w * 0.70, y + s * 0.86], fill=color)
 
-    def _gauge(self, draw, x: int, y: int, w: int, h: int, frac: float, color) -> None:
+    def _gauge(self, draw, x, y, w, h, frac, color):
         """Zeichnet einen Grafana-Balken (Track + gefuellter Teil)."""
         frac = max(0.0, min(1.0, frac))
         r = h // 2
@@ -261,11 +260,11 @@ class LeaderboardImg:
         if fw > 0:
             draw.rounded_rectangle([x, y, x + fw, y + h], radius=r, fill=color)
 
-    def _rank_color(self, i: int):
+    def _rank_color(self, i):
         return {0: _GOLD, 1: _SILVER, 2: _BRONZE}.get(i, None)
 
-    def render_png(self, rows: list[dict], *, title: str = "FLO  LEADERBOARD",
-                   subtitle: str = "") -> "bytes | None":
+    def render_png(self, rows, *, title = "FLO  LEADERBOARD",
+                   subtitle = ""):
         """Rendert die Bestenliste als PNG (bytes). Ohne Pillow: None.
 
         ``rows``: Liste von Dicts mit name, level, xp, coins, voice_secs, msgs, title
@@ -279,7 +278,7 @@ class LeaderboardImg:
             log.exception("Leaderboard-Render fehlgeschlagen")
             return None
 
-    def _render(self, rows: list[dict], title: str, subtitle: str) -> bytes:
+    def _render(self, rows, title, subtitle):
         n = len(rows)
         height = _HEADER_H + _ROW_H * n + _FOOTER_H
         img = self._vgrad(_W, height, _BG_TOP, _BG_BOT)   # Hintergrund mit Verlauf -> Tiefe
@@ -368,7 +367,7 @@ class LeaderboardImg:
         img.save(buf, format="PNG")
         return buf.getvalue()
 
-    def _mini_crown(self, d, cx: float, cy: float, col) -> None:
+    def _mini_crown(self, d, cx, cy, col):
         """Kleine Krone neben dem Namen (Thron/Koenigskrone aus dem Luxus-Shop)."""
         s = 8
         base = cy + s * 0.5
@@ -377,7 +376,7 @@ class LeaderboardImg:
                    (cx + s, cy - s * 0.2), (cx + s, base)], fill=col)
         d.rectangle([cx - s, base + 1, cx + s, base + 3], fill=col)
 
-    def _draw_header(self, d, title: str, subtitle: str) -> None:
+    def _draw_header(self, d, title, subtitle):
         # Goldener Pokal + Titel
         self._trophy(d, 24, 30, 30, _GOLD)
         d.text((74, 28), title, font=self._font(30, bold=True), fill=_WHITE)
@@ -397,7 +396,7 @@ class LeaderboardImg:
         d.text((_X_VOICE, 80), "VOICE-ZEIT", font=fh, fill=_FG_DIM)
         d.line([18, _HEADER_H - 2, _W - 18, _HEADER_H - 2], fill=_BORDER, width=2)
 
-    def _draw_footer(self, d, n: int, height: int) -> None:
+    def _draw_footer(self, d, n, height):
         f = self._font(13)
         txt = f"Flo  ·  sortiert nach XP  ·  {n} Spieler"
         tw = d.textlength(txt, font=f)

@@ -7,7 +7,6 @@
 Das eigentliche Bild-Lesen (Vision) laeuft ueber ai.see_image() und wird von
 bot.py beim KI-Fallback aufgerufen, wenn eine Nachricht ein Bild enthaelt.
 """
-from __future__ import annotations
 
 import asyncio
 import io
@@ -38,24 +37,24 @@ class Media:
     _GEN_RE = re.compile(r"^(?:male|zeichne|generier\w*|bild|img)\s+(.+)", re.I | re.S)
     _QUOTE_RE = re.compile(r"^(?:quote|zitat|meme|spruch)\b\s*(.*)", re.I | re.S)
 
-    def __init__(self) -> None:
-        self._enabled: bool = False
-        self._bot_name: str = "Flo"
+    def __init__(self):
+        self._enabled = False
+        self._bot_name = "Flo"
 
-    def setup(self) -> bool:
+    def setup(self):
         """Aktiviert das Media-Feature (braucht nur Pillow + Internet)."""
         self._bot_name = ai.bot_name()
         self._enabled = True
         log.info("Media-Feature aktiv (Bild generieren + Quote-Meme).")
         return self._enabled
 
-    def is_enabled(self) -> bool:
+    def is_enabled(self):
         return self._enabled
 
-    def _clean_lead(self, text: str) -> str:
+    def _clean_lead(self, text):
         return ai.strip_lead(text)
 
-    async def handle(self, message: discord.Message):
+    async def handle(self, message):
         """Erkennt einen Bild-Befehl. Rueckgabe: HANDLED (selbst gesendet),
         Text/Embed (Hinweis) oder None (kein Bild-Befehl -> naechstes Modul/KI)."""
         if not self._enabled or message.guild is None:
@@ -72,7 +71,7 @@ class Media:
         return None
 
     # --- Bild generieren -----------------------------------------------------
-    async def generate_image(self, prompt: str) -> "bytes | None":
+    async def generate_image(self, prompt):
         """Holt ein generiertes Bild von Pollinations (kostenlos) und gibt saubere
         PNG-Bytes zurueck. None bei Fehler/Timeout."""
         url = self._POLLI.format(p=urllib.parse.quote(prompt[:400]))
@@ -99,7 +98,7 @@ class Media:
             log.exception("Generiertes Bild nicht lesbar")
             return None
 
-    async def _cmd_generate(self, message: discord.Message, prompt: str):
+    async def _cmd_generate(self, message, prompt):
         if not prompt:
             return f"Was soll ich malen? z. B. `{self._bot_name} male einen Drachen aus Neon`."
         data = await self.generate_image(prompt)
@@ -118,13 +117,13 @@ class Media:
         return self.HANDLED
 
     # --- Quote-Meme ----------------------------------------------------------
-    async def _fetch_avatar(self, user) -> "bytes | None":
+    async def _fetch_avatar(self, user):
         try:
             return await asyncio.wait_for(user.display_avatar.with_size(256).read(), timeout=8)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
             return None
 
-    async def _cmd_quote(self, message: discord.Message, text: str):
+    async def _cmd_quote(self, message, text):
         target = message.author
         # Mention-Reste und umschliessende Anfuehrungszeichen aufraeumen
         # (die Karte setzt selbst typografische Anfuehrungszeichen).
