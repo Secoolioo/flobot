@@ -126,18 +126,18 @@ def test_words_tokenizer() -> None:
 
 
 def test_words_zaehlen() -> None:
-    # Fake-Store: reine dict-Logik testen, ohne Datei.
-    words._store = type("S", (), {"data": {"words": {}, "total": 0, "msgs": 0}})()
+    # Fake-Store: reine dict-Logik testen, ohne Datei (Zustand lebt in der Instanz).
+    words.instance._store = type("S", (), {"data": {"words": {}, "total": 0, "msgs": 0}})()
     n = words._count_text("pizza pizza salat", "111")
     assert n == 3
     n = words._count_text("PIZZA!", "222")
     assert n == 1
-    daten = words._store.data
+    daten = words.instance._store.data
     assert daten["words"]["pizza"]["n"] == 3
     assert daten["words"]["pizza"]["u"] == {"111": 2, "222": 1}
     assert daten["words"]["salat"]["n"] == 1
     assert daten["total"] == 4 and daten["msgs"] == 2
-    words._store = None
+    words.instance._store = None
 
 
 # --- Befehls-Normalisierung ----------------------------------------------------------
@@ -204,17 +204,17 @@ def test_attach_avatars_cache_und_fallback() -> None:
     """Avatar-Laden: Erfolg fuellt Cache, Fehlschlag landet im Negativ-Cache,
     zweiter Aufruf kommt ohne Resolver aus dem Cache."""
     orig = economy._resolve_avatar_user
-    economy._AVATAR_CACHE.clear()
-    economy._AVATAR_FAIL.clear()
+    economy.instance._AVATAR_CACHE.clear()
+    economy.instance._AVATAR_FAIL.clear()
     try:
         # 1) Aufloesung schlaegt fehl -> kein Avatar, Negativ-Cache gesetzt.
         async def _none(_guild, _uid):
             return None
-        economy._resolve_avatar_user = _none
+        economy.instance._resolve_avatar_user = _none
         rows = [{"id": 42}]
         asyncio.run(economy._attach_avatars(rows, None))
         assert "avatar" not in rows[0]
-        assert 42 in economy._AVATAR_FAIL
+        assert 42 in economy.instance._AVATAR_FAIL
 
         # 2) Erfolg -> Bytes am Row + im Cache.
         class FakeAsset:
@@ -229,23 +229,23 @@ def test_attach_avatars_cache_und_fallback() -> None:
 
         async def _user(_guild, _uid):
             return FakeUser()
-        economy._resolve_avatar_user = _user
+        economy.instance._resolve_avatar_user = _user
         rows = [{"id": 43}]
         asyncio.run(economy._attach_avatars(rows, None))
         assert rows[0]["avatar"] == b"PNGDATA"
-        assert economy._AVATAR_CACHE[43][0] == b"PNGDATA"
+        assert economy.instance._AVATAR_CACHE[43][0] == b"PNGDATA"
 
         # 3) Zweiter Aufruf: kommt aus dem Cache, Resolver wird nicht gebraucht.
         async def _boom(_guild, _uid):
             raise AssertionError("Resolver darf bei Cache-Treffer nicht laufen")
-        economy._resolve_avatar_user = _boom
+        economy.instance._resolve_avatar_user = _boom
         rows = [{"id": 43}]
         asyncio.run(economy._attach_avatars(rows, None))
         assert rows[0]["avatar"] == b"PNGDATA"
     finally:
-        economy._resolve_avatar_user = orig
-        economy._AVATAR_CACHE.clear()
-        economy._AVATAR_FAIL.clear()
+        economy.instance._resolve_avatar_user = orig
+        economy.instance._AVATAR_CACHE.clear()
+        economy.instance._AVATAR_FAIL.clear()
 
 
 def test_economy_display_name_of() -> None:
@@ -297,8 +297,8 @@ def test_admin_soundboard_toggle() -> None:
             self.saved += 1
 
     fake = FakeStore()
-    alt_store, alt_enabled = voicegags._store, voicegags._enabled
-    voicegags._store, voicegags._enabled = fake, True
+    alt_store, alt_enabled = voicegags.instance._store, voicegags.instance._enabled
+    voicegags.instance._store, voicegags.instance._enabled = fake, True
     try:
         assert voicegags.soundboard_enabled()
         # Owner schaltet aus -> Embed + persistiert + Schalter greift.
@@ -313,7 +313,7 @@ def test_admin_soundboard_toggle() -> None:
         # Fremde koennen nicht schalten.
         assert asyncio.run(admin.handle(_fake_msg(999, "soundboard aus"))) is None
     finally:
-        voicegags._store, voicegags._enabled = alt_store, alt_enabled
+        voicegags.instance._store, voicegags.instance._enabled = alt_store, alt_enabled
 
 
 def test_cmdnorm_admin_sicherheit() -> None:
@@ -345,10 +345,10 @@ def test_luxus_fmt_coins() -> None:
 
 
 def test_luxus_besitz_und_rahmen() -> None:
-    # Fake-Store: Besitz-Logik ohne Datei/Discord testen.
-    luxus._store = type("S", (), {"data": {"users": {}, "throne": {
+    # Fake-Store: Besitz-Logik ohne Datei/Discord testen (Zustand lebt in der Instanz).
+    luxus.instance._store = type("S", (), {"data": {"users": {}, "throne": {
         "owner": "", "preis": luxus.THRONE_START, "n": 0}}})()
-    luxus._enabled = True
+    luxus.instance._enabled = True
     try:
         uid = 42
         assert luxus.get_frame(uid) is None
@@ -367,8 +367,8 @@ def test_luxus_besitz_und_rahmen() -> None:
         assert rows[0].get("throne") and rows[1].get("crown")
         assert not rows[2].get("crown") and not rows[2].get("throne")
     finally:
-        luxus._store = None
-        luxus._enabled = False
+        luxus.instance._store = None
+        luxus.instance._enabled = False
 
 
 def run() -> None:

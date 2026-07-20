@@ -31,40 +31,49 @@ SEASON_IMAGES = {
 }
 
 
-def get_period(t: time) -> str:
-    """Liefert 'nacht' | 'morgen' | 'tag' | 'abend' fuer eine Uhrzeit."""
-    if MORGEN_START <= t < TAG_START:
-        return "morgen"
-    if TAG_START <= t < ABEND_START:
-        return "tag"
-    if ABEND_START <= t < NACHT_START:
-        return "abend"
-    return "nacht"  # 22:00-06:00, laeuft ueber Mitternacht
+class ScheduleLogic:
+    """Objektorientierte Kapselung der Zeit-/Jahreszeit-Logik."""
+
+    def get_period(self, t: time) -> str:
+        """Liefert 'nacht' | 'morgen' | 'tag' | 'abend' fuer eine Uhrzeit."""
+        if MORGEN_START <= t < TAG_START:
+            return "morgen"
+        if TAG_START <= t < ABEND_START:
+            return "tag"
+        if ABEND_START <= t < NACHT_START:
+            return "abend"
+        return "nacht"  # 22:00-06:00, laeuft ueber Mitternacht
+
+    def get_season(self, month: int) -> str:
+        """Meteorologische Jahreszeit fuer einen Monat (Nordhalbkugel)."""
+        if month in (12, 1, 2):
+            return "winter"
+        if month in (3, 4, 5):
+            return "fruehling"
+        if month in (6, 7, 8):
+            return "sommer"
+        return "herbst"  # 9, 10, 11
+
+    def get_image_filename(self, now: datetime) -> str:
+        """Bestimmt den Dateinamen des passenden Icons fuer 'now'."""
+        period = self.get_period(now.time())
+        if period == "tag":
+            return SEASON_IMAGES[self.get_season(now.month)]
+        return {
+            "nacht": NACHT_IMAGE,
+            "morgen": MORGEN_IMAGE,
+            "abend": ABEND_IMAGE,
+        }[period]
+
+    def all_image_filenames(self) -> list[str]:
+        """Alle Bilddateien, die der Bot ueber das Jahr braucht (fuer Checks)."""
+        return [NACHT_IMAGE, MORGEN_IMAGE, ABEND_IMAGE, *SEASON_IMAGES.values()]
 
 
-def get_season(month: int) -> str:
-    """Meteorologische Jahreszeit fuer einen Monat (Nordhalbkugel)."""
-    if month in (12, 1, 2):
-        return "winter"
-    if month in (3, 4, 5):
-        return "fruehling"
-    if month in (6, 7, 8):
-        return "sommer"
-    return "herbst"  # 9, 10, 11
-
-
-def get_image_filename(now: datetime) -> str:
-    """Bestimmt den Dateinamen des passenden Icons fuer 'now'."""
-    period = get_period(now.time())
-    if period == "tag":
-        return SEASON_IMAGES[get_season(now.month)]
-    return {
-        "nacht": NACHT_IMAGE,
-        "morgen": MORGEN_IMAGE,
-        "abend": ABEND_IMAGE,
-    }[period]
-
-
-def all_image_filenames() -> list[str]:
-    """Alle Bilddateien, die der Bot ueber das Jahr braucht (fuer Checks)."""
-    return [NACHT_IMAGE, MORGEN_IMAGE, ABEND_IMAGE, *SEASON_IMAGES.values()]
+# --- Modul-Schnittstelle (rueckwaertskompatibel) -------------------------
+# bot.py und test_logic.py nutzen weiterhin die alten Modulnamen.
+instance = ScheduleLogic()
+get_period = instance.get_period
+get_season = instance.get_season
+get_image_filename = instance.get_image_filename
+all_image_filenames = instance.all_image_filenames

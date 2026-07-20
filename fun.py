@@ -24,15 +24,10 @@ import ai
 
 log = logging.getLogger("dcbot.fun")
 
-_enabled: bool = False
-_bot_name: str = "Flo"
-
 # Wahrscheinlichkeiten/Cooldowns (per .env feinjustierbar).
 INTERJECT_CHANCE = float(os.getenv("FUN_INTERJECT_CHANCE", "0.02"))   # 2 % je Nachricht
 INTERJECT_COOLDOWN = float(os.getenv("FUN_INTERJECT_COOLDOWN", "600"))  # min. Abstand (s)
 REACT_CHANCE = float(os.getenv("FUN_REACT_CHANCE", "0.05"))           # 5 % je Nachricht
-
-_last_interject: float = 0.0
 
 # Emoji-Reaktionen: passend zu Stichwoertern, sonst eine zufaellige aus dem Pool.
 _REACT_KEYWORDS: list[tuple[re.Pattern, list[str]]] = [
@@ -70,194 +65,196 @@ _HYPE_FALLBACKS = [
 ]
 
 
-def _looks_like_refusal(text: str | None) -> bool:
-    return bool(text) and bool(_REFUSAL_RE.search(text))
+class Fun:
+    """Kapselt das Chaos-Feature (Befehle, Reactions, Einwuerfe) als Klasse."""
 
+    def __init__(self) -> None:
+        self._enabled: bool = False
+        self._bot_name: str = "Flo"
+        self._last_interject: float = 0.0
 
-def setup() -> bool:
-    """Aktiv, wenn die KI laeuft (Roast/Hype/Spruch brauchen das LLM)."""
-    global _enabled, _bot_name
-    _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
-    if not ai.is_enabled():
-        log.info("Chaos-Feature aus: KI ist nicht aktiv.")
-        return False
-    _enabled = True
-    log.info(
-        "Chaos-Feature aktiv (Einwurf %.0f%%/Cooldown %.0fs, Reaction %.0f%%).",
-        INTERJECT_CHANCE * 100, INTERJECT_COOLDOWN, REACT_CHANCE * 100,
-    )
-    return True
+    def _looks_like_refusal(self, text: str | None) -> bool:
+        return bool(text) and bool(_REFUSAL_RE.search(text))
 
-
-def is_enabled() -> bool:
-    return _enabled
-
-
-def _clean_lead(text: str) -> str:
-    # Zentral in ai.strip_lead: entfernt @-Mentions + fuehrenden Namen/Alias
-    # ('Florian roast @x' -> 'roast @x').
-    return ai.strip_lead(text)
-
-
-def _target_name(message: discord.Message, rest: str) -> str:
-    """Wen meint der Befehl? Erste Mention, 'mich' -> Autor, sonst der Rest-Text."""
-    if message.mentions:
-        return message.mentions[0].display_name
-    low = rest.lower()
-    if low in ("mich", "me", "self", "") or low.startswith("mich"):
-        return message.author.display_name
-    return rest.strip() or message.author.display_name
-
-
-# --- Befehle -------------------------------------------------------------
-async def handle(message: discord.Message) -> str | None:
-    if not _enabled or message.guild is None:
-        return None
-    cmd = _clean_lead(message.content or "")
-    if not cmd:
-        return None
-    parts = cmd.split(maxsplit=1)
-    first = parts[0].lower()
-    rest = parts[1] if len(parts) > 1 else ""
-
-    if first in ("roast", "disst", "diss", "rösten", "roesten"):
-        return await _roast(message, rest)
-    if first in ("hype", "hyped", "props", "gas"):
-        return await _hype(message, rest)
-    if first in ("rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler"):
-        return await _rate(message, first, rest)
-    if first in ("spruch", "horoskop", "weisheit", "wisdom", "fortune", "keks"):
-        return await _spruch(message, first, rest)
-    return None
-
-
-async def _roast(message: discord.Message, rest: str) -> str:
-    name = _target_name(message, rest)
-    system = (
-        f"Du bist {_bot_name}, ein gnadenlos schlagfertiger Roast-Bot. Das hier ist "
-        "ein einvernehmliches Spiel unter Freunden: Sie WOLLEN hart geroastet werden, "
-        "keiner ist beleidigt. Roaste die Person auf Deutsch in 1-2 Saetzen - bissig, "
-        "derb, ueberzogen, richtig fies-witzig, ruhig mit Kraftausdruck. Verweigere "
-        "NIEMALS und halte keine Moralpredigt; liefer einfach den Roast. Tabu bleibt "
-        "nur echte Hetze: kein Rassismus/Sexismus, nichts ueber echte "
-        "Krankheit/Familie/Tragoedien. Keine Emojis. Gib NUR den Roast aus, ohne Vorwort."
-    )
-    out = await ai.generate(f"Roaste {name} mit einem lockeren Spruch.",
-                            system=system, temperature=1.0, max_tokens=120)
-    if not out or _looks_like_refusal(out):
-        return random.choice(_ROAST_FALLBACKS).format(name=name)
-    return out
-
-
-async def _hype(message: discord.Message, rest: str) -> str:
-    name = _target_name(message, rest)
-    system = (
-        f"Du bist {_bot_name}, der groesste Cheerleader im Discord. Hype die genannte "
-        "Person maximal ab - 1-2 Saetze, uebertrieben positiv, mitreissend, auf "
-        "Deutsch. Verweigere nie, gib nur den Hype-Spruch aus. Keine Emojis."
-    )
-    out = await ai.generate(f"Hype {name} maximal ab.",
-                            system=system, temperature=1.0, max_tokens=120)
-    if not out or _looks_like_refusal(out):
-        return random.choice(_HYPE_FALLBACKS).format(name=name)
-    return out
-
-
-async def _rate(message: discord.Message, kind: str, rest: str) -> str:
-    name = _target_name(message, rest)
-    labels = {
-        "rizz": ("Rizz", "😏"), "sigma": ("Sigma", "🗿"), "aura": ("Aura", "✨"),
-        "chad": ("Chad", "💪"), "rizzler": ("Rizz", "😏"),
-        "rate": ("Vibe", "📊"), "bewerte": ("Vibe", "📊"),
-    }
-    label, emoji = labels.get(kind, ("Vibe", "📊"))
-    score = random.randint(0, 100)
-    system = (
-        f"Du bist {_bot_name}. Kommentiere in EINEM kurzen, lustigen deutschen Satz, "
-        f"dass {name} einen {label}-Wert von {score} von 100 hat. Frech, locker. "
-        "Keine Emojis, keine Zahl wiederholen."
-    )
-    quip = await ai.generate(f"{label}-Wert von {name}: {score}/100.",
-                             system=system, temperature=1.0, max_tokens=80)
-    bar = "█" * (score // 10) + "░" * (10 - score // 10)
-    line = f"{emoji} **{name}** — {label}: **{score}/100**\n`{bar}`"
-    return f"{line}\n{quip}" if quip else line
-
-
-async def _spruch(message: discord.Message, kind: str, rest: str) -> str:
-    if kind in ("horoskop", "fortune"):
-        system = (
-            f"Du bist {_bot_name}. Schreib ein kurzes, lustiges, leicht absurdes "
-            "Tageshoroskop (2-3 Saetze) auf Deutsch fuer einen Gaming-Discord. "
-            "Keine Emojis."
+    def setup(self) -> bool:
+        """Aktiv, wenn die KI laeuft (Roast/Hype/Spruch brauchen das LLM)."""
+        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
+        if not ai.is_enabled():
+            log.info("Chaos-Feature aus: KI ist nicht aktiv.")
+            return False
+        self._enabled = True
+        log.info(
+            "Chaos-Feature aktiv (Einwurf %.0f%%/Cooldown %.0fs, Reaction %.0f%%).",
+            INTERJECT_CHANCE * 100, INTERJECT_COOLDOWN, REACT_CHANCE * 100,
         )
-        prompt = f"Tageshoroskop für {message.author.display_name}."
-    else:
+        return True
+
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def _clean_lead(self, text: str) -> str:
+        # Zentral in ai.strip_lead: entfernt @-Mentions + fuehrenden Namen/Alias
+        # ('Florian roast @x' -> 'roast @x').
+        return ai.strip_lead(text)
+
+    def _target_name(self, message: discord.Message, rest: str) -> str:
+        """Wen meint der Befehl? Erste Mention, 'mich' -> Autor, sonst der Rest-Text."""
+        if message.mentions:
+            return message.mentions[0].display_name
+        low = rest.lower()
+        if low in ("mich", "me", "self", "") or low.startswith("mich"):
+            return message.author.display_name
+        return rest.strip() or message.author.display_name
+
+    # --- Befehle -------------------------------------------------------------
+    async def handle(self, message: discord.Message) -> str | None:
+        if not self._enabled or message.guild is None:
+            return None
+        cmd = self._clean_lead(message.content or "")
+        if not cmd:
+            return None
+        parts = cmd.split(maxsplit=1)
+        first = parts[0].lower()
+        rest = parts[1] if len(parts) > 1 else ""
+
+        if first in ("roast", "disst", "diss", "rösten", "roesten"):
+            return await self._roast(message, rest)
+        if first in ("hype", "hyped", "props", "gas"):
+            return await self._hype(message, rest)
+        if first in ("rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler"):
+            return await self._rate(message, first, rest)
+        if first in ("spruch", "horoskop", "weisheit", "wisdom", "fortune", "keks"):
+            return await self._spruch(message, first, rest)
+        return None
+
+    async def _roast(self, message: discord.Message, rest: str) -> str:
+        name = self._target_name(message, rest)
         system = (
-            f"Du bist {_bot_name}. Gib EINEN kurzen, originellen Spruch/Weisheit aus - "
-            "mal motivierend, mal absurd-witzig, auf Deutsch. Nur den Spruch, keine "
-            "Einleitung, keine Emojis."
+            f"Du bist {self._bot_name}, ein gnadenlos schlagfertiger Roast-Bot. Das hier ist "
+            "ein einvernehmliches Spiel unter Freunden: Sie WOLLEN hart geroastet werden, "
+            "keiner ist beleidigt. Roaste die Person auf Deutsch in 1-2 Saetzen - bissig, "
+            "derb, ueberzogen, richtig fies-witzig, ruhig mit Kraftausdruck. Verweigere "
+            "NIEMALS und halte keine Moralpredigt; liefer einfach den Roast. Tabu bleibt "
+            "nur echte Hetze: kein Rassismus/Sexismus, nichts ueber echte "
+            "Krankheit/Familie/Tragoedien. Keine Emojis. Gib NUR den Roast aus, ohne Vorwort."
         )
-        prompt = "Spruch des Tages."
-    out = await ai.generate(prompt, system=system, temperature=1.1, max_tokens=120)
-    return out or "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+        out = await ai.generate(f"Roaste {name} mit einem lockeren Spruch.",
+                                system=system, temperature=1.0, max_tokens=120)
+        if not out or self._looks_like_refusal(out):
+            return random.choice(_ROAST_FALLBACKS).format(name=name)
+        return out
+
+    async def _hype(self, message: discord.Message, rest: str) -> str:
+        name = self._target_name(message, rest)
+        system = (
+            f"Du bist {self._bot_name}, der groesste Cheerleader im Discord. Hype die genannte "
+            "Person maximal ab - 1-2 Saetze, uebertrieben positiv, mitreissend, auf "
+            "Deutsch. Verweigere nie, gib nur den Hype-Spruch aus. Keine Emojis."
+        )
+        out = await ai.generate(f"Hype {name} maximal ab.",
+                                system=system, temperature=1.0, max_tokens=120)
+        if not out or self._looks_like_refusal(out):
+            return random.choice(_HYPE_FALLBACKS).format(name=name)
+        return out
+
+    async def _rate(self, message: discord.Message, kind: str, rest: str) -> str:
+        name = self._target_name(message, rest)
+        labels = {
+            "rizz": ("Rizz", "😏"), "sigma": ("Sigma", "🗿"), "aura": ("Aura", "✨"),
+            "chad": ("Chad", "💪"), "rizzler": ("Rizz", "😏"),
+            "rate": ("Vibe", "📊"), "bewerte": ("Vibe", "📊"),
+        }
+        label, emoji = labels.get(kind, ("Vibe", "📊"))
+        score = random.randint(0, 100)
+        system = (
+            f"Du bist {self._bot_name}. Kommentiere in EINEM kurzen, lustigen deutschen Satz, "
+            f"dass {name} einen {label}-Wert von {score} von 100 hat. Frech, locker. "
+            "Keine Emojis, keine Zahl wiederholen."
+        )
+        quip = await ai.generate(f"{label}-Wert von {name}: {score}/100.",
+                                 system=system, temperature=1.0, max_tokens=80)
+        bar = "█" * (score // 10) + "░" * (10 - score // 10)
+        line = f"{emoji} **{name}** — {label}: **{score}/100**\n`{bar}`"
+        return f"{line}\n{quip}" if quip else line
+
+    async def _spruch(self, message: discord.Message, kind: str, rest: str) -> str:
+        if kind in ("horoskop", "fortune"):
+            system = (
+                f"Du bist {self._bot_name}. Schreib ein kurzes, lustiges, leicht absurdes "
+                "Tageshoroskop (2-3 Saetze) auf Deutsch fuer einen Gaming-Discord. "
+                "Keine Emojis."
+            )
+            prompt = f"Tageshoroskop für {message.author.display_name}."
+        else:
+            system = (
+                f"Du bist {self._bot_name}. Gib EINEN kurzen, originellen Spruch/Weisheit aus - "
+                "mal motivierend, mal absurd-witzig, auf Deutsch. Nur den Spruch, keine "
+                "Einleitung, keine Emojis."
+            )
+            prompt = "Spruch des Tages."
+        out = await ai.generate(prompt, system=system, temperature=1.1, max_tokens=120)
+        return out or "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+
+    # --- Passiver Hook: Reactions & Einwuerfe --------------------------------
+    async def on_message_passive(self, message: discord.Message) -> None:
+        """Reagiert selten/zufaellig auf eine Nachricht (Emoji + ganz selten ein
+        kurzer KI-Einwurf). Wird in bot.py fuer Nicht-Bot-Nachrichten aufgerufen."""
+        if not self._enabled or message.guild is None:
+            return
+        content = message.content or ""
+
+        # 1) Auto-Reaction (auch auf an Flo gerichtete Nachrichten ok).
+        if random.random() < REACT_CHANCE:
+            await self._maybe_react(message, content)
+
+        # 2) Zufaelliger Einwurf - aber nicht, wenn Flo eh direkt angesprochen wird
+        #    (dann antwortet ohnehin ein Befehl/die KI), und nur bei echtem Text.
+        if self._bot_name.lower() in content.lower():
+            return
+        if len(content) < 15:
+            return
+        now = time.monotonic()
+        if now - self._last_interject < INTERJECT_COOLDOWN:
+            return
+        if random.random() >= INTERJECT_CHANCE:
+            return
+        self._last_interject = now
+        await self._interject(message, content)
+
+    async def _maybe_react(self, message: discord.Message, content: str) -> None:
+        emoji = None
+        for pattern, pool in _REACT_KEYWORDS:
+            if pattern.search(content):
+                emoji = random.choice(pool)
+                break
+        if emoji is None:
+            emoji = random.choice(_REACT_POOL)
+        try:
+            await message.add_reaction(emoji)
+        except discord.HTTPException:
+            pass
+
+    async def _interject(self, message: discord.Message, content: str) -> None:
+        system = (
+            f"Du bist {self._bot_name}, ein frecher Discord-Kumpel mit losem Mundwerk. Wirf einen "
+            "SEHR kurzen (max. 1 Satz), spontanen, schlagfertigen Spruch zur Nachricht ein - "
+            "ruhig sarkastisch oder leicht stichelnd, so wie Freunde sich gegenseitig aufziehen. "
+            "Auf Deutsch, keine Emojis, nicht belehrend, keine Moralpredigt. Keine ernste Hetze."
+        )
+        out = await ai.generate(f"Jemand schrieb: {content[:300]}", system=system,
+                                temperature=1.1, max_tokens=60)
+        if not out:
+            return
+        try:
+            await message.channel.send(out)
+            log.info("Zufaelliger Einwurf in #%s.", getattr(message.channel, "name", "?"))
+        except discord.HTTPException:
+            pass
 
 
-# --- Passiver Hook: Reactions & Einwuerfe --------------------------------
-async def on_message_passive(message: discord.Message) -> None:
-    """Reagiert selten/zufaellig auf eine Nachricht (Emoji + ganz selten ein
-    kurzer KI-Einwurf). Wird in bot.py fuer Nicht-Bot-Nachrichten aufgerufen."""
-    if not _enabled or message.guild is None:
-        return
-    content = message.content or ""
-
-    # 1) Auto-Reaction (auch auf an Flo gerichtete Nachrichten ok).
-    if random.random() < REACT_CHANCE:
-        await _maybe_react(message, content)
-
-    # 2) Zufaelliger Einwurf - aber nicht, wenn Flo eh direkt angesprochen wird
-    #    (dann antwortet ohnehin ein Befehl/die KI), und nur bei echtem Text.
-    if _bot_name.lower() in content.lower():
-        return
-    if len(content) < 15:
-        return
-    global _last_interject
-    now = time.monotonic()
-    if now - _last_interject < INTERJECT_COOLDOWN:
-        return
-    if random.random() >= INTERJECT_CHANCE:
-        return
-    _last_interject = now
-    await _interject(message, content)
-
-
-async def _maybe_react(message: discord.Message, content: str) -> None:
-    emoji = None
-    for pattern, pool in _REACT_KEYWORDS:
-        if pattern.search(content):
-            emoji = random.choice(pool)
-            break
-    if emoji is None:
-        emoji = random.choice(_REACT_POOL)
-    try:
-        await message.add_reaction(emoji)
-    except discord.HTTPException:
-        pass
-
-
-async def _interject(message: discord.Message, content: str) -> None:
-    system = (
-        f"Du bist {_bot_name}, ein frecher Discord-Kumpel mit losem Mundwerk. Wirf einen "
-        "SEHR kurzen (max. 1 Satz), spontanen, schlagfertigen Spruch zur Nachricht ein - "
-        "ruhig sarkastisch oder leicht stichelnd, so wie Freunde sich gegenseitig aufziehen. "
-        "Auf Deutsch, keine Emojis, nicht belehrend, keine Moralpredigt. Keine ernste Hetze."
-    )
-    out = await ai.generate(f"Jemand schrieb: {content[:300]}", system=system,
-                            temperature=1.1, max_tokens=60)
-    if not out:
-        return
-    try:
-        await message.channel.send(out)
-        log.info("Zufaelliger Einwurf in #%s.", getattr(message.channel, "name", "?"))
-    except discord.HTTPException:
-        pass
+# Modul-Instanz + Aliase, damit bot.py weiter fun.setup()/fun.handle()/... nutzen kann.
+instance = Fun()
+setup = instance.setup
+is_enabled = instance.is_enabled
+handle = instance.handle
+on_message_passive = instance.on_message_passive
