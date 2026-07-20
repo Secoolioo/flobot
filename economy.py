@@ -18,6 +18,7 @@ import logging
 import os
 import random
 import re
+import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -269,17 +270,43 @@ class Economy:
         if after > before:
             reward = after * 25
             prof["coins"] += reward
+            self._record_trade(member.id, reward, "levelup", prof["coins"])
             return after
         return None
 
-    def add_coins(self, user_id: int, amount: int) -> int:
+    # Huebsche Quellen-Labels fuers Handelsbuch (Modulname -> Anzeige).
+    _TRADE_SOURCES = {"games": "spiele", "fun": "chaos", "voicegags": "voice"}
+
+    def add_coins(self, user_id: int, amount: int, reason: str = "") -> int:
         """Aendert den Kontostand (auch negativ) und gibt den neuen Stand zurueck.
-        Geht nie unter 0."""
+        Geht nie unter 0. Jede Bewegung landet im Handelsbuch (handel.py):
+        'reason' benennt die Quelle; ohne reason wird das aufrufende Modul
+        ermittelt (casino, spiele, luxus, admin, ...)."""
         if not self._enabled:
             return 0
+        if not reason:
+            try:
+                mod = sys._getframe(1).f_globals.get("__name__", "?")
+                reason = self._TRADE_SOURCES.get(mod, mod)
+            except Exception:  # noqa: BLE001 - Quelle ist nur Doku
+                reason = "?"
         prof = self._profile(user_id)
-        prof["coins"] = max(0, prof["coins"] + amount)
+        alt = prof["coins"]
+        prof["coins"] = max(0, alt + amount)
+        # Echtes Delta buchen (bei leerem Konto kann weniger abgehen als gewollt).
+        self._record_trade(user_id, prof["coins"] - alt, reason, prof["coins"])
         return prof["coins"]
+
+    def _record_trade(self, uid: int, delta: int, source: str, balance: int) -> None:
+        """Meldet eine Coin-Bewegung ans Handelsbuch. Lazy-Import (kein
+        Import-Zyklus) und niemals fatal - Buchhaltung sprengt kein Spiel."""
+        if not delta:
+            return
+        try:
+            import handel
+            handel.record(uid, delta, source, balance)
+        except Exception:  # noqa: BLE001
+            pass
 
     def get_coins(self, user_id: int) -> int:
         return self._profile(user_id)["coins"] if self._enabled else 0
@@ -441,6 +468,7 @@ class Economy:
             fehlt = item["price"] - prof["coins"]
             return f"Zu teuer – dir fehlen noch {fehlt} {self.COIN}."
         prof["coins"] -= item["price"]
+        self._record_trade(member.id, -item["price"], "shop", prof["coins"])
         owned.append({"text": item["text"], "label": item["label"],
                       "rarity": item["rarity"]})
         prof["title"] = item["label"]
@@ -472,7 +500,8 @@ class Economy:
             return
         self._last_msg_xp[key] = now
 
-        self.add_coins(message.author.id, random.randint(*self.COINS_PER_MSG))
+        self.add_coins(message.author.id, random.randint(*self.COINS_PER_MSG),
+                       reason="nachricht")
         new_level = await self.add_xp(message.author, random.randint(*self.XP_PER_MSG))
         if new_level is not None:
             await self._announce_levelup(message.guild, message.author, new_level, message.channel)
@@ -869,6 +898,7 @@ class Economy:
         bonus = min(prof["streak"], 7) * 20
         total = 100 + bonus
         prof["coins"] += total
+        self._record_trade(member.id, total, "daily", prof["coins"])
         await self._flush()
         return (f"🎁 Tagesbonus: **+{total} {self.COIN}**! "
                 f"(Streak: {prof['streak']} Tag(e), Bonus +{bonus})")
@@ -889,8 +919,8 @@ class Economy:
             return f"Wie viel denn? `{self._bot_name} pay @{ziel.display_name} 100` (auch `1k`)"
         if self.get_coins(message.author.id) < betrag:
             return f"Du hast nicht genug. Kontostand: {self.get_coins(message.author.id)} {self.COIN}."
-        self.add_coins(message.author.id, -betrag)
-        self.add_coins(ziel.id, betrag)
+        self.add_coins(message.author.id, -betrag, reason="pay")
+        self.add_coins(ziel.id, betrag, reason="pay")
         await self._flush()
         return f"✅ {message.author.display_name} → {ziel.display_name}: **{betrag} {self.COIN}**."
 

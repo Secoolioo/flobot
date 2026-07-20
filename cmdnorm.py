@@ -62,6 +62,9 @@ class CmdNorm:
         "adminhilfe", "admin",
         # luxus
         "luxus", "luxury", "prestige", "thron", "throne",
+        # handel (Coin-Handelsbuch)
+        "handel", "handelsbuch", "transaktion", "transaktionen", "verlauf",
+        "trades",
         # neue casino-spiele
         "hilo", "tower", "turm", "sieben", "baccarat", "bakkarat", "punto",
         "doppelt",
@@ -117,6 +120,8 @@ class CmdNorm:
         "nimmt", "profi", "ansagen",
         # 1 Tippfehler von 'turm' - 'Sturm' ist Alltagssprache:
         "sturm",
+        # 1 Tippfehler von 'handel' - normale Verben/Woerter nicht kapern:
+        "handeln", "wandel",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

@@ -2110,6 +2110,148 @@ class Render:
         return self._png(img)
 
 
+    def handel_card(self, name: str, avatar: "bytes | None", stats: dict,
+                    balance: int = 0) -> io.BytesIO:
+        """Coin-Handelsbuch als Bild: Kopf mit Avatar+Name+Kontostand, vier
+        Kennzahlen, Netto-Chart der letzten 14 Tage, Aufschluesselung nach
+        Quelle und die juengsten Einzelbuchungen.
+
+        ``stats``: {in, out, n, by: {quelle: {in, out, n}}, days:
+                    {"YYYY-MM-DD": {in, out}}, last: [{t, src, amt, bal}]}
+        """
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+        import os as _os
+
+        def _tsd(n: int) -> str:
+            return f"{n:,}".replace(",", ".")
+
+        by = dict(stats.get("by") or {})
+        srcs = sorted(by.items(), key=lambda kv: kv[1].get("n", 0), reverse=True)[:8]
+        letzte = list(stats.get("last") or [])[-6:][::-1]
+
+        W = 900
+        head = 176
+        chart_h = 200          # Titel + Balkenfeld + Tages-Labels
+        src_h = len(srcs) * 44 + (10 if srcs else 0)
+        last_h = (30 + len(letzte) * 30 + 6) if letzte else 0
+        H = head + chart_h + src_h + last_h + 34
+        img = self._vgrad(W, H, (23, 28, 38), (11, 13, 20)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        d.rounded_rectangle([6, 6, W - 6, H - 6], radius=18, outline=(48, 53, 63), width=2)
+
+        # Avatar + Name (gleiches Muster wie die Casino-Bilanz)
+        AD = 84
+        ax, ay = 34, 28
+        circ = None
+        if avatar:
+            try:
+                im = ImageOps.fit(Image.open(io.BytesIO(avatar)).convert("RGB"),
+                                  (AD, AD), method=self._RESAMPLE)
+                mask = Image.new("L", (AD, AD), 0)
+                ImageDraw.Draw(mask).ellipse([0, 0, AD - 1, AD - 1], fill=255)
+                circ = im.convert("RGBA")
+                circ.putalpha(mask)
+            except Exception:  # noqa: BLE001
+                circ = None
+        if circ is not None:
+            img.paste(circ, (ax, ay), circ)
+            d.ellipse([ax - 4, ay - 4, ax + AD + 3, ay + AD + 3],
+                      outline=(87, 148, 242), width=4)
+        safe = self._clean_text(name)[:26] or "Spieler"
+        d.text((ax + AD + 24, ay + 4), safe, font=self._font(38), fill=self._WHITE)
+        d.text((ax + AD + 24, ay + 54), "COIN-HANDELSBUCH", font=self._font(17),
+               fill=(150, 155, 168))
+        d.text((W - 34, ay + 8), "KONTOSTAND", font=self._font(15),
+               fill=(120, 126, 140), anchor="ra")
+        d.text((W - 34, ay + 30), _tsd(int(balance)), font=self._font(28),
+               fill=self._GOLD, anchor="ra")
+
+        # Kennzahlen-Zeile
+        ein, aus = int(stats.get("in", 0)), int(stats.get("out", 0))
+        net = ein - aus
+        net_col = self._GREEN if net >= 0 else self._RED_HOT
+        kennz = [
+            ("TRANSAKTIONEN", _tsd(stats.get("n", 0)), self._WHITE),
+            ("EINGENOMMEN", f"+{_tsd(ein)}" if ein else "0", self._GREEN),
+            ("AUSGEGEBEN", f"-{_tsd(aus)}" if aus else "0", self._RED_HOT),
+            ("NETTO", f"{'+' if net >= 0 else ''}{_tsd(net)}", net_col),
+        ]
+        seg = (W - 68) // len(kennz)
+        for i, (label, val, col) in enumerate(kennz):
+            sx = 34 + i * seg
+            d.text((sx, 124), label, font=self._font(15), fill=(120, 126, 140))
+            d.text((sx, 144), val, font=self._font(26), fill=col)
+
+        # Netto-Chart: ein Balken je Tag (letzte 14 Tage), gruen hoch / rot runter.
+        d.text((34, head + 6), "NETTO PRO TAG – LETZTE 14 TAGE",
+               font=self._font(15), fill=(120, 126, 140))
+        days = dict(stats.get("days") or {})
+        tz = ZoneInfo(_os.getenv("TIMEZONE", "Europe/Berlin"))
+        heute = datetime.now(tz).date()
+        reihe = []
+        for i in range(13, -1, -1):
+            tag = heute - timedelta(days=i)
+            e = days.get(tag.strftime("%Y-%m-%d")) or {}
+            reihe.append((tag, int(e.get("in", 0)) - int(e.get("out", 0))))
+        peak = max((abs(v) for _t, v in reihe), default=0) or 1
+        cy = head + 34 + 66                      # Nulllinie
+        half = 62                                # max. Balkenhoehe je Richtung
+        d.line([(34, cy), (W - 34, cy)], fill=(58, 63, 74), width=2)
+        slot = (W - 68) / 14
+        for i, (tag, v) in enumerate(reihe):
+            bx = 34 + i * slot + slot / 2
+            bw = min(36, slot - 12)
+            bh = int(round(abs(v) / peak * half))
+            if v > 0:
+                d.rounded_rectangle([bx - bw / 2, cy - max(bh, 3), bx + bw / 2, cy - 1],
+                                    radius=3, fill=self._GREEN)
+            elif v < 0:
+                d.rounded_rectangle([bx - bw / 2, cy + 1, bx + bw / 2, cy + max(bh, 3)],
+                                    radius=3, fill=self._RED_HOT)
+            else:
+                d.line([(bx - bw / 2, cy), (bx + bw / 2, cy)], fill=(90, 96, 108), width=2)
+            if i % 2 == 0:                       # jeden 2. Tag beschriften
+                d.text((bx, cy + half + 10), tag.strftime("%d.%m."),
+                       font=self._font(13), fill=(120, 126, 140), anchor="ma")
+
+        # Aufschluesselung nach Quelle (Balken = Anzahl, rechts das Netto)
+        y = head + chart_h + 10
+        if srcs:
+            src_peak = max(v.get("n", 0) for _s, v in srcs) or 1
+            for src, v in srcs:
+                snet = int(v.get("in", 0)) - int(v.get("out", 0))
+                col = self._GREEN if snet >= 0 else self._RED_HOT
+                d.text((34, y + 2), src.upper()[:14], font=self._font(18),
+                       fill=(200, 205, 218))
+                self._hbar(d, 220, y + 4, W - 470, 18, v.get("n", 0) / src_peak,
+                           (87, 148, 242))
+                d.text((W - 232, y + 2), f"{v.get('n', 0)}×", font=self._font(18),
+                       fill=(150, 155, 168))
+                d.text((W - 34, y + 2), f"{'+' if snet >= 0 else ''}{_tsd(snet)}",
+                       font=self._font(18), fill=col, anchor="ra")
+                y += 44
+
+        # Juengste Einzelbuchungen (neueste zuerst)
+        if letzte:
+            d.text((34, y + 4), "LETZTE TRANSAKTIONEN", font=self._font(15),
+                   fill=(120, 126, 140))
+            y += 30
+            for e in letzte:
+                amt = int(e.get("amt", 0))
+                col = self._GREEN if amt >= 0 else self._RED_HOT
+                d.text((34, y + 2), str(e.get("t", "")), font=self._font(16),
+                       fill=(150, 155, 168))
+                d.text((190, y + 2), str(e.get("src", ""))[:16], font=self._font(16),
+                       fill=(200, 205, 218))
+                d.text((W - 214, y + 2), f"{'+' if amt >= 0 else ''}{_tsd(amt)}",
+                       font=self._font(16), fill=col, anchor="ra")
+                d.text((W - 34, y + 2), f"Konto: {_tsd(int(e.get('bal', 0)))}",
+                       font=self._font(16), fill=(120, 126, 140), anchor="ra")
+                y += 30
+        return self._png(img)
+
+
     # === HiLo-Karte ============================================================
     def hilo_card(self, rank: str, suit: str, *, streak: int, mult: float,
                   state: str = "") -> io.BytesIO:
@@ -2227,6 +2369,7 @@ SLOT_KEYS = Render.SLOT_KEYS
 blackjack_table = instance.blackjack_table
 blackjack_table_anim = instance.blackjack_table_anim
 casino_stats_card = instance.casino_stats_card
+handel_card = instance.handel_card
 coin_flip = instance.coin_flip
 coin_flip_anim = instance.coin_flip_anim
 crash_chart = instance.crash_chart

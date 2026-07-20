@@ -31,6 +31,7 @@ import economy
 import fun
 import food
 import games
+import handel
 import luxus
 import media
 import moderation
@@ -140,6 +141,10 @@ ADMIN_ENABLED = admin.setup()
 # Luxus-Shop ('Flo luxus'): Prestige-Coin-Senke von 15k bis 1 MILLIARDE
 # (Level-Karten-Rahmen, Krone, Imperium) + DER THRON (Unikat, eroberbar).
 LUXUS_ENABLED = luxus.setup()
+# Coin-Handelsbuch ('Flo handel'): dokumentiert JEDE Coin-Bewegung (Casino,
+# Spiele, Daily, Shop, Pay, ...) und zeigt sie als Statistik-Karte. Braucht
+# economy (dort liegt der Coin-Topf).
+HANDEL_ENABLED = handel.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -170,7 +175,7 @@ WEISHEITEN = [
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
-     WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED]
+     WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -331,6 +336,7 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
         ("flo shop · kaufen 3", "Tages-Titel (2 Uhr neu, Legendary wird ausgerufen)"),
         ("flo inventar · titel <name>", "Titel verwalten & anlegen"),
         ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
+        ("flo handel [@wer]", "Coin-Handelsbuch: alle Transaktionen als Statistik"),
     ]),
     "casino": ("Casino", 0xE91E63, [
         ("flo casino", "Übersicht - alles per Button"),
@@ -382,7 +388,7 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
     "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
-    "economy": "level · daily · shop · luxus", "casino": "13 Spiele · stats",
+    "economy": "level · daily · shop · handel", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
     "chaos": "roast · rate · horoskop",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
@@ -1176,6 +1182,7 @@ class FloBot(discord.Client):
             (GAMES_ENABLED, games.handle),
             (CASINO_ENABLED, casino.handle),
             (LUXUS_ENABLED, luxus.handle),
+            (HANDEL_ENABLED, handel.handle),
             (WORDS_ENABLED, words.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FOOD_ENABLED, food.handle),

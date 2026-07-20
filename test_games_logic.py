@@ -371,6 +371,58 @@ def test_luxus_besitz_und_rahmen() -> None:
         luxus.instance._enabled = False
 
 
+# --- Coin-Handelsbuch ------------------------------------------------------------
+def test_handel_buchhaltung() -> None:
+    """record() fuehrt Gesamtsummen, Quellen, Tages-Buckets und Einzelbuchungen;
+    economy.add_coins bucht mit echtem Delta und erkanntem Quell-Modul."""
+    import handel
+
+    class FakeStore:
+        def __init__(self, data):
+            self.data = data
+
+        async def save(self):
+            pass
+
+    alt = (handel.instance._store, handel.instance._enabled)
+    handel.instance._store, handel.instance._enabled = FakeStore({"users": {}}), True
+    try:
+        handel.record(7, +150, "casino", 1150)
+        handel.record(7, -100, "casino", 1050)
+        handel.record(7, +120, "daily", 1170)
+        handel.record(7, 0, "casino", 1170)      # 0-Buchung wird ignoriert
+        u = handel.instance._store.data["users"]["7"]
+        assert u["n"] == 3 and u["in"] == 270 and u["out"] == 100
+        assert u["by"]["casino"] == {"in": 150, "out": 100, "n": 2}
+        assert u["by"]["daily"]["in"] == 120
+        assert len(u["days"]) == 1 and len(u["last"]) == 3
+        tag = next(iter(u["days"].values()))
+        assert tag["in"] == 270 and tag["out"] == 100
+        assert u["last"][-1]["amt"] == 120 and u["last"][-1]["bal"] == 1170
+
+        # economy-Integration: echtes Delta + Quelle (Aufrufer-Modul) landen hier.
+        alt_eco = (economy.instance._store, economy.instance._enabled)
+        economy.instance._store = FakeStore({"users": {}})
+        economy.instance._enabled = True
+        try:
+            economy.add_coins(8, 500)
+            economy.add_coins(8, -800)           # Konto 500 -> echtes Delta -500
+            u8 = handel.instance._store.data["users"]["8"]
+            assert u8["in"] == 500 and u8["out"] == 500
+            # Quelle = Aufrufer-Modul (beim direkten Testlauf '__main__').
+            quelle = next(iter(u8["by"]))
+            assert quelle in ("test_games_logic", "__main__"), quelle
+            assert u8["by"][quelle] == {"in": 500, "out": 500, "n": 2}
+        finally:
+            economy.instance._store, economy.instance._enabled = alt_eco
+
+        # Karte rendert die Daten als PNG (auch mit leeren Tagen im Chart).
+        buf = render.handel_card("Tester", None, u, 1170)
+        assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        handel.instance._store, handel.instance._enabled = alt
+
+
 # --- Casino-Bilanz: Gewonnen/Verloren-Summen -----------------------------------
 def test_casino_bilanz_gewonnen_verloren() -> None:
     """record() zaehlt Brutto-Gewinne und -Verluste getrennt; Alt-Profile ohne
