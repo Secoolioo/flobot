@@ -40,12 +40,6 @@ except ImportError:  # pragma: no cover - nur relevant ohne Paket
 
 log = logging.getLogger("dcbot.music")
 
-# --- Konfiguration (in setup() aus der .env gelesen) ---------------------
-_enabled: bool = False
-_bot_name: str = "Flo"
-_spotify_id: str = ""
-_spotify_secret: str = ""
-
 # Sentinel: das Modul hat selbst geantwortet (Embed + Buttons direkt gesendet).
 # bot.py erkennt das und schickt KEINE zusaetzliche Antwort.
 HANDLED = object()
@@ -70,32 +64,6 @@ _COL_QUEUE = 0x5865F2    # Blurple - Warteschlange / hinzugefuegt
 _COL_CTRL = 0xFEE75C     # Gelb   - Steuerung (Pause/Skip/Lautstaerke)
 _COL_INFO = 0x95A5A6     # Grau   - neutrale Info
 _COL_ERR = 0xED4245      # Rot    - geht gerade nicht
-
-
-def _fmt_dur(secs: int | None) -> str:
-    """Sekunden -> 'm:ss' bzw. 'h:mm:ss' (leer, wenn unbekannt)."""
-    if not secs or secs <= 0:
-        return ""
-    secs = int(secs)
-    h, rem = divmod(secs, 3600)
-    m, s = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-
-
-def _short(text: str, limit: int = 60) -> str:
-    """Kuerzt lange Titel fuer Listen (haelt Embed-Felder unter dem 1024er-Limit)."""
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def _embed(desc: str = "", *, title: str | None = None, color: int = _COL_INFO) -> discord.Embed:
-    """Kleiner Embed-Baukasten fuer einzeilige Antworten."""
-    e = discord.Embed(color=color)
-    if title:
-        e.title = title
-    if desc:
-        e.description = desc
-    return e
 
 # Audio-Optionen fuer yt-dlp und FFmpeg (bewaehrte Standardwerte).
 _YDL_OPTS = {
@@ -146,20 +114,6 @@ _REVERB_SUFFIX = (
     "extrastereo=m=1.5,volume=2.2,"
     "alimiter=level=false:limit=0.89:attack=2:release=80"
 )
-
-
-def _build_audio_filter(speed: float) -> str | None:
-    """Baut die -filter:a-Kette fuer die gewuenschte Geschwindigkeit.
-
-    None  -> Normaltempo, kein Filter.
-    >1.0  -> reines atempo (Tonhoehe bleibt, kein Reverb) - Speed-up.
-    <1.0  -> slowed + reverb (asetrate-Pitchdrop + Hall-Kette)."""
-    if abs(speed - 1.0) <= 1e-3:
-        return None
-    if speed > 1.0:
-        return f"atempo={speed:.3f}"
-    rate = round(_AUDIO_RATE * speed)   # 0.5 -> 24000 (Oktave tiefer), 0.75 -> 36000
-    return f"aresample={_AUDIO_RATE},asetrate={rate},aresample={_AUDIO_RATE},{_REVERB_SUFFIX}"
 
 
 # --- URL-Erkennung -------------------------------------------------------
@@ -226,59 +180,6 @@ _VOLUME_WORDS = {
 }
 # Kanonische Schreibweisen fuer den Tippfehler-Abgleich (difflib).
 _VOLUME_CANON = ("lautstärke", "lautstaerke", "lautstarke", "volume")
-
-
-def _is_volume_word(word: str) -> bool:
-    """True, wenn das Wort 'Lautstaerke' meint - inkl. Kurzform (ls) und Tippfehler."""
-    w = word.lower().strip(".:!?")
-    if w in ("lauter", "louder", "lautr", "leiser", "quieter", "leise"):
-        return False  # relative Befehle - die laufen ueber _VOLUME_UP/DOWN_RE
-    if w in _VOLUME_WORDS:
-        return True
-    # Tippfehler: ab 5 Zeichen nah an einer kanonischen Schreibweise.
-    return len(w) >= 5 and bool(
-        difflib.get_close_matches(w, _VOLUME_CANON, n=1, cutoff=0.8)
-    )
-
-
-# --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
-_sp_token = {"value": "", "exp": 0.0}
-
-
-def setup() -> bool:
-    """Liest die Konfiguration und prueft die Voraussetzungen.
-
-    Rueckgabe: True, wenn das Musik-Feature aktiv ist.
-    """
-    global _enabled, _bot_name, _spotify_id, _spotify_secret
-
-    _bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
-    _spotify_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
-    _spotify_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
-
-    if yt_dlp is None:
-        log.warning("Musik-Feature aus: Paket 'yt-dlp' ist nicht installiert.")
-        return False
-    if shutil.which("ffmpeg") is None:
-        log.warning("Musik-Feature aus: 'ffmpeg' nicht gefunden (z. B. 'apt install ffmpeg').")
-        return False
-    try:  # Voice braucht PyNaCl.
-        import nacl  # noqa: F401
-    except ImportError:
-        log.warning("Musik-Feature aus: Paket 'PyNaCl' ist nicht installiert (Voice).")
-        return False
-
-    _enabled = True
-    spotify_ok = bool(_spotify_id and _spotify_secret)
-    log.info(
-        "Musik-Feature aktiv (YouTube: ja, Spotify: %s).",
-        "ja" if spotify_ok else "nein - nur YouTube-Links",
-    )
-    return True
-
-
-def is_enabled() -> bool:
-    return _enabled
 
 
 # --- Track + Player ------------------------------------------------------
@@ -610,515 +511,6 @@ class GuildPlayer:
                         self._reconnect_fails, VOICE_RECONNECT_MAX_FAILS)
 
 
-_players: dict[int, GuildPlayer] = {}
-
-
-def _player_for(guild_id: int) -> GuildPlayer:
-    player = _players.get(guild_id)
-    if player is None:
-        player = GuildPlayer(loop=asyncio.get_running_loop())
-        _players[guild_id] = player
-    return player
-
-
-async def heal_voice(guild: "discord.Guild") -> None:
-    """Vom bot.py-Watchdog-Loop aufgerufen: haelt die Voice-Verbindung dieses
-    Servers am Leben und repariert Desyncs selbst. No-op, wenn kein Player aktiv."""
-    player = _players.get(guild.id)
-    if player is not None:
-        await player.heal(guild)
-
-
-def is_voice_busy(guild_id: int) -> bool:
-    """True, wenn die Musik den Voice-Channel dieses Servers belegt - auch in
-    Songpausen, beim Tempo-Wechsel oder waehrend eines Reconnects. voicegags
-    fragt das, um nicht in den Musik-Voice-Client reinzugraetschen."""
-    player = _players.get(guild_id)
-    if player is None:
-        return False
-    if player.active_channel_id is not None:
-        return True   # Bot soll in einem Kanal sein (Session laeuft) -> belegt
-    return player.voice is not None and player.voice.is_connected()
-
-
-# --- yt-dlp / Spotify Helfer ---------------------------------------------
-async def _extract(query_or_url: str) -> Track:
-    """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf."""
-    loop = asyncio.get_running_loop()
-
-    def work() -> dict:
-        with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:  # type: ignore[union-attr]
-            info = ydl.extract_info(query_or_url, download=False)
-        if info and "entries" in info:  # Suche/Playlist -> ersten Treffer nehmen
-            entries = [e for e in info["entries"] if e]
-            if not entries:
-                raise ValueError("keine Treffer")
-            info = entries[0]
-        return info
-
-    info = await loop.run_in_executor(None, work)
-    stream_url = info.get("url")
-    if not stream_url:
-        raise ValueError("kein abspielbarer Stream gefunden")
-    return Track(
-        title=info.get("title", "Unbekannter Titel"),
-        stream_url=stream_url,
-        webpage_url=info.get("webpage_url", ""),
-        duration=info.get("duration"),
-        thumbnail=info.get("thumbnail") or "",
-    )
-
-
-async def _resolve_track(track: Track) -> Track:
-    """Loest einen vorgemerkten Track auf. track.query = komplette yt-dlp-Eingabe
-    (direkte URL ODER 'ytsearch1:Kuenstler - Titel')."""
-    resolved = await _extract(track.query)
-    resolved.requested_by = track.requested_by
-    resolved.query = track.query
-    return resolved
-
-
-def _lazy_track(extract_input: str, title: str, requested_by: str) -> Track:
-    """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
-    extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename.
-    """
-    return Track(
-        title=title, stream_url="", query=extract_input, requested_by=requested_by
-    )
-
-
-async def _youtube_playlist(url: str) -> list[tuple[str, str]] | None:
-    """YouTube-Playlist -> Liste (video_url, titel). Schnell via extract_flat;
-    die einzelnen Videos werden erst beim Abspielen aufgeloest."""
-    loop = asyncio.get_running_loop()
-    opts = dict(_YDL_OPTS)
-    opts["noplaylist"] = False
-    opts["extract_flat"] = "in_playlist"
-    opts["playlistend"] = MAX_QUEUE
-    opts["ignoreerrors"] = True  # einzelne kaputte Videos ueberspringen, nicht crashen
-
-    def work() -> dict | None:
-        with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
-            return ydl.extract_info(url, download=False)
-
-    try:
-        info = await loop.run_in_executor(None, work)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("YouTube-Playlist nicht ladbar (%s): %s", url, exc)
-        return None
-
-    entries = info.get("entries") if info else None
-    if not entries:
-        return None
-    out: list[tuple[str, str]] = []
-    for e in entries:
-        if not e:
-            continue
-        vid = e.get("url") or e.get("id")
-        if not vid:
-            continue
-        if not str(vid).startswith("http"):
-            vid = f"https://www.youtube.com/watch?v={vid}"
-        out.append((vid, e.get("title", "Unbekannter Titel")))
-    return out or None
-
-
-async def _spotify_token() -> str:
-    """Holt (und cached) ein Spotify-App-Token (Client-Credentials-Flow)."""
-    if not (_spotify_id and _spotify_secret):
-        return ""
-    now = time.time()
-    if _sp_token["value"] and _sp_token["exp"] > now + 30:
-        return _sp_token["value"]  # type: ignore[return-value]
-
-    auth = base64.b64encode(f"{_spotify_id}:{_spotify_secret}".encode()).decode()
-    timeout = aiohttp.ClientTimeout(total=12)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.post(
-                "https://accounts.spotify.com/api/token",
-                data={"grant_type": "client_credentials"},
-                headers={"Authorization": f"Basic {auth}"},
-            ) as r:
-                if r.status != 200:
-                    log.error("Spotify-Token fehlgeschlagen (HTTP %s).", r.status)
-                    return ""
-                data = await r.json()
-    except (aiohttp.ClientError, OSError) as exc:
-        log.error("Spotify nicht erreichbar: %s", exc)
-        return ""
-
-    _sp_token["value"] = data.get("access_token", "")
-    _sp_token["exp"] = now + float(data.get("expires_in", 3600))
-    return _sp_token["value"]  # type: ignore[return-value]
-
-
-async def _spotify_to_query(url: str) -> str | None:
-    """Spotify-Track-Link -> 'Kuenstler - Titel' (fuer die YouTube-Suche)."""
-    m = _SPOTIFY_TRACK_RE.search(url)
-    if not m:
-        return None
-    token = await _spotify_token()
-    if not token:
-        return None
-    track_id = m.group(1)
-    timeout = aiohttp.ClientTimeout(total=12)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get(
-                f"https://api.spotify.com/v1/tracks/{track_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            ) as r:
-                if r.status != 200:
-                    log.error("Spotify-Track-Abruf fehlgeschlagen (HTTP %s).", r.status)
-                    return None
-                data = await r.json()
-    except (aiohttp.ClientError, OSError) as exc:
-        log.error("Spotify nicht erreichbar: %s", exc)
-        return None
-
-    name = data.get("name", "")
-    artists = ", ".join(a.get("name", "") for a in data.get("artists", []))
-    query = f"{artists} - {name}".strip(" -")
-    return query or None
-
-
-async def _spotify_list_tracks(url: str) -> list[str] | None:
-    """Spotify-Playlist-/Album-Link -> Liste 'Kuenstler - Titel' (max. MAX_QUEUE)."""
-    m = _SPOTIFY_LIST_RE.search(url)
-    if not m:
-        return None
-    kind = (m.group(1) or m.group(2) or "").lower()
-    list_id = m.group(3)
-    token = await _spotify_token()
-    if not token:
-        return None
-
-    if kind == "playlist":
-        next_url = (
-            f"https://api.spotify.com/v1/playlists/{list_id}/tracks"
-            "?limit=100&fields=items(track(name,artists(name))),next"
-        )
-    else:  # album
-        next_url = f"https://api.spotify.com/v1/albums/{list_id}/tracks?limit=50"
-
-    queries: list[str] = []
-    headers = {"Authorization": f"Bearer {token}"}
-    timeout = aiohttp.ClientTimeout(total=15)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            while next_url and len(queries) < MAX_QUEUE:
-                async with s.get(next_url, headers=headers) as r:
-                    if r.status != 200:
-                        log.error("Spotify-%s-Abruf fehlgeschlagen (HTTP %s).", kind, r.status)
-                        break
-                    data = await r.json()
-                for item in data.get("items", []):
-                    tr = item.get("track") if kind == "playlist" else item
-                    if not tr:
-                        continue
-                    name = tr.get("name", "")
-                    artists = ", ".join(a.get("name", "") for a in tr.get("artists", []))
-                    q = f"{artists} - {name}".strip(" -")
-                    if q:
-                        queries.append(q)
-                next_url = data.get("next")
-    except (aiohttp.ClientError, OSError) as exc:
-        log.error("Spotify nicht erreichbar: %s", exc)
-        return None
-    return queries
-
-
-def _deep_find(obj: object, key: str) -> object:
-    """Sucht rekursiv den ersten Wert zu 'key' in verschachtelten dict/list."""
-    if isinstance(obj, dict):
-        if key in obj:
-            return obj[key]
-        for value in obj.values():
-            found = _deep_find(value, key)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for value in obj:
-            found = _deep_find(value, key)
-            if found is not None:
-                return found
-    return None
-
-
-async def _spotify_playlist_via_embed(url: str) -> list[str] | None:
-    """Spotify-Playlist -> Liste 'Kuenstler - Titel' ueber das oeffentliche Embed.
-
-    Die Web-API verbietet Client-Credentials-Apps den Playlist-Track-Zugriff
-    (HTTP 403). Das Embed (open.spotify.com/embed/playlist/<id>) liefert die
-    Songliste dagegen ohne Login im __NEXT_DATA__-JSON.
-    """
-    m = _SPOTIFY_LIST_RE.search(url)
-    if not m:
-        return None
-    list_id = m.group(3)
-    embed_url = f"https://open.spotify.com/embed/playlist/{list_id}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-        "Accept-Language": "de,en;q=0.8",
-    }
-    timeout = aiohttp.ClientTimeout(total=15)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get(embed_url, headers=headers) as r:
-                if r.status != 200:
-                    log.error(
-                        "Spotify-Playlist-Embed fehlgeschlagen (HTTP %s).", r.status
-                    )
-                    return None
-                html = await r.text()
-    except (aiohttp.ClientError, OSError) as exc:
-        log.error("Spotify-Embed nicht erreichbar: %s", exc)
-        return None
-
-    m2 = _NEXT_DATA_RE.search(html)
-    if not m2:
-        log.error("Spotify-Embed: __NEXT_DATA__ nicht gefunden (Struktur geaendert?).")
-        return None
-    try:
-        data = json.loads(m2.group(1))
-    except json.JSONDecodeError as exc:
-        log.error("Spotify-Embed: JSON nicht lesbar (%s).", exc)
-        return None
-
-    track_list = _deep_find(data, "trackList")
-    if not isinstance(track_list, list) or not track_list:
-        log.error("Spotify-Embed: keine Songliste im JSON gefunden.")
-        return None
-
-    queries: list[str] = []
-    for entry in track_list:
-        if not isinstance(entry, dict):
-            continue
-        title = str(entry.get("title") or "").strip()
-        artist = str(entry.get("subtitle") or "").strip()
-        query = f"{artist} - {title}".strip(" -")
-        if query:
-            queries.append(query)
-        if len(queries) >= MAX_QUEUE:
-            break
-    return queries or None
-
-
-# --- Befehls-Erkennung ---------------------------------------------------
-def _clean_lead(text: str) -> str:
-    """Entfernt @-Mentions und den fuehrenden Botnamen/Alias ('Florian, spiel ...'
-    -> 'spiel ...'). Zentral in ai.strip_lead, damit alle Module gleich reagieren
-    (so gehen Musik-Befehle auch mit dem Alias 'Florian', nicht nur 'Flo')."""
-    return ai.strip_lead(text)
-
-
-def parse_command(text: str) -> tuple[str, str] | None:
-    """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
-
-    Aktionen: play, search, spotify_album, spotify_playlist, yt_playlist,
-              volume, skip, pause, resume, stop, leave, queue.
-    """
-    # 1) Link in der Nachricht? (staerkstes Signal)
-    for url in _URL_RE.findall(text):
-        low = url.lower()
-        m = _SPOTIFY_LIST_RE.search(url)
-        if m:
-            kind = (m.group(1) or m.group(2) or "").lower()
-            return ("spotify_album" if kind == "album" else "spotify_playlist", url)
-        if "youtube.com" in low or "youtu.be" in low:
-            # Echte Playlist abspielen - auch wenn ein einzelnes Video dabei steht
-            # (Teilen aus einer Playlist liefert watch?v=...&list=...). Nur Auto-Mixe
-            # (list=RD...) ignorieren wir und spielen das einzelne Video.
-            lm = _YT_LIST_RE.search(url)
-            if lm and not lm.group(1).upper().startswith("RD"):
-                return ("yt_playlist", url)
-            return ("play", url)
-        if _SPOTIFY_TRACK_RE.search(url):
-            return ("play", url)
-
-    cleaned = _clean_lead(text)
-    if not cleaned:
-        return None
-
-    # 2a) Wiederholen? (vor der Freitext-Suche, sonst wuerde "spiel nochmal"
-    #     als Suche nach "nochmal" gedeutet.)
-    rm = _REPLAY_RE.match(cleaned)
-    if rm:
-        return ("replay", rm.group(1) or "1")
-
-    # 2) Steuerbefehl am Satzanfang?
-    for action, pattern in _CONTROL:
-        if pattern.match(cleaned):
-            return (action, "")
-
-    # 3) Lautstaerke? Relativ (lauter/leiser) oder absolut ("ls 30", "vol 80",
-    #    Tippfehler ...). Ohne Zahl -> aktuelle Lautstaerke anzeigen ("?").
-    if _VOLUME_UP_RE.match(cleaned):
-        return ("volume", "+")
-    if _VOLUME_DOWN_RE.match(cleaned):
-        return ("volume", "-")
-    vm = _VOLUME_ARG_RE.match(cleaned)
-    if vm and _is_volume_word(vm.group(1)):
-        return ("volume", vm.group(2) or "?")
-
-    # 4) "spiel <suchbegriff>" ohne Link -> YouTube-Suche
-    m = _PLAY_TEXT_RE.match(cleaned)
-    if m:
-        return ("search", m.group(1).strip())
-
-    return None
-
-
-async def _play_many(
-    player: GuildPlayer,
-    channel: discord.VoiceChannel,
-    items: list[tuple[str, str]],
-    requested_by: str,
-    label: str,
-    reply_to: "discord.Message | None" = None,
-) -> "discord.Embed | object":
-    """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
-
-    items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
-    Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
-    """
-    try:
-        await player.connect(channel)
-    except discord.ClientException as exc:
-        log.error("Voice-Connect fehlgeschlagen: %s", exc)
-        return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                      color=_COL_ERR)
-
-    space = MAX_QUEUE - len(player.queue)
-    if space <= 0:
-        return _embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
-    items = items[:space]
-
-    if player.is_active():
-        for inp, title in items:
-            player.queue.append(_lazy_track(inp, title, requested_by))
-        return _embed(
-            f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
-            f"in der Warteschlange.",
-            title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE,
-        )
-
-    first_inp, _first_title = items[0]
-    rest = items[1:]
-    try:
-        track = await _extract(first_inp)
-    except Exception:  # noqa: BLE001
-        log.exception("Erster Track nicht ladbar: %s", first_inp)
-        return _embed("Den ersten Song konnte ich nicht laden.", color=_COL_ERR)
-    track.requested_by = requested_by
-    track.query = first_inp
-    for inp, title in rest:
-        player.queue.append(_lazy_track(inp, title, requested_by))
-    try:
-        player.start(track)
-    except Exception:
-        log.exception("Erster Track (Mehrfach) nicht abspielbar: %s", track.title)
-        return _embed("Den ersten Song konnte ich gerade nicht abspielen.", color=_COL_ERR)
-    extra = f"+{len(rest)} weitere {label}" if rest else ""
-    await _send_panel(player, track, reply_to=reply_to, extra=extra)
-    return HANDLED
-
-
-# --- Optik: groessere Embeds ---------------------------------------------
-def _title_value(track: "Track") -> str:
-    """Titel als Link (falls webpage_url bekannt), sonst fett."""
-    if track.webpage_url:
-        return f"**[{_short(track.title, 90)}]({track.webpage_url})**"
-    return f"**{_short(track.title, 90)}**"
-
-
-def _now_playing_embed(track: "Track", queue_len: int = 0, extra: str = "",
-                       speed: float = 1.0) -> discord.Embed:
-    """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
-    e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=_title_value(track),
-                      color=_COL_PLAY)
-    dur = _fmt_dur(track.duration)
-    if dur:
-        e.add_field(name="Länge", value=f"`{dur}`", inline=True)
-    if track.requested_by:
-        e.add_field(name="Gewünscht von", value=track.requested_by, inline=True)
-    if queue_len > 0:
-        e.add_field(name="In der Schlange", value=f"{queue_len} Song(s)", inline=True)
-    if abs(speed - 1.0) > 1e-3:
-        if speed < 1.0:
-            e.add_field(name="Effekt", value=f"🌌 `{speed:g}×` slowed + reverb", inline=True)
-        else:
-            e.add_field(name="Tempo", value=f"🚀 `{speed:g}×`", inline=True)
-    # Fussnote: optionaler Extra-Text und (falls aktiv) die Tempo-/Effekt-Anzeige.
-    foot = []
-    if extra:
-        foot.append(extra)
-    if speed < 1.0 - 1e-3:
-        foot.append(f"🌌 Slowed + Reverb aktiv ({speed:g}×)")
-    elif speed > 1.0 + 1e-3:
-        foot.append(f"🎚️ Tempo {speed:g}× aktiv")
-    if foot:
-        e.set_footer(text="  ·  ".join(foot))
-    else:
-        e.set_footer(text="🎚️ Tempo & Effekte: Menü unter den Buttons")
-    if track.thumbnail:
-        e.set_thumbnail(url=track.thumbnail)
-    return e
-
-
-def _added_embed(track: "Track", position: int, total: int, *,
-                title: str = "➕  Zur Warteschlange hinzugefügt",
-                footer: str | None = None) -> discord.Embed:
-    """Embed fuer einen frisch eingereihten Song."""
-    e = discord.Embed(title=title, description=_title_value(track), color=_COL_QUEUE)
-    e.add_field(name="Position", value=f"**#{position}** von {total}", inline=True)
-    dur = _fmt_dur(track.duration)
-    if dur:
-        e.add_field(name="Länge", value=f"`{dur}`", inline=True)
-    if track.requested_by:
-        e.add_field(name="Von", value=track.requested_by, inline=True)
-    if footer:
-        e.set_footer(text=footer)
-    if track.thumbnail:
-        e.set_thumbnail(url=track.thumbnail)
-    return e
-
-
-def _gone_embed(track: "Track") -> discord.Embed:
-    return _embed(f"**{_short(track.title, 90)}** ist nicht mehr in der Warteschlange.",
-                  title="⌛  Schon durch", color=_COL_INFO)
-
-
-def _queue_embed(player: "GuildPlayer") -> discord.Embed:
-    """Uebersichtliche Warteschlange: aktueller Song + naechste 10."""
-    e = discord.Embed(title="🎶  Warteschlange", color=_COL_QUEUE)
-    if player.current:
-        dur = _fmt_dur(player.current.duration)
-        cur = f"**{_short(player.current.title, 80)}**"
-        if dur:
-            cur += f"  ·  `{dur}`"
-        e.add_field(name="▶️  Jetzt", value=cur, inline=False)
-    if player.queue:
-        lines = []
-        for i, t in enumerate(player.queue[:10], start=1):
-            dur = _fmt_dur(t.duration)
-            line = f"`{i:>2}.`  {_short(t.title, 55)}"
-            if dur:
-                line += f"  ·  `{dur}`"
-            lines.append(line)
-        more = len(player.queue) - 10
-        if more > 0:
-            lines.append(f"…und **{more}** weitere")
-        e.add_field(name=f"⬆️  Als Nächstes  ({len(player.queue)})",
-                    value="\n".join(lines), inline=False)
-    else:
-        e.set_footer(text="Keine weiteren Songs – wirf was rein!")
-    if player.current and player.current.thumbnail:
-        e.set_thumbnail(url=player.current.thumbnail)
-    return e
-
-
 # --- Interaktiv: Position in der Warteschlange aendern --------------------
 class _PositionModal(discord.ui.Modal):
     """Tippfeld fuer eine konkrete Wunsch-Position."""
@@ -1343,250 +735,871 @@ class PlaybackControlView(discord.ui.View):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
 
 
-async def _retire_panel(player: "GuildPlayer") -> None:
-    """Loescht das zuletzt gepostete Steuer-Panel selbst - der Song dazu ist vorbei
-    bzw. wird gleich durch ein neues ersetzt. Das AKTUELLE Panel ist beim Auto-
-    Loeschen ausgenommen (bot.py, ueber NOWPLAYING_EMBED_TITLE); alte raeumen wir
-    hier sofort weg, damit nichts liegen bleibt."""
-    msg = player.panel_message
-    player.panel_message = None
-    if msg is not None:
+class Music:
+    """Buendelt Zustand und Logik des Musik-Features (frueher freie
+    Modul-Funktionen und globale Variablen dieses Moduls)."""
+
+    def __init__(self) -> None:
+        # --- Konfiguration (in setup() aus der .env gelesen) ---------------------
+        self._enabled: bool = False
+        self._bot_name: str = "Flo"
+        self._spotify_id: str = ""
+        self._spotify_secret: str = ""
+        # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
+        self._sp_token = {"value": "", "exp": 0.0}
+        # Player-/Queue-Zustand pro Server (guild_id -> GuildPlayer).
+        self._players: dict[int, GuildPlayer] = {}
+
+    def _fmt_dur(self, secs: int | None) -> str:
+        """Sekunden -> 'm:ss' bzw. 'h:mm:ss' (leer, wenn unbekannt)."""
+        if not secs or secs <= 0:
+            return ""
+        secs = int(secs)
+        h, rem = divmod(secs, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+    def _short(self, text: str, limit: int = 60) -> str:
+        """Kuerzt lange Titel fuer Listen (haelt Embed-Felder unter dem 1024er-Limit)."""
+        text = (text or "").strip()
+        return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+    def _embed(self, desc: str = "", *, title: str | None = None, color: int = _COL_INFO) -> discord.Embed:
+        """Kleiner Embed-Baukasten fuer einzeilige Antworten."""
+        e = discord.Embed(color=color)
+        if title:
+            e.title = title
+        if desc:
+            e.description = desc
+        return e
+
+    def _build_audio_filter(self, speed: float) -> str | None:
+        """Baut die -filter:a-Kette fuer die gewuenschte Geschwindigkeit.
+
+        None  -> Normaltempo, kein Filter.
+        >1.0  -> reines atempo (Tonhoehe bleibt, kein Reverb) - Speed-up.
+        <1.0  -> slowed + reverb (asetrate-Pitchdrop + Hall-Kette)."""
+        if abs(speed - 1.0) <= 1e-3:
+            return None
+        if speed > 1.0:
+            return f"atempo={speed:.3f}"
+        rate = round(_AUDIO_RATE * speed)   # 0.5 -> 24000 (Oktave tiefer), 0.75 -> 36000
+        return f"aresample={_AUDIO_RATE},asetrate={rate},aresample={_AUDIO_RATE},{_REVERB_SUFFIX}"
+
+    def _is_volume_word(self, word: str) -> bool:
+        """True, wenn das Wort 'Lautstaerke' meint - inkl. Kurzform (ls) und Tippfehler."""
+        w = word.lower().strip(".:!?")
+        if w in ("lauter", "louder", "lautr", "leiser", "quieter", "leise"):
+            return False  # relative Befehle - die laufen ueber _VOLUME_UP/DOWN_RE
+        if w in _VOLUME_WORDS:
+            return True
+        # Tippfehler: ab 5 Zeichen nah an einer kanonischen Schreibweise.
+        return len(w) >= 5 and bool(
+            difflib.get_close_matches(w, _VOLUME_CANON, n=1, cutoff=0.8)
+        )
+
+    def setup(self) -> bool:
+        """Liest die Konfiguration und prueft die Voraussetzungen.
+
+        Rueckgabe: True, wenn das Musik-Feature aktiv ist.
+        """
+        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
+        self._spotify_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
+        self._spotify_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
+
+        if yt_dlp is None:
+            log.warning("Musik-Feature aus: Paket 'yt-dlp' ist nicht installiert.")
+            return False
+        if shutil.which("ffmpeg") is None:
+            log.warning("Musik-Feature aus: 'ffmpeg' nicht gefunden (z. B. 'apt install ffmpeg').")
+            return False
+        try:  # Voice braucht PyNaCl.
+            import nacl  # noqa: F401
+        except ImportError:
+            log.warning("Musik-Feature aus: Paket 'PyNaCl' ist nicht installiert (Voice).")
+            return False
+
+        self._enabled = True
+        spotify_ok = bool(self._spotify_id and self._spotify_secret)
+        log.info(
+            "Musik-Feature aktiv (YouTube: ja, Spotify: %s).",
+            "ja" if spotify_ok else "nein - nur YouTube-Links",
+        )
+        return True
+
+    def is_enabled(self) -> bool:
+        return self._enabled
+
+    def _player_for(self, guild_id: int) -> GuildPlayer:
+        player = self._players.get(guild_id)
+        if player is None:
+            player = GuildPlayer(loop=asyncio.get_running_loop())
+            self._players[guild_id] = player
+        return player
+
+    async def heal_voice(self, guild: "discord.Guild") -> None:
+        """Vom bot.py-Watchdog-Loop aufgerufen: haelt die Voice-Verbindung dieses
+        Servers am Leben und repariert Desyncs selbst. No-op, wenn kein Player aktiv."""
+        player = self._players.get(guild.id)
+        if player is not None:
+            await player.heal(guild)
+
+    def is_voice_busy(self, guild_id: int) -> bool:
+        """True, wenn die Musik den Voice-Channel dieses Servers belegt - auch in
+        Songpausen, beim Tempo-Wechsel oder waehrend eines Reconnects. voicegags
+        fragt das, um nicht in den Musik-Voice-Client reinzugraetschen."""
+        player = self._players.get(guild_id)
+        if player is None:
+            return False
+        if player.active_channel_id is not None:
+            return True   # Bot soll in einem Kanal sein (Session laeuft) -> belegt
+        return player.voice is not None and player.voice.is_connected()
+
+    # --- yt-dlp / Spotify Helfer ---------------------------------------------
+
+    async def _extract(self, query_or_url: str) -> Track:
+        """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf."""
+        loop = asyncio.get_running_loop()
+
+        def work() -> dict:
+            with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:  # type: ignore[union-attr]
+                info = ydl.extract_info(query_or_url, download=False)
+            if info and "entries" in info:  # Suche/Playlist -> ersten Treffer nehmen
+                entries = [e for e in info["entries"] if e]
+                if not entries:
+                    raise ValueError("keine Treffer")
+                info = entries[0]
+            return info
+
+        info = await loop.run_in_executor(None, work)
+        stream_url = info.get("url")
+        if not stream_url:
+            raise ValueError("kein abspielbarer Stream gefunden")
+        return Track(
+            title=info.get("title", "Unbekannter Titel"),
+            stream_url=stream_url,
+            webpage_url=info.get("webpage_url", ""),
+            duration=info.get("duration"),
+            thumbnail=info.get("thumbnail") or "",
+        )
+
+    async def _resolve_track(self, track: Track) -> Track:
+        """Loest einen vorgemerkten Track auf. track.query = komplette yt-dlp-Eingabe
+        (direkte URL ODER 'ytsearch1:Kuenstler - Titel')."""
+        resolved = await self._extract(track.query)
+        resolved.requested_by = track.requested_by
+        resolved.query = track.query
+        return resolved
+
+    def _lazy_track(self, extract_input: str, title: str, requested_by: str) -> Track:
+        """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
+        extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename.
+        """
+        return Track(
+            title=title, stream_url="", query=extract_input, requested_by=requested_by
+        )
+
+    async def _youtube_playlist(self, url: str) -> list[tuple[str, str]] | None:
+        """YouTube-Playlist -> Liste (video_url, titel). Schnell via extract_flat;
+        die einzelnen Videos werden erst beim Abspielen aufgeloest."""
+        loop = asyncio.get_running_loop()
+        opts = dict(_YDL_OPTS)
+        opts["noplaylist"] = False
+        opts["extract_flat"] = "in_playlist"
+        opts["playlistend"] = MAX_QUEUE
+        opts["ignoreerrors"] = True  # einzelne kaputte Videos ueberspringen, nicht crashen
+
+        def work() -> dict | None:
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
+                return ydl.extract_info(url, download=False)
+
         try:
-            await msg.delete()
-        except discord.HTTPException:
-            pass
+            info = await loop.run_in_executor(None, work)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("YouTube-Playlist nicht ladbar (%s): %s", url, exc)
+            return None
 
+        entries = info.get("entries") if info else None
+        if not entries:
+            return None
+        out: list[tuple[str, str]] = []
+        for e in entries:
+            if not e:
+                continue
+            vid = e.get("url") or e.get("id")
+            if not vid:
+                continue
+            if not str(vid).startswith("http"):
+                vid = f"https://www.youtube.com/watch?v={vid}"
+            out.append((vid, e.get("title", "Unbekannter Titel")))
+        return out or None
 
-async def _send_panel(player: "GuildPlayer", track: "Track", *,
-                     reply_to: "discord.Message | None" = None, extra: str = "") -> None:
-    """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
-    Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
-    vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
-    await _retire_panel(player)
-    emb = _now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
-    view = PlaybackControlView(player)
-    try:
-        if reply_to is not None:
-            msg = await reply_to.reply(embed=emb, view=view, mention_author=False)
-        elif player.text_channel is not None:
-            msg = await player.text_channel.send(embed=emb, view=view)
+    async def _spotify_token(self) -> str:
+        """Holt (und cached) ein Spotify-App-Token (Client-Credentials-Flow)."""
+        if not (self._spotify_id and self._spotify_secret):
+            return ""
+        now = time.time()
+        if self._sp_token["value"] and self._sp_token["exp"] > now + 30:
+            return self._sp_token["value"]  # type: ignore[return-value]
+
+        auth = base64.b64encode(f"{self._spotify_id}:{self._spotify_secret}".encode()).decode()
+        timeout = aiohttp.ClientTimeout(total=12)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.post(
+                    "https://accounts.spotify.com/api/token",
+                    data={"grant_type": "client_credentials"},
+                    headers={"Authorization": f"Basic {auth}"},
+                ) as r:
+                    if r.status != 200:
+                        log.error("Spotify-Token fehlgeschlagen (HTTP %s).", r.status)
+                        return ""
+                    data = await r.json()
+        except (aiohttp.ClientError, OSError) as exc:
+            log.error("Spotify nicht erreichbar: %s", exc)
+            return ""
+
+        self._sp_token["value"] = data.get("access_token", "")
+        self._sp_token["exp"] = now + float(data.get("expires_in", 3600))
+        return self._sp_token["value"]  # type: ignore[return-value]
+
+    async def _spotify_to_query(self, url: str) -> str | None:
+        """Spotify-Track-Link -> 'Kuenstler - Titel' (fuer die YouTube-Suche)."""
+        m = _SPOTIFY_TRACK_RE.search(url)
+        if not m:
+            return None
+        token = await self._spotify_token()
+        if not token:
+            return None
+        track_id = m.group(1)
+        timeout = aiohttp.ClientTimeout(total=12)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(
+                    f"https://api.spotify.com/v1/tracks/{track_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as r:
+                    if r.status != 200:
+                        log.error("Spotify-Track-Abruf fehlgeschlagen (HTTP %s).", r.status)
+                        return None
+                    data = await r.json()
+        except (aiohttp.ClientError, OSError) as exc:
+            log.error("Spotify nicht erreichbar: %s", exc)
+            return None
+
+        name = data.get("name", "")
+        artists = ", ".join(a.get("name", "") for a in data.get("artists", []))
+        query = f"{artists} - {name}".strip(" -")
+        return query or None
+
+    async def _spotify_list_tracks(self, url: str) -> list[str] | None:
+        """Spotify-Playlist-/Album-Link -> Liste 'Kuenstler - Titel' (max. MAX_QUEUE)."""
+        m = _SPOTIFY_LIST_RE.search(url)
+        if not m:
+            return None
+        kind = (m.group(1) or m.group(2) or "").lower()
+        list_id = m.group(3)
+        token = await self._spotify_token()
+        if not token:
+            return None
+
+        if kind == "playlist":
+            next_url = (
+                f"https://api.spotify.com/v1/playlists/{list_id}/tracks"
+                "?limit=100&fields=items(track(name,artists(name))),next"
+            )
+        else:  # album
+            next_url = f"https://api.spotify.com/v1/albums/{list_id}/tracks?limit=50"
+
+        queries: list[str] = []
+        headers = {"Authorization": f"Bearer {token}"}
+        timeout = aiohttp.ClientTimeout(total=15)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                while next_url and len(queries) < MAX_QUEUE:
+                    async with s.get(next_url, headers=headers) as r:
+                        if r.status != 200:
+                            log.error("Spotify-%s-Abruf fehlgeschlagen (HTTP %s).", kind, r.status)
+                            break
+                        data = await r.json()
+                    for item in data.get("items", []):
+                        tr = item.get("track") if kind == "playlist" else item
+                        if not tr:
+                            continue
+                        name = tr.get("name", "")
+                        artists = ", ".join(a.get("name", "") for a in tr.get("artists", []))
+                        q = f"{artists} - {name}".strip(" -")
+                        if q:
+                            queries.append(q)
+                    next_url = data.get("next")
+        except (aiohttp.ClientError, OSError) as exc:
+            log.error("Spotify nicht erreichbar: %s", exc)
+            return None
+        return queries
+
+    def _deep_find(self, obj: object, key: str) -> object:
+        """Sucht rekursiv den ersten Wert zu 'key' in verschachtelten dict/list."""
+        if isinstance(obj, dict):
+            if key in obj:
+                return obj[key]
+            for value in obj.values():
+                found = self._deep_find(value, key)
+                if found is not None:
+                    return found
+        elif isinstance(obj, list):
+            for value in obj:
+                found = self._deep_find(value, key)
+                if found is not None:
+                    return found
+        return None
+
+    async def _spotify_playlist_via_embed(self, url: str) -> list[str] | None:
+        """Spotify-Playlist -> Liste 'Kuenstler - Titel' ueber das oeffentliche Embed.
+
+        Die Web-API verbietet Client-Credentials-Apps den Playlist-Track-Zugriff
+        (HTTP 403). Das Embed (open.spotify.com/embed/playlist/<id>) liefert die
+        Songliste dagegen ohne Login im __NEXT_DATA__-JSON.
+        """
+        m = _SPOTIFY_LIST_RE.search(url)
+        if not m:
+            return None
+        list_id = m.group(3)
+        embed_url = f"https://open.spotify.com/embed/playlist/{list_id}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+            "Accept-Language": "de,en;q=0.8",
+        }
+        timeout = aiohttp.ClientTimeout(total=15)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(embed_url, headers=headers) as r:
+                    if r.status != 200:
+                        log.error(
+                            "Spotify-Playlist-Embed fehlgeschlagen (HTTP %s).", r.status
+                        )
+                        return None
+                    html = await r.text()
+        except (aiohttp.ClientError, OSError) as exc:
+            log.error("Spotify-Embed nicht erreichbar: %s", exc)
+            return None
+
+        m2 = _NEXT_DATA_RE.search(html)
+        if not m2:
+            log.error("Spotify-Embed: __NEXT_DATA__ nicht gefunden (Struktur geaendert?).")
+            return None
+        try:
+            data = json.loads(m2.group(1))
+        except json.JSONDecodeError as exc:
+            log.error("Spotify-Embed: JSON nicht lesbar (%s).", exc)
+            return None
+
+        track_list = self._deep_find(data, "trackList")
+        if not isinstance(track_list, list) or not track_list:
+            log.error("Spotify-Embed: keine Songliste im JSON gefunden.")
+            return None
+
+        queries: list[str] = []
+        for entry in track_list:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("title") or "").strip()
+            artist = str(entry.get("subtitle") or "").strip()
+            query = f"{artist} - {title}".strip(" -")
+            if query:
+                queries.append(query)
+            if len(queries) >= MAX_QUEUE:
+                break
+        return queries or None
+
+    # --- Befehls-Erkennung ---------------------------------------------------
+
+    def _clean_lead(self, text: str) -> str:
+        """Entfernt @-Mentions und den fuehrenden Botnamen/Alias ('Florian, spiel ...'
+        -> 'spiel ...'). Zentral in ai.strip_lead, damit alle Module gleich reagieren
+        (so gehen Musik-Befehle auch mit dem Alias 'Florian', nicht nur 'Flo')."""
+        return ai.strip_lead(text)
+
+    def parse_command(self, text: str) -> tuple[str, str] | None:
+        """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
+
+        Aktionen: play, search, spotify_album, spotify_playlist, yt_playlist,
+                  volume, skip, pause, resume, stop, leave, queue.
+        """
+        # 1) Link in der Nachricht? (staerkstes Signal)
+        for url in _URL_RE.findall(text):
+            low = url.lower()
+            m = _SPOTIFY_LIST_RE.search(url)
+            if m:
+                kind = (m.group(1) or m.group(2) or "").lower()
+                return ("spotify_album" if kind == "album" else "spotify_playlist", url)
+            if "youtube.com" in low or "youtu.be" in low:
+                # Echte Playlist abspielen - auch wenn ein einzelnes Video dabei steht
+                # (Teilen aus einer Playlist liefert watch?v=...&list=...). Nur Auto-Mixe
+                # (list=RD...) ignorieren wir und spielen das einzelne Video.
+                lm = _YT_LIST_RE.search(url)
+                if lm and not lm.group(1).upper().startswith("RD"):
+                    return ("yt_playlist", url)
+                return ("play", url)
+            if _SPOTIFY_TRACK_RE.search(url):
+                return ("play", url)
+
+        cleaned = self._clean_lead(text)
+        if not cleaned:
+            return None
+
+        # 2a) Wiederholen? (vor der Freitext-Suche, sonst wuerde "spiel nochmal"
+        #     als Suche nach "nochmal" gedeutet.)
+        rm = _REPLAY_RE.match(cleaned)
+        if rm:
+            return ("replay", rm.group(1) or "1")
+
+        # 2) Steuerbefehl am Satzanfang?
+        for action, pattern in _CONTROL:
+            if pattern.match(cleaned):
+                return (action, "")
+
+        # 3) Lautstaerke? Relativ (lauter/leiser) oder absolut ("ls 30", "vol 80",
+        #    Tippfehler ...). Ohne Zahl -> aktuelle Lautstaerke anzeigen ("?").
+        if _VOLUME_UP_RE.match(cleaned):
+            return ("volume", "+")
+        if _VOLUME_DOWN_RE.match(cleaned):
+            return ("volume", "-")
+        vm = _VOLUME_ARG_RE.match(cleaned)
+        if vm and self._is_volume_word(vm.group(1)):
+            return ("volume", vm.group(2) or "?")
+
+        # 4) "spiel <suchbegriff>" ohne Link -> YouTube-Suche
+        m = _PLAY_TEXT_RE.match(cleaned)
+        if m:
+            return ("search", m.group(1).strip())
+
+        return None
+
+    async def _play_many(
+        self,
+        player: GuildPlayer,
+        channel: discord.VoiceChannel,
+        items: list[tuple[str, str]],
+        requested_by: str,
+        label: str,
+        reply_to: "discord.Message | None" = None,
+    ) -> "discord.Embed | object":
+        """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
+
+        items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
+        Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
+        """
+        try:
+            await player.connect(channel)
+        except discord.ClientException as exc:
+            log.error("Voice-Connect fehlgeschlagen: %s", exc)
+            return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                               color=_COL_ERR)
+
+        space = MAX_QUEUE - len(player.queue)
+        if space <= 0:
+            return self._embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
+        items = items[:space]
+
+        if player.is_active():
+            for inp, title in items:
+                player.queue.append(self._lazy_track(inp, title, requested_by))
+            return self._embed(
+                f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
+                f"in der Warteschlange.",
+                title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE,
+            )
+
+        first_inp, _first_title = items[0]
+        rest = items[1:]
+        try:
+            track = await self._extract(first_inp)
+        except Exception:  # noqa: BLE001
+            log.exception("Erster Track nicht ladbar: %s", first_inp)
+            return self._embed("Den ersten Song konnte ich nicht laden.", color=_COL_ERR)
+        track.requested_by = requested_by
+        track.query = first_inp
+        for inp, title in rest:
+            player.queue.append(self._lazy_track(inp, title, requested_by))
+        try:
+            player.start(track)
+        except Exception:
+            log.exception("Erster Track (Mehrfach) nicht abspielbar: %s", track.title)
+            return self._embed("Den ersten Song konnte ich gerade nicht abspielen.", color=_COL_ERR)
+        extra = f"+{len(rest)} weitere {label}" if rest else ""
+        await self._send_panel(player, track, reply_to=reply_to, extra=extra)
+        return HANDLED
+
+    # --- Optik: groessere Embeds ---------------------------------------------
+
+    def _title_value(self, track: "Track") -> str:
+        """Titel als Link (falls webpage_url bekannt), sonst fett."""
+        if track.webpage_url:
+            return f"**[{self._short(track.title, 90)}]({track.webpage_url})**"
+        return f"**{self._short(track.title, 90)}**"
+
+    def _now_playing_embed(self, track: "Track", queue_len: int = 0, extra: str = "",
+                           speed: float = 1.0) -> discord.Embed:
+        """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
+        e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=self._title_value(track),
+                          color=_COL_PLAY)
+        dur = self._fmt_dur(track.duration)
+        if dur:
+            e.add_field(name="Länge", value=f"`{dur}`", inline=True)
+        if track.requested_by:
+            e.add_field(name="Gewünscht von", value=track.requested_by, inline=True)
+        if queue_len > 0:
+            e.add_field(name="In der Schlange", value=f"{queue_len} Song(s)", inline=True)
+        if abs(speed - 1.0) > 1e-3:
+            if speed < 1.0:
+                e.add_field(name="Effekt", value=f"🌌 `{speed:g}×` slowed + reverb", inline=True)
+            else:
+                e.add_field(name="Tempo", value=f"🚀 `{speed:g}×`", inline=True)
+        # Fussnote: optionaler Extra-Text und (falls aktiv) die Tempo-/Effekt-Anzeige.
+        foot = []
+        if extra:
+            foot.append(extra)
+        if speed < 1.0 - 1e-3:
+            foot.append(f"🌌 Slowed + Reverb aktiv ({speed:g}×)")
+        elif speed > 1.0 + 1e-3:
+            foot.append(f"🎚️ Tempo {speed:g}× aktiv")
+        if foot:
+            e.set_footer(text="  ·  ".join(foot))
         else:
+            e.set_footer(text="🎚️ Tempo & Effekte: Menü unter den Buttons")
+        if track.thumbnail:
+            e.set_thumbnail(url=track.thumbnail)
+        return e
+
+    def _added_embed(self, track: "Track", position: int, total: int, *,
+                    title: str = "➕  Zur Warteschlange hinzugefügt",
+                    footer: str | None = None) -> discord.Embed:
+        """Embed fuer einen frisch eingereihten Song."""
+        e = discord.Embed(title=title, description=self._title_value(track), color=_COL_QUEUE)
+        e.add_field(name="Position", value=f"**#{position}** von {total}", inline=True)
+        dur = self._fmt_dur(track.duration)
+        if dur:
+            e.add_field(name="Länge", value=f"`{dur}`", inline=True)
+        if track.requested_by:
+            e.add_field(name="Von", value=track.requested_by, inline=True)
+        if footer:
+            e.set_footer(text=footer)
+        if track.thumbnail:
+            e.set_thumbnail(url=track.thumbnail)
+        return e
+
+    def _gone_embed(self, track: "Track") -> discord.Embed:
+        return self._embed(f"**{self._short(track.title, 90)}** ist nicht mehr in der Warteschlange.",
+                           title="⌛  Schon durch", color=_COL_INFO)
+
+    def _queue_embed(self, player: "GuildPlayer") -> discord.Embed:
+        """Uebersichtliche Warteschlange: aktueller Song + naechste 10."""
+        e = discord.Embed(title="🎶  Warteschlange", color=_COL_QUEUE)
+        if player.current:
+            dur = self._fmt_dur(player.current.duration)
+            cur = f"**{self._short(player.current.title, 80)}**"
+            if dur:
+                cur += f"  ·  `{dur}`"
+            e.add_field(name="▶️  Jetzt", value=cur, inline=False)
+        if player.queue:
+            lines = []
+            for i, t in enumerate(player.queue[:10], start=1):
+                dur = self._fmt_dur(t.duration)
+                line = f"`{i:>2}.`  {self._short(t.title, 55)}"
+                if dur:
+                    line += f"  ·  `{dur}`"
+                lines.append(line)
+            more = len(player.queue) - 10
+            if more > 0:
+                lines.append(f"…und **{more}** weitere")
+            e.add_field(name=f"⬆️  Als Nächstes  ({len(player.queue)})",
+                        value="\n".join(lines), inline=False)
+        else:
+            e.set_footer(text="Keine weiteren Songs – wirf was rein!")
+        if player.current and player.current.thumbnail:
+            e.set_thumbnail(url=player.current.thumbnail)
+        return e
+
+    async def _retire_panel(self, player: "GuildPlayer") -> None:
+        """Loescht das zuletzt gepostete Steuer-Panel selbst - der Song dazu ist vorbei
+        bzw. wird gleich durch ein neues ersetzt. Das AKTUELLE Panel ist beim Auto-
+        Loeschen ausgenommen (bot.py, ueber NOWPLAYING_EMBED_TITLE); alte raeumen wir
+        hier sofort weg, damit nichts liegen bleibt."""
+        msg = player.panel_message
+        player.panel_message = None
+        if msg is not None:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+
+    async def _send_panel(self, player: "GuildPlayer", track: "Track", *,
+                         reply_to: "discord.Message | None" = None, extra: str = "") -> None:
+        """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
+        Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
+        vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
+        await self._retire_panel(player)
+        emb = self._now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
+        view = PlaybackControlView(player)
+        try:
+            if reply_to is not None:
+                msg = await reply_to.reply(embed=emb, view=view, mention_author=False)
+            elif player.text_channel is not None:
+                msg = await player.text_channel.send(embed=emb, view=view)
+            else:
+                return
+        except discord.HTTPException as exc:
+            log.error("Now-Playing-Panel fehlgeschlagen: %s", exc)
             return
-    except discord.HTTPException as exc:
-        log.error("Now-Playing-Panel fehlgeschlagen: %s", exc)
-        return
-    view.message = msg
-    player.panel_message = msg
+        view.message = msg
+        player.panel_message = msg
 
+    # --- Oeffentlicher Einstieg ----------------------------------------------
 
-# --- Oeffentlicher Einstieg ----------------------------------------------
-async def handle(message: discord.Message) -> "str | discord.Embed | object | None":
-    """Prueft, ob die Nachricht ein Musik-Befehl ist, und fuehrt ihn aus.
+    async def handle(self, message: discord.Message) -> "str | discord.Embed | object | None":
+        """Prueft, ob die Nachricht ein Musik-Befehl ist, und fuehrt ihn aus.
 
-    Rueckgabe:
-    - discord.Embed -> es war ein Musik-Befehl; bot.py schickt das Embed.
-    - HANDLED        -> das Modul hat selbst geantwortet (Embed + Buttons).
-    - None           -> kein Musik-Befehl; die KI soll uebernehmen.
-    """
-    if not _enabled or message.guild is None:
-        return None
+        Rueckgabe:
+        - discord.Embed -> es war ein Musik-Befehl; bot.py schickt das Embed.
+        - HANDLED        -> das Modul hat selbst geantwortet (Embed + Buttons).
+        - None           -> kein Musik-Befehl; die KI soll uebernehmen.
+        """
+        if not self._enabled or message.guild is None:
+            return None
 
-    cmd = parse_command(message.content or "")
-    if cmd is None:
-        return None
-    action, arg = cmd
-    player = _player_for(message.guild.id)
-    player.text_channel = message.channel
+        cmd = self.parse_command(message.content or "")
+        if cmd is None:
+            return None
+        action, arg = cmd
+        player = self._player_for(message.guild.id)
+        player.text_channel = message.channel
 
-    # --- Wiederholen: den (N-t-)letzten Song aus dem Verlauf erneut spielen ---
-    if action == "replay":
-        try:
-            idx = max(1, int(arg))
-        except (TypeError, ValueError):
-            idx = 1
-        if idx > len(player.history):
-            if not player.history:
-                return _embed("Ich hab noch keinen Song im Verlauf. Spiel erst was! 🎵",
-                              color=_COL_ERR)
-            return _embed(f"So weit reicht mein Verlauf nicht – ich kenne die letzten "
-                          f"**{len(player.history)}** Songs.", color=_COL_ERR)
-        want = player.history[-idx]
-        again = want.webpage_url or want.query or want.title
-        if not again:
-            return _embed("Diesen Song kann ich leider nicht nochmal laden.", color=_COL_ERR)
-        # Wie ein normaler Play-Befehl weiterbehandeln.
-        action, arg = "play", again
+        # --- Wiederholen: den (N-t-)letzten Song aus dem Verlauf erneut spielen ---
+        if action == "replay":
+            try:
+                idx = max(1, int(arg))
+            except (TypeError, ValueError):
+                idx = 1
+            if idx > len(player.history):
+                if not player.history:
+                    return self._embed("Ich hab noch keinen Song im Verlauf. Spiel erst was! 🎵",
+                                       color=_COL_ERR)
+                return self._embed(f"So weit reicht mein Verlauf nicht – ich kenne die letzten "
+                                   f"**{len(player.history)}** Songs.", color=_COL_ERR)
+            want = player.history[-idx]
+            again = want.webpage_url or want.query or want.title
+            if not again:
+                return self._embed("Diesen Song kann ich leider nicht nochmal laden.", color=_COL_ERR)
+            # Wie ein normaler Play-Befehl weiterbehandeln.
+            action, arg = "play", again
 
-    # --- Steuerbefehle, die keine Voice-Verbindung voraussetzen ---
-    if action == "volume":
-        cur = int(round(player.volume * 100))
-        if arg == "?":
-            bar = "🔉" if cur < 50 else ("🔊" if cur <= 100 else "📢")
-            return _embed(
-                f"Lautstärke steht aktuell auf **{cur}%**.\n"
-                f"Ändern z. B. mit `flo ls 50`, `flo lauter` oder `flo leiser`.",
-                title=f"{bar}  Lautstärke", color=_COL_CTRL)
-        if arg == "+":
-            new = min(200, cur + 20)
-        elif arg == "-":
-            new = max(0, cur - 20)
-        else:
-            new = max(0, min(200, int(arg)))
-        player.volume = new / 100
-        if player.voice is not None and isinstance(
-            player.voice.source, discord.PCMVolumeTransformer
-        ):
-            player.voice.source.volume = player.volume  # live anwenden
-        bar = "🔉" if new < 50 else ("🔊" if new <= 100 else "📢")
-        return _embed(f"Lautstärke steht jetzt auf **{new}%**.",
-                      title=f"{bar}  Lautstärke", color=_COL_CTRL)
+        # --- Steuerbefehle, die keine Voice-Verbindung voraussetzen ---
+        if action == "volume":
+            cur = int(round(player.volume * 100))
+            if arg == "?":
+                bar = "🔉" if cur < 50 else ("🔊" if cur <= 100 else "📢")
+                return self._embed(
+                    f"Lautstärke steht aktuell auf **{cur}%**.\n"
+                    f"Ändern z. B. mit `flo ls 50`, `flo lauter` oder `flo leiser`.",
+                    title=f"{bar}  Lautstärke", color=_COL_CTRL)
+            if arg == "+":
+                new = min(200, cur + 20)
+            elif arg == "-":
+                new = max(0, cur - 20)
+            else:
+                new = max(0, min(200, int(arg)))
+            player.volume = new / 100
+            if player.voice is not None and isinstance(
+                player.voice.source, discord.PCMVolumeTransformer
+            ):
+                player.voice.source.volume = player.volume  # live anwenden
+            bar = "🔉" if new < 50 else ("🔊" if new <= 100 else "📢")
+            return self._embed(f"Lautstärke steht jetzt auf **{new}%**.",
+                               title=f"{bar}  Lautstärke", color=_COL_CTRL)
 
-    if action in ("stop", "leave"):
-        if player.voice is None or not player.voice.is_connected():
-            return _embed("Ich bin gerade in keinem Sprachkanal.", color=_COL_ERR)
-        await player.disconnect()
-        return _embed("Musik gestoppt, Warteschlange geleert und raus aus dem Sprachkanal.",
-                      title="⏹️  Gestoppt", color=_COL_INFO)
+        if action in ("stop", "leave"):
+            if player.voice is None or not player.voice.is_connected():
+                return self._embed("Ich bin gerade in keinem Sprachkanal.", color=_COL_ERR)
+            await player.disconnect()
+            return self._embed("Musik gestoppt, Warteschlange geleert und raus aus dem Sprachkanal.",
+                               title="⏹️  Gestoppt", color=_COL_INFO)
 
-    if action == "skip":
-        if not player.is_active():
-            return _embed("Ich spiele gerade nichts.", color=_COL_ERR)
-        skipped = player.current.title if player.current else ""
-        player.voice.stop()  # type: ignore[union-attr]  -> loest _after -> naechster Track
-        desc = f"**{_short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
-        return _embed(desc, title="⏭️  Skip", color=_COL_CTRL)
+        if action == "skip":
+            if not player.is_active():
+                return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
+            skipped = player.current.title if player.current else ""
+            player.voice.stop()  # type: ignore[union-attr]  -> loest _after -> naechster Track
+            desc = f"**{self._short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
+            return self._embed(desc, title="⏭️  Skip", color=_COL_CTRL)
 
-    if action == "pause":
-        if player.voice is None or not player.voice.is_playing():
-            return _embed("Ich spiele gerade nichts.", color=_COL_ERR)
-        player.voice.pause()
-        return _embed(f"Pausiert. Sag `{_bot_name} weiter`, wenn's weitergehen soll.",
-                      title="⏸️  Pause", color=_COL_CTRL)
+        if action == "pause":
+            if player.voice is None or not player.voice.is_playing():
+                return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
+            player.voice.pause()
+            return self._embed(f"Pausiert. Sag `{self._bot_name} weiter`, wenn's weitergehen soll.",
+                               title="⏸️  Pause", color=_COL_CTRL)
 
-    if action == "resume":
-        if player.voice is None or not player.voice.is_paused():
-            return _embed("Da ist nichts pausiert.", color=_COL_ERR)
-        player.voice.resume()
-        return _embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
+        if action == "resume":
+            if player.voice is None or not player.voice.is_paused():
+                return self._embed("Da ist nichts pausiert.", color=_COL_ERR)
+            player.voice.resume()
+            return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
 
-    if action == "queue":
-        if not player.current and not player.queue:
-            return _embed("Die Warteschlange ist leer – wirf was rein!",
-                          title="🎶  Warteschlange", color=_COL_INFO)
-        return _queue_embed(player)
+        if action == "queue":
+            if not player.current and not player.queue:
+                return self._embed("Die Warteschlange ist leer – wirf was rein!",
+                                   title="🎶  Warteschlange", color=_COL_INFO)
+            return self._queue_embed(player)
 
-    if action == "join":
-        # Nur in den Sprachkanal kommen (ohne etwas abzuspielen).
+        if action == "join":
+            # Nur in den Sprachkanal kommen (ohne etwas abzuspielen).
+            voice_state = getattr(message.author, "voice", None)
+            if voice_state is None or voice_state.channel is None:
+                return self._embed("Geh erst in einen Sprachkanal, dann komme ich dazu.", color=_COL_ERR)
+            try:
+                await player.connect(voice_state.channel)
+            except RuntimeError as exc:  # discord.py >= 2.7 ohne davey
+                log.error("Voice nicht moeglich (join): %s", exc)
+                return self._embed("Voice ist hier gerade nicht eingerichtet "
+                                   "(auf dem Server fehlt vermutlich `davey`).", color=_COL_ERR)
+            except discord.ClientException as exc:
+                log.error("Voice-Connect (join) fehlgeschlagen: %s", exc)
+                return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                                   color=_COL_ERR)
+            return self._embed(f"Bin da in **{voice_state.channel.name}**. "
+                               f"Sag z. B. `{self._bot_name} spiel <song>`.",
+                               title="👋  Eingeklinkt", color=_COL_PLAY)
+
+        # --- Abspielen: Nutzer muss im Sprachkanal sein ---
         voice_state = getattr(message.author, "voice", None)
         if voice_state is None or voice_state.channel is None:
-            return _embed("Geh erst in einen Sprachkanal, dann komme ich dazu.", color=_COL_ERR)
+            return self._embed("Geh erst in einen Sprachkanal, dann spiele ich dort.", color=_COL_ERR)
+
+        # --- Mehrere Songs auf einmal (Spotify-Album / YouTube-Playlist) ---
+        if action == "spotify_album":
+            queries = await self._spotify_list_tracks(arg)
+            if not queries:
+                return self._embed("Das Spotify-Album konnte ich nicht laden (Token, privat oder leer?).",
+                                   color=_COL_ERR)
+            items = [(f"ytsearch1:{q}", q) for q in queries]
+            return await self._play_many(
+                player, voice_state.channel, items,
+                message.author.display_name, "aus dem Album", reply_to=message,
+            )
+
+        if action == "spotify_playlist":
+            queries = await self._spotify_playlist_via_embed(arg)
+            if not queries:
+                return self._embed(
+                    "An diese Spotify-**Playlist** komme ich nicht ran – Spotify sperrt den "
+                    "Playlist-Zugriff für Bots. Was sicher geht: ein Spotify-**Album**, ein "
+                    "einzelner Song-Link oder eine **YouTube-Playlist**.",
+                    title="🚫  Playlist gesperrt", color=_COL_ERR)
+            items = [(f"ytsearch1:{q}", q) for q in queries]
+            return await self._play_many(
+                player, voice_state.channel, items,
+                message.author.display_name, "aus der Playlist", reply_to=message,
+            )
+
+        if action == "yt_playlist":
+            entries = await self._youtube_playlist(arg)
+            if not entries:
+                return self._embed("Die YouTube-Playlist konnte ich nicht laden (leer oder privat?).",
+                                   color=_COL_ERR)
+            return await self._play_many(
+                player, voice_state.channel, entries,
+                message.author.display_name, "aus der Playlist", reply_to=message,
+            )
+
+        if len(player.queue) >= MAX_QUEUE:
+            return self._embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
+
+        # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
+        try:
+            if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
+                query = await self._spotify_to_query(arg)
+                if not query:
+                    return self._embed("Den Spotify-Link konnte ich nicht auflösen (Keys/Token?).",
+                                       color=_COL_ERR)
+                track = await self._extract(f"ytsearch1:{query}")
+            elif action == "play":
+                track = await self._extract(arg)
+            else:  # search
+                track = await self._extract(f"ytsearch1:{arg}")
+        except Exception:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
+            log.exception("Track konnte nicht aufgeloest werden: %s", arg)
+            return self._embed("Den Song konnte ich nicht laden. Probier einen anderen Link "
+                               "oder Suchbegriff.", color=_COL_ERR)
+
+        track.requested_by = message.author.display_name
+
         try:
             await player.connect(voice_state.channel)
-        except RuntimeError as exc:  # discord.py >= 2.7 ohne davey
-            log.error("Voice nicht moeglich (join): %s", exc)
-            return _embed("Voice ist hier gerade nicht eingerichtet "
-                          "(auf dem Server fehlt vermutlich `davey`).", color=_COL_ERR)
         except discord.ClientException as exc:
-            log.error("Voice-Connect (join) fehlgeschlagen: %s", exc)
-            return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                          color=_COL_ERR)
-        return _embed(f"Bin da in **{voice_state.channel.name}**. "
-                      f"Sag z. B. `{_bot_name} spiel <song>`.",
-                      title="👋  Eingeklinkt", color=_COL_PLAY)
+            log.error("Voice-Connect fehlgeschlagen: %s", exc)
+            return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                               color=_COL_ERR)
 
-    # --- Abspielen: Nutzer muss im Sprachkanal sein ---
-    voice_state = getattr(message.author, "voice", None)
-    if voice_state is None or voice_state.channel is None:
-        return _embed("Geh erst in einen Sprachkanal, dann spiele ich dort.", color=_COL_ERR)
+        # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
+        # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
+        if player.is_active():
+            player.queue.append(track)
+            pos = len(player.queue)
+            if pos >= 2:
+                view = QueuePositionView(player, track, message.author.id)
+                emb = self._added_embed(track, pos, pos,
+                                        footer="⏭️ = als Nächstes · 📍 = Position wählen")
+                try:
+                    view.message = await message.reply(embed=emb, view=view, mention_author=False)
+                except discord.HTTPException as exc:
+                    log.error("Queue-Embed mit Buttons fehlgeschlagen: %s", exc)
+                    return emb  # Notfall: wenigstens das Embed ohne Buttons
+                log.info("In Warteschlange (#%d) + Position-Buttons: %s", pos, track.title)
+                return HANDLED
+            return self._added_embed(track, pos, pos)
 
-    # --- Mehrere Songs auf einmal (Spotify-Album / YouTube-Playlist) ---
-    if action == "spotify_album":
-        queries = await _spotify_list_tracks(arg)
-        if not queries:
-            return _embed("Das Spotify-Album konnte ich nicht laden (Token, privat oder leer?).",
-                          color=_COL_ERR)
-        items = [(f"ytsearch1:{q}", q) for q in queries]
-        return await _play_many(
-            player, voice_state.channel, items,
-            message.author.display_name, "aus dem Album", reply_to=message,
-        )
+        try:
+            player.start(track)
+        except Exception:
+            log.exception("Track nicht abspielbar: %s", track.title)
+            return self._embed("Den Song konnte ich gerade nicht abspielen. Probier einen anderen.",
+                               color=_COL_ERR)
+        await self._send_panel(player, track, reply_to=message)
+        return HANDLED
 
-    if action == "spotify_playlist":
-        queries = await _spotify_playlist_via_embed(arg)
-        if not queries:
-            return _embed(
-                "An diese Spotify-**Playlist** komme ich nicht ran – Spotify sperrt den "
-                "Playlist-Zugriff für Bots. Was sicher geht: ein Spotify-**Album**, ein "
-                "einzelner Song-Link oder eine **YouTube-Playlist**.",
-                title="🚫  Playlist gesperrt", color=_COL_ERR)
-        items = [(f"ytsearch1:{q}", q) for q in queries]
-        return await _play_many(
-            player, voice_state.channel, items,
-            message.author.display_name, "aus der Playlist", reply_to=message,
-        )
 
-    if action == "yt_playlist":
-        entries = await _youtube_playlist(arg)
-        if not entries:
-            return _embed("Die YouTube-Playlist konnte ich nicht laden (leer oder privat?).",
-                          color=_COL_ERR)
-        return await _play_many(
-            player, voice_state.channel, entries,
-            message.author.display_name, "aus der Playlist", reply_to=message,
-        )
+# Eine Instanz fuer das ganze Modul - bot.py & Co. nutzen die Aliase darunter.
+instance = Music()
 
-    if len(player.queue) >= MAX_QUEUE:
-        return _embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
-
-    # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
-    try:
-        if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
-            query = await _spotify_to_query(arg)
-            if not query:
-                return _embed("Den Spotify-Link konnte ich nicht auflösen (Keys/Token?).",
-                              color=_COL_ERR)
-            track = await _extract(f"ytsearch1:{query}")
-        elif action == "play":
-            track = await _extract(arg)
-        else:  # search
-            track = await _extract(f"ytsearch1:{arg}")
-    except Exception:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
-        log.exception("Track konnte nicht aufgeloest werden: %s", arg)
-        return _embed("Den Song konnte ich nicht laden. Probier einen anderen Link "
-                      "oder Suchbegriff.", color=_COL_ERR)
-
-    track.requested_by = message.author.display_name
-
-    try:
-        await player.connect(voice_state.channel)
-    except discord.ClientException as exc:
-        log.error("Voice-Connect fehlgeschlagen: %s", exc)
-        return _embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                      color=_COL_ERR)
-
-    # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
-    # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
-    if player.is_active():
-        player.queue.append(track)
-        pos = len(player.queue)
-        if pos >= 2:
-            view = QueuePositionView(player, track, message.author.id)
-            emb = _added_embed(track, pos, pos,
-                               footer="⏭️ = als Nächstes · 📍 = Position wählen")
-            try:
-                view.message = await message.reply(embed=emb, view=view, mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Queue-Embed mit Buttons fehlgeschlagen: %s", exc)
-                return emb  # Notfall: wenigstens das Embed ohne Buttons
-            log.info("In Warteschlange (#%d) + Position-Buttons: %s", pos, track.title)
-            return HANDLED
-        return _added_embed(track, pos, pos)
-
-    try:
-        player.start(track)
-    except Exception:
-        log.exception("Track nicht abspielbar: %s", track.title)
-        return _embed("Den Song konnte ich gerade nicht abspielen. Probier einen anderen.",
-                      color=_COL_ERR)
-    await _send_panel(player, track, reply_to=message)
-    return HANDLED
+# --- Modul-Aliase: bisherige Modul-Funktionen bleiben unter ihren alten
+# --- Namen aufrufbar (bot.py/voicegags.py und interne Klassen nutzen sie).
+_fmt_dur = instance._fmt_dur
+_short = instance._short
+_embed = instance._embed
+_build_audio_filter = instance._build_audio_filter
+_is_volume_word = instance._is_volume_word
+setup = instance.setup
+is_enabled = instance.is_enabled
+_player_for = instance._player_for
+heal_voice = instance.heal_voice
+is_voice_busy = instance.is_voice_busy
+_extract = instance._extract
+_resolve_track = instance._resolve_track
+_lazy_track = instance._lazy_track
+_youtube_playlist = instance._youtube_playlist
+_spotify_token = instance._spotify_token
+_spotify_to_query = instance._spotify_to_query
+_spotify_list_tracks = instance._spotify_list_tracks
+_deep_find = instance._deep_find
+_spotify_playlist_via_embed = instance._spotify_playlist_via_embed
+_clean_lead = instance._clean_lead
+parse_command = instance.parse_command
+_play_many = instance._play_many
+_title_value = instance._title_value
+_now_playing_embed = instance._now_playing_embed
+_added_embed = instance._added_embed
+_gone_embed = instance._gone_embed
+_queue_embed = instance._queue_embed
+_retire_panel = instance._retire_panel
+_send_panel = instance._send_panel
+handle = instance.handle
