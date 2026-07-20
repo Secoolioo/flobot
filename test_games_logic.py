@@ -371,6 +371,45 @@ def test_luxus_besitz_und_rahmen() -> None:
         luxus.instance._enabled = False
 
 
+# --- Casino-Bilanz: Gewonnen/Verloren-Summen -----------------------------------
+def test_casino_bilanz_gewonnen_verloren() -> None:
+    """record() zaehlt Brutto-Gewinne und -Verluste getrennt; Alt-Profile ohne
+    die neuen Felder werden aus dem Netto geseedet; die Karte rendert damit."""
+    class FakeStore:
+        def __init__(self):
+            self.data = {"stats": {}}
+
+        async def save(self):
+            pass
+
+    alt_stats, alt_enabled = casino.instance._stats, casino.instance._enabled
+    casino.instance._stats, casino.instance._enabled = FakeStore(), True
+    try:
+        asyncio.run(casino.record(1, "slots", 100, 250))   # +150 gewonnen
+        asyncio.run(casino.record(1, "slots", 100, 0))     # -100 verloren
+        asyncio.run(casino.record(1, "crash", 200, 0))     # -200 verloren
+        asyncio.run(casino.record(1, "sieben", 50, 50))    # +-0 -> zaehlt nirgends
+        prof = casino.instance._stats_profile(1)
+        assert prof["games"] == 4 and prof["wagered"] == 450 and prof["payout"] == 300
+        assert prof["won"] == 150 and prof["lost"] == 300
+        assert prof["won"] - prof["lost"] == prof["payout"] - prof["wagered"]
+        assert prof["best_win"] == 150
+        # Migration: Alt-Profil ohne won/lost -> aus dem Netto geseedet.
+        casino.instance._stats.data["stats"]["2"] = {
+            "games": 5, "wagered": 1000, "payout": 1400, "best_win": 300, "per": {}}
+        alt = casino.instance._stats_profile(2)
+        assert alt["won"] == 400 and alt["lost"] == 0
+        casino.instance._stats.data["stats"]["3"] = {
+            "games": 2, "wagered": 500, "payout": 100, "best_win": 0, "per": {}}
+        alt = casino.instance._stats_profile(3)
+        assert alt["won"] == 0 and alt["lost"] == 400
+        # Stats-Karte rendert die neuen Kennzahlen als PNG.
+        buf = render.casino_stats_card("Tester", None, casino.instance._stats_profile(1))
+        assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
+    finally:
+        casino.instance._stats, casino.instance._enabled = alt_stats, alt_enabled
+
+
 def run() -> None:
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

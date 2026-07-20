@@ -241,7 +241,16 @@ class Casino:
     def _stats_profile(self, uid: int) -> dict:
         assert self._stats is not None
         prof = self._stats.data.setdefault("stats", {}).setdefault(
-            str(uid), {"games": 0, "wagered": 0, "payout": 0, "best_win": 0, "per": {}})
+            str(uid), {"games": 0, "wagered": 0, "payout": 0, "best_win": 0,
+                       "won": 0, "lost": 0, "per": {}})
+        # Migration: Alt-Profile (vor der Gewonnen/Verloren-Zaehlung) bekommen die
+        # neuen Brutto-Felder aus dem Netto geseedet, damit die Rechnung
+        # 'Gewonnen - Verloren = Netto' von Anfang an aufgeht. Ab jetzt zaehlen
+        # die echten Rundensummen weiter.
+        if "won" not in prof or "lost" not in prof:
+            net = prof.get("payout", 0) - prof.get("wagered", 0)
+            prof.setdefault("won", max(net, 0))
+            prof.setdefault("lost", max(-net, 0))
         return prof
 
     async def record(self, uid: int, game: str, bet: int, payout: int) -> None:
@@ -255,6 +264,12 @@ class Casino:
             prof["wagered"] += bet
             prof["payout"] += payout
             net = payout - bet
+            # Brutto-Summen: jede Gewinn-Runde zaehlt auf 'won', jede
+            # Verlust-Runde auf 'lost' (beide positiv gefuehrt).
+            if net > 0:
+                prof["won"] += net
+            elif net < 0:
+                prof["lost"] += -net
             if net > prof.get("best_win", 0):
                 prof["best_win"] = net
             g = prof["per"].setdefault(game, {"n": 0, "net": 0})
@@ -875,6 +890,8 @@ class Casino:
                 f"**{target.display_name}** hat noch keine Casino-Runde gespielt. "
                 f"`{self._bot_name} casino` wartet. 🎰"))
             return HANDLED
+        # Alt-Profile auf die neuen Gewonnen/Verloren-Felder migrieren.
+        prof = self._stats_profile(target.id)
         avatar = await self._fetch_avatar(target)
         try:
             buf = await asyncio.to_thread(render.casino_stats_card,
@@ -883,6 +900,7 @@ class Casino:
             log.exception("Stats-Karte fehlgeschlagen - Text-Fallback")
             net = prof.get("payout", 0) - prof.get("wagered", 0)
             emb = self._info(f"**{target.display_name}** – {prof.get('games', 0)} Runden, "
+                        f"gewonnen +{prof.get('won', 0)}, verloren -{prof.get('lost', 0)}, "
                         f"Netto {'+' if net >= 0 else ''}{net} {economy.COIN}.")
             await self._send(message, embed=emb)
             return HANDLED

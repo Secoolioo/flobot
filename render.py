@@ -2022,15 +2022,17 @@ class Render:
 
     # === Casino-Statistik-Karte ================================================
     def casino_stats_card(self, name: str, avatar: "bytes | None", stats: dict) -> io.BytesIO:
-        """Persoenliche Casino-Bilanz: Kopf mit Avatar+Name, vier Kennzahlen und
-        ein Balken je Spiel (Anzahl Runden, Netto eingefaerbt).
+        """Persoenliche Casino-Bilanz: Kopf mit Avatar+Name, sechs Kennzahlen
+        (inkl. Brutto-Gewonnen/-Verloren) und ein Balken je Spiel (Anzahl
+        Runden, Netto eingefaerbt).
 
-        ``stats``: {games, wagered, payout, best_win, per: {spiel: {n, net}}}
+        ``stats``: {games, wagered, payout, best_win, won, lost,
+                    per: {spiel: {n, net}}}
         """
         per = dict(stats.get("per") or {})
         rows = sorted(per.items(), key=lambda kv: kv[1].get("n", 0), reverse=True)
         W = 900
-        head, row_h = 176, 52
+        head, row_h = 242, 52
         H = head + max(1, len(rows)) * row_h + 40
         img = self._vgrad(W, H, (26, 24, 40), (12, 11, 20)).convert("RGBA")
         d = ImageDraw.Draw(img, "RGBA")
@@ -2059,20 +2061,35 @@ class Render:
         d.text((ax + AD + 24, ay + 54), "CASINO-BILANZ", font=self._font(17),
                fill=(150, 155, 168))
 
-        # Kennzahlen-Zeile
+        # Kennzahlen: zwei Zeilen a drei Werte. Oben die Klassiker, unten die
+        # Brutto-Summen (wie viel insgesamt gewonnen bzw. verloren wurde) -
+        # fehlen die Felder (Alt-Profil), werden sie aus dem Netto abgeleitet.
+        def _tsd(n: int) -> str:
+            return f"{n:,}".replace(",", ".")
+
         net = int(stats.get("payout", 0)) - int(stats.get("wagered", 0))
+        won = int(stats.get("won", max(net, 0)))
+        lost = int(stats.get("lost", max(-net, 0)))
         net_col = self._GREEN if net >= 0 else self._RED_HOT
-        kennz = [
-            ("RUNDEN", f"{stats.get('games', 0):,}".replace(",", "."), self._WHITE),
-            ("EINSATZ", f"{stats.get('wagered', 0):,}".replace(",", "."), self._WHITE),
-            ("NETTO", f"{'+' if net >= 0 else ''}{net:,}".replace(",", "."), net_col),
-            ("BESTER GEWINN", f"+{stats.get('best_win', 0):,}".replace(",", "."), self._GOLD),
+        kennz_zeilen = [
+            [
+                ("RUNDEN", _tsd(stats.get("games", 0)), self._WHITE),
+                ("EINSATZ", _tsd(stats.get("wagered", 0)), self._WHITE),
+                ("NETTO", f"{'+' if net >= 0 else ''}{_tsd(net)}", net_col),
+            ],
+            [
+                ("GEWONNEN", f"+{_tsd(won)}" if won else "0", self._GREEN),
+                ("VERLOREN", f"-{_tsd(lost)}" if lost else "0", self._RED_HOT),
+                ("BESTER GEWINN", f"+{_tsd(stats.get('best_win', 0))}", self._GOLD),
+            ],
         ]
-        seg = (W - 68) // len(kennz)
-        for i, (label, val, col) in enumerate(kennz):
-            sx = 34 + i * seg
-            d.text((sx, 124), label, font=self._font(15), fill=(120, 126, 140))
-            d.text((sx, 144), val, font=self._font(26), fill=col)
+        seg = (W - 68) // 3
+        for zi, zeile in enumerate(kennz_zeilen):
+            ly, vy = 124 + zi * 66, 144 + zi * 66
+            for i, (label, val, col) in enumerate(zeile):
+                sx = 34 + i * seg
+                d.text((sx, ly), label, font=self._font(15), fill=(120, 126, 140))
+                d.text((sx, vy), val, font=self._font(26), fill=col)
 
         # Balken je Spiel (Anzahl Runden relativ zum Maximum, Netto rechts)
         if rows:
