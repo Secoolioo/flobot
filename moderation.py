@@ -546,8 +546,12 @@ class Moderation:
             return ("Mir fehlt hier das Recht **Nachrichten verwalten** "
                     "(und Verlauf lesen) – dann kann ich nichts löschen.")
 
-        want_all = bool(_ALL_RE.search(rest)) or cmd.lower().startswith("nuke")
         num_match = re.search(r"\d+", rest)
+        # Eine EXPLIZIT genannte Zahl hat Vorrang: 'loesch 20 ganz schnell' loescht
+        # 20, nicht den ganzen Channel. Alles loeschen nur bei 'nuke' oder wenn ein
+        # Alles-Wort OHNE Zahl kommt ('loesch alle').
+        want_all = cmd.lower().startswith("nuke") or (
+            bool(_ALL_RE.search(rest)) and num_match is None)
 
         try:
             if want_all:

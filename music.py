@@ -287,10 +287,16 @@ class GuildPlayer:
         # Players (z. B. nach einem Tempo-Wechsel) nichts mehr ausloesen.
         self._play_gen += 1
         gen = self._play_gen
-        self.voice.play(
-            discord.PCMVolumeTransformer(source, self.volume),
-            after=lambda err, g=gen: self._after(err, g),
-        )
+        try:
+            self.voice.play(
+                discord.PCMVolumeTransformer(source, self.volume),
+                after=lambda err, g=gen: self._after(err, g),
+            )
+        except Exception:
+            # play() wirft (z. B. 'Already playing' / 'Not connected') -> der schon
+            # gespawnte ffmpeg-Prozess muss beendet werden, sonst bleibt ein Zombie.
+            source.cleanup()
+            raise
         if not keep_speed:
             # Jeden NEU gestarteten Song in den Verlauf legen (fuer 'flo nochmal').
             # Effekt-/Tempo-Neustarts (keep_speed) zaehlen nicht als neuer Song.

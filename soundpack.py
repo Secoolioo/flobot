@@ -285,12 +285,19 @@ class Soundpack:
         sounds_dir.mkdir(parents=True, exist_ok=True)
         vorhanden = {p.stem.lower() for p in sounds_dir.iterdir() if p.is_file()}
         neu = 0
-        for name, bauen in self.PACK.items():
-            if name in vorhanden:
-                continue
-            random.seed(name)            # reproduzierbar, unabhaengig vom Start
-            self._write(sounds_dir / f"{name}.wav", bauen())
-            neu += 1
+        # Zustand des globalen Zufalls sichern: wir seeden je Sound reproduzierbar,
+        # duerfen den Prozess-RNG danach aber NICHT deterministisch hinterlassen -
+        # sonst wuerden Casino/Spiele auf einer frischen Installation vorhersagbar.
+        state = random.getstate()
+        try:
+            for name, bauen in self.PACK.items():
+                if name in vorhanden:
+                    continue
+                random.seed(name)            # reproduzierbar, unabhaengig vom Start
+                self._write(sounds_dir / f"{name}.wav", bauen())
+                neu += 1
+        finally:
+            random.setstate(state)
         return neu
 
 

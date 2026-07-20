@@ -907,6 +907,10 @@ class FloBot(discord.Client):
                         getattr(channel, "name", cid))
                 except discord.HTTPException as exc:
                     log.warning("Auto-Loeschen (Buendel) fehlgeschlagen: %s", exc)
+                except Exception as exc:  # noqa: BLE001
+                    # Netzwerkfehler (z. B. aiohttp/OSError) sind KEINE HTTPException
+                    # und wuerden sonst den ganzen tasks.loop dauerhaft killen.
+                    log.warning("Auto-Loeschen (Buendel) unerwartet fehlgeschlagen: %s", exc)
 
     def protect_message(self, message):
         """Meldet eine aktive Spiel-Nachricht beim Auto-Loesch-Schutz an. Nur in den

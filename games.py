@@ -415,10 +415,15 @@ class _QDuelChallenge(discord.ui.View):
             _release(self.message)
             return
         self.done = True
+        # ZUERST die Interaction bestaetigen (defer): das Generieren der KI-Frage
+        # kann laenger als Discords 3-Sekunden-Antwortfrist dauern - ohne defer
+        # wuerde die Erstantwort danach fehlschlagen und beide Einsaetze waeren weg.
+        await interaction.response.defer()
+        frage, antwort = await _gen_quiz_frage()
+        # Erst NACH erfolgreicher Frage abbuchen (KI-Fehler kostet dann nichts).
         economy.add_coins(self.a.id, -self.bet)
         economy.add_coins(self.b.id, -self.bet)
         await economy.flush()
-        frage, antwort = await _gen_quiz_frage()
         tok = _new_token(cid)
         emb = discord.Embed(
             title="🧠 QUIZ-DUELL",
@@ -426,12 +431,17 @@ class _QDuelChallenge(discord.ui.View):
             color=discord.Color.gold())
         emb.set_footer(text=f"{self.a.display_name} vs {self.b.display_name} · "
                             f"Pot: {self.bet * 2} Flo Coins · {QDUEL_TIMEOUT}s")
-        await interaction.response.edit_message(embed=emb, view=None)
+        # Runde + Timeout-Watchdog registrieren, BEVOR die Anzeige editiert wird -
+        # so greift die Timeout-Erstattung auch, falls das Edit fehlschlaegt.
         instance._qduel[cid] = {"players": {self.a.id, self.b.id}, "answer": antwort,
                                 "bet": self.bet, "msg": self.message,
                                 "expires": time.monotonic() + QDUEL_TIMEOUT, "token": tok}
         self.stop()
         _spawn(_qduel_timeout(interaction.channel, tok))
+        try:
+            await interaction.edit_original_response(embed=emb, view=None)
+        except discord.HTTPException:
+            log.exception("Quiz-Duell: Frage-Anzeige fehlgeschlagen")
 
     @discord.ui.button(label="Ablehnen", emoji="✖️", style=discord.ButtonStyle.secondary)
     async def _nein(self, interaction, _b):
@@ -1350,9 +1360,15 @@ class Games:
             return err
         if not bet:
             return f"Wort entwirren: richtig in {ANA_TIMEOUT}s = **×3**. {self._bet_hint('anagramm')}"
-        kandidaten = [w for w in (self._event_words or _EVENT_FALLBACK_WORDS)
-                      if 6 <= len(w) <= 9]
-        wort = random.choice(kandidaten or _EVENT_FALLBACK_WORDS)
+        # Kandidatenliste einmalig cachen: die Wortliste kann ~300k Eintraege haben
+        # (System-Wortliste), ein O(n)-Filter bei JEDEM 'anagramm'-Start blockiert
+        # sonst unnoetig den Event-Loop. Ergebnis ist konstant.
+        kandidaten = getattr(self, "_anagramm_pool", None)
+        if kandidaten is None:
+            kandidaten = [w for w in (self._event_words or _EVENT_FALLBACK_WORDS)
+                          if 6 <= len(w) <= 9] or list(_EVENT_FALLBACK_WORDS)
+            self._anagramm_pool = kandidaten
+        wort = random.choice(kandidaten)
         buchstaben = list(wort.lower())
         for _ in range(20):
             random.shuffle(buchstaben)

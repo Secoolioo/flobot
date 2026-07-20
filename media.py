@@ -33,9 +33,11 @@ class Media:
     _POLLI = ("https://image.pollinations.ai/prompt/{p}"
               "?width=1024&height=1024&nologo=true&model=flux")
 
-    # Befehle. "male/zeichne/generiere/bild/img <prompt>" bzw. "quote/zitat/meme/spruch <text>".
+    # Befehle. "male/zeichne/generiere/bild/img <prompt>" bzw. "quote/zitat/meme <text>".
+    # ('spruch' bewusst NICHT hier - das ist der Spruch-des-Tages-Befehl aus fun.py,
+    # der sonst von media verschluckt wuerde.)
     _GEN_RE = re.compile(r"^(?:male|zeichne|generier\w*|bild|img)\s+(.+)", re.I | re.S)
-    _QUOTE_RE = re.compile(r"^(?:quote|zitat|meme|spruch)\b\s*(.*)", re.I | re.S)
+    _QUOTE_RE = re.compile(r"^(?:quote|zitat|meme)\b\s*(.*)", re.I | re.S)
 
     def __init__(self):
         self._enabled = False
@@ -145,7 +147,9 @@ class Media:
         avatar = await self._fetch_avatar(target)
         name = getattr(target, "display_name", None) or "Unbekannt"
         try:
-            buf = render.quote_card(avatar, quote, name)
+            # Im Thread rendern: quote_card jagt den ganzen Text durch die
+            # Glyphen-Pruefung und zeichnet auf grossem Canvas - nicht im Loop.
+            buf = await asyncio.to_thread(render.quote_card, avatar, quote, name)
         except Exception:  # noqa: BLE001
             log.exception("Quote-Render fehlgeschlagen")
             return "Das Zitat-Bild ist gerade abgestürzt."

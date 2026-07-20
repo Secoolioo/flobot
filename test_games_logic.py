@@ -145,8 +145,11 @@ def test_cmdnorm_neue_befehle():
     assert cmdnorm.normalize("woerterr pizza") == "woerter pizza"
     assert cmdnorm.normalize("minees 50") == "mines 50"
     # Alltagswoerter duerfen NICHT gekapert werden.
-    for satz in ("orte 5", "wert 100", "start jetzt", "statt dessen", "worten nach"):
+    for satz in ("orte 5", "wert 100", "start jetzt", "statt dessen", "worten nach",
+                 "kommt ihr heute", "spielen wir was"):
         assert cmdnorm.normalize(satz) is None, satz
+    # Toter Dialekt-Key ist bereinigt (wird vor dem Lookup eh weggestrippt).
+    assert "weida..." not in cmdnorm.DIALECT and cmdnorm.DIALECT["weida"] == "weiter"
     # Exakte neue Befehle bleiben unveraendert (None = nichts zu korrigieren).
     assert cmdnorm.normalize("wörter pizza") is None
     assert cmdnorm.normalize("mines 50 3") is None

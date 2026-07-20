@@ -88,14 +88,14 @@ class CmdNorm:
         "spui": "spiel", "spuih": "spiel", "spü": "spiel", "spöi": "spiel",
         "spöl": "spiel", "spuis": "spiel", "spün": "spiel",
         "hoit": "stop", "hoid": "stop", "aus": "stop",
-        "weida": "weiter", "weida...": "weiter", "weita": "weiter", "weda": "weiter",
+        "weida": "weiter", "weita": "weiter", "weda": "weiter",
         "schleich": "leave", "schleichdi": "leave", "gemma": "leave",
         "lauda": "lauter", "leisa": "leiser",
         "geld": "coins", "moos": "coins", "kohle": "coins", "koin": "coins",
         "kaffa": "kaufen", "kafn": "kaufen",
         "iberspring": "skip", "übaspring": "skip", "iwaspring": "skip",
         "wiafl": "würfel", "wiaschd": "würfel",
-        "haudi": "leave", "schleichdi": "leave",
+        "haudi": "leave",
         "vasteck": "roast", "obara": "hype",
         "wiavui": "coins",
     }
@@ -121,6 +121,9 @@ class CmdNorm:
         "sturm",
         # 1 Tippfehler von 'handel' - normale Verben/Woerter nicht kapern:
         "handeln", "wandel",
+        # 1 Buchstabe von 'komm'/'spiele' entfernt - gaengige Verben nicht kapern
+        # ('kommt ihr?' darf nicht zum Voice-Join werden, 'spielen wir?' nicht zu 'spiele'):
+        "kommt", "spielen",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

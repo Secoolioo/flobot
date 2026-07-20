@@ -413,11 +413,14 @@ class VoiceGags:
                 log.error("Gag-Wiedergabe-Fehler: %s", err)
             loop.call_soon_threadsafe(done.set)
 
+        audio = None
         try:
             audio = discord.FFmpegPCMAudio(source, options=_FFMPEG_OPTS)
             vc.play(audio, after=_after)
         except (discord.ClientException, OSError) as exc:
             log.error("Konnte Sound nicht starten: %s", exc)
+            if audio is not None:
+                audio.cleanup()   # bereits gestarteten ffmpeg-Prozess beenden (kein Zombie)
             if created:
                 await self._safe_disconnect(vc)
             return (False, "Den Sound konnte ich nicht abspielen.")

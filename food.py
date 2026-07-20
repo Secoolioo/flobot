@@ -181,7 +181,9 @@ class Food:
             return
         sent = False
         try:
-            buf = render.nutrition_card(photo, data)
+            # Karte im Thread rendern: Decode/Fit eines evtl. mehrere MB grossen Fotos
+            # plus Glyphen-Pruefung darf den Event-Loop nicht blockieren.
+            buf = await asyncio.to_thread(render.nutrition_card, photo, data)
             sent = await self._deliver(message, buf=buf)
         except Exception:  # noqa: BLE001 - Render-Fehler -> Embed-Fallback
             log.exception("Kalorien-Karte fehlgeschlagen - nutze Embed")

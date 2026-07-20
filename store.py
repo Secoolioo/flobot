@@ -62,7 +62,13 @@ class JsonStore:
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-            tmp.write_text(payload, encoding="utf-8")
+            # Erst vollstaendig auf die Platte zwingen (flush + fsync), DANN atomar
+            # umbenennen - sonst kann nach einem Stromausfall das Rename da sein, die
+            # Datenbloecke aber nicht (klassische leere/abgeschnittene Datei).
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.path)  # atomar
         except OSError as exc:
             log.error("Konnte %s nicht speichern: %s", self.path, exc)

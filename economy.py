@@ -905,7 +905,17 @@ class Economy:
     async def _pay(self, message):
         if not message.mentions:
             return f"So geht's: `{self._bot_name} pay @jemand 100`"
-        ziel = message.mentions[0]
+        # Empfaenger = erste @-Erwaehnung IN DER REIHENFOLGE DES TEXTES. message.mentions
+        # ist unsortiert und enthaelt bei einer Antwort-mit-Ping auch den Autor der
+        # beantworteten Nachricht - deshalb die ID aus dem geschriebenen Text ziehen.
+        by_id = {u.id: u for u in message.mentions}
+        ziel = None
+        for token in re.findall(r"<@!?(\d+)>", message.content or ""):
+            u = by_id.get(int(token))
+            if u is not None:
+                ziel = u
+                break
+        ziel = ziel or message.mentions[0]
         if ziel.id == message.author.id:
             return "Dir selbst Geld geben? Netter Versuch. 😄"
         if ziel.bot:

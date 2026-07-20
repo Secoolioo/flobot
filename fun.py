@@ -97,9 +97,12 @@ class Fun:
         return ai.strip_lead(text)
 
     def _target_name(self, message, rest):
-        """Wen meint der Befehl? Erste Mention, 'mich' -> Autor, sonst der Rest-Text."""
-        if message.mentions:
-            return message.mentions[0].display_name
+        """Wen meint der Befehl? Erste Mention (ausser Flo selbst, das steht bei
+        Trigger-per-@Mention mit drin), 'mich' -> Autor, sonst der Rest-Text."""
+        me_id = message.guild.me.id if message.guild is not None else None
+        echte = [u for u in message.mentions if u.id != me_id]
+        if echte:
+            return echte[0].display_name
         low = rest.lower()
         if low in ("mich", "me", "self", "") or low.startswith("mich"):
             return message.author.display_name

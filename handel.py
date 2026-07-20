@@ -14,6 +14,7 @@ Befehl: handel [@wer]  ->  Statistik-Karte als Bild (render.handel_card).
 """
 
 import asyncio
+import copy
 import logging
 import os
 from datetime import datetime
@@ -46,6 +47,9 @@ class Handel:
         self._enabled = False
         self._bot_name = "Flo"
         self._store = None
+        # Referenzen auf laufende Speicher-Tasks halten - sonst kann der GC einen
+        # noch nicht fertigen Task einsammeln (asyncio-Doku).
+        self._save_tasks = set()
 
     def setup(self):
         """Aktiviert das Handelsbuch. Braucht economy (dort liegt der Coin-Topf)."""
@@ -113,9 +117,11 @@ class Handel:
         laufenden Event-Loop (Tests) passiert nichts - der naechste Lauf im Bot
         schreibt den Stand mit."""
         try:
-            asyncio.get_running_loop().create_task(self._store.save())
+            task = asyncio.get_running_loop().create_task(self._store.save())
         except RuntimeError:
-            pass
+            return
+        self._save_tasks.add(task)
+        task.add_done_callback(self._save_tasks.discard)
 
     # --- Befehl -----------------------------------------------------------
     async def _fetch_avatar(self, user):
@@ -141,9 +147,12 @@ class Handel:
                     f"`{self._bot_name} casino`!")
         avatar = await self._fetch_avatar(target)
         balance = economy.get_coins(target.id)
+        # Snapshot: record() mutiert das Live-Dict weiter, waehrend der Render-Thread
+        # darueber iteriert. Eine tiefe Kopie schuetzt vor 'dict changed size'-Races.
+        snapshot = copy.deepcopy(u)
         try:
             buf = await asyncio.to_thread(render.handel_card,
-                                          target.display_name, avatar, u, balance)
+                                          target.display_name, avatar, snapshot, balance)
             return discord.File(buf, filename=f"handel_{target.id}.png")
         except Exception:  # noqa: BLE001 - Karte ist nice-to-have, Text geht immer
             log.exception("Handels-Karte fehlgeschlagen - Text-Fallback")
