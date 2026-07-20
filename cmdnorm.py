@@ -64,8 +64,6 @@ KNOWN: set[str] = {
     # coin-spiele
     "mathe", "rechnen", "kopfrechnen", "anagramm", "wortsalat", "reaktion",
     "reaktionstest", "reflex", "quizduell",
-    # dead by daylight
-    "dbd", "build", "builds", "perk", "perks", "killer", "survivor", "surv",
     # fun
     "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
     "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",

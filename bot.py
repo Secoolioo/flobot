@@ -27,7 +27,6 @@ import ai
 import bayern
 import casino
 import cmdnorm
-import dbd
 import economy
 import fun
 import food
@@ -143,9 +142,6 @@ ADMIN_ENABLED = admin.setup()
 # Luxus-Shop ('Flo luxus'): Prestige-Coin-Senke von 15k bis 1 MILLIARDE
 # (Level-Karten-Rahmen, Krone, Imperium) + DER THRON (Unikat, eroberbar).
 LUXUS_ENABLED = luxus.setup()
-# Dead by Daylight ('Flo build/killer/perk/dbd'): Otzdarva-Builds + alle
-# Perks/Killer auf Deutsch als Datenbasis, freie Fragen laufen ueber die KI.
-DBD_ENABLED = dbd.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -384,7 +380,6 @@ def _help_categories() -> "list[tuple[str, str, str]]":
         ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
         ("casino", "🎰", "Casino", CASINO_ENABLED),
         ("wörter", "📊", "Wörter", WORDS_ENABLED),
-        ("dbd", "🔪", "DbD", DBD_ENABLED),
         ("chaos", "😈", "Chaos", FUN_ENABLED),
         ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
         ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
@@ -443,13 +438,6 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
         ("flo wörter pizza", "wie oft schon gesagt + Top-Sager"),
         ("flo wörter", "Top 15 des Servers als Bild"),
     ]),
-    "dbd": ("Dead by Daylight", 0x8B0000, [
-        ("flo build nurse", "Otzdarvas Builds für jeden Killer"),
-        ("flo build survivor · team · profi", "Survivor-Builds"),
-        ("flo killer wesker", "Steckbrief, eigene Perks, Guide"),
-        ("flo perk adrenalin", "Perk-Beschreibung (deutsch, echte Werte)"),
-        ("flo dbd <frage>", "frag irgendwas - Antwort auf Datenbasis"),
-    ]),
     "chaos": ("Chaos", 0x9B59B6, [
         ("flo roast @wer · hype @wer", "austeilen oder abfeiern"),
         ("flo rate @wer · rizz @wer", "0-100 Bewertung mit Spruch"),
@@ -482,7 +470,7 @@ _HELP_DATA: "dict[str, tuple[str, int, list[tuple[str, str]]]]" = {
 _HELP_HINTS = {
     "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
     "economy": "level · daily · shop · luxus", "casino": "13 Spiele · stats",
-    "wörter": "wörter <wort>", "dbd": "build · killer · perk",
+    "wörter": "wörter <wort>",
     "chaos": "roast · rate · horoskop",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen",
@@ -1053,8 +1041,6 @@ async def _handle_owner_dm(message: discord.Message) -> None:
                 antwort = await ai.see_image(
                     content, image_url, author=message.author.display_name,
                     title=title, tone=tone, channel_id=message.channel.id)
-            elif DBD_ENABLED and dbd.erkennt_frage(content):
-                antwort = await dbd.beantworte(message, ai.strip_lead(content) or content)
             else:
                 antwort = await ai.ask_flo(
                     content, author=message.author.display_name, title=title,
@@ -1222,7 +1208,6 @@ async def on_message(message: discord.Message) -> None:
         (GAMES_ENABLED, games.handle),
         (CASINO_ENABLED, casino.handle),
         (LUXUS_ENABLED, luxus.handle),
-        (DBD_ENABLED, dbd.handle),
         (WORDS_ENABLED, words.handle),
         (ECONOMY_ENABLED, economy.handle),
         (FOOD_ENABLED, food.handle),
@@ -1287,10 +1272,6 @@ async def on_message(message: discord.Message) -> None:
                     title=title, tone=tone, channel_id=message.channel.id,
                     bavarian=bavarian,
                 )
-            elif DBD_ENABLED and dbd.erkennt_frage(content):
-                # Klingt nach Dead by Daylight -> mit den echten Spieldaten
-                # antworten (Otz-Builds, Perks, Addons) statt aus dem Bauch.
-                antwort = await dbd.beantworte(message, ai.strip_lead(content) or content)
             else:
                 antwort = await ai.ask_flo(
                     content, author=message.author.display_name, title=title, tone=tone,
