@@ -326,6 +326,40 @@ def test_music_random_genre():
         inst._enabled, inst._player_for, inst._extract, inst._send_panel = alt
 
 
+# --- Musik: Spotify Best-Match (richtiger Song statt Sped-Up/Loop) --------------
+def test_music_spotify_best_match():
+    """Aus mehreren YouTube-Treffern wird der beste fuer einen Spotify-Song gewaehlt:
+    Dauer-Naehe + Titel-Match, Abwertung von Sped-Up/Loop/Nightcore/Cover/Live -
+    aber 'live' darf nicht in 'Alive' matchen und ein gewollter Remix nicht sinken."""
+    import music
+    m = music.instance
+
+    def pick(cands, dur, title, artist=""):
+        return m._pick_best_match(cands, dur, title, artist)
+
+    # Original-Video (Dauer passt) schlaegt Sped-Up/1h-Loop/Nightcore.
+    c = [{"title": "Alan Walker - Faded (Sped Up)", "duration": 175, "id": "a"},
+         {"title": "Alan Walker - Faded [1 HOUR LOOP]", "duration": 3600, "id": "b"},
+         {"title": "Alan Walker - Faded (Official Music Video)", "duration": 212, "id": "c"},
+         {"title": "Faded - Alan Walker (Nightcore)", "duration": 150, "id": "d"}]
+    assert pick(c, 212, "Faded", "Alan Walker")["id"] == "c"
+    # Ohne Dauer-Info wird wenigstens der Junk abgewertet.
+    c2 = [{"title": "Song X (Sped Up)", "duration": None, "id": "1"},
+          {"title": "Song X (Official Audio)", "duration": None, "id": "2"},
+          {"title": "Song X 10 hours", "duration": None, "id": "3"}]
+    assert pick(c2, None, "Song X")["id"] == "2"
+    # Ein gewuenschter Remix wird NICHT als 'Junk' abgestraft.
+    c3 = [{"title": "Titel (Original Mix)", "duration": 200, "id": "o"},
+          {"title": "Titel (Tiesto Remix)", "duration": 201, "id": "r"}]
+    assert pick(c3, 201, "Titel Tiesto Remix")["id"] == "r"
+    # 'live'-Abwertung darf 'Stayin Alive' nicht treffen.
+    c4 = [{"title": "Bee Gees - Stayin Alive (Official)", "duration": 285, "id": "x"},
+          {"title": "Bee Gees - Stayin Alive (Live 1979)", "duration": 300, "id": "y"}]
+    assert pick(c4, 285, "Stayin Alive", "Bee Gees")["id"] == "x"
+    # Normalisierung behaelt Klammer-Woerter ('faded sped up').
+    assert m._norm_match("Alan Walker - Faded (Sped Up!)") == "alan walker faded sped up"
+
+
 # --- Musik: Lyrics -------------------------------------------------------------
 def test_music_lyrics():
     """Artist/Titel-Split, Seiten-Pagination und _build_lyrics (Fetch gemockt):

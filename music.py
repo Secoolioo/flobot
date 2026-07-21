@@ -132,6 +132,19 @@ _SPOTIFY_PLAYLIST_RE = re.compile(
     re.IGNORECASE,
 )
 # Wie oben, aber mit Typ (playlist/album) und ID als Gruppen fuer den API-Abruf.
+# So viele YouTube-Kandidaten zieht Flo bei Spotify-Songs, um den besten
+# (Dauer-/Titel-Match) auszuwaehlen statt blind den ersten Treffer.
+_SPOTIFY_SEARCH_N = 6
+# Varianten, die bei einem Spotify-Song FAST NIE gemeint sind -> im Best-Match
+# abwerten (ausser der Titel selbst enthaelt das Wort). (Wort, Strafpunkte).
+_YT_BAD_VARIANTS = (
+    ("sped up", 35), ("speed up", 35), ("nightcore", 40), ("slowed", 30),
+    ("reverb", 18), ("8d audio", 30), ("cover", 30), ("karaoke", 45),
+    ("instrumental", 28), ("remix", 22), ("mashup", 22), ("reaction", 55),
+    ("live", 16), ("1 hour", 55), ("1hour", 55), ("10 hours", 60),
+    ("loop", 30), ("bass boosted", 22), ("lyrics video", 6),
+)
+
 _SPOTIFY_LIST_RE = re.compile(
     r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?(playlist|album)/"
     r"|spotify:(playlist|album):)([A-Za-z0-9]+)",
@@ -350,6 +363,7 @@ class Track:
     requested_by: str = ""
     query: str = ""            # YouTube-Suchbegriff fuer spaetes Aufloesen (Playlist)
     thumbnail: str = ""        # Cover/Vorschaubild fuer das Embed (sofern bekannt)
+    match_hint: "dict | None" = None  # Spotify-Metadaten (Titel/Kuenstler/Dauer) fuer Best-Match
 
 
 @dataclass
@@ -1157,20 +1171,111 @@ class Music:
             thumbnail=info.get("thumbnail") or "",
         )
 
+    def _norm_match(self, s):
+        """Titel/Namen fuer den Vergleich vereinheitlichen: klein, Sonderzeichen ->
+        Leerzeichen (Klammer-WOERTER bleiben erhalten, z. B. 'Faded (Sped Up)' ->
+        'faded sped up'), Mehrfach-Leerzeichen zusammengefasst."""
+        s = (s or "").lower()
+        s = re.sub(r"[^a-z0-9äöüß]+", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+
+    def _pick_best_match(self, entries, want_dur, want_title, want_artist):
+        """Waehlt aus YouTube-Suchtreffern den besten fuer einen bestimmten Song:
+        Dauer-Naehe (starkes Signal), Titel-/Kuenstler-Treffer, Abwertung von
+        Sped-Up/Cover/Live/1-Stunden-Loops. Gibt den besten Eintrag zurueck."""
+        want_t = self._norm_match(want_title)
+        want_a = self._norm_match(want_artist)
+        best, best_score = None, -1e9
+        for i, e in enumerate(entries):
+            full = self._norm_match(e.get("title") or "")   # inkl. Klammer-Woerter
+            score = 0.0
+            if want_t and want_t in full:
+                score += 45
+            if want_a and want_a in full:
+                score += 25
+            dur = e.get("duration")
+            if want_dur and dur:
+                diff = abs(dur - want_dur)
+                if diff <= 3:
+                    score += 50
+                elif diff <= 7:
+                    score += 32
+                elif diff <= 15:
+                    score += 12
+                else:
+                    score -= min(60, diff)   # weit weg (Loop/Live/Sped-Up) -> raus
+            for bad, pen in _YT_BAD_VARIANTS:
+                # Wortgenau pruefen ('live' darf nicht in 'alive' matchen); nicht
+                # abwerten, wenn der gewuenschte Titel das Wort selbst enthaelt.
+                if bad not in want_t and re.search(rf"\b{re.escape(bad)}\b", full):
+                    score -= pen
+            score += max(0, 6 - i)           # YouTube-Ranking als leichter Tie-Break
+            if score > best_score:
+                best, best_score = e, score
+        return best
+
+    async def _youtube_search_best(self, query, *, want_dur=None, want_title="",
+                                   want_artist=""):
+        """Sucht mehrere YouTube-Treffer (flach) und liefert die Video-URL des
+        besten Matches - oder None, wenn nichts brauchbar war."""
+        loop = asyncio.get_running_loop()
+        opts = dict(_YDL_OPTS)
+        opts["noplaylist"] = True
+        opts["extract_flat"] = "in_playlist"
+
+        def work():
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
+                return ydl.extract_info(
+                    f"ytsearch{_SPOTIFY_SEARCH_N}:{query}", download=False)
+
+        try:
+            info = await loop.run_in_executor(None, work)
+        except Exception as exc:  # noqa: BLE001 - yt-dlp wirft viele Fehlerarten
+            log.warning("YouTube-Best-Match-Suche fehlgeschlagen (%s): %s", query, exc)
+            return None
+        entries = [e for e in (info.get("entries") or []) if e]
+        if not entries:
+            return None
+        best = self._pick_best_match(entries, want_dur, want_title, want_artist)
+        if best is None:
+            return None
+        vid = best.get("url") or best.get("id")
+        if vid and not str(vid).startswith("http"):
+            vid = f"https://www.youtube.com/watch?v={vid}"
+        return vid
+
+    async def _resolve_input(self, extract_input, hint):
+        """Loest eine yt-dlp-Eingabe zu einem Track auf. Mit 'hint' (Spotify-Meta:
+        query/dur/title/artist) wird der beste YouTube-Treffer per Dauer/Titel
+        gewaehlt statt blind der erste; scheitert das, Fallback auf extract_input."""
+        if hint and hint.get("query"):
+            try:
+                vid = await self._youtube_search_best(
+                    hint["query"], want_dur=hint.get("dur"),
+                    want_title=hint.get("title", ""), want_artist=hint.get("artist", ""))
+            except Exception:  # noqa: BLE001 - nie den Song wegen Matching verlieren
+                log.exception("Best-Match fehlgeschlagen - nutze ersten Treffer")
+                vid = None
+            if vid:
+                return await self._extract(vid)
+        return await self._extract(extract_input)
+
     async def _resolve_track(self, track):
         """Loest einen vorgemerkten Track auf. track.query = komplette yt-dlp-Eingabe
-        (direkte URL ODER 'ytsearch1:Kuenstler - Titel')."""
-        resolved = await self._extract(track.query)
+        (direkte URL ODER 'ytsearch1:Kuenstler - Titel'); track.match_hint bringt bei
+        Spotify-Songs die Metadaten fuer die Best-Match-Auswahl mit."""
+        resolved = await self._resolve_input(track.query, track.match_hint)
         resolved.requested_by = track.requested_by
         resolved.query = track.query
         return resolved
 
-    def _lazy_track(self, extract_input, title, requested_by):
+    def _lazy_track(self, extract_input, title, requested_by, hint=None):
         """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
-        extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename.
-        """
+        extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename,
+        hint = optionale Spotify-Metadaten fuer die Best-Match-Auswahl."""
         return Track(
-            title=title, stream_url="", query=extract_input, requested_by=requested_by
+            title=title, stream_url="", query=extract_input, requested_by=requested_by,
+            match_hint=hint,
         )
 
     async def _youtube_playlist(self, url):
@@ -1237,8 +1342,11 @@ class Music:
         self._sp_token["exp"] = now + float(data.get("expires_in", 3600))
         return self._sp_token["value"]  # type: ignore[return-value]
 
-    async def _spotify_to_query(self, url):
-        """Spotify-Track-Link -> 'Kuenstler - Titel' (fuer die YouTube-Suche)."""
+    async def _spotify_track_meta(self, url):
+        """Spotify-Track-Link -> Metadaten fuer die YouTube-Suche:
+        {query, name, artist, dur}. 'query' = 'Kuenstler - Titel', 'artist' = der
+        HAUPT-Kuenstler, 'dur' = Laenge in Sekunden (fuer den Dauer-Match).
+        None, wenn der Link/Token nicht aufloesbar ist."""
         m = _SPOTIFY_TRACK_RE.search(url)
         if not m:
             return None
@@ -1261,13 +1369,31 @@ class Music:
             log.error("Spotify nicht erreichbar: %s", exc)
             return None
 
-        name = data.get("name", "")
-        artists = ", ".join(a.get("name", "") for a in data.get("artists", []))
-        query = f"{artists} - {name}".strip(" -")
-        return query or None
+        name = (data.get("name") or "").strip()
+        alle = [a.get("name", "") for a in data.get("artists", []) if a.get("name")]
+        haupt = alle[0] if alle else ""
+        if not name:
+            return None
+        dur_ms = data.get("duration_ms")
+        dur = int(round(dur_ms / 1000)) if isinstance(dur_ms, (int, float)) else None
+        # Suchanfrage: Haupt-Kuenstler + Titel (ohne Kommas) trifft die YouTube-
+        # Suche zuverlaessiger als eine lange Kuenstlerliste.
+        query = f"{haupt} {name}".strip() or name
+        return {"query": query, "name": name, "artist": haupt, "dur": dur,
+                "artists": ", ".join(alle)}
+
+    async def _spotify_to_query(self, url):
+        """Spotify-Track-Link -> 'Kuenstler - Titel' (Kompatibilitaets-Wrapper)."""
+        meta = await self._spotify_track_meta(url)
+        if not meta:
+            return None
+        arts = meta.get("artists") or meta.get("artist") or ""
+        return f"{arts} - {meta['name']}".strip(" -") or None
 
     async def _spotify_list_tracks(self, url):
-        """Spotify-Playlist-/Album-Link -> Liste 'Kuenstler - Titel' (max. MAX_QUEUE)."""
+        """Spotify-Playlist-/Album-Link -> Liste Metadaten-Dicts
+        {query, name, artist, dur, display} (max. MAX_QUEUE). 'dur' erlaubt beim
+        Abspielen die Dauer-genaue YouTube-Auswahl (kein Sped-Up/Loop)."""
         m = _SPOTIFY_LIST_RE.search(url)
         if not m:
             return None
@@ -1280,17 +1406,17 @@ class Music:
         if kind == "playlist":
             next_url = (
                 f"https://api.spotify.com/v1/playlists/{list_id}/tracks"
-                "?limit=100&fields=items(track(name,artists(name))),next"
+                "?limit=100&fields=items(track(name,artists(name),duration_ms)),next"
             )
         else:  # album
             next_url = f"https://api.spotify.com/v1/albums/{list_id}/tracks?limit=50"
 
-        queries = []
+        tracks = []
         headers = {"Authorization": f"Bearer {token}"}
         timeout = aiohttp.ClientTimeout(total=15)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as s:
-                while next_url and len(queries) < MAX_QUEUE:
+                while next_url and len(tracks) < MAX_QUEUE:
                     async with s.get(next_url, headers=headers) as r:
                         if r.status != 200:
                             log.error("Spotify-%s-Abruf fehlgeschlagen (HTTP %s).", kind, r.status)
@@ -1300,16 +1426,23 @@ class Music:
                         tr = item.get("track") if kind == "playlist" else item
                         if not tr:
                             continue
-                        name = tr.get("name", "")
-                        artists = ", ".join(a.get("name", "") for a in tr.get("artists", []))
-                        q = f"{artists} - {name}".strip(" -")
-                        if q:
-                            queries.append(q)
+                        name = (tr.get("name") or "").strip()
+                        if not name:
+                            continue
+                        alle = [a.get("name", "") for a in tr.get("artists", []) if a.get("name")]
+                        haupt = alle[0] if alle else ""
+                        dms = tr.get("duration_ms")
+                        dur = int(round(dms / 1000)) if isinstance(dms, (int, float)) else None
+                        tracks.append({
+                            "query": f"{haupt} {name}".strip() or name,
+                            "name": name, "artist": haupt, "dur": dur,
+                            "display": f"{', '.join(alle)} - {name}".strip(" -") or name,
+                        })
                     next_url = data.get("next")
         except (aiohttp.ClientError, OSError) as exc:
             log.error("Spotify nicht erreichbar: %s", exc)
             return None
-        return queries
+        return tracks
 
     def _deep_find(self, obj, key):
         """Sucht rekursiv den ersten Wert zu 'key' in verschachtelten dict/list."""
@@ -1656,6 +1789,12 @@ class Music:
         view = LyricsView(pages, artist, title, thumbnail)
         return (view.embed(), view)
 
+    def _unpack_item(self, item):
+        """Ein _play_many-Item ist (yt-dlp-Eingabe, Titel) ODER
+        (yt-dlp-Eingabe, Titel, Match-Hint). Liefert immer (inp, titel, hint)."""
+        inp, title, *rest = item
+        return inp, title, (rest[0] if rest else None)
+
     async def _play_many(
         self,
         player,
@@ -1667,7 +1806,8 @@ class Music:
     ):
         """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
 
-        items = Liste (yt-dlp-Eingabe, Anzeigetitel), label z. B. 'aus dem Album'.
+        items = Liste (yt-dlp-Eingabe, Anzeigetitel[, Match-Hint]),
+        label z. B. 'aus dem Album'.
         Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
         """
         try:
@@ -1683,25 +1823,28 @@ class Music:
         items = items[:space]
 
         if player.is_active():
-            for inp, title in items:
-                player.queue.append(self._lazy_track(inp, title, requested_by))
+            for item in items:
+                inp, title, hint = self._unpack_item(item)
+                player.queue.append(self._lazy_track(inp, title, requested_by, hint))
             return self._embed(
                 f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
                 f"in der Warteschlange.",
                 title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE,
             )
 
-        first_inp, _first_title = items[0]
+        first_inp, _first_title, first_hint = self._unpack_item(items[0])
         rest = items[1:]
         try:
-            track = await self._extract(first_inp)
+            track = await self._resolve_input(first_inp, first_hint)
         except Exception:  # noqa: BLE001
             log.exception("Erster Track nicht ladbar: %s", first_inp)
             return self._embed("Den ersten Song konnte ich nicht laden.", color=_COL_ERR)
         track.requested_by = requested_by
         track.query = first_inp
-        for inp, title in rest:
-            player.queue.append(self._lazy_track(inp, title, requested_by))
+        track.match_hint = first_hint
+        for item in rest:
+            inp, title, hint = self._unpack_item(item)
+            player.queue.append(self._lazy_track(inp, title, requested_by, hint))
         try:
             player.start(track)
         except Exception:
@@ -2012,11 +2155,15 @@ class Music:
 
         # --- Mehrere Songs auf einmal (Spotify-Album / YouTube-Playlist) ---
         if action == "spotify_album":
-            queries = await self._spotify_list_tracks(arg)
-            if not queries:
+            metas = await self._spotify_list_tracks(arg)
+            if not metas:
                 return self._embed("Das Spotify-Album konnte ich nicht laden (Token, privat oder leer?).",
                                    color=_COL_ERR)
-            items = [(f"ytsearch1:{q}", q) for q in queries]
+            # Jeder Song bringt seine Spotify-Metadaten als Match-Hint mit -> beim
+            # Abspielen wird der laengen-genaue YouTube-Treffer gewaehlt.
+            items = [(f"ytsearch1:{mt['query']}", mt["display"],
+                      {"query": mt["query"], "dur": mt["dur"],
+                       "title": mt["name"], "artist": mt["artist"]}) for mt in metas]
             return await self._play_many(
                 player, voice_state.channel, items,
                 message.author.display_name, "aus dem Album", reply_to=message,
@@ -2030,7 +2177,9 @@ class Music:
                     "Playlist-Zugriff für Bots. Was sicher geht: ein Spotify-**Album**, ein "
                     "einzelner Song-Link oder eine **YouTube-Playlist**.",
                     title="🚫  Playlist gesperrt", color=_COL_ERR)
-            items = [(f"ytsearch1:{q}", q) for q in queries]
+            # Ueber das Embed gibt's keine Dauer - trotzdem als Hint durchreichen,
+            # damit der Best-Match wenigstens Sped-Up/Loop/Cover abwertet.
+            items = [(f"ytsearch1:{q}", q, {"query": q, "title": q}) for q in queries]
             return await self._play_many(
                 player, voice_state.channel, items,
                 message.author.display_name, "aus der Playlist", reply_to=message,
@@ -2052,11 +2201,16 @@ class Music:
         # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
         try:
             if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
-                query = await self._spotify_to_query(arg)
-                if not query:
+                meta = await self._spotify_track_meta(arg)
+                if not meta:
                     return self._embed("Den Spotify-Link konnte ich nicht auflösen (Keys/Token?).",
                                        color=_COL_ERR)
-                track = await self._extract(f"ytsearch1:{query}")
+                # Besten YouTube-Treffer per Dauer/Titel waehlen (statt blind den
+                # ersten - der ist bei Spotify-Songs oft ein Sped-Up/Loop/Cover).
+                track = await self._resolve_input(f"ytsearch1:{meta['query']}", {
+                    "query": meta["query"], "dur": meta.get("dur"),
+                    "title": meta["name"], "artist": meta.get("artist", ""),
+                })
             elif action == "play":
                 track = await self._extract(arg)
             else:  # search
@@ -2119,11 +2273,16 @@ _player_for = instance._player_for
 heal_voice = instance.heal_voice
 is_voice_busy = instance.is_voice_busy
 _extract = instance._extract
+_resolve_input = instance._resolve_input
 _resolve_track = instance._resolve_track
 _lazy_track = instance._lazy_track
+_norm_match = instance._norm_match
+_pick_best_match = instance._pick_best_match
+_youtube_search_best = instance._youtube_search_best
 _youtube_playlist = instance._youtube_playlist
 _spotify_token = instance._spotify_token
 _spotify_to_query = instance._spotify_to_query
+_spotify_track_meta = instance._spotify_track_meta
 _spotify_list_tracks = instance._spotify_list_tracks
 _deep_find = instance._deep_find
 _spotify_playlist_via_embed = instance._spotify_playlist_via_embed
