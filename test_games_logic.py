@@ -233,6 +233,99 @@ def test_music_natural_language():
     assert pc("flo mach mal blackjack an") is None
 
 
+# --- Musik: Zufalls-Song mit Genre-Auswahl --------------------------------------
+def test_music_random_genre():
+    """start_random: ohne Voice -> Hinweis; mit Voice -> Track aufgeloest, gestartet
+    und Panel gepostet; 'surprise' waehlt ein gueltiges Genre; Genre-Pools sauber."""
+    import music
+
+    # Genre-Datenbank plausibel (Dropdown-Limit, gefuellte Pools).
+    assert 1 <= len(music._RANDOM_GENRES) <= 24
+    assert all(pool and isinstance(pool, list)
+               for _l, _e, pool in music._RANDOM_GENRES.values())
+
+    calls = {"defer": 0, "panel": 0, "started": None, "ephemeral": []}
+
+    class FakePlayer:
+        def __init__(self):
+            self.text_channel = None
+            self.queue = []
+
+        async def connect(self, ch):
+            pass
+
+        def is_active(self):
+            return False
+
+        def start(self, track):
+            calls["started"] = track.title
+
+    fake_player = FakePlayer()
+
+    class Resp:
+        def is_done(self):
+            return False
+
+        async def defer(self):
+            calls["defer"] += 1
+
+        async def send_message(self, *a, **k):
+            calls["ephemeral"].append((a, k))
+
+    class Inter:
+        def __init__(self, in_voice):
+            self.guild = SimpleNamespace(id=1)
+            self.channel = SimpleNamespace(id=2)
+            self.user = SimpleNamespace(
+                id=7, display_name="Tester",
+                voice=SimpleNamespace(channel=SimpleNamespace(id=9)) if in_voice else None)
+            self.response = Resp()
+
+        async def edit_original_response(self, *a, **k):
+            pass
+
+        # followup.send
+        @property
+        def followup(self):
+            async def _send(*a, **k):
+                pass
+            return SimpleNamespace(send=_send)
+
+    inst = music.instance
+    alt = (inst._enabled, inst._player_for, inst._extract, inst._send_panel)
+    inst._enabled = True
+    inst._player_for = lambda gid: fake_player
+
+    async def _fake_extract(q):
+        return music.Track(title=f"Song für {q}", stream_url="http://x")
+    inst._extract = _fake_extract
+
+    async def _fake_panel(player, track, **k):
+        calls["panel"] += 1
+    inst._send_panel = _fake_panel
+    try:
+        # 1) Nicht im Voice -> ephemerer Hinweis, kein Abspielen.
+        asyncio.run(inst.start_random(Inter(in_voice=False), "rock"))
+        assert calls["ephemeral"] and calls["started"] is None and calls["panel"] == 0
+
+        # 2) Im Voice -> defer, Track gestartet, Panel gepostet.
+        asyncio.run(inst.start_random(Inter(in_voice=True), "rock"))
+        assert calls["defer"] == 1
+        assert calls["started"] is not None and calls["panel"] == 1
+
+        # 3) 'surprise' waehlt ein gueltiges Genre (kein Crash, spielt).
+        calls["started"] = None
+        asyncio.run(inst.start_random(Inter(in_voice=True), "surprise"))
+        assert calls["started"] is not None
+
+        # 4) Unbekanntes Genre -> ephemerer Hinweis, kein Abspielen.
+        before = calls["started"]
+        asyncio.run(inst.start_random(Inter(in_voice=True), "gibtsnicht"))
+        assert calls["started"] == before  # unveraendert (nicht gestartet)
+    finally:
+        inst._enabled, inst._player_for, inst._extract, inst._send_panel = alt
+
+
 # --- Sendepause (nur Owner) ------------------------------------------------------
 def test_admin_sendepause_toggle():
     """'sendepause' schaltet um, 'an'/'aus' erzwingen den Zustand; nur der Owner

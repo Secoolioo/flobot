@@ -23,6 +23,7 @@ import difflib
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import time
@@ -199,6 +200,109 @@ _NAT_NOT_A_SONG = {
     "glücksrad", "gluecksrad", "don", "duell", "duel", "zahlenraten", "anagramm",
     "mathe", "reaktion", "soundboard", "spiel", "spiele", "game", "runde", "shop",
     "level", "daily", "quizduell", "sieben", "ssp", "rad", "bombe", "bomben",
+}
+
+# "flo spiel random" / "flo random" / "flo überrasch mich" -> Genre-Auswahl (Dropdown),
+# danach ein zufaelliger Song aus dem Genre. Fuellwoerter (mir/uns/mal/was ...) egal.
+_RANDOM_RE = re.compile(
+    r"^(?:spiel(?:e|st)?\s+)?"
+    r"(?:mir\s+|uns\s+|mal\s+|was\s+|etwas\s+|nen\s+|einen\s+|ne\s+|nal\s+)*"
+    r"(?:random|zufall\w*|überrasch\w*|ueberrasch\w*)\b", re.I)
+
+# Genre -> (Anzeige-Label, Emoji, Song-Pool). Der Pool sind YouTube-Suchbegriffe
+# ("Kuenstler - Titel"); daraus zieht Flo per Zufall einen Song. Bewusst bekannte
+# Titel, damit die YouTube-Suche zuverlaessig etwas Gutes findet.
+_RANDOM_GENRES = {
+    "phonk": ("Phonk", "🌫️", [
+        "Kordhell - Murder In My Mind", "MoonDeity - Neon Blade",
+        "Ghostface Playa - Why Not", "DVRST - Close Eyes", "Hensonn - Sahara",
+        "PHARMACIST - Gigachad Theme", "Interworld - Metamorphosis",
+        "Freddie Dredd - Cha Cha", "KSLV Noh - Empire", "Scary Garry - Sahara",
+        "SVDDEN DEATH - VOID", "PlayaPhonk - Close Eyes", "Sxmbra - Montagem",
+        "9mm - Phonk", "Kordhell - Sate",
+    ]),
+    "deutschrap": ("Deutschrap", "🎤", [
+        "Cro - Easy", "Bausa - Was du Liebe nennst", "Capital Bra - Neymar",
+        "RAF Camora - Andere Liga", "Kontra K - Erfolg ist kein Glück",
+        "Sido - Bilder im Kopf", "Apache 207 - Roller", "Marteria - Kids",
+        "Haftbefehl - Chabos wissen wer der Babo ist", "Ufo361 - Ich bin 3 Berliner",
+        "Shindy - Affalterbach", "Kollegah - King", "SSIO - 0900",
+        "Luciano - Beautiful Girl", "Bonez MC - Mörder",
+    ]),
+    "rapus": ("Hip-Hop / Rap", "🇺🇸", [
+        "Eminem - Lose Yourself", "Kendrick Lamar - HUMBLE", "50 Cent - In Da Club",
+        "Drake - God's Plan", "Travis Scott - SICKO MODE", "Kanye West - Stronger",
+        "Snoop Dogg - Drop It Like Its Hot", "Dr. Dre - Still D.R.E.",
+        "Post Malone - rockstar", "J. Cole - Middle Child", "Tyler The Creator - EARFQUAKE",
+        "2Pac - California Love", "Nas - N.Y. State of Mind", "Lil Nas X - Old Town Road",
+        "Cardi B - Bodak Yellow",
+    ]),
+    "rock": ("Rock", "🎸", [
+        "Queen - Bohemian Rhapsody", "AC/DC - Thunderstruck",
+        "Guns N Roses - Sweet Child O Mine", "Nirvana - Smells Like Teen Spirit",
+        "Led Zeppelin - Stairway to Heaven", "Survivor - Eye of the Tiger",
+        "Bon Jovi - Livin on a Prayer", "Toto - Africa", "Kansas - Carry On Wayward Son",
+        "Deep Purple - Smoke on the Water", "Foo Fighters - Everlong",
+        "The Killers - Mr Brightside", "Red Hot Chili Peppers - Californication",
+        "Europe - The Final Countdown", "The Rolling Stones - Paint It Black",
+    ]),
+    "metal": ("Metal", "🤘", [
+        "Metallica - Master of Puppets", "System of a Down - Toxicity",
+        "Rammstein - Du Hast", "Slipknot - Duality", "Iron Maiden - The Trooper",
+        "Sabaton - Bismarck", "Disturbed - Down with the Sickness",
+        "Black Sabbath - Paranoid", "Megadeth - Symphony of Destruction",
+        "Pantera - Walk", "Lamb of God - Laid to Rest", "Gojira - Stranded",
+        "Bring Me The Horizon - Throne", "Trivium - In Waves", "Amon Amarth - Raise Your Horns",
+    ]),
+    "edm": ("EDM / House", "🔊", [
+        "Avicii - Levels", "Martin Garrix - Animals", "Alan Walker - Faded",
+        "Swedish House Mafia - Don't You Worry Child", "Skrillex - Bangarang",
+        "David Guetta - Titanium", "Calvin Harris - Summer", "Marshmello - Alone",
+        "Zedd - Clarity", "deadmau5 - Strobe", "Daft Punk - One More Time",
+        "The Chainsmokers - Closer", "Kygo - Firestone", "Tiesto - Red Lights",
+        "Illenium - Good Things Fall Apart",
+    ]),
+    "pop": ("Pop", "✨", [
+        "The Weeknd - Blinding Lights", "Dua Lipa - Levitating", "Ed Sheeran - Shape of You",
+        "Billie Eilish - bad guy", "Harry Styles - As It Was", "Michael Jackson - Billie Jean",
+        "Miley Cyrus - Flowers", "Bruno Mars - Uptown Funk", "Taylor Swift - Shake It Off",
+        "Ariana Grande - 7 rings", "Justin Bieber - Sorry", "Lady Gaga - Poker Face",
+        "Rihanna - Umbrella", "Katy Perry - Firework", "Olivia Rodrigo - good 4 u",
+    ]),
+    "party": ("Party / Malle", "🥳", [
+        "Mickie Krause - Finger im Po Mexiko", "Scooter - How Much Is The Fish",
+        "DJ Ötzi - Anton aus Tirol", "Peter Wackel - Joana", "Lorenz Büffel - Johnny Däpp",
+        "Almklausi - Mallorca da bin ich daheim", "Jürgen Drews - Ein Bett im Kornfeld",
+        "DJ Robin - Layla", "Klaus und Klaus - An der Nordseeküste", "Loona - Bailando",
+        "Ikke Hüftgold - Dicke", "Culcha Candela - Hamma", "Brings - Superjeilezick",
+        "Wolfgang Petry - Wahnsinn", "Mia Julia - Oewer",
+    ]),
+    "lofi": ("Lofi / Chill", "🌙", [
+        "lofi hip hop radio beats to relax", "Nujabes - Aruarian Dance",
+        "Joji - Slow Dancing in the Dark", "Idealism - Controlla",
+        "Kudasai - The Girl I Havent Met", "Potsu - Im Closing My Eyes",
+        "Aso - Bloom", "jinsang - affection", "Sarcastic Sounds - Lonely",
+        "Powfu - death bed", "L'indécis - Soulful", "Philanthrope - Landscape",
+        "sleepy - lost", "Chillhop Essentials", "Mac Ayres - Slow Down",
+    ]),
+    "eighties": ("80er", "📼", [
+        "a-ha - Take On Me", "Michael Jackson - Thriller",
+        "Rick Astley - Never Gonna Give You Up", "Journey - Don't Stop Believin",
+        "Whitney Houston - I Wanna Dance with Somebody",
+        "Tears for Fears - Everybody Wants to Rule the World",
+        "Cyndi Lauper - Girls Just Want to Have Fun", "Dead or Alive - You Spin Me Round",
+        "Depeche Mode - Enjoy the Silence", "Queen - Another One Bites the Dust",
+        "Bonnie Tyler - Total Eclipse of the Heart", "Toto - Africa",
+        "Europe - The Final Countdown", "Kim Wilde - Kids in America",
+        "Duran Duran - Hungry Like the Wolf",
+    ]),
+    "gaming": ("Gaming / Hype", "🎮", [
+        "TheFatRat - Unity", "TheFatRat - Monody", "Warriyo - Mortals",
+        "Different Heaven - Nekozilla", "NEFFEX - Cold", "NEFFEX - Fight Back",
+        "Alan Walker - Spectre", "Tobu - Hope", "Elektronomia - Sky High",
+        "K-391 - Earth", "Razihel - Love U", "DM DOKURO - The Tale of a Cruel World",
+        "Ross Bugden - Battle", "CS GO Main Menu Theme", "Rob Gasser - I Remember",
+    ]),
 }
 
 # "flo nochmal", "flo spiel nochmal 2", "flo repeat 3", "flo wiederhole" ->
@@ -586,6 +690,51 @@ class _PositionModal(discord.ui.Modal):
             self._view.stop()
             return
         await interaction.response.edit_message(embed=emb, view=self._view)
+
+
+class _RandomGenreSelect(discord.ui.Select):
+    """Dropdown mit allen Genres (plus 'Überrasch mich' fuer voll zufaellig)."""
+
+    def __init__(self):
+        options = [discord.SelectOption(
+            label="Überrasch mich", value="surprise", emoji="🎲",
+            description="völlig zufälliges Genre")]
+        for key, (label, emoji, _pool) in _RANDOM_GENRES.items():
+            options.append(discord.SelectOption(label=label, value=key, emoji=emoji))
+        super().__init__(placeholder="Welches Genre? 🎧", min_values=1, max_values=1,
+                         options=options)
+
+    async def callback(self, interaction):
+        # Auswahl ist getroffen - View beenden und den Zufalls-Song starten.
+        self.view.stop()
+        await instance.start_random(interaction, self.values[0])
+
+
+class RandomGenreView(discord.ui.View):
+    """Genre-Auswahl fuer 'flo spiel random'. Nur der Aufrufer darf waehlen."""
+
+    def __init__(self, owner_id, *, timeout = 120.0):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+        self.message = None
+        self.add_item(_RandomGenreSelect())
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Das ist nicht deine Auswahl – tipp dir mit `flo spiel random` eine eigene. 🎲",
+            ephemeral=True)
+        return False
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
 
 class QueuePositionView(discord.ui.View):
@@ -1216,6 +1365,11 @@ class Music:
         if vm and self._is_volume_word(vm.group(1)):
             return ("volume", vm.group(2) or "?")
 
+        # 3b) "random" / "zufall" / "überrasch mich" -> Genre-Auswahl per Dropdown.
+        #     (vor der Freitext-Suche, sonst wuerde nach "random" gesucht.)
+        if _RANDOM_RE.match(cleaned):
+            return ("random", "")
+
         # 4a) "mach die musik aus" / "stell die mucke ab" -> stoppen.
         if _NAT_STOP_RE.match(cleaned):
             return ("stop", "")
@@ -1242,6 +1396,78 @@ class Music:
             return ("search", m.group(1).strip())
 
         return None
+
+    async def start_random(self, interaction, genre_key):
+        """Spielt aus einer Genre-Auswahl (Dropdown) heraus einen zufaelligen Song.
+        'genre_key' ist ein Schluessel aus _RANDOM_GENRES oder 'surprise' (Genre
+        wird dann selbst zufaellig gezogen). Antwortet ueber die Interaction."""
+        if not self._enabled or interaction.guild is None:
+            await interaction.response.send_message("Musik ist gerade aus.", ephemeral=True)
+            return
+        key = random.choice(list(_RANDOM_GENRES)) if genre_key == "surprise" else genre_key
+        genre = _RANDOM_GENRES.get(key)
+        if genre is None:
+            await interaction.response.send_message("Dieses Genre kenne ich nicht. 🤔",
+                                                    ephemeral=True)
+            return
+        label, emoji, pool = genre
+        query = random.choice(pool)
+
+        # Der Klickende muss selbst im Sprachkanal sein.
+        voice_state = getattr(interaction.user, "voice", None)
+        if voice_state is None or voice_state.channel is None:
+            await interaction.response.send_message(
+                "Geh erst in einen Sprachkanal, dann leg ich los. 🎧", ephemeral=True)
+            return
+
+        # Aufloesen + Connect kann laenger als Discords 3s-Frist dauern -> defer.
+        await interaction.response.defer()
+        player = self._player_for(interaction.guild.id)
+        player.text_channel = interaction.channel
+        try:
+            track = await self._extract(f"ytsearch1:{query}")
+        except Exception:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
+            log.exception("Random-Track nicht aufloesbar: %s", query)
+            await interaction.followup.send(embed=self._embed(
+                "Den Zufalls-Song konnte ich gerade nicht laden – probier's nochmal. 🎲",
+                color=_COL_ERR))
+            return
+        track.requested_by = interaction.user.display_name
+        try:
+            await player.connect(voice_state.channel)
+        except (discord.ClientException, RuntimeError) as exc:
+            log.error("Random-Connect fehlgeschlagen: %s", exc)
+            await interaction.followup.send(embed=self._embed(
+                "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                color=_COL_ERR))
+            return
+
+        # Auswahl-Menue zur Bestaetigung umschreiben (Dropdown weg).
+        try:
+            await interaction.edit_original_response(
+                embed=self._embed(
+                    f"**{emoji} {label}** – ich hab **{self._short(track.title, 80)}** "
+                    "rausgekramt. Viel Spaß! 🎶",
+                    title="🎲  Zufalls-Song", color=_COL_PLAY),
+                view=None)
+        except discord.HTTPException:
+            pass
+
+        # Laeuft schon was? -> einreihen, sonst starten + Panel posten.
+        if player.is_active():
+            player.queue.append(track)
+            await interaction.followup.send(
+                embed=self._added_embed(track, len(player.queue), len(player.queue)))
+            return
+        try:
+            player.start(track)
+        except Exception:  # noqa: BLE001
+            log.exception("Random-Track nicht abspielbar: %s", track.title)
+            await interaction.followup.send(embed=self._embed(
+                "Den Song konnte ich gerade nicht abspielen – zieh nochmal. 🎲",
+                color=_COL_ERR))
+            return
+        await self._send_panel(player, track)
 
     async def _play_many(
         self,
@@ -1531,6 +1757,21 @@ class Music:
                 return self._embed("Die Warteschlange ist leer – wirf was rein!",
                                    title="🎶  Warteschlange", color=_COL_INFO)
             return self._queue_embed(player)
+
+        # "random"/"zufall"/"überrasch mich" -> Genre-Dropdown, danach Zufalls-Song.
+        if action == "random":
+            view = RandomGenreView(message.author.id)
+            emb = self._embed(
+                "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen "
+                "Song raus und leg ihn im Voice auf.\n_(Du musst dafür in einem "
+                "Sprachkanal sein.)_",
+                title="🎲  Zufalls-Song", color=_COL_QUEUE)
+            try:
+                view.message = await message.reply(embed=emb, view=view, mention_author=False)
+            except discord.HTTPException as exc:
+                log.error("Random-Menü konnte nicht gesendet werden: %s", exc)
+                return self._embed("Das Zufalls-Menü ging gerade nicht auf.", color=_COL_ERR)
+            return HANDLED
 
         if action == "join":
             # Nur in den Sprachkanal kommen (ohne etwas abzuspielen).

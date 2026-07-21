@@ -26,6 +26,7 @@ class CmdNorm:
         "spiel", "spiele", "play", "lautstärke", "lautstaerke", "lautstarke",
         "volume", "vol", "lauter", "louder", "leiser", "quieter", "leise",
         "nochmal", "nochmals", "repeat", "replay", "wiederhol", "wiederhole",
+        "random", "zufall", "zufallssong", "überrasch", "ueberrasch",
         # economy
         "level", "lvl", "rank", "rang", "coins", "konto", "kontostand", "münzen",
         "muenzen", "balance", "top", "bestenliste", "rangliste", "leaderboard",
