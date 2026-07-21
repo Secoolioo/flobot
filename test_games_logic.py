@@ -201,6 +201,38 @@ def test_admin_owner_gate():
     assert hilfe is not None and not isinstance(hilfe, str)
 
 
+# --- Musik: natuerlichsprachige Play-Trigger ------------------------------------
+def test_music_natural_language():
+    """'Flo mach mal <X> an' & Co. werden wie ein Play-Befehl erkannt; generische
+    Floskeln fuehren zu resume/Hinweis, normale Saetze bleiben None."""
+    import music
+    pc = music.instance.parse_command
+    # Song steht in der Mitte -> Suche nach genau diesem Song.
+    assert pc("flo mach mal bohemian rhapsody an") == ("search", "bohemian rhapsody")
+    assert pc("Flo mach mal despacito an") == ("search", "despacito")
+    assert pc("flo leg mir mal sandstorm auf") == ("search", "sandstorm")
+    assert pc("flo hau mal darude sandstorm raus") == ("search", "darude sandstorm")
+    assert pc("flo pack mal lofi beats auf") == ("search", "lofi beats")
+    assert pc("flo kannst du mal wonderwall abspielen") == ("search", "wonderwall")
+    assert pc("flo spiel mir mal africa vor") == ("search", "africa")
+    # "spiel mir mal <X>" darf nicht nach "mir mal <X>" suchen.
+    assert pc("flo spiel mir mal africa") == ("search", "africa")
+    # Generisch ohne konkreten Song -> resume/Hinweis.
+    assert pc("flo mach mal musik an") == ("resume_or_hint", "")
+    assert pc("flo mach mal die mucke an") == ("resume_or_hint", "")
+    # "Musik aus" -> stoppen.
+    assert pc("flo mach die musik aus") == ("stop", "")
+    assert pc("flo stell die mucke ab") == ("stop", "")
+    # Normaler Play-Befehl bleibt unveraendert.
+    assert pc("flo spiel despacito") == ("search", "despacito")
+    # Kein Musikbefehl -> None (keine Kaperung normaler Saetze).
+    assert pc("flo wie gehts dir") is None
+    assert pc("flo mach mal langsam") is None
+    # Spiel-/Feature-Namen werden NICHT als Song gesucht (kein Kapern des Quiz-Starts).
+    assert pc("flo mach das quiz an") is None
+    assert pc("flo mach mal blackjack an") is None
+
+
 # --- Sendepause (nur Owner) ------------------------------------------------------
 def test_admin_sendepause_toggle():
     """'sendepause' schaltet um, 'an'/'aus' erzwingen den Zustand; nur der Owner

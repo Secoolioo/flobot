@@ -157,7 +157,49 @@ _CONTROL = [
 ]
 # "flo spiel <suchbegriff>" ohne Link -> YouTube-Suche. Nur Imperativ-Formen
 # (spiel/spiele/play), damit Fragen wie "spielst du..." NICHT als Befehl gelten.
-_PLAY_TEXT_RE = re.compile(r"^(?:spiele?|play)\s+(?:mal\s+)?(.+)", re.I)
+# Fuellwoerter nach dem Verb (mal/mir/uns/doch/bitte) werden weggeschluckt, damit
+# "spiel mir mal <Song>" nicht nach "mir mal <Song>" sucht.
+_PLAY_TEXT_RE = re.compile(
+    r"^(?:spiele?|play)\s+(?:(?:mal|mir|uns|doch|bitte)\s+)*(.+)", re.I)
+
+# Natuerlichsprachige Play-Trigger: der Song steht in der MITTE ("mach mal <X>
+# an", "leg <X> auf", "hau <X> raus", "pack <X> auf/an", "spiel <X> vor", "tu <X>
+# an/auf", "kannst du <X> (ab)spielen"). Gruppe 1 = Suchbegriff. Greift nur, wenn
+# Flo direkt angesprochen wurde (bot.py ruft music.handle nur dann auf).
+_NAT_PLAY_RES = [
+    re.compile(r"^mach(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+an$", re.I),
+    re.compile(r"^leg(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+auf$", re.I),
+    re.compile(r"^hau(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+(?:raus|rein)$", re.I),
+    re.compile(r"^pack(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+(?:auf|an)$", re.I),
+    re.compile(r"^tu(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+(?:an|auf)$", re.I),
+    re.compile(r"^spiel(?:e)?(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+vor$", re.I),
+    re.compile(r"^kannst\s+du(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+(?:ab)?spielen$", re.I),
+]
+# "mach die musik aus", "stell die mucke ab", "dreh die musik weg" -> stoppen.
+_NAT_STOP_RE = re.compile(
+    r"^(?:mach|stell|dreh|schalt)\s+(?:die\s+|das\s+|den\s+)?"
+    r"(?:musik|music|mucke|mukke|lied|song|sound|radio|beats|playback)\s+"
+    r"(?:aus|ab|weg)$", re.I)
+# Generische "Musik an"-Floskeln OHNE konkreten Song -> fortsetzen bzw. Hinweis.
+_NAT_GENERIC = {
+    "musik", "music", "mucke", "mukke", "mukge", "lied", "song", "sound", "sounds",
+    "beats", "party", "radio", "was", "etwas", "irgendwas", "irgendwatt", "tunes",
+    "playback", "playlist", "playlists", "mukke", "krach", "stimmung", "pause",
+}
+# Fuehrende Fuellwoerter/Artikel vor dem Song entfernen ("mal die musik" -> "musik").
+_NAT_ARTICLE_RE = re.compile(
+    r"^(?:die|das|der|den|ne|nen|einen?|eine|bisschen|bissl|etwas|mal|noch|"
+    r"wieder|schnell|ma|halt|jetzt)\s+", re.I)
+# Feature-/Spielnamen: die sind KEIN Song. Sonst wuerde "mach mal das quiz an"
+# YouTube nach "das quiz" durchsuchen, statt das Spiel dem richtigen Handler
+# (bzw. der KI) zu ueberlassen. -> in dem Fall gibt der Musik-Parser None zurueck.
+_NAT_NOT_A_SONG = {
+    "quiz", "casino", "blackjack", "mines", "roulette", "crash", "slots", "slot",
+    "keno", "tower", "turm", "hilo", "baccarat", "bakkarat", "rubbellos",
+    "glücksrad", "gluecksrad", "don", "duell", "duel", "zahlenraten", "anagramm",
+    "mathe", "reaktion", "soundboard", "spiel", "spiele", "game", "runde", "shop",
+    "level", "daily", "quizduell", "sieben", "ssp", "rad", "bombe", "bomben",
+}
 
 # "flo nochmal", "flo spiel nochmal 2", "flo repeat 3", "flo wiederhole" ->
 # den zuletzt (bzw. N-t-letzten) gespielten Song noch einmal spielen.
@@ -1174,6 +1216,26 @@ class Music:
         if vm and self._is_volume_word(vm.group(1)):
             return ("volume", vm.group(2) or "?")
 
+        # 4a) "mach die musik aus" / "stell die mucke ab" -> stoppen.
+        if _NAT_STOP_RE.match(cleaned):
+            return ("stop", "")
+
+        # 4b) Natuerlichsprachig: "mach mal <X> an", "leg <X> auf", "hau <X> raus",
+        #     "kannst du <X> spielen" ... -> wie ein Play-Befehl behandeln. Steht kein
+        #     konkreter Song da ("mach mal musik an"), fortsetzen/Hinweis geben.
+        for pat in _NAT_PLAY_RES:
+            nm = pat.match(cleaned)
+            if nm:
+                q = nm.group(1).strip()
+                bare = _NAT_ARTICLE_RE.sub("", q).strip().lower()
+                if not bare or bare in _NAT_GENERIC:
+                    return ("resume_or_hint", "")
+                # Spielt auf ein anderes Feature an (Spiel/Casino/Shop ...) -> nicht
+                # als Song deuten, damit der echte Handler bzw. die KI drankommt.
+                if bare.split()[0] in _NAT_NOT_A_SONG:
+                    return None
+                return ("search", q)
+
         # 4) "spiel <suchbegriff>" ohne Link -> YouTube-Suche
         m = _PLAY_TEXT_RE.match(cleaned)
         if m:
@@ -1450,6 +1512,19 @@ class Music:
                 return self._embed("Da ist nichts pausiert.", color=_COL_ERR)
             player.voice.resume()
             return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
+
+        # "mach mal Musik an" ohne konkreten Song: pausiert -> weiter, laeuft schon ->
+        # kurzer Hinweis, sonst freundlich nach dem Wunsch-Song fragen.
+        if action == "resume_or_hint":
+            if player.voice is not None and player.voice.is_paused():
+                player.voice.resume()
+                return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
+            if player.is_active():
+                return self._embed("Läuft doch schon. 🎶", color=_COL_INFO)
+            return self._embed(
+                f"Klar – was soll ich spielen? Sag z. B. `{self._bot_name} mach mal "
+                f"Bohemian Rhapsody an` oder `{self._bot_name} spiel <Song/Link>`.",
+                title="🎵  Was denn?", color=_COL_QUEUE)
 
         if action == "queue":
             if not player.current and not player.queue:

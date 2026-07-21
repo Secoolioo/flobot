@@ -311,6 +311,7 @@ class RestartConfirmView(discord.ui.View):
 _HELP_DATA = {
     "musik": ("Musik", 0x1DB954, [
         ("flo spiel <song/link>", "YouTube & Spotify abspielen"),
+        ("flo mach mal <song> an", "geht auch locker: leg/hau/pack … auf/raus"),
         ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
         ("flo nochmal [n]", "letzten Song nochmal"),
         ("flo queue", "Warteschlange zeigen"),
@@ -746,9 +747,6 @@ class FloBot(discord.Client):
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
     async def voice_xp_loop(self):
         """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit)."""
-        # Sendepause: Flo bleibt komplett still - kein Voice-XP, keine Level-Up-Ansage.
-        if ADMIN_ENABLED and admin.is_locked():
-            return
         guild = self.get_guild(GUILD_ID)
         if guild is None:
             return
@@ -772,9 +770,6 @@ class FloBot(discord.Client):
     @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
     async def event_loop(self):
         """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
-        # Sendepause: keine oeffentlichen Zufalls-Events, waehrend Flo stumm ist.
-        if ADMIN_ENABLED and admin.is_locked():
-            return
         guild = self.get_guild(GUILD_ID)
         if guild is None:
             return
@@ -1084,13 +1079,6 @@ class FloBot(discord.Client):
                 self._spawn(self._forward_dm_to_owner(message))
             return
 
-        # Sendepause (nur der Besitzer kann sie per 'Flo sendepause' setzen/aufheben):
-        # ist sie aktiv, ignoriert Flo ALLE anderen komplett - keine passiven Hooks,
-        # keine Befehle, keine KI. Der Besitzer wird ganz normal weiter bedient
-        # (inkl. des Befehls zum Aufheben). Auto-Loeschen oben laeuft bewusst weiter.
-        if ADMIN_ENABLED and admin.is_locked() and message.author.id != OWNER_ID:
-            return
-
         content = message.content or ""
 
         # Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat (auch ohne direkt
@@ -1135,6 +1123,13 @@ class FloBot(discord.Client):
                     and ref.author.id == self.user.id):
                 angesprochen = True
         if not angesprochen:
+            return
+
+        # Sendepause (nur der Besitzer schaltet sie per 'Flo sendepause'): ist sie
+        # aktiv, blockiert Flo AB HIER alles Interaktive - Befehle UND KI - fuer
+        # jeden ausser dem Besitzer. Die passiven Hooks oben (XP, Level, Coins,
+        # Wortzaehler, Reactions) sind bewusst schon gelaufen und bleiben erhalten.
+        if ADMIN_ENABLED and admin.is_locked() and message.author.id != OWNER_ID:
             return
 
         # 'Flo restart' / 'Flo neustarten' -> kompletter Neustart, NUR fuer den Besitzer.

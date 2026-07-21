@@ -171,10 +171,11 @@ class Admin:
             except Exception:  # noqa: BLE001 - Persistenz ist nice-to-have
                 log.exception("Sendepause-Zustand konnte nicht gespeichert werden")
         if neu:
-            log.info("SENDEPAUSE aktiviert (nur noch Besitzer wird bedient).")
+            log.info("SENDEPAUSE aktiviert (nur noch Besitzer nutzt Befehle).")
             return self._emb(
-                "🔇 **Sendepause AN.**\nAb jetzt ignoriere ich alle anderen komplett – "
-                "keine Befehle, keine KI, keine Spiele. Nur du wirst noch bedient.\n"
+                "🔇 **Sendepause AN.**\nAb jetzt reagiere ich auf **keine Befehle und "
+                "keine KI-Fragen** mehr – außer von dir. XP, Level, Coins und der "
+                "Wortzähler laufen für alle ganz normal weiter.\n"
                 f"Aufheben mit `{self._bot_name} sendepause aus`.",
                 color=discord.Color.red())
         log.info("SENDEPAUSE aufgehoben (wieder fuer alle da).")
