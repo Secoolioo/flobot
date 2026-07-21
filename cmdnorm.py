@@ -27,6 +27,7 @@ class CmdNorm:
         "volume", "vol", "lauter", "louder", "leiser", "quieter", "leise",
         "nochmal", "nochmals", "repeat", "replay", "wiederhol", "wiederhole",
         "random", "zufall", "zufallssong", "überrasch", "ueberrasch",
+        "lyrics", "lyric", "songtext", "liedtext",
         # economy
         "level", "lvl", "rank", "rang", "coins", "konto", "kontostand", "münzen",
         "muenzen", "balance", "top", "bestenliste", "rangliste", "leaderboard",

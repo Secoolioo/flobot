@@ -313,6 +313,7 @@ _HELP_DATA = {
         ("flo spiel <song/link>", "YouTube & Spotify abspielen"),
         ("flo mach mal <song> an", "geht auch locker: leg/hau/pack … auf/raus"),
         ("flo spiel random", "Genre wählen 🎲 → zufälliger Song"),
+        ("flo lyrics [song]", "Songtext (auch per 🎤-Button am Panel)"),
         ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
         ("flo nochmal [n]", "letzten Song nochmal"),
         ("flo queue", "Warteschlange zeigen"),

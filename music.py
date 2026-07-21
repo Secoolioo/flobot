@@ -27,6 +27,7 @@ import random
 import re
 import shutil
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
 import aiohttp
@@ -208,6 +209,17 @@ _RANDOM_RE = re.compile(
     r"^(?:spiel(?:e|st)?\s+)?"
     r"(?:mir\s+|uns\s+|mal\s+|was\s+|etwas\s+|nen\s+|einen\s+|ne\s+|nal\s+)*"
     r"(?:random|zufall\w*|überrasch\w*|ueberrasch\w*)\b", re.I)
+
+# "flo lyrics [song]" / "songtext" -> Songtext des aktuellen Songs oder eines
+# genannten Titels. Gruppe 1 = optionaler Suchbegriff ("Kuenstler - Titel").
+_LYRICS_RE = re.compile(r"^(?:lyrics?|songtext|liedtext|text\s+von)\s*(.*)", re.I)
+# Kostenlose Songtext-API (kein Key noetig): /v1/<artist>/<title> -> {"lyrics": ...}.
+_LYRICS_API = "https://api.lyrics.ovh/v1"
+# Deko-Woerter, die YouTube-Titel verschmutzen ("(Official Video)", "[HD]", ...).
+_LYRICS_NOISE_RE = re.compile(
+    r"\b(official|video|audio|lyrics?|lyric|hd|4k|hq|mv|visualizer|"
+    r"music\s*video|remaster(?:ed)?|explicit|prod|clip|full\s*album|"
+    r"official\s*music\s*video)\b", re.I)
 
 # Genre -> (Anzeige-Label, Emoji, Song-Pool). Der Pool sind YouTube-Suchbegriffe
 # ("Kuenstler - Titel"); daraus zieht Flo per Zufall einen Song. Bewusst bekannte
@@ -860,6 +872,55 @@ class _SpeedSelect(discord.ui.Select):
             pass
 
 
+class LyricsView(discord.ui.View):
+    """Blaettert lange Songtexte seitenweise durch (◀ / ▶). Bei nur einer Seite
+    kommen keine Buttons. Funktioniert oeffentlich UND ephemer (Button-Callbacks
+    editieren die Nachricht ueber die Interaction)."""
+
+    def __init__(self, pages, artist, title, thumb, *, timeout = 300.0):
+        super().__init__(timeout=timeout)
+        self.pages = pages
+        self.artist = artist
+        self.title = title
+        self.thumb = thumb
+        self.idx = 0
+        self.message = None
+        if len(pages) <= 1:
+            self.clear_items()      # eine Seite -> keine Blaetter-Buttons noetig
+        else:
+            self._sync()
+
+    def embed(self):
+        return instance._lyrics_embed(
+            self.artist, self.title, self.pages[self.idx], self.idx, len(self.pages),
+            self.thumb)
+
+    def _sync(self):
+        self._prev.disabled = self.idx <= 0
+        self._next.disabled = self.idx >= len(self.pages) - 1
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def _prev(self, interaction, _b):
+        self.idx = max(0, self.idx - 1)
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def _next(self, interaction, _b):
+        self.idx = min(len(self.pages) - 1, self.idx + 1)
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class PlaybackControlView(discord.ui.View):
     """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue + Tempo-Dropdown.
 
@@ -930,6 +991,22 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="Queue", emoji="🎶", style=discord.ButtonStyle.secondary)
     async def _queue(self, interaction, _b):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
+
+    @discord.ui.button(label="Lyrics", emoji="🎤", style=discord.ButtonStyle.secondary)
+    async def _lyrics(self, interaction, _b):
+        track = self.player.current
+        if track is None:
+            await interaction.response.send_message("Gerade läuft nichts. 🤔", ephemeral=True)
+            return
+        # Nur der Klickende sieht den Text (ephemer) - kein Zuspammen des Channels.
+        # Abruf kann dauern -> defer, sonst reisst die 3s-Frist.
+        await interaction.response.defer(ephemeral=True)
+        emb, view = await instance._build_lyrics(
+            track.title, getattr(track, "thumbnail", "") or None)
+        if view is not None:
+            await interaction.followup.send(embed=emb, view=view, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=emb, ephemeral=True)
 
 
 class Music:
@@ -1370,6 +1447,12 @@ class Music:
         if _RANDOM_RE.match(cleaned):
             return ("random", "")
 
+        # 3c) "lyrics [song]" / "songtext [song]" -> Songtext (aktueller Song oder
+        #     genannter Titel). Vor der Freitext-Suche, sonst wird danach gesucht.
+        lm = _LYRICS_RE.match(cleaned)
+        if lm:
+            return ("lyrics", (lm.group(1) or "").strip())
+
         # 4a) "mach die musik aus" / "stell die mucke ab" -> stoppen.
         if _NAT_STOP_RE.match(cleaned):
             return ("stop", "")
@@ -1468,6 +1551,110 @@ class Music:
                 color=_COL_ERR))
             return
         await self._send_panel(player, track)
+
+    # --- Songtext (Lyrics) ------------------------------------------------
+    def _split_artist_title(self, raw):
+        """Zerlegt einen (YouTube-)Titel bestmoeglich in (Kuenstler, Titel).
+        Entfernt Deko wie '(Official Video)', '[HD]', 'feat. ...' und splittet am
+        ersten ' - '. Ohne Trenner: Kuenstler leer, alles ist der Titel."""
+        s = raw or ""
+        s = re.sub(r"\[[^\]]*\]", " ", s)          # [Official Video]
+        s = re.sub(r"\([^)]*\)", " ", s)           # (Official Audio) / (Lyrics)
+        s = s.split("|")[0]                         # "Song | Label" -> "Song"
+        s = re.sub(r"\b(?:feat\.?|ft\.?|featuring|prod\.?)\b.*$", "", s, flags=re.I)
+        s = _LYRICS_NOISE_RE.sub(" ", s)
+        s = re.sub(r"\s+", " ", s).strip(" -–—\"'“”„")
+        for sep in (" - ", " – ", " — ", "–", "—"):
+            if sep in s:
+                artist, title = s.split(sep, 1)
+                return artist.strip(" -–—\"'“”„"), title.strip(" -–—\"'“”„")
+        return "", s.strip()
+
+    async def fetch_lyrics(self, artist, title):
+        """Holt den Songtext von der kostenlosen lyrics.ovh-API (kein Key noetig).
+        Rueckgabe: Text (str) oder None, wenn nichts gefunden/erreichbar."""
+        if not title:
+            return None
+        url = (f"{_LYRICS_API}/{urllib.parse.quote(artist.strip())}/"
+               f"{urllib.parse.quote(title.strip())}")
+        try:
+            session = ai.http_session()
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, OSError, asyncio.TimeoutError, ValueError):
+            log.warning("Lyrics-Abruf fehlgeschlagen: %s - %s", artist, title)
+            return None
+        lyr = (data or {}).get("lyrics") or ""
+        lyr = lyr.replace("\r\n", "\n").replace("\r", "\n").strip()
+        return lyr or None
+
+    def _lyrics_pages(self, text, limit = 3800):
+        """Zerlegt den Text in lesbare Seiten: bricht bevorzugt an Strophen
+        (Leerzeilen), zu grosse Strophen notfalls an Zeilen. Max 'limit' Zeichen
+        je Seite (unter Discords 4096er-Embed-Limit)."""
+        text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+        pages, cur = [], ""
+
+        def flush():
+            nonlocal cur
+            if cur.strip():
+                pages.append(cur.strip())
+            cur = ""
+
+        for stanza in text.split("\n\n"):
+            stanza = stanza.strip()
+            if not stanza:
+                continue
+            if len(stanza) > limit:                 # Riesen-Strophe -> zeilenweise
+                for line in stanza.split("\n"):
+                    if len(cur) + len(line) + 1 > limit:
+                        flush()
+                    cur += line + "\n"
+                cur += "\n"
+                continue
+            if len(cur) + len(stanza) + 2 > limit:
+                flush()
+            cur += stanza + "\n\n"
+        flush()
+        return pages or ["_(Kein Text gefunden.)_"]
+
+    def _lyrics_embed(self, artist, title, page_text, page_idx, total, thumb):
+        """Baut das huebsche Lyrics-Embed fuer eine Seite."""
+        kopf = f"{artist} – {title}" if artist else (title or "Songtext")
+        emb = self._embed(page_text, title=f"🎤  {self._short(kopf, 240)}", color=_COL_PLAY)
+        if thumb:
+            try:
+                emb.set_thumbnail(url=thumb)
+            except Exception:  # noqa: BLE001 - Thumbnail ist nur Deko
+                pass
+        quelle = "Quelle: lyrics.ovh"
+        emb.set_footer(text=f"Seite {page_idx + 1}/{total}  ·  {quelle}"
+                       if total > 1 else quelle)
+        return emb
+
+    async def _build_lyrics(self, raw_title, thumbnail = None):
+        """Ermittelt Kuenstler/Titel aus 'raw_title', holt den Text und baut
+        (Embed, LyricsView). View ist None, wenn kein Text gefunden wurde."""
+        artist, title = self._split_artist_title(raw_title)
+        lyr = await self.fetch_lyrics(artist, title)
+        if lyr is None and artist:
+            # Manche YT-Titel sind 'Titel - Kuenstler' -> einmal vertauscht probieren.
+            lyr = await self.fetch_lyrics(title, artist)
+            if lyr is not None:
+                artist, title = title, artist
+        if lyr is None:
+            kopf = f"{artist} – {title}" if artist else (title or raw_title)
+            return (self._embed(
+                f"Für **{self._short(kopf, 200)}** hab ich online keinen Songtext "
+                f"gefunden. 😕\nTipp: `{self._bot_name} lyrics Künstler - Titel` "
+                "klappt am zuverlässigsten.",
+                title="🎤  Kein Text gefunden", color=_COL_ERR), None)
+        pages = self._lyrics_pages(lyr)
+        view = LyricsView(pages, artist, title, thumbnail)
+        return (view.embed(), view)
 
     async def _play_many(
         self,
@@ -1771,6 +1958,32 @@ class Music:
             except discord.HTTPException as exc:
                 log.error("Random-Menü konnte nicht gesendet werden: %s", exc)
                 return self._embed("Das Zufalls-Menü ging gerade nicht auf.", color=_COL_ERR)
+            return HANDLED
+
+        # "lyrics [song]" -> Songtext des aktuellen Songs oder eines genannten Titels.
+        if action == "lyrics":
+            raw = arg.strip() if arg else ""
+            thumb = None
+            if not raw:
+                if player.current is None:
+                    return self._embed(
+                        f"Gerade läuft nichts. Sag `{self._bot_name} lyrics "
+                        "<Künstler - Titel>` oder starte erst einen Song.",
+                        title="🎤  Lyrics", color=_COL_ERR)
+                raw = player.current.title
+                thumb = getattr(player.current, "thumbnail", "") or None
+            async with message.channel.typing():
+                emb, lview = await self._build_lyrics(raw, thumb)
+            kwargs = {"embed": emb, "mention_author": False}
+            if lview is not None:
+                kwargs["view"] = lview
+            try:
+                msg = await message.reply(**kwargs)
+            except discord.HTTPException:
+                log.exception("Lyrics senden fehlgeschlagen")
+                return HANDLED
+            if lview is not None:
+                lview.message = msg
             return HANDLED
 
         if action == "join":

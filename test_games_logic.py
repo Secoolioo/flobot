@@ -326,6 +326,48 @@ def test_music_random_genre():
         inst._enabled, inst._player_for, inst._extract, inst._send_panel = alt
 
 
+# --- Musik: Lyrics -------------------------------------------------------------
+def test_music_lyrics():
+    """Artist/Titel-Split, Seiten-Pagination und _build_lyrics (Fetch gemockt):
+    Treffer -> Embed + Paginator-View, kein Treffer -> Fehler-Embed ohne View."""
+    import music
+    m = music.instance
+    # YouTube-Deko wird entfernt, am ' - ' getrennt.
+    assert m._split_artist_title("Queen - Bohemian Rhapsody (Official Video)") \
+        == ("Queen", "Bohemian Rhapsody")
+    assert m._split_artist_title("Rick Astley - Never Gonna Give You Up [HD]") \
+        == ("Rick Astley", "Never Gonna Give You Up")
+    assert m._split_artist_title("Bohemian Rhapsody") == ("", "Bohemian Rhapsody")
+    # Pagination bricht an Strophen und haelt das Zeichenlimit ein.
+    text = "\n\n".join(f"Strophe {i}\nzeile a\nzeile b" for i in range(30))
+    pages = m._lyrics_pages(text, limit=300)
+    assert len(pages) > 1 and all(len(p) <= 300 for p in pages)
+    # Eine leere/kurze Eingabe liefert trotzdem mindestens eine Seite.
+    assert m._lyrics_pages("") and m._lyrics_pages("nur eine zeile")
+
+    async def fake_ok(artist, title):
+        return "Vers 1\nZeile A\nZeile B\n\nRefrain\nHook 1\nHook 2"
+
+    async def fake_none(artist, title):
+        return None
+
+    try:
+        m.fetch_lyrics = fake_ok
+        emb, view = asyncio.run(m._build_lyrics("Queen - Bohemian Rhapsody", None))
+        assert view is not None and emb.title.startswith("🎤")
+        assert "Vers 1" in (emb.description or "")
+        assert len(view.pages) >= 1 and view.embed().title.startswith("🎤")
+        # Kein Treffer -> Fehler-Embed, KEINE View.
+        m.fetch_lyrics = fake_none
+        emb2, view2 = asyncio.run(m._build_lyrics("Voellig Unbekannt XY", None))
+        assert view2 is None and "Kein Text" in (emb2.title or "")
+    finally:
+        try:
+            del m.fetch_lyrics    # Instanz-Override weg -> Klassenmethode zurueck
+        except AttributeError:
+            pass
+
+
 # --- Sendepause (nur Owner) ------------------------------------------------------
 def test_admin_sendepause_toggle():
     """'sendepause' schaltet um, 'an'/'aus' erzwingen den Zustand; nur der Owner
