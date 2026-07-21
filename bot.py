@@ -746,6 +746,9 @@ class FloBot(discord.Client):
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
     async def voice_xp_loop(self):
         """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit)."""
+        # Sendepause: Flo bleibt komplett still - kein Voice-XP, keine Level-Up-Ansage.
+        if ADMIN_ENABLED and admin.is_locked():
+            return
         guild = self.get_guild(GUILD_ID)
         if guild is None:
             return
@@ -769,6 +772,9 @@ class FloBot(discord.Client):
     @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
     async def event_loop(self):
         """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
+        # Sendepause: keine oeffentlichen Zufalls-Events, waehrend Flo stumm ist.
+        if ADMIN_ENABLED and admin.is_locked():
+            return
         guild = self.get_guild(GUILD_ID)
         if guild is None:
             return
@@ -1076,6 +1082,13 @@ class FloBot(discord.Client):
                 await self._handle_owner_dm(message)
             elif OWNER_ID:
                 self._spawn(self._forward_dm_to_owner(message))
+            return
+
+        # Sendepause (nur der Besitzer kann sie per 'Flo sendepause' setzen/aufheben):
+        # ist sie aktiv, ignoriert Flo ALLE anderen komplett - keine passiven Hooks,
+        # keine Befehle, keine KI. Der Besitzer wird ganz normal weiter bedient
+        # (inkl. des Befehls zum Aufheben). Auto-Loeschen oben laeuft bewusst weiter.
+        if ADMIN_ENABLED and admin.is_locked() and message.author.id != OWNER_ID:
             return
 
         content = message.content or ""

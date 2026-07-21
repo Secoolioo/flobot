@@ -58,7 +58,7 @@ class CmdNorm:
         "words", "word", "wordcount",
         # admin (nur Besitzer - schadet als Korrekturziel niemandem)
         "gib", "nimm", "setcoins", "gibxp", "profil", "ansage", "shopneu",
-        "adminhilfe", "admin",
+        "adminhilfe", "admin", "sendepause", "funkstille", "lockdown",
         # luxus
         "luxus", "luxury", "prestige", "thron", "throne",
         # handel (Coin-Handelsbuch)

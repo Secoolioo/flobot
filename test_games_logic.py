@@ -201,6 +201,45 @@ def test_admin_owner_gate():
     assert hilfe is not None and not isinstance(hilfe, str)
 
 
+# --- Sendepause (nur Owner) ------------------------------------------------------
+def test_admin_sendepause_toggle():
+    """'sendepause' schaltet um, 'an'/'aus' erzwingen den Zustand; nur der Owner
+    erreicht den Befehl ueberhaupt (admin.handle gibt Fremden None)."""
+    admin.setup()
+    # Ohne Store (Test): Persistenz-Aufruf darf nicht crashen -> Fake-Store.
+    class FakeStore:
+        def __init__(self):
+            self.data = {"sendepause": False}
+
+        async def save(self):
+            self.data["sendepause_saved"] = self.data["sendepause"]
+
+    alt = admin.instance._store
+    admin.instance._store = FakeStore()
+    admin.instance._locked = False
+    try:
+        assert admin.is_locked() is False
+        # Fremder kann die Sendepause NICHT setzen (kein Owner -> None, kein Effekt).
+        assert asyncio.run(admin.handle(_fake_msg(999, "sendepause"))) is None
+        assert admin.is_locked() is False
+        # Owner schaltet an (Toggle) -> Embed, Flag + Persistenz gesetzt.
+        antwort = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause")))
+        assert antwort is not None and not isinstance(antwort, str)
+        assert admin.is_locked() is True
+        assert admin.instance._store.data["sendepause_saved"] is True
+        # Toggle zurueck.
+        asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause")))
+        assert admin.is_locked() is False
+        # Explizit 'an' und idempotentes 'aus'.
+        asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause an")))
+        assert admin.is_locked() is True
+        asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause aus")))
+        assert admin.is_locked() is False
+    finally:
+        admin.instance._store = alt
+        admin.instance._locked = False
+
+
 # --- Leaderboard-Avatare ---------------------------------------------------------
 def test_attach_avatars_cache_und_fallback():
     """Avatar-Laden: Erfolg fuellt Cache, Fehlschlag landet im Negativ-Cache,

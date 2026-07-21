@@ -25,6 +25,7 @@ import discord
 
 import ai
 import economy
+from store import JsonStore
 
 log = logging.getLogger("dcbot.admin")
 
@@ -42,6 +43,10 @@ class Admin:
         # Veraenderlicher Modulzustand (frueher per 'global' neu zugewiesen).
         self._enabled = False
         self._bot_name = "Flo"
+        # Sendepause ('Funkstille'): ist sie an, ignoriert der Bot JEDEN ausser dem
+        # Besitzer komplett. Persistiert in data/admin.json (ueberlebt Neustarts).
+        self._store = None
+        self._locked = False
 
     def setup(self):
         """Aktiviert die Admin-Befehle (braucht nur eine OWNER_ID)."""
@@ -49,12 +54,21 @@ class Admin:
         if not OWNER_ID:
             log.info("Admin-Befehle aus (keine OWNER_ID).")
             return False
+        self._store = JsonStore("admin.json", default={"sendepause": False})
+        self._locked = bool(self._store.data.get("sendepause", False))
         self._enabled = True
-        log.info("Admin-Befehle aktiv (Besitzer %d).", OWNER_ID)
+        log.info("Admin-Befehle aktiv (Besitzer %d%s).",
+                 OWNER_ID, ", SENDEPAUSE aktiv" if self._locked else "")
         return True
 
     def is_enabled(self):
         return self._enabled
+
+    def is_locked(self):
+        """True, wenn die Sendepause aktiv ist. bot.py fragt das bei JEDER Nachricht
+        ab, um alle ausser dem Besitzer zu ignorieren - daher bewusst nur ein
+        In-Memory-Flag (kein Datei-Zugriff auf dem heissen Pfad)."""
+        return self._locked
 
     # --- Parsen ----------------------------------------------------------------
     def _extract(self, rest):
@@ -134,9 +148,39 @@ class Admin:
             return None
         if first in ("shopneu", "shoprefresh"):
             return await self._shop_refresh()
+        if first in ("sendepause", "sendpause", "funkstille", "lockdown"):
+            return await self._toggle_lock(rest.strip().lower())
         if first in ("admin", "adminhilfe", "adminhelp"):
             return self._admin_help()
         return None
+
+    async def _toggle_lock(self, arg):
+        """Sendepause an-/abschalten (persistiert). Ohne Argument: umschalten.
+        Waehrend der Sendepause reagiert Flo auf NIEMANDEN ausser dem Besitzer."""
+        if arg in ("aus", "off", "ende", "beenden", "stop", "weg"):
+            neu = False
+        elif arg in ("an", "ein", "on", "start"):
+            neu = True
+        else:
+            neu = not self._locked
+        self._locked = neu
+        if self._store is not None:
+            self._store.data["sendepause"] = neu
+            try:
+                await self._store.save()
+            except Exception:  # noqa: BLE001 - Persistenz ist nice-to-have
+                log.exception("Sendepause-Zustand konnte nicht gespeichert werden")
+        if neu:
+            log.info("SENDEPAUSE aktiviert (nur noch Besitzer wird bedient).")
+            return self._emb(
+                "🔇 **Sendepause AN.**\nAb jetzt ignoriere ich alle anderen komplett – "
+                "keine Befehle, keine KI, keine Spiele. Nur du wirst noch bedient.\n"
+                f"Aufheben mit `{self._bot_name} sendepause aus`.",
+                color=discord.Color.red())
+        log.info("SENDEPAUSE aufgehoben (wieder fuer alle da).")
+        return self._emb(
+            "🔊 **Sendepause AUS.**\nIch bin wieder für alle da. 🎉",
+            color=discord.Color.green())
 
     async def _give(self, message, rest, *, sign
                     ):
@@ -322,7 +366,9 @@ class Admin:
                       value=f"`{n} gibxp @wer 250` · `{n} profil @wer`", inline=False)
         emb.add_field(name="Server",
                       value=(f"`{n} ansage <channel-id> <text>` · `{n} shopneu`\n"
-                             f"`{n} soundboard an/aus` · `{n} restart`"), inline=False)
+                             f"`{n} soundboard an/aus` · `{n} restart`\n"
+                             f"`{n} sendepause` – Funkstille: nur DU wirst noch bedient "
+                             f"(aus: `{n} sendepause aus`)"), inline=False)
         emb.add_field(name="DM-Relay",
                       value=(f"`{n} dm @wer <text>` – {n} schreibt privat; "
                              "Antworten landen automatisch bei dir."), inline=False)
@@ -336,6 +382,8 @@ instance = Admin()
 
 setup = instance.setup
 is_enabled = instance.is_enabled
+is_locked = instance.is_locked
+_toggle_lock = instance._toggle_lock
 _extract = instance._extract
 _user_of = instance._user_of
 _name_of = instance._name_of
