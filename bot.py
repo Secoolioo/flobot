@@ -356,7 +356,9 @@ _HELP_DATA = {
     ]),
     "terraria": ("Terraria", 0x8DB360, [
         ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
-        ("flo terraria Plantera", "Boss/Item/Biom nachschlagen"),
+        ("flo terraria Plantera", "Boss/Item/Biom nachschlagen (🔎-Button für mehr)"),
+        ("flo terraria random", "🎲 zufällige Seite - lass dich überraschen"),
+        ("flo terraria bosse · waffen · items", "Kategorie-Zufall (auch npcs/erze/biome …)"),
         ("flo <terraria-frage>", "Flo erkennt Terraria-Fragen auch ohne Prefix"),
     ]),
     "aktien": ("Aktien", 0x2ECC71, [
@@ -1068,13 +1070,12 @@ class FloBot(discord.Client):
         # Terraria-Frage in der DM? -> mit Wiki-Daten (Embed + Bild) antworten.
         if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
             try:
-                emb = await terraria.beantworte(message, ai.strip_lead(content) or content)
+                res = await terraria.beantworte(message, ai.strip_lead(content) or content)
             except Exception:
                 log.exception("Terraria-Auto-Antwort (DM) fehlgeschlagen")
-                emb = None
-            if emb is not None:
-                await self._send_reply(message, emb)
-                return
+                res = None
+            if res is not None:
+                return  # Terraria hat selbst geantwortet
         async with message.channel.typing():
             try:
                 if image_url:
@@ -1268,8 +1269,9 @@ class FloBot(discord.Client):
                     or antwort is casino.HANDLED or antwort is games.HANDLED
                     or antwort is economy.HANDLED or antwort is media.HANDLED
                     or antwort is food.HANDLED or antwort is words.HANDLED
-                    or antwort is luxus.HANDLED or antwort is voicegags.HANDLED):
-                return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild ...).
+                    or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
+                    or antwort is terraria.HANDLED):
+                return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
             elif isinstance(antwort, discord.Embed):
@@ -1302,13 +1304,12 @@ class FloBot(discord.Client):
         if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
             async with message.channel.typing():
                 try:
-                    emb = await terraria.beantworte(message, ai.strip_lead(content) or content)
+                    res = await terraria.beantworte(message, ai.strip_lead(content) or content)
                 except Exception:
                     log.exception("Terraria-Auto-Antwort fehlgeschlagen")
-                    emb = None
-            if emb is not None:
-                await self._send_reply(message, emb)
-                return
+                    res = None
+            if res is not None:
+                return  # Terraria hat selbst geantwortet (Embed + Buttons)
         async with message.channel.typing():
             try:
                 if image_url:

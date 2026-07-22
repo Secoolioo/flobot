@@ -42,6 +42,100 @@ _TIMEOUT = aiohttp.ClientTimeout(total=12)
 _FARBE = 0x8DB360
 
 
+class TerrariaPagesView(discord.ui.View):
+    """Blaettert den vollen Wiki-Text seitenweise durch (◀/▶). Ephemer - nur der
+    Klickende sieht die Detail-Seiten. Bei einer Seite kommen keine Buttons."""
+
+    def __init__(self, pages, titel, bild, *, timeout=300.0):
+        super().__init__(timeout=timeout)
+        self.pages = pages
+        self.titel = titel
+        self.bild = bild
+        self.idx = 0
+        self.message = None
+        if len(pages) <= 1:
+            self.clear_items()
+        else:
+            self._sync()
+
+    def embed(self):
+        emb = discord.Embed(
+            title=instance._kuerzen(self.titel or "Terraria", 240),
+            description=self.pages[self.idx], color=_FARBE)
+        if self.bild:
+            try:
+                emb.set_thumbnail(url=self.bild)
+            except Exception:  # noqa: BLE001 - Bild ist nur Deko
+                pass
+        emb.set_footer(text=f"Seite {self.idx + 1}/{len(self.pages)}  ·  Terraria Wiki")
+        return emb
+
+    def _sync(self):
+        self._prev.disabled = self.idx <= 0
+        self._next.disabled = self.idx >= len(self.pages) - 1
+
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def _prev(self, interaction, _b):
+        self.idx = max(0, self.idx - 1)
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
+    async def _next(self, interaction, _b):
+        self.idx = min(len(self.pages) - 1, self.idx + 1)
+        self._sync()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+
+class TerrariaView(discord.ui.View):
+    """Buttons unter einer Terraria-Antwort: 🔎 Mehr dazu (voller Text, ephemer),
+    🎲 Zufall (neue Zufalls-Seite, oeffentlich), 🌐 Zum Wiki (Link)."""
+
+    def __init__(self, titel, url, *, timeout=600.0):
+        super().__init__(timeout=timeout)
+        self.titel = titel
+        self.message = None
+        if url:
+            self.add_item(discord.ui.Button(
+                label="Zum Wiki", emoji="🌐", style=discord.ButtonStyle.link, url=url))
+
+    @discord.ui.button(label="Mehr dazu", emoji="🔎", style=discord.ButtonStyle.secondary)
+    async def _more(self, interaction, _b):
+        # Vollen Seitentext laden und ephemer (nur fuer den Klickenden) blaettern.
+        await interaction.response.defer(ephemeral=True)
+        seite = await instance._seite_laden(self.titel, voll=True) if self.titel else None
+        roh = re.sub(r"\s+", " ", (seite or {}).get("extract") or "").strip()
+        if not roh:
+            await interaction.followup.send(
+                "Dazu hab ich gerade nicht mehr im Wiki. 🤷", ephemeral=True)
+            return
+        pages = instance._paginate(roh)
+        pv = TerrariaPagesView(pages, self.titel, (seite or {}).get("bild"))
+        await interaction.followup.send(
+            embed=pv.embed(), view=(pv if len(pages) > 1 else None), ephemeral=True)
+
+    @discord.ui.button(label="Zufall", emoji="🎲", style=discord.ButtonStyle.secondary)
+    async def _random(self, interaction, _b):
+        await interaction.response.defer()
+        emb, view = await instance._build_random()
+        if emb is None:
+            await interaction.followup.send("Der Zufall streikt gerade. 🎲", ephemeral=True)
+            return
+        msg = await interaction.followup.send(embed=emb, view=view)
+        if view is not None:
+            view.message = msg
+
+    async def on_timeout(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and not child.url:
+                child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class Terraria:
     """Terraria-Wiki-Nachschlagewerk als Objekt gekapselt."""
 
@@ -96,6 +190,41 @@ class Terraria:
         "Die Terra Blade schiesst Projektile und ist ein Klassiker unter den Schwertern.",
         "Der Dungeon-Waechter kommt, wenn du VOR Skeletron zu tief in den Dungeon gehst - viel Spass.",
     )
+
+    # Kuratierter Pool markanter Seiten fuer 'terraria random' - so kommt immer
+    # was Cooles und kein obskurer Stub.
+    _RANDOM_POOL = (
+        "Moon Lord", "Wall of Flesh", "Plantera", "Eye of Cthulhu", "Skeletron",
+        "The Twins", "The Destroyer", "Duke Fishron", "Empress of Light",
+        "Queen Bee", "King Slime", "Golem", "Lunatic Cultist", "Deerclops",
+        "Queen Slime", "Skeletron Prime", "Brain of Cthulhu", "Eater of Worlds",
+        "Zenith", "Terra Blade", "Meowmere", "Star Wrath", "Terrarian",
+        "Daedalus Stormbow", "Megashark", "Last Prism", "Rainbow Gun", "Influx Waver",
+        "Chlorophyte Ore", "Luminite", "The Hallow", "The Corruption", "The Crimson",
+        "Jungle", "Dungeon", "Hardmode", "Wings", "Grappling Hook", "Nurse",
+        "Goblin Tinkerer", "Slime Staff", "Terraprisma", "Ankh Shield",
+        "Molten Armor", "Master Ninja Gear", "Rod of Discord", "Bee Keeper",
+    )
+    # Kategorie-Aliase (deutsch/englisch) -> Terraria-Wiki-Kategorie.
+    _KATEGORIEN = {
+        "bosse": "Bosses", "boss": "Bosses", "bosses": "Bosses",
+        "waffen": "Weapons", "waffe": "Weapons", "weapons": "Weapons",
+        "schwerter": "Swords", "swords": "Swords", "schwert": "Swords",
+        "items": "Items", "item": "Items", "gegenstände": "Items", "gegenstaende": "Items",
+        "rüstung": "Armor", "ruestung": "Armor", "armor": "Armor",
+        "rüstungen": "Armor", "ruestungen": "Armor",
+        "npcs": "NPCs", "npc": "NPCs",
+        "erze": "Ores", "erz": "Ores", "ores": "Ores", "ore": "Ores",
+        "biome": "Biomes", "biom": "Biomes", "biomes": "Biomes",
+        "accessoires": "Accessories", "accessories": "Accessories", "zubehör": "Accessories",
+        "werkzeuge": "Tools", "tools": "Tools", "werkzeug": "Tools", "tool": "Tools",
+        "flügel": "Wings", "wings": "Wings", "fluegel": "Wings",
+        "pets": "Pets", "haustiere": "Pets", "mounts": "Mounts", "reittiere": "Mounts",
+        "tränke": "Potions", "traenke": "Potions", "potions": "Potions", "trank": "Potions",
+    }
+    # Woerter, die 'terraria random' ausloesen.
+    _RANDOM_WORDS = {"random", "zufall", "zufällig", "zufaellig", "überrasch",
+                     "ueberrasch", "irgendwas", "surprise", "überrasch mich"}
 
     def __init__(self):
         self._enabled = False
@@ -280,11 +409,58 @@ class Terraria:
             return None
         return (antwort or "").strip() or None
 
+    # --- Text-Pagination (fuer 'Mehr dazu') ----------------------------------
+    def _paginate(self, text, limit=1800):
+        """Zerlegt den (langen) Wiki-Text in lesbare Seiten - bricht bevorzugt an
+        Absaetzen/Saetzen, haelt 'limit' Zeichen je Seite ein."""
+        text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+        if not text:
+            return ["_(Kein Text vorhanden.)_"]
+        pages, cur = [], ""
+        for absatz in re.split(r"\n\n+", text):
+            absatz = absatz.strip()
+            if not absatz:
+                continue
+            if len(absatz) > limit:                 # Riesen-Absatz -> hart kappen
+                while len(absatz) > limit:
+                    if cur:
+                        pages.append(cur.strip())
+                        cur = ""
+                    schnitt = absatz.rfind(" ", 0, limit)
+                    schnitt = schnitt if schnitt > 0 else limit
+                    pages.append(absatz[:schnitt].strip())
+                    absatz = absatz[schnitt:].strip()
+            if len(cur) + len(absatz) + 2 > limit:
+                pages.append(cur.strip())
+                cur = ""
+            cur += absatz + "\n\n"
+        if cur.strip():
+            pages.append(cur.strip())
+        return pages or ["_(Kein Text vorhanden.)_"]
+
+    # --- Zufalls- & Kategorie-Titel -----------------------------------------
+    def _random_titel(self):
+        """Zufaelliger, sehenswerter Seitentitel aus dem kuratierten Pool."""
+        return random.choice(self._RANDOM_POOL)
+
+    async def _category_titel(self, kategorie):
+        """Zufaelliger Seitentitel aus einer Wiki-Kategorie (categorymembers)."""
+        data = await self._api_get({
+            "action": "query", "list": "categorymembers",
+            "cmtitle": f"Category:{kategorie}", "cmlimit": 200, "cmnamespace": 0,
+        })
+        if not isinstance(data, dict):
+            return None
+        members = (data.get("query") or {}).get("categorymembers") or []
+        titel = [m.get("title") for m in members
+                 if isinstance(m, dict) and m.get("title")]
+        return random.choice(titel) if titel else None
+
     # --- Embeds --------------------------------------------------------------
-    async def _baue_embed(self, message, frage, seite):
-        """Baut das Antwort-Embed aus einer geladenen Wiki-Seite: KI-Antwort (wenn
-        aktiv) als Beschreibung, grosses Seitenbild fuers Aussehen, roher
-        Wiki-Auszug als Beleg-Feld, Link zur Quelle."""
+    async def _build_answer(self, frage, seite):
+        """Baut (Embed, View) aus einer geladenen Wiki-Seite: KI-Antwort (wenn
+        aktiv) als Beschreibung, grosses Seitenbild, roher Wiki-Auszug als Beleg,
+        plus Buttons (Mehr dazu / Zufall / Zum Wiki)."""
         roh = re.sub(r"\s+", " ", seite.get("extract") or "").strip()
         ki_text = await self._frage_ki(frage, seite.get("titel") or "", roh)
 
@@ -307,7 +483,35 @@ class Terraria:
             emb.add_field(name="📖 Wiki-Auszug",
                           value=self._kuerzen(roh, 1000), inline=False)
         emb.set_footer(text="Quelle: Terraria Wiki (terraria.wiki.gg)")
-        return emb
+        view = TerrariaView(seite.get("titel") or "", seite.get("url") or "")
+        return emb, view
+
+    async def _build_random(self):
+        """(Embed, View) fuer eine zufaellige Terraria-Seite (kuratierter Pool)."""
+        for _ in range(3):                       # ein paar Versuche, falls mal leer
+            titel = self._random_titel()
+            seite = await self._seite_laden(titel, voll=bool(ai.is_enabled()))
+            if not seite:
+                seite = await self._seite_laden(titel, voll=False)
+            if seite:
+                emb, view = await self._build_answer(f"Erzähl mir was über {titel}", seite)
+                emb.title = f"🎲  {emb.title}"
+                return emb, view
+        return None, None
+
+    async def _build_category(self, kategorie, anzeige):
+        """(Embed, View) fuer eine zufaellige Seite aus einer Wiki-Kategorie."""
+        titel = await self._category_titel(kategorie)
+        if not titel:
+            return None, None
+        seite = await self._seite_laden(titel, voll=bool(ai.is_enabled()))
+        if not seite:
+            seite = await self._seite_laden(titel, voll=False)
+        if not seite:
+            return None, None
+        emb, view = await self._build_answer(f"Erzähl mir was über {titel}", seite)
+        emb.title = f"{anzeige}: {emb.title}"
+        return emb, view
 
     def _hinweis_embed(self):
         """Hinweis + zufaelliger Terraria-Fakt, wenn kein Thema genannt wurde."""
@@ -342,31 +546,47 @@ class Terraria:
         return emb
 
     # --- oeffentliche Schnittstelle ------------------------------------------
-    async def beantworte(self, message, frage):
-        """Beantwortet eine freie Terraria-Frage mit echten Wiki-Daten + Bild.
+    async def _send(self, message, emb, view=None):
+        """Sendet ein Embed (+ optional View) als Antwort und gibt HANDLED zurueck.
+        Merkt sich die Nachricht in der View (fuer das Deaktivieren beim Timeout)."""
+        kwargs = {"embed": emb, "mention_author": False}
+        if view is not None:
+            kwargs["view"] = view
+        try:
+            msg = await message.reply(**kwargs)
+        except discord.HTTPException:
+            log.exception("Terraria-Antwort konnte nicht gesendet werden")
+            return self.HANDLED
+        if view is not None:
+            view.message = msg
+        return self.HANDLED
 
-        Sucht die beste Wiki-Seite, laedt Text + Bild + Link und baut daraus ein
-        Embed. Ist die KI aktiv, beantwortet sie die konkrete Frage auf Basis der
-        Fakten (RAG). Rueckgabe: discord.Embed (bot.py sendet es)."""
+    async def beantworte(self, message, frage):
+        """Beantwortet eine freie Terraria-Frage mit echten Wiki-Daten + Bild und
+        SENDET die Antwort selbst (Embed + Buttons). Rueckgabe: HANDLED, wenn eine
+        Antwort verschickt wurde, sonst None (dann findet sich nichts - der
+        Aufrufer kann anders reagieren, z. B. die normale KI antworten lassen)."""
         frage = (frage or "").strip()
         if not frage:
-            return self._hinweis_embed()
+            return None
         titel = await self._suche_titel(frage)
         if not titel:
-            return self._keine_seite_embed(frage)
+            return None
         # Fuer die KI (RAG) den laengeren Volltext laden, sonst reicht das Intro.
         seite = await self._seite_laden(titel, voll=bool(ai.is_enabled()))
         if not seite:
             seite = await self._seite_laden(titel, voll=False)
         if not seite:
-            return self._keine_seite_embed(frage)
-        return await self._baue_embed(message, frage, seite)
+            return None
+        emb, view = await self._build_answer(frage, seite)
+        return await self._send(message, emb, view)
 
     async def handle(self, message):
-        """Erkennt die Prefix-Befehle ('terraria'/'terra'/'twiki'/'terrariawiki').
+        """Erkennt die Prefix-Befehle ('terraria'/'terra'/'twiki'/'terrariawiki')
+        samt Unterbefehlen 'random' und Kategorien (bosse/waffen/items/...).
 
-        Rueckgabe: Embed (Antwort/Hinweis) oder None (kein Terraria-Befehl ->
-        naechstes Modul / KI ist dran)."""
+        Rueckgabe: HANDLED (Antwort selbst gesendet), Embed (Hinweis/nichts
+        gefunden - bot.py sendet) oder None (kein Terraria-Befehl)."""
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
@@ -379,7 +599,23 @@ class Terraria:
         rest = teile[1].strip() if len(teile) > 1 else ""
         if not rest:
             return self._hinweis_embed()
-        return await self.beantworte(message, rest)
+        low = rest.lower().strip(".,;:!?")
+        erstes_wort = low.split()[0] if low.split() else ""
+
+        # 'terraria random' -> zufaellige, sehenswerte Seite.
+        if low in self._RANDOM_WORDS or erstes_wort in self._RANDOM_WORDS:
+            emb, view = await self._build_random()
+            return await self._send(message, emb, view) if emb else self._keine_seite_embed(rest)
+
+        # 'terraria bosse/waffen/items/...' (EIN Kategorie-Wort) -> Zufalls-Seite
+        # aus der Kategorie. Mehrere Woerter = normale Frage ('waffen gegen plantera').
+        if len(low.split()) == 1 and low in self._KATEGORIEN:
+            emb, view = await self._build_category(self._KATEGORIEN[low], f"🗂️ {rest.capitalize()}")
+            return await self._send(message, emb, view) if emb else self._keine_seite_embed(rest)
+
+        # Sonst: freie Frage ans Wiki.
+        res = await self.beantworte(message, rest)
+        return res if res is not None else self._keine_seite_embed(rest)
 
 
 instance = Terraria()
@@ -393,8 +629,13 @@ erkennt_frage = instance.erkennt_frage
 beantworte = instance.beantworte
 # Interne Helfer (fuer Tests ohne Netz).
 _kuerzen = instance._kuerzen
+_paginate = instance._paginate
 _beste_seite = instance._beste_seite
+_random_titel = instance._random_titel
 _suche_titel = instance._suche_titel
 _seite_laden = instance._seite_laden
+_build_random = instance._build_random
 _TERRA_KEYWORDS = Terraria._TERRA_KEYWORDS
 _STARKE_KEYWORDS = Terraria._STARKE_KEYWORDS
+_KATEGORIEN = Terraria._KATEGORIEN
+_RANDOM_POOL = Terraria._RANDOM_POOL

@@ -508,6 +508,63 @@ def test_terraria_logic():
     assert t._beste_seite({"query": {"search": []}}) is None
 
 
+def test_terraria_random_und_kategorie():
+    """Pagination, Kategorie-Map/Random-Pool und das handle-Routing: 'random' ->
+    Zufalls-Seite, ein Kategorie-Wort -> Kategorie, mehrere Woerter -> Frage."""
+    import discord
+    import terraria
+    t = terraria.instance
+    # Pagination haelt das Limit ein.
+    pages = t._paginate("Absatz.\n\n" * 300, 400)
+    assert len(pages) > 1 and all(len(p) <= 420 for p in pages)
+    # Kategorie-Map + Zufalls-Pool.
+    assert terraria._KATEGORIEN["bosse"] == "Bosses"
+    assert terraria._KATEGORIEN["waffen"] == "Weapons"
+    assert terraria._random_titel() in terraria._RANDOM_POOL
+
+    calls = {"random": 0, "cat": None}
+
+    async def fake_random():
+        calls["random"] += 1
+        return discord.Embed(title="Zufall"), None
+
+    async def fake_cat(kat, anzeige):
+        calls["cat"] = kat
+        return discord.Embed(title=kat), None
+
+    async def fake_send(message, emb, view=None):
+        return terraria.HANDLED
+
+    async def fake_beantworte(message, frage):
+        calls.setdefault("frage", frage)
+        return None
+
+    orig = (t._build_random, t._build_category, t._send, t.beantworte, t._enabled)
+    t._build_random, t._build_category, t._send = fake_random, fake_cat, fake_send
+    t.beantworte = fake_beantworte
+    t._enabled = True
+
+    def msg(content):
+        return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
+                               author=SimpleNamespace(display_name="x"))
+    try:
+        # 'terraria random' -> Zufalls-Seite.
+        assert asyncio.run(terraria.handle(msg("terraria random"))) is terraria.HANDLED
+        assert calls["random"] == 1
+        # Ein Kategorie-Wort -> Kategorie.
+        assert asyncio.run(terraria.handle(msg("terraria bosse"))) is terraria.HANDLED
+        assert calls["cat"] == "Bosses"
+        # Mehrere Woerter mit Kategorie-Wort -> normale Frage (nicht Kategorie).
+        calls["cat"] = None
+        r = asyncio.run(terraria.handle(msg("terraria waffen gegen plantera")))
+        assert calls["cat"] is None and isinstance(r, discord.Embed)  # keine_seite_embed
+        assert calls.get("frage") == "waffen gegen plantera"
+        # Kein Terraria-Prefix -> None.
+        assert asyncio.run(terraria.handle(msg("spiel despacito"))) is None
+    finally:
+        (t._build_random, t._build_category, t._send, t.beantworte, t._enabled) = orig
+
+
 # --- Bot-Hass ------------------------------------------------------------------
 def test_bot_beef():
     import ai
