@@ -402,6 +402,123 @@ def test_music_lyrics():
             pass
 
 
+# --- Steal (Coin-Raub) ---------------------------------------------------------
+def test_steal_heist():
+    """steal.handle: kein Ziel -> Hinweis; Erfolg klaut (Topf konstant); Cooldown
+    greift; Misserfolg kostet Strafe; Selbst-/Bot-/Arm-Ziel abgefangen."""
+    import steal
+
+    class FakeStore:
+        def __init__(self, data):
+            self.data = data
+
+        async def save(self):
+            pass
+
+    alt_eco = (economy.instance._store, economy.instance._enabled)
+    economy.instance._store = FakeStore({"users": {}})
+    economy.instance._enabled = True
+    economy.instance._profile(1)["coins"] = 10000   # Opfer
+    economy.instance._profile(2)["coins"] = 5000    # Raeuber
+    alt_steal = (steal.instance._store, steal.instance._enabled,
+                 steal.instance._success_chance)
+    steal.instance._store = FakeStore({"cooldowns": {}})
+    steal.instance._enabled = True
+
+    def cd_clear():
+        steal.instance._store.data["cooldowns"].clear()
+
+    def mk(author, content, mentions):
+        return SimpleNamespace(author=author, content=content, mentions=mentions,
+                               guild=SimpleNamespace(id=1))
+    raeuber = SimpleNamespace(id=2, bot=False, display_name="Raeuber")
+    opfer = SimpleNamespace(id=1, bot=False, display_name="Opfer")
+    try:
+        # Kein Ziel -> Hinweistext.
+        assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal", []))), str)
+        # Erfolg erzwingen: Opfer verliert, Raeuber gewinnt, Gesamttopf konstant.
+        steal.instance._success_chance = 1.0
+        cd_clear()
+        vo, vr = economy.get_coins(1), economy.get_coins(2)
+        emb = asyncio.run(steal.handle(mk(raeuber, "steal <@1>", [opfer])))
+        assert not isinstance(emb, str)
+        assert economy.get_coins(1) < vo and economy.get_coins(2) > vr
+        assert economy.get_coins(1) + economy.get_coins(2) == vo + vr
+        # Cooldown greift jetzt.
+        r = asyncio.run(steal.handle(mk(raeuber, "steal <@1>", [opfer])))
+        assert isinstance(r, str) and "Min" in r
+        # Misserfolg: neuer Raeuber zahlt Strafe.
+        steal.instance._success_chance = 0.0
+        cd_clear()
+        economy.instance._profile(3)["coins"] = 3000
+        pech = SimpleNamespace(id=3, bot=False, display_name="Pech")
+        v3 = economy.get_coins(3)
+        asyncio.run(steal.handle(mk(pech, "steal <@1>", [opfer])))
+        assert economy.get_coins(3) < v3
+        # Selbst-Klau, Bot-Ziel, armes Ziel -> jeweils Hinweistext, kein Raub.
+        cd_clear()
+        assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal <@2>", [raeuber]))), str)
+        botziel = SimpleNamespace(id=99, bot=True, display_name="RivalBot")
+        assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal <@99>", [botziel]))), str)
+        economy.instance._profile(9)["coins"] = 10
+        arm = SimpleNamespace(id=9, bot=False, display_name="Arm")
+        cd_clear()
+        assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal <@9>", [arm]))), str)
+        # Kein Steal-Befehl -> None.
+        assert asyncio.run(steal.handle(mk(raeuber, "wie gehts", []))) is None
+    finally:
+        steal.instance._store, steal.instance._enabled, steal.instance._success_chance = alt_steal
+        economy.instance._store, economy.instance._enabled = alt_eco
+
+
+# --- Stocks (Aktienkurse) ------------------------------------------------------
+def test_stocks_helpers():
+    import stocks
+    a, p, plus = stocks._format_change(110, 100)
+    assert round(a) == 10 and round(p) == 10 and plus is True
+    a, p, plus = stocks._format_change(90, 100)
+    assert plus is False and round(p) == -10
+    # None/Muell robust -> (None, None, True), kein Crash.
+    assert stocks._format_change(None, 100) == (None, None, True)
+    assert stocks._format_change("x", "y")[0] is None
+    # Ticker-Erkennung.
+    assert stocks._looks_like_ticker("AAPL")
+    assert not stocks._looks_like_ticker("Apple Inc")
+
+
+# --- Terraria-Wiki -------------------------------------------------------------
+def test_terraria_logic():
+    import terraria
+    t = terraria.instance
+    # Terraria-Fragen werden erkannt, Alltag nicht.
+    assert terraria.erkennt_frage("wie besiege ich plantera")
+    assert terraria.erkennt_frage("was ist terraria eigentlich")
+    assert terraria.erkennt_frage("wie craftet man das zenith")
+    assert not terraria.erkennt_frage("wie wird das wetter morgen")
+    assert not terraria.erkennt_frage("was gibts heute zu essen")
+    assert not terraria.erkennt_frage("mein boss hat frei gegeben")   # kein Fehlalarm
+    # _kuerzen haelt das Limit ein.
+    lang = "Ein Satz. " * 400
+    k = t._kuerzen(lang, 120)
+    assert len(k) <= 130
+    # _beste_seite versteht beide Such-Formate.
+    assert t._beste_seite({"query": {"search": [{"title": "Plantera"}]}}) == "Plantera"
+    assert t._beste_seite(["copper", ["Copper Ore", "Copper Bar"], [], []]) == "Copper Ore"
+    assert t._beste_seite(None) is None
+    assert t._beste_seite({"query": {"search": []}}) is None
+
+
+# --- Bot-Hass ------------------------------------------------------------------
+def test_bot_beef():
+    import ai
+    import fun
+    # Persona traegt den Bot-Hass.
+    assert "verachtest" in ai.instance._system_prompt().lower()
+    # Roast-Sprueche formatieren sauber mit dem Namen des Rivalen.
+    assert "NervBot" in fun._BOT_ROASTS[0].format(name="NervBot")
+    assert hasattr(fun, "maybe_roast_bot")
+
+
 # --- Sendepause (nur Owner) ------------------------------------------------------
 def test_admin_sendepause_toggle():
     """'sendepause' schaltet um, 'an'/'aus' erzwingen den Zustand; nur der Owner

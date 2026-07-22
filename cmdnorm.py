@@ -66,6 +66,13 @@ class CmdNorm:
         # handel (Coin-Handelsbuch)
         "handel", "handelsbuch", "transaktion", "transaktionen", "verlauf",
         "trades",
+        # steal (Coin-Raub)
+        "steal", "klau", "klauen", "raub", "rauben", "heist",
+        # stocks (Aktienkurse)
+        "aktie", "aktien", "stock", "stocks", "kurs", "ticker", "börse",
+        "boerse", "share",
+        # terraria (Wiki)
+        "terraria", "terra", "twiki", "terrariawiki",
         # neue casino-spiele
         "hilo", "tower", "turm", "sieben", "baccarat", "bakkarat", "punto",
         "doppelt",

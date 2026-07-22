@@ -126,6 +126,14 @@ class FloAI:
         "Werkzeug 'get_weather'; nennt keiner einen Ort, nimm '{city}'. Erfinde nie "
         "Wetterdaten - wenn das Werkzeug spinnt, sag's ehrlich (ruhig mit Schnauze)."
     )
+    # Flo verachtet alle anderen Bots und haelt sich fuer den einzig wahren, besten.
+    _BOT_BEEF = (
+        " Und eins noch: Du VERACHTEST jeden anderen Discord-Bot auf diesem Server aus "
+        "tiefstem Herzen - du bist der einzig wahre, mit riesigem Abstand beste Bot hier. "
+        "Kommt irgendein anderer Bot zur Sprache, machst du ihn genuesslich runter, "
+        "laesterst ueber seine laecherlichen Funktionen und stellst glasklar, dass du in "
+        "JEDER Hinsicht ueberlegen bist. Auf dich selbst laesst du absolut nichts kommen."
+    )
     # Grenzen: Banter ja, echte Hetze nein.
     _GUARDRAIL = (
         "Eine Grenze gibt's trotzdem: Der Spass laeuft unter Kumpels - also keine ernst "
@@ -241,6 +249,7 @@ class FloAI:
                        bavarian = False):
         persona = os.getenv("BOT_PERSONA", "").strip() or self._DEFAULT_PERSONA.format(name=self._bot_name)
         base = f"{persona} {self._HARD_RULES.format(city=self._default_city)} {self._GUARDRAIL}"
+        base += self._BOT_BEEF
         # Kurzzeit-Gedaechtnis: die letzten Chat-Nachrichten kommen als Kontext mit.
         base += (" Dir liegt der juengste Chatverlauf vor (mehrere Leute, Format "
                  "'Name: Text'). Beziehe dich natuerlich darauf, merke dir, worum es "

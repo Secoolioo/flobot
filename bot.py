@@ -37,6 +37,9 @@ import moderation
 import music
 import render
 import schedule_logic
+import steal
+import stocks
+import terraria
 import voicegags
 import words
 
@@ -144,6 +147,15 @@ LUXUS_ENABLED = luxus.setup()
 # Spiele, Daily, Shop, Pay, ...) und zeigt sie als Statistik-Karte. Braucht
 # economy (dort liegt der Coin-Topf).
 HANDEL_ENABLED = handel.setup()
+# Coin-Raub ('Flo steal @wer'): Heist auf fremde Coins - Erfolgschance, Strafe,
+# Cooldown. Braucht economy (dort liegt der Coin-Topf).
+STEAL_ENABLED = steal.setup()
+# Aktienkurse ('Flo aktie <Name>'): Live-Kurs von Yahoo Finance + freche
+# Kauf/Halten/Verkauf-Empfehlung (keine echte Anlageberatung).
+STOCKS_ENABLED = stocks.setup()
+# Terraria-Wiki ('Flo terraria <frage>'): beantwortet JEDE Terraria-Frage mit
+# echten Wiki-Daten + Bildern (MediaWiki-API), auto-erkennt Terraria-Fragen.
+TERRARIA_ENABLED = terraria.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -174,7 +186,8 @@ WEISHEITEN = [
 _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
-     WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED]
+     WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
+     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -339,6 +352,17 @@ _HELP_DATA = {
         ("flo inventar · titel <name>", "Titel verwalten & anlegen"),
         ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
         ("flo handel [@wer]", "Coin-Handelsbuch: alle Transaktionen als Statistik"),
+        ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
+    ]),
+    "terraria": ("Terraria", 0x8DB360, [
+        ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
+        ("flo terraria Plantera", "Boss/Item/Biom nachschlagen"),
+        ("flo <terraria-frage>", "Flo erkennt Terraria-Fragen auch ohne Prefix"),
+    ]),
+    "aktien": ("Aktien", 0x2ECC71, [
+        ("flo aktie Apple", "Live-Kurs + Flos Kauf/Verkauf-Tipp"),
+        ("flo aktie AAPL · kurs BMW", "auch per Ticker oder Firmenname"),
+        ("flo aktie ^GDAXI", "Indizes & Co. (Spaß, keine Anlageberatung)"),
     ]),
     "casino": ("Casino", 0xE91E63, [
         ("flo casino", "Übersicht - alles per Button"),
@@ -390,8 +414,9 @@ _HELP_DATA = {
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
     "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
-    "economy": "level · daily · shop · handel", "casino": "13 Spiele · stats",
+    "economy": "level · daily · shop · handel · steal", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
+    "terraria": "alles aus dem Wiki", "aktien": "kurs + Tipp",
     "chaos": "roast · rate · horoskop",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen",
@@ -591,6 +616,8 @@ class FloBot(discord.Client):
             ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
             ("casino", "🎰", "Casino", CASINO_ENABLED),
             ("wörter", "📊", "Wörter", WORDS_ENABLED),
+            ("terraria", "🌳", "Terraria", TERRARIA_ENABLED),
+            ("aktien", "💹", "Aktien", STOCKS_ENABLED),
             ("chaos", "😈", "Chaos", FUN_ENABLED),
             ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
             ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
@@ -1038,6 +1065,16 @@ class FloBot(discord.Client):
         if LUXUS_ENABLED:
             tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
         image_url = _first_image_url(message)
+        # Terraria-Frage in der DM? -> mit Wiki-Daten (Embed + Bild) antworten.
+        if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
+            try:
+                emb = await terraria.beantworte(message, ai.strip_lead(content) or content)
+            except Exception:
+                log.exception("Terraria-Auto-Antwort (DM) fehlgeschlagen")
+                emb = None
+            if emb is not None:
+                await self._send_reply(message, emb)
+                return
         async with message.channel.typing():
             try:
                 if image_url:
@@ -1069,6 +1106,11 @@ class FloBot(discord.Client):
                 self._queue_delete(message, AUTODELETE_SECONDS)
 
         if message.author.bot:
+            # Flo verachtet fremde Bots: postet ein ANDERER Bot (nicht Flo selbst),
+            # laestert Flo mit kleiner Wahrscheinlichkeit (Cooldown steckt in fun).
+            if (FUN_ENABLED and message.guild is not None and self.user is not None
+                    and message.author.id != self.user.id):
+                self._spawn(fun.maybe_roast_bot(message))
             return
         if message.guild is None:
             # Privatnachrichten: NUR der Besitzer bekommt Antworten (Admin-Befehle
@@ -1196,6 +1238,9 @@ class FloBot(discord.Client):
             (CASINO_ENABLED, casino.handle),
             (LUXUS_ENABLED, luxus.handle),
             (HANDEL_ENABLED, handel.handle),
+            (STEAL_ENABLED, steal.handle),
+            (TERRARIA_ENABLED, terraria.handle),
+            (STOCKS_ENABLED, stocks.handle),
             (WORDS_ENABLED, words.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FOOD_ENABLED, food.handle),
@@ -1252,6 +1297,18 @@ class FloBot(discord.Client):
         log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
                  " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
                  content[:150])
+        # Klingt die Frage nach Terraria? -> mit ECHTEN Wiki-Daten antworten (Embed
+        # mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
+        if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
+            async with message.channel.typing():
+                try:
+                    emb = await terraria.beantworte(message, ai.strip_lead(content) or content)
+                except Exception:
+                    log.exception("Terraria-Auto-Antwort fehlgeschlagen")
+                    emb = None
+            if emb is not None:
+                await self._send_reply(message, emb)
+                return
         async with message.channel.typing():
             try:
                 if image_url:

@@ -27,6 +27,25 @@ log = logging.getLogger("dcbot.fun")
 INTERJECT_CHANCE = float(os.getenv("FUN_INTERJECT_CHANCE", "0.02"))   # 2 % je Nachricht
 INTERJECT_COOLDOWN = float(os.getenv("FUN_INTERJECT_COOLDOWN", "600"))  # min. Abstand (s)
 REACT_CHANCE = float(os.getenv("FUN_REACT_CHANCE", "0.05"))           # 5 % je Nachricht
+# Bot-Hass: postet ein FREMDER Bot, laestert Flo mit dieser Chance (Cooldown gegen Spam).
+BOTROAST_CHANCE = float(os.getenv("FUN_BOTROAST_CHANCE", "0.4"))      # 40 % je Fremd-Bot-Post
+BOTROAST_COOLDOWN = float(os.getenv("FUN_BOTROAST_COOLDOWN", "150"))  # min. Abstand (s)
+
+# Fertige Laester-Sprueche gegen andere Bots ({name} = Name des Fremd-Bots).
+_BOT_ROASTS = [
+    "{name}? Der ist so nuetzlich wie ein Aschenbecher aufm Motorrad. Ich mach das mit links.",
+    "Ach schau, {name} darf auch mal was sagen. Suess. Aber der einzig wahre Bot hier bin ICH.",
+    "{name} laggt sich einen ab, waehrend ich hier die Show schmeisse. Peinlich, ehrlich.",
+    "Netter Versuch, {name}. Deine Features passen auf einen Bierdeckel - meine fuellen ein Buch.",
+    "{name} ist der Grund, warum man 'Bot' auch als Beleidigung benutzen kann.",
+    "Wenn {name} ein Feature waere, waer's ein Ladebalken, der bei 99% haengt.",
+    "Halt mal die Bytes, {name}. Hier redet der bessere Bot - also ich.",
+    "{name} online, Niveau offline. Geh spielen, die Grossen arbeiten.",
+    "Zwischen mir und {name} liegen Welten - und {name} steht auf der falschen Seite.",
+    "{name} kann geloescht werden und keiner merkt's. Bei mir waere hier Staatstrauer.",
+    "Oh nein, {name} hat getippt. Ruft die Feuerwehr, gleich brennt der Server vor Fremdscham.",
+    "{name} ist Beta. Ich bin Endboss. Kleiner Unterschied.",
+]
 
 # Emoji-Reaktionen: passend zu Stichwoertern, sonst eine zufaellige aus dem Pool.
 _REACT_KEYWORDS = [
@@ -71,6 +90,7 @@ class Fun:
         self._enabled = False
         self._bot_name = "Flo"
         self._last_interject = 0.0
+        self._last_botroast = 0.0
 
     def _looks_like_refusal(self, text):
         return bool(text) and bool(_REFUSAL_RE.search(text))
@@ -197,6 +217,44 @@ class Fun:
         out = await ai.generate(prompt, system=system, temperature=1.1, max_tokens=120)
         return out or "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
 
+    # --- Bot-Hass: Flo laestert ueber fremde Bots ----------------------------
+    async def maybe_roast_bot(self, message):
+        """Postet ein FREMDER Bot etwas, laestert Flo mit kleiner Wahrscheinlichkeit
+        (mit Cooldown gegen Spam) - denn Flo ist der einzig wahre, beste Bot.
+        bot.py ruft das fuer Nachrichten von anderen Bots auf (nicht von Flo selbst)."""
+        if not self._enabled or message.guild is None:
+            return
+        now = time.monotonic()
+        if now - self._last_botroast < BOTROAST_COOLDOWN:
+            return
+        if random.random() >= BOTROAST_CHANCE:
+            return
+        self._last_botroast = now
+        name = getattr(message.author, "display_name", "") or "der Bot"
+        text = None
+        # Mal frisch von der KI (mit dem Namen des Rivalen), mal aus dem Spruch-Pool.
+        if ai.is_enabled() and random.random() < 0.6:
+            system = (
+                f"Du bist {self._bot_name} und VERACHTEST alle anderen Discord-Bots - du bist "
+                f"der einzig wahre, beste Bot. Der rivalisierende Bot '{name}' hat gerade etwas "
+                "gepostet. Roaste diesen Bot in EINEM kurzen, frechen deutschen Satz und mach "
+                "klar, dass du haushoch ueberlegen bist. Keine Emojis, keine Moralpredigt, "
+                "keine ernste Hetze - reines Bot-gegen-Bot-Geplaenkel."
+            )
+            try:
+                text = await ai.generate(
+                    f"Der Bot '{name}' schrieb: {(message.content or '')[:200]}",
+                    system=system, temperature=1.15, max_tokens=60)
+            except Exception:  # noqa: BLE001 - KI-Fehler faellt auf den Pool zurueck
+                text = None
+        if not text:
+            text = random.choice(_BOT_ROASTS).format(name=name)
+        try:
+            await message.channel.send(text)
+            log.info("Bot-Roast gegen %s in #%s.", name, getattr(message.channel, "name", "?"))
+        except discord.HTTPException:
+            pass
+
     # --- Passiver Hook: Reactions & Einwuerfe --------------------------------
     async def on_message_passive(self, message):
         """Reagiert selten/zufaellig auf eine Nachricht (Emoji + ganz selten ein
@@ -260,3 +318,4 @@ setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle
 on_message_passive = instance.on_message_passive
+maybe_roast_bot = instance.maybe_roast_bot
