@@ -44,7 +44,9 @@ HANDLED = object()
 
 
 MIN_BET = 1
-MAX_BET = int(os.getenv("CASINO_MAX_BET", "100000") or "100000")
+# Maximaleinsatz je Runde. Bewusst hoch (1 Milliarde = die Economy-Obergrenze),
+# damit auch dicke Konten voll all-in gehen koennen; per .env feinjustierbar.
+MAX_BET = int(os.getenv("CASINO_MAX_BET", "1000000000") or "1000000000")
 BJ_TIMEOUT = 180        # Sekunden, bis eine offene Blackjack-Runde verfaellt
 MINES_TIMEOUT = 180     # Sekunden, bis eine offene Mines-Runde auto-cashoutet
 
@@ -2548,15 +2550,16 @@ class CasinoHubView(discord.ui.View):
 #  Menue. (Discord laesst Formulare/Modals nur nach einem Klick zu, darum
 #  ist der Einstieg ein Button-Menue statt eines Pop-ups.)
 # =========================================================================
-_BET_CHOICES = (10, 25, 50, 100, 250, 500, 1000, 2500, 5000)
+_BET_CHOICES = (100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000)
 
 
 class _BetSelect(discord.ui.Select):
     """Dropdown fuer den Einsatz (feste Stufen + 'Alles')."""
 
     def __init__(self):
-        options = [discord.SelectOption(label=f"{v} {economy.COIN}", value=str(v), emoji="🪙")
-                   for v in _BET_CHOICES]
+        options = [discord.SelectOption(
+            label=f"{v:,}".replace(",", ".") + f" {economy.COIN}", value=str(v), emoji="🪙")
+            for v in _BET_CHOICES]
         options.append(discord.SelectOption(
             label="Alles", value="all", emoji="💰", description="Dein ganzer Kontostand"))
         super().__init__(placeholder="💰 Einsatz wählen …", min_values=1, max_values=1,
