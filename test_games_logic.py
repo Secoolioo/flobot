@@ -546,6 +546,14 @@ def test_payments_flow():
         # Nochmal pollen -> KEINE Doppel-Gutschrift.
         asyncio.run(p.poll_pending())
         assert economy.get_coins(5) == 100_000
+
+        # Owner-Uebersicht 'umsatz': zeigt den Kauf; Fremde bekommen None.
+        def hmsg(uid, content):
+            return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
+                                   author=SimpleNamespace(id=uid, display_name="Owner"))
+        emb = asyncio.run(payments.handle(hmsg(payments.OWNER_ID, "umsatz")))
+        assert emb is not None and not isinstance(emb, str)   # discord.Embed
+        assert asyncio.run(payments.handle(hmsg(999999, "umsatz"))) is None
     finally:
         (p._enabled, p._store, p._secret_key, p._stripe, p._notify) = alt
         economy.instance._store, economy.instance._enabled = alt_eco

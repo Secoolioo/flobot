@@ -34,6 +34,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime
 
 import aiohttp
 import discord
@@ -45,6 +46,9 @@ from store import JsonStore
 log = logging.getLogger("dcbot.payments")
 
 STRIPE_API = "https://api.stripe.com/v1"
+
+# Bot-Besitzer: nur er sieht die Verkaufsuebersicht ('flo umsatz').
+OWNER_ID = int(os.getenv("OWNER_ID", "1040135855710404659") or "0")
 
 # Sentinel: payments hat selbst geantwortet (interaktives Menue) -> bot.py schweigt.
 HANDLED = object()
@@ -284,12 +288,22 @@ class Payments:
         return False
 
     async def handle(self, message):
-        """Erkennt den Aufladen-Befehl und zeigt das Paket-Menue.
-        Rueckgabe: HANDLED (Menue gesendet) oder None (kein Aufladen-Befehl)."""
+        """Erkennt den Aufladen-Befehl (Paket-Menue) und - NUR fuer den Besitzer -
+        'umsatz'/'kaeufe' (Verkaufsuebersicht: wer hat wie viel gekauft).
+        Rueckgabe: HANDLED / Embed (Uebersicht) oder None (kein Befehl)."""
         if not self._enabled or message.guild is None:
             return None
         cmd = ai.strip_lead(message.content or "")
-        if not cmd or not self._is_command(cmd):
+        if not cmd:
+            return None
+        erstes = cmd.lower().split()[0].strip(".,;:!?")
+        # Owner-only: Verkaufsuebersicht - wer hat gekauft?
+        if erstes in ("umsatz", "käufe", "kaeufe", "verkäufe", "verkaeufe",
+                      "einnahmen", "sales"):
+            if message.author.id != OWNER_ID:
+                return None            # leise durchreichen (kein Owner)
+            return self._umsatz_embed()
+        if not self._is_command(cmd):
             return None
         emb = self._shop_embed()
         view = _KaufView(message.author.id)
@@ -315,6 +329,38 @@ class Payments:
                 inline=True)
         emb.set_footer(text="Coins sind reine Ingame-Währung ohne Auszahlungswert · "
                             "Zahlung sicher über Stripe")
+        return emb
+
+    def _umsatz_embed(self):
+        """Verkaufsuebersicht NUR fuer den Besitzer: wer hat wann wie viele Coins
+        fuer wie viel gekauft, plus Gesamtsummen und offene Bestellungen."""
+        orders = self._orders()
+        gekauft = [o for o in orders.values() if o.get("status") == "credited"]
+        offen = sum(1 for o in orders.values() if o.get("status") == "pending")
+        umsatz_cent = sum(int(o.get("cents", 0)) for o in gekauft)
+        coins_total = sum(int(o.get("coins", 0)) for o in gekauft)
+        emb = discord.Embed(
+            title="💳  Verkaufsübersicht",
+            description=("Noch keine bezahlten Käufe." if not gekauft else None),
+            color=discord.Color.gold())
+        emb.add_field(name="Käufe", value=str(len(gekauft)), inline=True)
+        emb.add_field(name="Umsatz", value=_euro(umsatz_cent), inline=True)
+        emb.add_field(name="Coins verkauft", value=_fmt(coins_total), inline=True)
+        if gekauft:
+            letzte = sorted(gekauft, key=lambda o: o.get("credited_at") or 0,
+                            reverse=True)[:12]
+            zeilen = []
+            for o in letzte:
+                stamp = o.get("credited_at") or o.get("created", 0)
+                try:
+                    wann = datetime.fromtimestamp(stamp).strftime("%d.%m. %H:%M")
+                except (OverflowError, OSError, ValueError):
+                    wann = "?"
+                # <@id> verlinkt den Discord-Account direkt (wer gekauft hat).
+                zeilen.append(f"<@{o.get('uid')}> · **{_fmt(o.get('coins', 0))}** "
+                              f"Coins · {_euro(o.get('cents', 0))} · {wann}")
+            emb.add_field(name="Letzte Käufe", value="\n".join(zeilen), inline=False)
+        emb.set_footer(text=f"{offen} offene Bestellung(en) · nur für dich sichtbar")
         return emb
 
     async def start_checkout(self, interaction, pkg_key):
