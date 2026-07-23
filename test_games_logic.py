@@ -1132,6 +1132,67 @@ def test_ai_tool_leak_sanitizer():
     assert a._sanitize_output("") == "" and a._sanitize_output(None) == ""
 
 
+def test_fun_dm_roast():
+    """Beleidigung im Chat -> Flo schickt (im Test sicher) eine DM-Retoure; harmlose
+    Nachrichten NICHT; Cooldown pro Person greift; Bots werden nicht angeschrieben."""
+    import fun
+    f = fun.instance
+    alt = (f._enabled, f._last_dmroast, dict(f._dm_cooldowns))
+    alt_mod = (fun.DMROAST_CHANCE, fun.DMROAST_GLOBAL_COOLDOWN, fun.DMROAST_USER_COOLDOWN)
+    f._enabled = True
+    f._last_dmroast = 0.0
+    f._dm_cooldowns = {}
+    fun.DMROAST_CHANCE = 1.0            # zum Testen sicher feuern
+    fun.DMROAST_GLOBAL_COOLDOWN = 0.0   # serverweiten Cooldown ausschalten
+    fun.DMROAST_USER_COOLDOWN = 0.0
+
+    sent = []
+
+    class FakeAuthor:
+        def __init__(self, uid, name="Poebler", is_bot=False):
+            self.id = uid
+            self.bot = is_bot
+            self.display_name = name
+
+        async def send(self, text):
+            sent.append((self.id, text))
+
+    def mk(author, content):
+        return SimpleNamespace(author=author, content=content,
+                               guild=SimpleNamespace(id=1))
+    try:
+        # Erkennung: Beleidigung ja, harmlos nein.
+        assert f.looks_offensive("du bist ein arschloch")
+        assert f.looks_offensive("halt dein maul")
+        assert not f.looks_offensive("schönen tag noch, alles gut")
+
+        # Beleidigung -> DM-Konter (nicht-leerer String an den Autor).
+        a = FakeAuthor(1)
+        asyncio.run(f.maybe_dm_roast(mk(a, "du hurensohn spinnst wohl")))
+        assert len(sent) == 1 and sent[0][0] == 1 and isinstance(sent[0][1], str) and sent[0][1]
+
+        # Harmlose Nachricht -> keine DM.
+        asyncio.run(f.maybe_dm_roast(mk(FakeAuthor(9), "wann fangen wir an zu zocken")))
+        assert len(sent) == 1
+
+        # Cooldown pro Person: gleicher Poebler nochmal -> nichts (trotz Chance 1.0).
+        fun.DMROAST_USER_COOLDOWN = 99999.0
+        f._dm_cooldowns = {}
+        b = FakeAuthor(2)
+        asyncio.run(f.maybe_dm_roast(mk(b, "fick dich du opfer")))
+        n1 = len(sent)
+        asyncio.run(f.maybe_dm_roast(mk(b, "arschloch nochmal")))
+        assert len(sent) == n1        # vom Personen-Cooldown geblockt
+
+        # Bots werden nicht privat angeschrieben.
+        f._dm_cooldowns = {}
+        asyncio.run(f.maybe_dm_roast(mk(FakeAuthor(3, is_bot=True), "du wichser")))
+        assert all(uid != 3 for uid, _ in sent)
+    finally:
+        f._enabled, f._last_dmroast, f._dm_cooldowns = alt
+        fun.DMROAST_CHANCE, fun.DMROAST_GLOBAL_COOLDOWN, fun.DMROAST_USER_COOLDOWN = alt_mod
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

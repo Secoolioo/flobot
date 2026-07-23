@@ -30,6 +30,38 @@ REACT_CHANCE = float(os.getenv("FUN_REACT_CHANCE", "0.05"))           # 5 % je N
 # Bot-Hass: postet ein FREMDER Bot, laestert Flo mit dieser Chance (Cooldown gegen Spam).
 BOTROAST_CHANCE = float(os.getenv("FUN_BOTROAST_CHANCE", "0.4"))      # 40 % je Fremd-Bot-Post
 BOTROAST_COOLDOWN = float(os.getenv("FUN_BOTROAST_COOLDOWN", "150"))  # min. Abstand (s)
+# DM-Konter: wer im Chat nur Beleidigungen/Muell raushaut, kriegt GANZ SELTEN von
+# Flo privat (DM) eine freche Retoure. Bewusst niedrige Chance + doppelter Cooldown
+# (pro Person UND serverweit), damit es nur selten passiert - alles per .env.
+DMROAST_CHANCE = float(os.getenv("FUN_DMROAST_CHANCE", "0.08"))              # 8 % je erkannter Beleidigung
+DMROAST_USER_COOLDOWN = float(os.getenv("FUN_DMROAST_USER_COOLDOWN", "21600"))    # 6 h pro Person
+DMROAST_GLOBAL_COOLDOWN = float(os.getenv("FUN_DMROAST_GLOBAL_COOLDOWN", "1800"))  # 30 min serverweit
+
+# Erkennt Beleidigungen / "random Scheiss" (deutsch, grob). Wortgrenzen, damit
+# normale Woerter nicht faelschlich anschlagen. Die niedrige Chance + Cooldowns
+# fangen die paar Fehlalarme locker ab.
+_INSULT_RE = re.compile(
+    r"\b("
+    r"schei(ss|ß)e?|kacke|kack|fuck|fick(en|st|t)?|gefickt|motherfucker|"
+    r"wichser|wixer|wixxer|arschloch|arsch|fotze|hurensohn|huso|hurentochter|"
+    r"hure|nutte|schlampe|missgeburt|spast(i)?|spacko|spacken|"
+    r"idiot|vollidiot|vollpfosten|trottel|depp|opfer|bastard|mistkerl|"
+    r"drecksau|dreckskerl|drecksack|penner|bitch|verpiss|"
+    r"maul|fresse|spinner|lappen|versager|noob|hurensöhne"
+    r")\b",
+    re.IGNORECASE,
+)
+# Fertige DM-Konter, falls die KI aus ist oder abblockt ({name} = Ziel).
+_DM_ROASTS = [
+    "Ey {name}, dein Wortschatz hat angerufen - er will sein Niveau zurück.",
+    "Sag mal {name}, muss man dumm sein oder ist das bei dir ein Hobby?",
+    "{name}, du laberst Müll, als würdest du dafür bezahlt. Spoiler: tust du nicht.",
+    "Nettes Geschreibsel, {name}. Hält dich wenigstens einer für witzig? Nein? Dachte ich mir.",
+    "{name}, wenn Blödheit Coins wären, wärst du reicher als das ganze Casino.",
+    "Hör zu {name}: erst denken, dann tippen. In deinem Fall: einfach mal nicht tippen.",
+    "{name}, du bist im Chat wie Fußpilz - keiner will dich, aber du bist trotzdem da.",
+    "Beeindruckend, {name}. So viel Unsinn und trotzdem keine einzige Pointe.",
+]
 
 # Fertige Laester-Sprueche gegen andere Bots ({name} = Name des Fremd-Bots).
 _BOT_ROASTS = [
@@ -91,6 +123,8 @@ class Fun:
         self._bot_name = "Flo"
         self._last_interject = 0.0
         self._last_botroast = 0.0
+        self._last_dmroast = 0.0       # serverweiter Cooldown fuer den DM-Konter
+        self._dm_cooldowns = {}        # uid -> letzter DM-Konter (pro Person)
 
     def _looks_like_refusal(self, text):
         return bool(text) and bool(_REFUSAL_RE.search(text))
@@ -255,6 +289,63 @@ class Fun:
         except discord.HTTPException:
             pass
 
+    # --- DM-Konter: Flo beleidigt Poebler privat zurueck ---------------------
+    def looks_offensive(self, content):
+        """Grobe Erkennung: enthaelt die Nachricht Beleidigungen / 'random Scheiss'?"""
+        return bool(content) and bool(_INSULT_RE.search(content))
+
+    async def maybe_dm_roast(self, message):
+        """Wer im Chat nur Beleidigungen/Muell raushaut, bekommt GANZ SELTEN von Flo
+        privat (DM) einen frechen Konter zurueck. Passiver Hook (bot.py, nebenher).
+        Dreifach gebremst: kleine Chance + Cooldown pro Person + serverweiter
+        Cooldown - damit es wirklich nur ab und zu passiert."""
+        if not self._enabled or message.guild is None:
+            return
+        author = message.author
+        if getattr(author, "bot", False):
+            return
+        content = message.content or ""
+        if not self.looks_offensive(content):
+            return
+        now = time.monotonic()
+        if now - self._last_dmroast < DMROAST_GLOBAL_COOLDOWN:
+            return
+        if now - self._dm_cooldowns.get(author.id, 0.0) < DMROAST_USER_COOLDOWN:
+            return
+        if random.random() >= DMROAST_CHANCE:
+            return
+        # Ab hier feuern wir -> beide Cooldowns setzen (auch wenn die DM scheitert,
+        # damit kein wiederholter Versuch am selben Poebler haengen bleibt).
+        self._last_dmroast = now
+        self._dm_cooldowns[author.id] = now
+        name = getattr(author, "display_name", "") or "du"
+        text = await self._dm_roast_text(name, content)
+        try:
+            await author.send(text)
+            log.info("DM-Konter an %s (Beleidigung im Chat).", name)
+        except (discord.Forbidden, discord.HTTPException):
+            pass  # DMs zu / nicht erreichbar -> einfach schlucken
+
+    async def _dm_roast_text(self, name, content):
+        """Baut den DM-Konter: frisch von der KI, sonst ein Fertig-Spruch."""
+        if ai.is_enabled():
+            system = (
+                f"Du bist {self._bot_name}, ein frecher Discord-Bot mit losem Mundwerk. "
+                f"{name} hat gerade im Server-Chat nur Beleidigungen oder Muell rausgehauen. "
+                "Schreib ihm PRIVAT genau EINEN kurzen, frechen, schlagfertigen deutschen "
+                "Konter, der ihn zurueck aufzieht - so wie Kumpels sich derbe anmachen. "
+                "KEINE Slurs, kein echtes Hate-Speech, keine Moralpredigt, keine Emojis - "
+                "nur trockener, frecher Spott."
+            )
+            try:
+                out = await ai.generate(f"{name} schrieb: {content[:200]}",
+                                        system=system, temperature=1.15, max_tokens=60)
+            except Exception:  # noqa: BLE001 - KI-Fehler faellt auf den Pool zurueck
+                out = None
+            if out and not self._looks_like_refusal(out):
+                return out.strip()
+        return random.choice(_DM_ROASTS).format(name=name)
+
     # --- Passiver Hook: Reactions & Einwuerfe --------------------------------
     async def on_message_passive(self, message):
         """Reagiert selten/zufaellig auf eine Nachricht (Emoji + ganz selten ein
@@ -262,6 +353,10 @@ class Fun:
         if not self._enabled or message.guild is None:
             return
         content = message.content or ""
+
+        # 0) Ganz selten: wer nur Beleidigungen/Muell in den Chat rotzt, kriegt von
+        #    Flo privat (DM) einen frechen Konter zurueck (Chance + Cooldowns intern).
+        await self.maybe_dm_roast(message)
 
         # 1) Auto-Reaction (auch auf an Flo gerichtete Nachrichten ok).
         if random.random() < REACT_CHANCE:
@@ -319,3 +414,5 @@ is_enabled = instance.is_enabled
 handle = instance.handle
 on_message_passive = instance.on_message_passive
 maybe_roast_bot = instance.maybe_roast_bot
+maybe_dm_roast = instance.maybe_dm_roast
+looks_offensive = instance.looks_offensive
