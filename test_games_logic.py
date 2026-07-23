@@ -1000,9 +1000,34 @@ def test_merchant_shop_und_trade():
         assert asyncio.run(m.handle(hmsg(1, "wie gehts"))) is None
         m._store.data["departed"] = True
         assert isinstance(asyncio.run(m.handle(hmsg(1, "haendler"))), str)
+
+        # _roll_stock ist KRASSER als der Shop: nur mythisch/legendaer/exklusiv,
+        # immer mind. ein Highlight; Tausch-Belohnungen sind legendaer/exklusiv.
+        for _ in range(25):
+            m._roll_stock()
+            stock = m._state()["stock"]
+            assert stock and all(e["rarity"] in ("mythisch", "legendary", "exklusiv")
+                                 for e in stock)
+            assert any(e["rarity"] in ("legendary", "exklusiv") for e in stock)
+            for t in m._state()["trades"]:
+                assert t["reward_rarity"] in ("legendary", "exklusiv")
     finally:
         m._store, m._enabled = alt
         restore_eco()
+
+
+# --- Titel: die neue EXKLUSIV-Stufe (nur beim Haendler) ------------------------
+def test_titles_exklusiv_tier():
+    """'exklusiv' ist die hoechste Stufe und taucht NIE im normalen Shop/Pool auf."""
+    import titles
+    assert "exklusiv" in titles.RARITY
+    assert titles.RANK["exklusiv"] == max(titles.RANK.values())   # hoechster Rang
+    assert titles.RARITY["exklusiv"]["shop_weight"] == 0
+    assert titles.counts().get("exklusiv", 0) == 0                # kein Pool-Titel
+    assert all(e["rarity"] != "exklusiv" for e in titles.random_titles(40))
+    # rarity_of vergibt die Stufe grundsaetzlich nie.
+    assert all(titles.rarity_of(t) != "exklusiv"
+               for t in ("Goldener König", "Wilder Wolf", "Titan des Chaos"))
 
 
 # --- Monats-Lotto --------------------------------------------------------------

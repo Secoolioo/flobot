@@ -51,14 +51,30 @@ TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 # Frühester / spätester Zeitpunkt (Ortszeit-Stunde), zu dem er auftauchen kann.
 APPEAR_EARLIEST_HOUR = 9
 APPEAR_LATEST_HOUR = 22
-# Wie lange er bleibt, bevor er weiterzieht (Stunden).
-PRESENT_HOURS = float(os.getenv("MERCHANT_PRESENT_HOURS", "3") or "3")
+# Wie lange er bleibt, bevor er weiterzieht (Stunden). Standard: 1 STUNDE - danach
+# ist er weg und man muss auf morgen warten.
+PRESENT_HOURS = float(os.getenv("MERCHANT_PRESENT_HOURS", "1") or "1")
 
 # --- Der exklusive Titel-Katalog des Haendlers ------------------------------
-# Nur HIER erhaeltlich. price = fairer Sonderpreis. Jeder Titel hat eine feste
-# Seltenheit (economy schreibt sie beim Kauf ins Inventar -> Farb-Rolle).
+# BEWUSST krasser als der normale Flo-Shop: KEIN 'normal'/'selten'-Kram, nur
+# mythisch, legendaer und die brandneue Stufe EXKLUSIV (🔱) - die es im Shop
+# NIEMALS gibt. price = fairer Sonderpreis. Jeder Titel hat eine feste Seltenheit
+# (economy schreibt sie beim Kauf ins Inventar -> passende Farb-Rolle).
 _KATALOG = [
-    # --- Legendär (👑 gold) - die Kronjuwelen ---
+    # --- EXKLUSIV (🔱) - gibt's NUR hier, hoeher als Legendaer ---
+    {"id": "haendler:weltenherrscher", "text": "Weltenherrscher",
+     "label": "🔱 Weltenherrscher", "rarity": "exklusiv", "price": 120000},
+    {"id": "haendler:gottkaiser", "text": "Gottkaiser",
+     "label": "👑 Gottkaiser", "rarity": "exklusiv", "price": 110000},
+    {"id": "haendler:der_eine", "text": "Der Auserwählte",
+     "label": "✴️ Der Auserwählte", "rarity": "exklusiv", "price": 95000},
+    {"id": "haendler:sternengott", "text": "Sternengott",
+     "label": "🌌 Sternengott", "rarity": "exklusiv", "price": 100000},
+    {"id": "haendler:ewiger", "text": "Der Ewige",
+     "label": "♾️ Der Ewige", "rarity": "exklusiv", "price": 130000},
+    {"id": "haendler:drachenkoenig", "text": "Drachenkönig",
+     "label": "🐲 Drachenkönig", "rarity": "exklusiv", "price": 105000},
+    # --- Legendär (🟡 gold) - die Kronjuwelen ---
     {"id": "haendler:drachenlord", "text": "Drachenlord",
      "label": "🐉 Drachenlord", "rarity": "legendary", "price": 45000},
     {"id": "haendler:schattenkaiser", "text": "Schattenkaiser",
@@ -71,7 +87,7 @@ _KATALOG = [
      "label": "💀 Der Unsterbliche", "rarity": "legendary", "price": 50000},
     {"id": "haendler:sturmbaendiger", "text": "Sturmbändiger",
      "label": "⚡ Sturmbändiger", "rarity": "legendary", "price": 38000},
-    # --- Mythisch (🟣 lila) ---
+    # --- Mythisch (🟣 lila) - der guenstigere Einstieg ---
     {"id": "haendler:sternenjaeger", "text": "Sternenjäger",
      "label": "🌠 Sternenjäger", "rarity": "mythisch", "price": 15000},
     {"id": "haendler:nebelwandler", "text": "Nebelwandler",
@@ -84,25 +100,16 @@ _KATALOG = [
      "label": "❄️ Frostfürst", "rarity": "mythisch", "price": 11000},
     {"id": "haendler:phoenix", "text": "Phönix",
      "label": "🦅 Phönix", "rarity": "mythisch", "price": 16000},
-    # --- Selten (🔵 blau) - für den schmaleren Geldbeutel ---
-    {"id": "haendler:schatzsucher", "text": "Schatzsucher",
-     "label": "🧭 Schatzsucher", "rarity": "selten", "price": 5000},
-    {"id": "haendler:gluecksritter", "text": "Glücksritter",
-     "label": "🍀 Glücksritter", "rarity": "selten", "price": 4500},
-    {"id": "haendler:wolfsherz", "text": "Wolfsherz",
-     "label": "🐺 Wolfsherz", "rarity": "selten", "price": 6000},
-    {"id": "haendler:donnerfaust", "text": "Donnerfaust",
-     "label": "👊 Donnerfaust", "rarity": "selten", "price": 5500},
 ]
 _KATALOG_BY_ID = {e["id"]: e for e in _KATALOG}
 
 # --- Freche Begrüßungs-/Abschieds-Sprüche (random.choice) --------------------
 _ARRIVE_LINES = [
     "Ein Karren rumpelt heran… **der fahrende Händler** hat seinen Stand aufgeschlagen! 🛒",
-    "🔔 Glöckchen-Klingeln! **Der fahrende Händler** ist da - aber nicht lange.",
+    "🔔 Glöckchen-Klingeln! **Der fahrende Händler** ist da - und nur **eine Stunde**!",
     "Aus dem Nebel tritt **der fahrende Händler** mit prall gefüllter Truhe. 🧳",
-    "**Der fahrende Händler** ist eingetroffen! Seltene Ware, faire Preise, kurze Zeit. ⏳",
-    "Hört, hört! **Der fahrende Händler** macht Halt und packt seine Schätze aus. 💼",
+    "**Der fahrende Händler** ist eingetroffen! Ware, die's im Shop NIE gibt - **1 Stunde**. ⏳",
+    "Hört, hört! **Der fahrende Händler** packt Schätze aus, die kein Shop führt. 💼",
 ]
 _LEAVE_LINES = [
     "Der Händler packt zusammen und zieht weiter. Bis zum nächsten Mal! 🐫",
@@ -111,10 +118,10 @@ _LEAVE_LINES = [
     "Der Karren rollt davon - **der fahrende Händler** verschwindet im Nebel. 🌫️",
 ]
 _HAGGLE = [
-    "Nur heute! Solche Preise siehst du so schnell nicht wieder.",
-    "Handverlesene Ware - im normalen Shop kriegst du die nie.",
-    "Kauf jetzt oder ärgere dich morgen. Ich bin dann längst weg.",
-    "Für dich, mein Freund, ein ganz besonderer Preis.",
+    "Nur diese eine Stunde! Solche Ware siehst du so schnell nicht wieder.",
+    "Handverlesen und KRASSER als alles im Shop - im Laden kriegst du das nie.",
+    "Kauf jetzt oder ärgere dich morgen. In einer Stunde bin ich weg.",
+    "Titel, die kein normaler Shop führt - bis hoch zu EXKLUSIV. 🔱",
 ]
 
 
@@ -212,18 +219,19 @@ class Merchant:
         return True
 
     def _roll_stock(self):
-        """Wuerfelt 3 Verkaufs-Titel (seltenheits-gewichtet, Richtung 'krass') und
-        1-2 Tausch-Deals. Schreibt beides in den Zustand."""
+        """Wuerfelt 3 Verkaufs-Titel (nur mythisch/legendaer/EXKLUSIV - krasser als
+        der Shop) und 1-2 Tausch-Deals. Es ist IMMER mindestens ein legendaerer oder
+        exklusiver Brocken dabei. Schreibt beides in den Zustand."""
         st = self._state()
-        # Verkauf: gewichtet - der Haendler fuehrt bewusst mehr edles Zeug als der
-        # normale Shop, aber nicht NUR Legendaeres.
-        gewicht = {"selten": 3, "mythisch": 3, "legendary": 2}
+        # Verkauf: gewichtet Richtung 'krass'. Mythisch als bezahlbarer Einstieg,
+        # dazu fast immer Legendaeres und mit etwas Glueck das EXKLUSIVE Top-Zeug.
+        gewicht = {"mythisch": 4, "legendary": 3, "exklusiv": 2}
         pool = list(_KATALOG)
         gewichte = [gewicht.get(e["rarity"], 1) for e in pool]
         stock = []
         gewaehlt_ids = set()
         versuche = 0
-        while len(stock) < 3 and versuche < 60:
+        while len(stock) < 3 and versuche < 80:
             versuche += 1
             e = random.choices(pool, weights=gewichte, k=1)[0]
             if e["id"] in gewaehlt_ids:
@@ -233,22 +241,33 @@ class Merchant:
             # Manche Angebote sind limitiert (Minecraft-Flair: "nur X Stück!").
             eintrag["limit"] = random.choice([0, 0, 1, 2, 3])  # 0 = unbegrenzt
             stock.append(eintrag)
+        # Garantie: mindestens EIN Highlight (legendaer/exklusiv) im Angebot.
+        if not any(e["rarity"] in ("legendary", "exklusiv") for e in stock):
+            highlights = [e for e in _KATALOG
+                          if e["rarity"] in ("legendary", "exklusiv")
+                          and e["id"] not in gewaehlt_ids]
+            if highlights and stock:
+                e = dict(random.choice(highlights))
+                e["limit"] = random.choice([0, 1, 2])
+                gewaehlt_ids.discard(stock[-1]["id"])
+                gewaehlt_ids.add(e["id"])
+                stock[-1] = e
 
         # Tausch-Deals: gib einen Titel her (Mindest-Seltenheit) + Aufzahlung ->
         # bekomm einen krasseren. Belohnung != bereits im Verkauf (mehr Abwechslung).
         trades = []
         rewards = [e for e in _KATALOG
-                   if e["rarity"] in ("mythisch", "legendary")
+                   if e["rarity"] in ("legendary", "exklusiv")
                    and e["id"] not in gewaehlt_ids]
         random.shuffle(rewards)
         anzahl_trades = random.choice([1, 2])
         for reward in rewards[:anzahl_trades]:
-            if reward["rarity"] == "legendary":
+            if reward["rarity"] == "exklusiv":
+                need = "legendary"
+                aufzahlung = random.choice([20000, 25000, 30000, 40000])
+            else:  # legendary
                 need = "mythisch"
                 aufzahlung = random.choice([8000, 10000, 12000, 15000])
-            else:  # mythisch
-                need = "selten"
-                aufzahlung = random.choice([2500, 3000, 4000, 5000])
             trades.append({
                 "id": "trade:" + reward["id"],
                 "need_rarity": need,

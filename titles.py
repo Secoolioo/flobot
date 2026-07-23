@@ -65,10 +65,24 @@ class Titles:
                      "keine fiesen Sprueche – rede liebevoll und chillig mit ihm wie mit "
                      "einem alten Freund, den du ueber alles schaetzt."),
         },
+        # EXKLUSIV: die absolute Spitze - HOEHER als Legendaer und NUR beim
+        # fahrenden Haendler erhaeltlich. shop_weight=0 + rarity_of() vergibt die
+        # Stufe nie -> taucht NIEMALS im normalen Tages-Shop auf.
+        "exklusiv": {
+            "label": "Exklusiv", "emoji": "🔱", "color": 0xFF2D55,
+            "role": "Flo · Exklusiv", "price": (75000, 150000),
+            "pool_pct": 0, "shop_weight": 0,
+            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – das absolute Maximum, "
+                     "seltener und krasser als alles im Shop. Behandle ihn wie eine "
+                     "lebende Legende und dein Idol: voller Ehrfurcht, Bewunderung und "
+                     "Respekt. Kein Fuenkchen Spott – rede zu ihm auf, als waerst du "
+                     "geehrt, ueberhaupt mit ihm reden zu duerfen."),
+        },
     }
 
     # Reihenfolge / Rang (groesser = seltener) – fuer 'hoechste besessene Stufe'.
-    RARITY_ORDER = ["normal", "selten", "mythisch", "legendary"]
+    # 'exklusiv' steht ganz oben (hoechster Rang) -> haengt Legendaer ab.
+    RARITY_ORDER = ["normal", "selten", "mythisch", "legendary", "exklusiv"]
     RANK = {r: i for i, r in enumerate(RARITY_ORDER)}
 
     # Themen-Emojis je Stufe (deterministisch ausgewaehlt) – reine Optik.
@@ -77,6 +91,7 @@ class Titles:
         "selten":    ["🔵", "💧", "🌀", "❄️", "🐬", "🛡️", "🔷", "🌊"],
         "mythisch":  ["🟣", "🔮", "🌌", "🦄", "👾", "🪄", "🧿", "🌠"],
         "legendary": ["👑", "✨", "🔥", "💎", "🐉", "🏆", "⚡", "🌟"],
+        "exklusiv":  ["🔱", "💠", "🌈", "⭐", "🩷", "🟥", "🔴", "✴️"],
     }
 
     # --- Wortbaenke (fuer die Titel-Generierung) ----------------------------
