@@ -471,6 +471,86 @@ def test_steal_heist():
         economy.instance._store, economy.instance._enabled = alt_eco
 
 
+# --- Payments (Coins mit echtem Geld) ------------------------------------------
+def test_payments_flow():
+    """Befehlserkennung, Bestellung anlegen, Polling schreibt bei 'bezahlt' EINMAL
+    gut (keine Doppel-Gutschrift), und alles ist aus, solange kein Key da ist."""
+    import payments
+
+    class FakeStore:
+        def __init__(self, data):
+            self.data = data
+
+        async def save(self):
+            pass
+
+    # economy mit Fake-Store aktivieren.
+    alt_eco = (economy.instance._store, economy.instance._enabled)
+    economy.instance._store = FakeStore({"users": {}})
+    economy.instance._enabled = True
+    economy.instance._profile(5)["coins"] = 0
+
+    p = payments.instance
+    alt = (p._enabled, p._store, p._secret_key, p._stripe, p._notify)
+    p._enabled = True
+    p._secret_key = "sk_test_x"
+    p._store = FakeStore({"orders": {}})
+
+    async def fake_notify(uid, coins, neu):
+        return None
+    p._notify = fake_notify
+
+    # Stripe-Antworten steuerbar machen.
+    box = {"paid": False}
+
+    async def fake_stripe(method, path, fields=None):
+        if method == "POST" and path == "checkout/sessions":
+            return {"id": "cs_test_1", "url": "https://checkout.stripe.com/pay/cs_test_1",
+                    "payment_status": "unpaid"}
+        if method == "GET" and path.startswith("checkout/sessions/"):
+            return {"payment_status": "paid" if box["paid"] else "unpaid",
+                    "status": "complete" if box["paid"] else "open"}
+        return None
+    p._stripe = fake_stripe
+
+    try:
+        # Befehlserkennung: aufladen/echtgeld/coins kaufen JA; coins allein NEIN.
+        assert p._is_command("aufladen")
+        assert p._is_command("echtgeld")
+        assert p._is_command("coins kaufen")
+        assert not p._is_command("coins")           # -> economy zeigt Kontostand
+        assert not p._is_command("wie gehts")
+        # Paket-Mathematik.
+        assert payments._fmt(2_000_000) == "2.000.000"
+        assert payments._euro(499) == "4,99 €"
+        assert "bundle" in payments.packages()
+
+        # Bestellung anlegen -> pending gemerkt, URL zurueck.
+        url = asyncio.run(p.create_checkout(5, "Tester", "bundle"))
+        assert url and "checkout.stripe.com" in url
+        orders = p._store.data["orders"]
+        assert "cs_test_1" in orders and orders["cs_test_1"]["status"] == "pending"
+        assert orders["cs_test_1"]["coins"] == 100_000
+
+        # Poll, solange NICHT bezahlt -> keine Gutschrift.
+        asyncio.run(p.poll_pending())
+        assert economy.get_coins(5) == 0
+        assert orders["cs_test_1"]["status"] == "pending"
+
+        # Jetzt bezahlt -> genau 100.000 Coins gutgeschrieben, Status 'credited'.
+        box["paid"] = True
+        asyncio.run(p.poll_pending())
+        assert economy.get_coins(5) == 100_000
+        assert orders["cs_test_1"]["status"] == "credited"
+
+        # Nochmal pollen -> KEINE Doppel-Gutschrift.
+        asyncio.run(p.poll_pending())
+        assert economy.get_coins(5) == 100_000
+    finally:
+        (p._enabled, p._store, p._secret_key, p._stripe, p._notify) = alt
+        economy.instance._store, economy.instance._enabled = alt_eco
+
+
 # --- Stocks (Aktienkurse) ------------------------------------------------------
 def test_stocks_helpers():
     import stocks

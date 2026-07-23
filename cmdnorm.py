@@ -68,6 +68,8 @@ class CmdNorm:
         "trades",
         # steal (Coin-Raub)
         "steal", "klau", "klauen", "raub", "rauben", "heist",
+        # payments (Coins mit echtem Geld aufladen)
+        "aufladen", "topup", "echtgeld", "coinshop",
         # stocks (Aktienkurse)
         "aktie", "aktien", "stock", "stocks", "kurs", "ticker", "börse",
         "boerse", "share",

@@ -35,6 +35,7 @@ import luxus
 import media
 import moderation
 import music
+import payments
 import render
 import schedule_logic
 import steal
@@ -156,10 +157,16 @@ STOCKS_ENABLED = stocks.setup()
 # Terraria-Wiki ('Flo terraria <frage>'): beantwortet JEDE Terraria-Frage mit
 # echten Wiki-Daten + Bildern (MediaWiki-API), auto-erkennt Terraria-Fragen.
 TERRARIA_ENABLED = terraria.setup()
+# Coin-Shop ('Flo aufladen'): echtes Geld -> Flo Coins ueber Stripe (Apple Pay,
+# Google Pay, Karte, PayPal). Polling-Modell (kein offener Port). Standardmaessig
+# AUS - aktiv nur mit STRIPE_SECRET_KEY in der .env.
+PAYMENTS_ENABLED = payments.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
 EVENT_INTERVAL_SECONDS = float(os.getenv("GAMES_EVENT_INTERVAL", "300"))
+# Takt, in dem der Coin-Shop offene Stripe-Bestellungen auf 'bezahlt' prueft.
+PAYMENTS_POLL_SECONDS = float(os.getenv("PAYMENTS_POLL_SECONDS", "25"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -187,7 +194,7 @@ _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
-     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED]
+     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED, PAYMENTS_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -353,6 +360,7 @@ _HELP_DATA = {
         ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
         ("flo handel [@wer]", "Coin-Handelsbuch: alle Transaktionen als Statistik"),
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
+        ("flo aufladen", "Coins mit echtem Geld kaufen (Apple Pay/PayPal)"),
     ]),
     "terraria": ("Terraria", 0x8DB360, [
         ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
@@ -809,6 +817,15 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Event-Loop Fehler - laeuft weiter")
 
+    @tasks.loop(seconds=PAYMENTS_POLL_SECONDS)
+    async def payments_poll_loop(self):
+        """Fragt bei Stripe ab, ob offene Coin-Kaeufe bezahlt sind, und schreibt die
+        Coins gut. No-op, wenn nichts offen ist (siehe payments.poll_pending)."""
+        try:
+            await payments.poll_pending()
+        except Exception:
+            log.exception("Payments-Poll-Loop Fehler - laeuft weiter")
+
     @tasks.loop(time=SHOP_REFRESH_TIME)
     async def shop_refresh_loop(self):
         """Wuerfelt jede Nacht um 2 Uhr die Tagesauswahl des Flo Shops neu (random,
@@ -1243,6 +1260,8 @@ class FloBot(discord.Client):
             (TERRARIA_ENABLED, terraria.handle),
             (STOCKS_ENABLED, stocks.handle),
             (WORDS_ENABLED, words.handle),
+            # payments VOR economy: 'coins kaufen' -> Aufladen, 'coins' allein -> economy.
+            (PAYMENTS_ENABLED, payments.handle),
             (ECONOMY_ENABLED, economy.handle),
             (FOOD_ENABLED, food.handle),
             (MEDIA_ENABLED, media.handle),
@@ -1391,6 +1410,8 @@ class FloBot(discord.Client):
             self.voice_heal_loop.start()
         if GAMES_ENABLED and not self.event_loop.is_running():
             self.event_loop.start()
+        if PAYMENTS_ENABLED and not self.payments_poll_loop.is_running():
+            self.payments_poll_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_sweep_loop.is_running():
             self.autodelete_sweep_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_batch_loop.is_running():
