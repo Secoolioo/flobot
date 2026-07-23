@@ -355,6 +355,64 @@ class Economy:
         rar = self._profile(user_id).get("title_rarity") or ""
         return titles.RARITY.get(rar, {}).get("tone", "") if rar else ""
 
+    # --- Titel-API fuer andere Module (Haendler, Lotto, Trades) ---------------
+    # Diese Helfer arbeiten nur auf den Daten. Aufrufer, die eine Rolle
+    # aktualisieren oder speichern wollen, rufen danach sync_role(member) und
+    # flush() selbst auf (beide sind async).
+    def owns_title(self, user_id, text):
+        """True, wenn der Nutzer den Titel mit dieser internen 'text'-ID besitzt."""
+        if not self._enabled:
+            return False
+        return any(o.get("text") == text
+                   for o in self._owned_list(self._profile(user_id)))
+
+    def list_titles(self, user_id):
+        """Inventar als frische Liste von Dicts (text/label/rarity). Kopie, damit
+        Aufrufer nicht versehentlich am gespeicherten Profil herumschrauben."""
+        if not self._enabled:
+            return []
+        return [dict(o) for o in self._owned_list(self._profile(user_id))]
+
+    def grant_title(self, user_id, text, label, rarity, wear=False):
+        """Legt einen Titel ins Inventar (falls noch nicht vorhanden). Optional wird
+        er direkt getragen. Speichert NICHT selbst und synct KEINE Rolle - der
+        Aufrufer macht danach sync_role()/flush(). Rueckgabe: True bei neuem Titel."""
+        if not self._enabled:
+            return False
+        prof = self._profile(user_id)
+        owned = self._owned_list(prof)
+        rarity = rarity if rarity in titles.RARITY else "normal"
+        existing = next((o for o in owned if o.get("text") == text), None)
+        neu = existing is None
+        if neu:
+            owned.append({"text": text, "label": label, "rarity": rarity})
+        if wear:
+            prof["title"] = label
+            prof["title_rarity"] = rarity
+        return neu
+
+    def remove_title(self, user_id, text):
+        """Nimmt einen Titel wieder aus dem Inventar (z. B. beim Traden). War es der
+        getragene Titel, wird er abgelegt. Speichert/synct NICHT selbst. Rueckgabe:
+        das entfernte Titel-Dict oder None, wenn nicht besessen."""
+        if not self._enabled:
+            return None
+        prof = self._profile(user_id)
+        owned = self._owned_list(prof)
+        entry = next((o for o in owned if o.get("text") == text), None)
+        if entry is None:
+            return None
+        owned.remove(entry)
+        if prof.get("title") == entry.get("label"):
+            prof["title"] = ""
+            prof["title_rarity"] = ""
+        return entry
+
+    async def sync_role(self, member):
+        """Oeffentlicher Wrapper: gibt dem Mitglied genau die Rolle seiner hoechsten
+        besessenen Seltenheit (andere Module rufen das nach grant/remove auf)."""
+        await self._sync_role(member)
+
     # --- Taeglicher Shop -----------------------------------------------------
     def _shop_state(self):
         assert self._store is not None
@@ -1221,6 +1279,11 @@ display_name_of = instance.display_name_of
 get_title = instance.get_title
 get_user_rarity = instance.get_user_rarity
 get_tone = instance.get_tone
+owns_title = instance.owns_title
+list_titles = instance.list_titles
+grant_title = instance.grant_title
+remove_title = instance.remove_title
+sync_role = instance.sync_role
 refresh_shop = instance.refresh_shop
 refresh_shop_async = instance.refresh_shop_async
 get_shop_items = instance.get_shop_items

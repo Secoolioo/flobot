@@ -153,6 +153,12 @@ def test_cmdnorm_neue_befehle():
     # Exakte neue Befehle bleiben unveraendert (None = nichts zu korrigieren).
     assert cmdnorm.normalize("wörter pizza") is None
     assert cmdnorm.normalize("mines 50 3") is None
+    # Haendler & Lotto sind bekannte Befehle (kein Umschreiben).
+    for w in ("haendler", "händler", "merchant", "lotto", "jackpot"):
+        assert w in cmdnorm.KNOWN, w
+        assert cmdnorm.normalize(f"{w} test") is None
+    # Tippfehler auf die neuen Befehle wird korrigiert.
+    assert cmdnorm.normalize("lottoo kauf 5") == "lotto kauf 5"
 
 
 # --- Admin-Befehle (nur Besitzer) -----------------------------------------------------
@@ -968,6 +974,194 @@ def test_casino_bilanz_gewonnen_verloren():
         assert buf.getvalue()[:8] == b"\x89PNG\r\n\x1a\n"
     finally:
         casino.instance._stats, casino.instance._enabled = alt_stats, alt_enabled
+
+
+class _FakeStore:
+    """Minimaler JsonStore-Ersatz fuer die Tests (kein Datei-IO)."""
+
+    def __init__(self, data):
+        self.data = data
+
+    async def save(self):
+        pass
+
+
+def _with_economy(coins_by_uid=None):
+    """Aktiviert economy mit Fake-Store; gibt (restore_fn) zurueck."""
+    alt = (economy.instance._store, economy.instance._enabled)
+    economy.instance._store = _FakeStore({"users": {}})
+    economy.instance._enabled = True
+    for uid, coins in (coins_by_uid or {}).items():
+        economy.instance._profile(uid)["coins"] = coins
+
+    def restore():
+        economy.instance._store, economy.instance._enabled = alt
+    return restore
+
+
+# --- economy Titel-API (grant/remove/list/owns) --------------------------------
+def test_economy_title_helpers():
+    restore = _with_economy({1: 0})
+    try:
+        assert not economy.owns_title(1, "Held")
+        neu = economy.grant_title(1, "Held", "🛡️ Held", "selten", wear=True)
+        assert neu is True
+        assert economy.owns_title(1, "Held")
+        assert economy.get_title(1) == "🛡️ Held"
+        # Zweites grant_title fuer denselben Titel -> kein neuer Eintrag.
+        assert economy.grant_title(1, "Held", "🛡️ Held", "selten") is False
+        assert len(economy.list_titles(1)) == 1
+        # remove_title nimmt ihn raus und legt den getragenen Titel ab.
+        entry = economy.remove_title(1, "Held")
+        assert entry is not None and entry["text"] == "Held"
+        assert not economy.owns_title(1, "Held")
+        assert economy.get_title(1) == ""
+        # remove_title auf nicht-besessenen Titel -> None.
+        assert economy.remove_title(1, "GibtsNicht") is None
+        # Unbekannte Rarity faellt auf 'normal' zurueck.
+        economy.grant_title(1, "X", "X", "quatsch")
+        assert economy.list_titles(1)[0]["rarity"] == "normal"
+    finally:
+        restore()
+
+
+# --- Fahrender Haendler --------------------------------------------------------
+def test_merchant_shop_und_trade():
+    """Kaufen (inkl. limitiert/ausverkauft/zu teuer/schon besessen), Tauschen
+    (Einsatz raus, Belohnung rein), eligible_gives, is_present & closed-Text."""
+    import merchant
+
+    restore_eco = _with_economy({1: 6000, 2: 60000, 3: 60000, 4: 5000})
+    m = merchant.instance
+    alt = (m._store, m._enabled)
+    m._enabled = True
+    stock = [
+        {"id": "haendler:schatzsucher", "text": "Schatzsucher",
+         "label": "🧭 Schatzsucher", "rarity": "selten", "price": 5000, "limit": 0},
+        {"id": "haendler:drachenlord", "text": "Drachenlord",
+         "label": "🐉 Drachenlord", "rarity": "legendary", "price": 45000, "limit": 1},
+    ]
+    trades = [{
+        "id": "trade:haendler:sternenjaeger", "need_rarity": "selten",
+        "surcharge": 3000, "reward_id": "haendler:sternenjaeger",
+        "reward_text": "Sternenjäger", "reward_label": "🌠 Sternenjäger",
+        "reward_rarity": "mythisch"}]
+    m._store = _FakeStore({"arrived": True, "departed": False, "depart_at": 9e18,
+                           "stock": stock, "trades": trades, "sold": {}})
+
+    def member(uid, name="M"):
+        return SimpleNamespace(id=uid, display_name=name, guild=None)
+    try:
+        assert m.is_present() is True
+        # Kauf: genug Coins -> Titel im Inventar, Coins abgezogen.
+        r = asyncio.run(m.buy(member(1), "haendler:schatzsucher"))
+        assert "Gekauft" in r
+        assert economy.get_coins(1) == 1000
+        assert economy.owns_title(1, "Schatzsucher")
+        # Nochmal derselbe -> schon besessen, keine erneute Abbuchung.
+        r = asyncio.run(m.buy(member(1), "haendler:schatzsucher"))
+        assert "schon" in r.lower() and economy.get_coins(1) == 1000
+        # Zu teuer.
+        assert "teuer" in asyncio.run(m.buy(member(4), "haendler:drachenlord")).lower()
+        # Limitierte Ware: erster kauft, zweiter guckt in die Roehre.
+        r = asyncio.run(m.buy(member(2), "haendler:drachenlord"))
+        assert "Gekauft" in r and economy.get_coins(2) == 15000
+        r = asyncio.run(m.buy(member(3), "haendler:drachenlord"))
+        assert "ausverkauft" in r.lower() and economy.get_coins(3) == 60000
+
+        # Tausch: member 3 braucht einen SELTENEN Einsatz-Titel.
+        assert asyncio.run(m.trade(member(3), "trade:haendler:sternenjaeger",
+                                   "IrgendWas")).lower().count("besitzt") >= 0
+        economy.grant_title(3, "Glücksbär", "🐻 Glücksbär", "selten")
+        assert len(m.eligible_gives(member(3), "selten")) == 1
+        assert m.eligible_gives(member(3), "mythisch") == []   # zu niedrig
+        r = asyncio.run(m.trade(member(3), "trade:haendler:sternenjaeger", "Glücksbär"))
+        assert "Tausch" in r
+        assert economy.owns_title(3, "Sternenjäger")           # Belohnung da
+        assert not economy.owns_title(3, "Glücksbär")          # Einsatz weg
+        assert economy.get_coins(3) == 57000                   # 3000 Aufzahlung
+        # Belohnung schon besessen -> abgelehnt.
+        economy.grant_title(3, "Glücksbär", "🐻 Glücksbär", "selten")
+        assert "schon" in asyncio.run(
+            m.trade(member(3), "trade:haendler:sternenjaeger", "Glücksbär")).lower()
+
+        # Kein Haendler-Befehl -> None; Weg-Zustand -> closed-Text (str).
+        def hmsg(uid, content):
+            return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
+                                   author=member(uid))
+        assert asyncio.run(m.handle(hmsg(1, "wie gehts"))) is None
+        m._store.data["departed"] = True
+        assert isinstance(asyncio.run(m.handle(hmsg(1, "haendler"))), str)
+    finally:
+        m._store, m._enabled = alt
+        restore_eco()
+
+
+# --- Monats-Lotto --------------------------------------------------------------
+def test_lotto_flow():
+    """Lospreis = Jackpot/80 (glatt), Kauf zieht Coins ab & zaehlt Lose, Ziehung
+    schreibt den Jackpot gut & protokolliert, Monatswechsel loest aus."""
+    import lotto
+
+    restore_eco = _with_economy({1: 1_000_000, 2: 100})
+    lt = lotto.instance
+    alt = (lt._store, lt._enabled)
+    lt._enabled = True
+    lt._store = _FakeStore({"month": "2026-07", "jackpot": 20_000_000,
+                            "ticket_price": 250_000, "entries": {}, "history": []})
+    try:
+        # Lospreis-Kopplung: Beispiel 20 Mio -> 250k, und generell Jackpot/80 glatt.
+        assert 20_000_000 // lotto.PRICE_DIVISOR == 250_000
+        for _ in range(50):
+            jp, preis = lt._roll_jackpot()
+            assert jp % 1_000_000 == 0
+            assert preis == jp // lotto.PRICE_DIVISOR
+            assert preis * lotto.PRICE_DIVISOR == jp     # glatt, kein Rest
+            assert lotto.JACKPOT_MIN_M * 1_000_000 <= jp <= lotto.JACKPOT_MAX_M * 1_000_000
+
+        # Kauf: genug Coins -> Lose gezaehlt, Coins ab.
+        r = asyncio.run(lt.buy(SimpleNamespace(id=1), 3))
+        assert "3" in r and economy.get_coins(1) == 1_000_000 - 3 * 250_000
+        assert lt._entries()["1"] == 3
+        # Zu wenig Coins -> Hinweis, keine Lose.
+        r = asyncio.run(lt.buy(SimpleNamespace(id=2), 1))
+        assert isinstance(r, str) and "2" not in lt._entries()
+        # 'max' deckelt nach Guthaben.
+        assert lt._resolve_count(SimpleNamespace(id=1), "max") == \
+            economy.get_coins(1) // 250_000
+
+        # Ziehung: einziger Spieler gewinnt den Jackpot.
+        vorher = economy.get_coins(1)
+        res = lt._draw()
+        assert res.winner_id == 1
+        assert economy.get_coins(1) == vorher + 20_000_000
+        assert lt._state()["history"][-1]["winner_id"] == 1
+
+        # Ziehung ohne Lose -> kein Gewinner, kein Crash.
+        lt._store.data["entries"] = {}
+        res = lt._draw()
+        assert res.winner_id == 0
+
+        # Monatswechsel via tick(): alter Monat wird gezogen, neuer startet.
+        lt._store.data.update({"month": "2020-01", "jackpot": 10_000_000,
+                               "ticket_price": 125_000, "entries": {"1": 2}})
+        h_vor = len(lt._state()["history"])
+        res = asyncio.run(lt.tick())
+        assert res is not None and res.winner_id == 1
+        assert lt._state()["month"] == lt._month_str()      # neuer Monat laeuft
+        assert lt._state()["entries"] == {}                 # Lose zurueckgesetzt
+        assert len(lt._state()["history"]) == h_vor + 1
+
+        # handle: Nicht-Befehl -> None; 'lotto kauf 2' kauft (str).
+        def lmsg(uid, content):
+            return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
+                                   author=SimpleNamespace(id=uid, display_name="P"))
+        assert asyncio.run(lt.handle(lmsg(1, "wie gehts"))) is None
+        r = asyncio.run(lt.handle(lmsg(1, "lotto kauf 1")))
+        assert isinstance(r, str)
+    finally:
+        lt._store, lt._enabled = alt
+        restore_eco()
 
 
 def run():

@@ -31,8 +31,10 @@ import fun
 import food
 import games
 import handel
+import lotto
 import luxus
 import media
+import merchant
 import moderation
 import music
 import payments
@@ -161,12 +163,23 @@ TERRARIA_ENABLED = terraria.setup()
 # Google Pay, Karte, PayPal). Polling-Modell (kein offener Port). Standardmaessig
 # AUS - aktiv nur mit STRIPE_SECRET_KEY in der .env.
 PAYMENTS_ENABLED = payments.setup()
+# Fahrender Haendler ('Flo haendler'): taucht einmal taeglich zu zufaelliger Zeit
+# auf und verkauft/tauscht EXKLUSIVE Titel. Braucht economy (Coins + Inventar).
+MERCHANT_ENABLED = merchant.setup()
+# Monats-Lotto ('Flo lotto'): Zufalls-Jackpot in Millionen, Lospreis = Jackpot/80,
+# einmal im Monat Ziehung. Braucht economy (dort liegt der Coin-Topf).
+LOTTO_ENABLED = lotto.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
 EVENT_INTERVAL_SECONDS = float(os.getenv("GAMES_EVENT_INTERVAL", "300"))
 # Takt, in dem der Coin-Shop offene Stripe-Bestellungen auf 'bezahlt' prueft.
 PAYMENTS_POLL_SECONDS = float(os.getenv("PAYMENTS_POLL_SECONDS", "25"))
+# Takt, in dem geprueft wird, ob der Haendler gerade ankommt/weiterzieht.
+MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
+# Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
+# Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
+LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -194,7 +207,8 @@ _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
-     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED, PAYMENTS_ENABLED]
+     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED, PAYMENTS_ENABLED,
+     MERCHANT_ENABLED, LOTTO_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -360,6 +374,8 @@ _HELP_DATA = {
         ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
         ("flo handel [@wer]", "Coin-Handelsbuch: alle Transaktionen als Statistik"),
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
+        ("flo händler", "🛒 fahrender Händler: exklusive Titel kaufen & tauschen"),
+        ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
         ("flo aufladen", "Coins mit echtem Geld kaufen (Apple Pay/PayPal)"),
     ]),
     "terraria": ("Terraria", 0x8DB360, [
@@ -424,7 +440,7 @@ _HELP_DATA = {
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
     "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
-    "economy": "level · daily · shop · handel · steal", "casino": "13 Spiele · stats",
+    "economy": "level · daily · shop · händler · lotto", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
     "terraria": "alles aus dem Wiki", "aktien": "kurs + Tipp",
     "chaos": "roast · rate · horoskop",
@@ -825,6 +841,64 @@ class FloBot(discord.Client):
             await payments.poll_pending()
         except Exception:
             log.exception("Payments-Poll-Loop Fehler - laeuft weiter")
+
+    def _event_channel(self):
+        """Ziel-Channel fuer oeffentliche Ansagen (Haendler, Lotto, ...): der
+        Level-Up-/Commands-Channel, sonst der System-Channel. None, wenn nirgends
+        gesendet werden darf."""
+        guild = self.get_guild(GUILD_ID)
+        if guild is None:
+            return None
+        channel = guild.get_channel(economy.LEVELUP_CHANNEL_ID) if ECONOMY_ENABLED else None
+        if channel is None or not channel.permissions_for(guild.me).send_messages:
+            channel = guild.system_channel
+        if channel is None or not channel.permissions_for(guild.me).send_messages:
+            return None
+        return channel
+
+    @tasks.loop(seconds=MERCHANT_TICK_SECONDS)
+    async def merchant_loop(self):
+        """Prueft, ob der fahrende Haendler gerade ankommt oder weiterzieht, und
+        postet die Ansage (mit Kauf-/Tausch-Panel beim Eintreffen)."""
+        try:
+            res = await merchant.tick()
+        except Exception:
+            log.exception("Haendler-Loop Fehler - laeuft weiter")
+            return
+        if res is None:
+            return
+        channel = self._event_channel()
+        if channel is None:
+            return
+        try:
+            if res.kind == "arrive" and res.view is not None:
+                msg = await channel.send(embed=res.embed, view=res.view)
+                res.view.message = msg
+                self.protect_message(msg)
+            else:
+                await channel.send(embed=res.embed)
+        except discord.HTTPException:
+            log.warning("Haendler-Ansage konnte nicht gesendet werden")
+
+    @tasks.loop(seconds=LOTTO_TICK_SECONDS)
+    async def lotto_loop(self):
+        """Prueft den Monatswechsel: ist ein Monat rum, wird gezogen und der
+        Gewinner oeffentlich ausgerufen. Sonst No-op (siehe lotto.tick)."""
+        try:
+            res = await lotto.tick()
+        except Exception:
+            log.exception("Lotto-Loop Fehler - laeuft weiter")
+            return
+        if res is None:
+            return
+        channel = self._event_channel()
+        if channel is None:
+            return
+        try:
+            content = f"<@{res.winner_id}>" if res.winner_id else None
+            await channel.send(content=content, embed=res.embed)
+        except discord.HTTPException:
+            log.warning("Lotto-Ansage konnte nicht gesendet werden")
 
     @tasks.loop(time=SHOP_REFRESH_TIME)
     async def shop_refresh_loop(self):
@@ -1257,6 +1331,8 @@ class FloBot(discord.Client):
             (LUXUS_ENABLED, luxus.handle),
             (HANDEL_ENABLED, handel.handle),
             (STEAL_ENABLED, steal.handle),
+            (MERCHANT_ENABLED, merchant.handle),
+            (LOTTO_ENABLED, lotto.handle),
             (TERRARIA_ENABLED, terraria.handle),
             (STOCKS_ENABLED, stocks.handle),
             (WORDS_ENABLED, words.handle),
@@ -1289,7 +1365,8 @@ class FloBot(discord.Client):
                     or antwort is economy.HANDLED or antwort is media.HANDLED
                     or antwort is food.HANDLED or antwort is words.HANDLED
                     or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
-                    or antwort is terraria.HANDLED):
+                    or antwort is terraria.HANDLED or antwort is merchant.HANDLED
+                    or antwort is lotto.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1412,6 +1489,10 @@ class FloBot(discord.Client):
             self.event_loop.start()
         if PAYMENTS_ENABLED and not self.payments_poll_loop.is_running():
             self.payments_poll_loop.start()
+        if MERCHANT_ENABLED and not self.merchant_loop.is_running():
+            self.merchant_loop.start()
+        if LOTTO_ENABLED and not self.lotto_loop.is_running():
+            self.lotto_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_sweep_loop.is_running():
             self.autodelete_sweep_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_batch_loop.is_running():

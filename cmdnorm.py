@@ -70,6 +70,11 @@ class CmdNorm:
         "steal", "klau", "klauen", "raub", "rauben", "heist",
         # payments (Coins mit echtem Geld aufladen)
         "aufladen", "topup", "echtgeld", "coinshop",
+        # merchant (fahrender Haendler)
+        "haendler", "händler", "merchant", "kraemer", "krämer",
+        "wanderhaendler", "wanderhändler", "trader", "kramer",
+        # lotto (Monats-Lotto)
+        "lotto", "lottery", "jackpot", "lose", "los", "ziehung",
         # stocks (Aktienkurse)
         "aktie", "aktien", "stock", "stocks", "kurs", "ticker", "börse",
         "boerse", "share",
