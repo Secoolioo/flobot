@@ -55,11 +55,18 @@ HANDLED = object()
 
 # Coin-Pakete: SERVER-SEITIG festgelegt (coins + Preis in Cent). Reihenfolge =
 # Anzeige-Reihenfolge. Preise/Coins nie vom Client uebernehmen!
+# Preisleiter: 1-10 Euro, 100k/250k/500k/750k/1M und dann +250k je Euro.
 _PACKAGES = {
-    "starter": {"coins": 25_000,    "cents": 199,  "label": "Starter", "emoji": "🪙"},
-    "bundle":  {"coins": 100_000,   "cents": 499,  "label": "Bundle",  "emoji": "💰"},
-    "big":     {"coins": 500_000,   "cents": 1499, "label": "Big Stack", "emoji": "💎"},
-    "mega":    {"coins": 2_000_000, "cents": 4999, "label": "Mega",    "emoji": "👑"},
+    "p1":  {"coins":   100_000, "cents":  100, "label": "Snack",    "emoji": "🪙"},
+    "p2":  {"coins":   250_000, "cents":  200, "label": "Happen",   "emoji": "🪙"},
+    "p3":  {"coins":   500_000, "cents":  300, "label": "Stack",    "emoji": "💰"},
+    "p4":  {"coins":   750_000, "cents":  400, "label": "Bündel",   "emoji": "💰"},
+    "p5":  {"coins": 1_000_000, "cents":  500, "label": "Koffer",   "emoji": "💎"},
+    "p6":  {"coins": 1_250_000, "cents":  600, "label": "Tresor",   "emoji": "💎"},
+    "p7":  {"coins": 1_500_000, "cents":  700, "label": "Panzer",   "emoji": "💎"},
+    "p8":  {"coins": 1_750_000, "cents":  800, "label": "Schatz",   "emoji": "👑"},
+    "p9":  {"coins": 2_000_000, "cents":  900, "label": "Vermögen", "emoji": "👑"},
+    "p10": {"coins": 2_250_000, "cents": 1000, "label": "Imperium", "emoji": "👑"},
 }
 
 # Wie lange eine unbezahlte Bestellung verfolgt wird, bevor der Bot aufgibt.

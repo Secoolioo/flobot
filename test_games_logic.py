@@ -520,13 +520,17 @@ def test_payments_flow():
         assert p._is_command("coins kaufen")
         assert not p._is_command("coins")           # -> economy zeigt Kontostand
         assert not p._is_command("wie gehts")
-        # Paket-Mathematik.
+        # Paket-Mathematik + Preisleiter (1-10 €, 100k Stufe = 1 €).
         assert payments._fmt(2_000_000) == "2.000.000"
-        assert payments._euro(499) == "4,99 €"
-        assert "bundle" in payments.packages()
+        assert payments._euro(100) == "1,00 €" and payments._euro(1000) == "10,00 €"
+        pk = payments.packages()
+        assert pk["p1"]["coins"] == 100_000 and pk["p1"]["cents"] == 100
+        assert pk["p5"]["coins"] == 1_000_000 and pk["p5"]["cents"] == 500
+        assert pk["p10"]["coins"] == 2_250_000 and pk["p10"]["cents"] == 1000
+        assert len(pk) == 10
 
         # Bestellung anlegen -> pending gemerkt, URL zurueck.
-        url = asyncio.run(p.create_checkout(5, "Tester", "bundle"))
+        url = asyncio.run(p.create_checkout(5, "Tester", "p1"))
         assert url and "checkout.stripe.com" in url
         orders = p._store.data["orders"]
         assert "cs_test_1" in orders and orders["cs_test_1"]["status"] == "pending"
