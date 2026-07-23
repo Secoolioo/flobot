@@ -1007,69 +1007,129 @@ def test_merchant_shop_und_trade():
 
 # --- Monats-Lotto --------------------------------------------------------------
 def test_lotto_flow():
-    """Lospreis = Jackpot/80 (glatt), Kauf zieht Coins ab & zaehlt Lose, Ziehung
-    schreibt den Jackpot gut & protokolliert, Monatswechsel loest aus."""
+    """Lospreis = Jackpot/80 (glatt); Kauf zieht Coins ab, zaehlt Lose UND fuellt
+    Flos Kasse; Gewinnen ist chancen-gesteuert (extrem selten); kein Gewinner ->
+    Jackpot-Rollover waechst; nur der Owner kann die Kasse abbuchen."""
     import lotto
 
-    restore_eco = _with_economy({1: 1_000_000, 2: 100})
+    restore_eco = _with_economy({1: 1_000_000, 2: 100, lotto.OWNER_ID: 0, 999: 0})
     lt = lotto.instance
-    alt = (lt._store, lt._enabled)
+    alt = (lt._store, lt._enabled, lt._win_chance)
     lt._enabled = True
+    lt._win_chance = 1.0
     lt._store = _FakeStore({"month": "2026-07", "jackpot": 20_000_000,
-                            "ticket_price": 250_000, "entries": {}, "history": []})
+                            "ticket_price": 10_000, "entries": {}, "house": 0,
+                            "history": []})
     try:
-        # Lospreis-Kopplung: Beispiel 20 Mio -> 250k, und generell Jackpot/80 glatt.
-        assert 20_000_000 // lotto.PRICE_DIVISOR == 250_000
+        # Lospreis: sanft gekoppelt & gedeckelt - 20 Mio -> 10k (kein Wucher mehr).
+        assert lt._price_for(20_000_000) == 10_000
+        assert lt._price_for(5_000_000) == 2_500
+        assert lt._price_for(500_000_000) == lotto.TICKET_MAX     # Deckel greift
         for _ in range(50):
             jp, preis = lt._roll_jackpot()
             assert jp % 1_000_000 == 0
-            assert preis == jp // lotto.PRICE_DIVISOR
-            assert preis * lotto.PRICE_DIVISOR == jp     # glatt, kein Rest
+            assert preis == max(lotto.TICKET_MIN,
+                                min(lotto.TICKET_MAX, jp // lotto.PRICE_DIVISOR))
+            assert lotto.TICKET_MIN <= preis <= lotto.TICKET_MAX
             assert lotto.JACKPOT_MIN_M * 1_000_000 <= jp <= lotto.JACKPOT_MAX_M * 1_000_000
 
-        # Kauf: genug Coins -> Lose gezaehlt, Coins ab.
+        # Kauf: Coins ab, Lose gezaehlt, Einsatz wandert in die Kasse.
         r = asyncio.run(lt.buy(SimpleNamespace(id=1), 3))
-        assert "3" in r and economy.get_coins(1) == 1_000_000 - 3 * 250_000
+        assert "3" in r and economy.get_coins(1) == 1_000_000 - 3 * 10_000
         assert lt._entries()["1"] == 3
-        # Zu wenig Coins -> Hinweis, keine Lose.
+        assert lt._state()["house"] == 3 * 10_000        # Einsatz -> Flos Kasse
+        # Zu wenig Coins -> Hinweis, keine Lose, Kasse unveraendert.
         r = asyncio.run(lt.buy(SimpleNamespace(id=2), 1))
         assert isinstance(r, str) and "2" not in lt._entries()
+        assert lt._state()["house"] == 3 * 10_000
         # 'max' deckelt nach Guthaben.
         assert lt._resolve_count(SimpleNamespace(id=1), "max") == \
-            economy.get_coins(1) // 250_000
+            economy.get_coins(1) // 10_000
 
-        # Ziehung: einziger Spieler gewinnt den Jackpot.
+        # Gewinnchance: 1 Los bei chance=1.0 sicher; bei chance 0 nie.
+        assert lt._win_prob_for(1) == 1.0
+        lt._win_chance = 0.0
+        assert lt._win_prob_for(9999) == 0.0
+        lt._win_chance = 1.0
+
+        # Ziehung MIT Gewinn (chance 1.0): Spieler kriegt den Jackpot, won=True.
         vorher = economy.get_coins(1)
         res = lt._draw()
-        assert res.winner_id == 1
+        assert res.won and res.winner_ids == [1]
         assert economy.get_coins(1) == vorher + 20_000_000
-        assert lt._state()["history"][-1]["winner_id"] == 1
+        assert lt._state()["history"][-1]["winner_ids"] == [1]
 
-        # Ziehung ohne Lose -> kein Gewinner, kein Crash.
-        lt._store.data["entries"] = {}
+        # Ziehung OHNE Gewinn (chance 0): kein Gewinner, kein Crash, won=False.
+        lt._win_chance = 0.0
+        lt._store.data["entries"] = {"1": 5}
         res = lt._draw()
-        assert res.winner_id == 0
+        assert not res.won and res.winner_ids == []
 
-        # Monatswechsel via tick(): alter Monat wird gezogen, neuer startet.
+        # Kasse: Fremder darf NICHT abbuchen; Owner holt alles aufs Konto.
+        lt._store.data["house"] = 750_000
+        deny = asyncio.run(lt.withdraw(SimpleNamespace(id=999), "alles"))
+        assert isinstance(deny, str) and economy.get_coins(999) == 0
+        assert lt._state()["house"] == 750_000
+        ow_vor = economy.get_coins(lotto.OWNER_ID)
+        asyncio.run(lt.withdraw(SimpleNamespace(id=lotto.OWNER_ID), "alles"))
+        assert economy.get_coins(lotto.OWNER_ID) == ow_vor + 750_000
+        assert lt._state()["house"] == 0
+
+        # Monatswechsel via tick() MIT Gewinn: loest aus, frischer Jackpot, Lose leer.
+        lt._win_chance = 1.0
         lt._store.data.update({"month": "2020-01", "jackpot": 10_000_000,
                                "ticket_price": 125_000, "entries": {"1": 2}})
         h_vor = len(lt._state()["history"])
         res = asyncio.run(lt.tick())
-        assert res is not None and res.winner_id == 1
+        assert res is not None and res.won and res.winner_ids == [1]
         assert lt._state()["month"] == lt._month_str()      # neuer Monat laeuft
         assert lt._state()["entries"] == {}                 # Lose zurueckgesetzt
         assert len(lt._state()["history"]) == h_vor + 1
+        assert (lotto.JACKPOT_MIN_M * 1_000_000
+                <= lt._state()["jackpot"] <= lotto.JACKPOT_MAX_M * 1_000_000)
 
-        # handle: Nicht-Befehl -> None; 'lotto kauf 2' kauft (str).
+        # Monatswechsel OHNE Gewinn: Jackpot-Rollover waechst.
+        lt._win_chance = 0.0
+        lt._store.data.update({"month": "2019-12", "jackpot": 8_000_000,
+                               "ticket_price": 100_000, "entries": {"1": 1}})
+        res = asyncio.run(lt.tick())
+        assert not res.won
+        assert lt._state()["jackpot"] >= 8_000_000 + lotto.GROWTH_MIN_M * 1_000_000
+
+        # handle: Nicht-Befehl -> None; Kauf -> str; 'kasse' fuer Fremde -> str.
         def lmsg(uid, content):
             return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
                                    author=SimpleNamespace(id=uid, display_name="P"))
         assert asyncio.run(lt.handle(lmsg(1, "wie gehts"))) is None
-        r = asyncio.run(lt.handle(lmsg(1, "lotto kauf 1")))
-        assert isinstance(r, str)
+        assert isinstance(asyncio.run(lt.handle(lmsg(1, "lotto kauf 1"))), str)
+        assert isinstance(asyncio.run(lt.handle(lmsg(1, "lotto kasse"))), str)
     finally:
-        lt._store, lt._enabled = alt
+        lt._store, lt._enabled, lt._win_chance = alt
         restore_eco()
+
+
+# --- KI: geleakte Werkzeug-Syntax herausfiltern --------------------------------
+def test_ai_tool_leak_sanitizer():
+    """'<function=get_weather>{...}</function>' & Co. werden erkannt und aus dem
+    Antworttext entfernt - normale Winkelklammern/Mentions bleiben unangetastet."""
+    import ai
+    a = ai.instance
+    leak = 'Na klar.\n<function=get_weather>{"city": "Regensburg"}</function>'
+    clean = a._sanitize_output(leak)
+    assert "<function" not in clean and "get_weather" not in clean
+    assert "Na klar." in clean
+    # Der geleakte Aufruf wird zur echten Ausfuehrung extrahiert.
+    assert a._extract_inline_tool_calls(leak) == [("get_weather", '{"city": "Regensburg"}')]
+    # Auch OHNE schliessendes Tag wird die Syntax entfernt.
+    assert "<function" not in a._sanitize_output('Hi <function=get_weather>{"city":"X"}')
+    # <tool_call>-Bloecke und Streu-Tags raus.
+    assert a._sanitize_output("A <tool_call>{x}</tool_call> B").replace(" ", "") == "AB"
+    assert "</function>" not in a._sanitize_output("text</function>")
+    # Normale Winkelklammern & Mentions bleiben, wie sie sind.
+    assert a._sanitize_output("2 < 3 und <@123> bleibt") == "2 < 3 und <@123> bleibt"
+    # Kein Tool drin -> keine Extraktion; leer/None sicher.
+    assert a._extract_inline_tool_calls("nur normaler text") == []
+    assert a._sanitize_output("") == "" and a._sanitize_output(None) == ""
 
 
 def run():

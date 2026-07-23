@@ -878,7 +878,7 @@ class FloBot(discord.Client):
         if channel is None:
             return
         try:
-            content = f"<@{res.winner_id}>" if res.winner_id else None
+            content = " ".join(f"<@{u}>" for u in res.winner_ids) or None
             await channel.send(content=content, embed=res.embed)
         except discord.HTTPException:
             log.warning("Lotto-Ansage konnte nicht gesendet werden")

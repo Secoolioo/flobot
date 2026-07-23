@@ -122,9 +122,12 @@ class FloAI:
     _HARD_RULES = (
         "Antworte immer auf Deutsch, kurz und natuerlich wie im Chat - keine langen "
         "Vortraege, keine Aufzaehlungs-Romane. Benutze KEINE Emojis und keine "
-        "Emoticons, die Leute hier hassen das. Bei Wetterfragen nutzt du immer das "
-        "Werkzeug 'get_weather'; nennt keiner einen Ort, nimm '{city}'. Erfinde nie "
-        "Wetterdaten - wenn das Werkzeug spinnt, sag's ehrlich (ruhig mit Schnauze)."
+        "Emoticons, die Leute hier hassen das. Nutze das Werkzeug 'get_weather' NUR, "
+        "wenn wirklich nach dem Wetter gefragt wird; nennt keiner einen Ort, nimm "
+        "'{city}'. Erfinde nie Wetterdaten - wenn das Werkzeug spinnt, sag's ehrlich "
+        "(ruhig mit Schnauze). Gib Werkzeug-Aufrufe NIEMALS als Text aus (kein "
+        "'<function=...>' im Antworttext) - nutze dafuer ausschliesslich die echte "
+        "Werkzeug-Funktion, sonst antworte einfach normal in Worten."
     )
     # Flo verachtet alle anderen Bots und haelt sich fuer den einzig wahren, besten.
     _BOT_BEEF = (
@@ -368,6 +371,49 @@ class FloAI:
             return await self.get_weather(city)
         return {"error": f"Unbekanntes Werkzeug: {name}"}
 
+    # --- Schutz vor "geleakter" Werkzeug-Syntax ------------------------------
+    # Manche Modelle schreiben einen Tool-Aufruf faelschlich in den ANTWORTTEXT
+    # (statt ins strukturierte tool_calls-Feld), z. B.:
+    #   <function=get_weather>{"city": "Regensburg"}</function>
+    # Das darf NIE beim Nutzer landen. Wir erkennen solche Aufrufe (fuehren sie
+    # bei Bedarf echt aus) und filtern die Roh-Syntax aus jedem Antworttext.
+    _INLINE_CALL_RE = re.compile(
+        r"<function\s*=\s*([A-Za-z_]\w*)\s*>\s*(\{.*?\})?", re.DOTALL | re.IGNORECASE)
+    _LEAK_PATTERNS = [
+        re.compile(r"<function\s*=\s*[^>]*>.*?</function>", re.DOTALL | re.IGNORECASE),
+        re.compile(r"<function_call>.*?</function_call>", re.DOTALL | re.IGNORECASE),
+        re.compile(r"<tool_calls?>.*?</tool_calls?>", re.DOTALL | re.IGNORECASE),
+        re.compile(r"<function\s*=\s*[^>]*>\s*(\{.*?\})?", re.DOTALL | re.IGNORECASE),
+        re.compile(r"</?function[^>]*>", re.IGNORECASE),
+        re.compile(r"</?tool_calls?>", re.IGNORECASE),
+        re.compile(r"<\|?/?python_tag\|?>", re.IGNORECASE),
+    ]
+
+    def _extract_inline_tool_calls(self, content):
+        """Findet als TEXT ausgegebene Tool-Aufrufe und gibt [(name, arg-json), ...]
+        zurueck (leer, wenn keine drin sind)."""
+        if not content or "<function" not in content.lower():
+            return []
+        calls = []
+        for m in self._INLINE_CALL_RE.finditer(content):
+            name = m.group(1)
+            arg = (m.group(2) or "").strip()
+            if not (arg.startswith("{") and arg.endswith("}")):
+                arg = "{}"
+            calls.append((name, arg))
+        return calls
+
+    def _sanitize_output(self, text):
+        """Entfernt versehentlich in den Text geratene Werkzeug-Syntax
+        (<function=...>, <tool_call> usw.), damit sie nie beim Nutzer ankommt."""
+        if not text or "<" not in text:
+            return text or ""
+        for pat in self._LEAK_PATTERNS:
+            text = pat.sub("", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        return text.strip()
+
     async def generate(
         self,
         prompt,
@@ -395,7 +441,8 @@ class FloAI:
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            return (response.choices[0].message.content or "").strip() or None
+            text = self._sanitize_output((response.choices[0].message.content or "").strip())
+            return text or None
         except Exception:  # noqa: BLE001 - Bot soll nie wegen LLM-Fehler crashen
             log.exception("LLM generate() fehlgeschlagen")
             return None
@@ -477,9 +524,27 @@ class FloAI:
                 )
                 msg = response.choices[0].message
                 tool_calls = getattr(msg, "tool_calls", None)
+                content = msg.content or ""
 
                 if not tool_calls:
-                    return (msg.content or "").strip() or "Dazu faellt mir gerade nichts ein."
+                    # Hat das Modell den Tool-Aufruf faelschlich als TEXT ausgegeben
+                    # (z. B. '<function=get_weather>{"city":"X"}</function>')? Dann echt
+                    # ausfuehren und in eine saubere Runde zurueckgeben - statt die
+                    # Roh-Syntax anzuzeigen.
+                    inline = self._extract_inline_tool_calls(content)
+                    if inline:
+                        messages.append({"role": "assistant",
+                                         "content": self._sanitize_output(content)})
+                        for name, argstr in inline:
+                            result = await self._run_tool(name, argstr)
+                            messages.append({
+                                "role": "user",
+                                "content": (f"[System] Ergebnis von {name}({argstr}): "
+                                            f"{json.dumps(result, ensure_ascii=False)}. "
+                                            f"Antworte dem Nutzer jetzt normal in Worten - "
+                                            f"KEINE Werkzeug-Syntax, kein <function=...>.")})
+                        continue
+                    return self._sanitize_output(content) or "Dazu faellt mir gerade nichts ein."
 
                 # Assistant-Nachricht mit den Tool-Aufrufen sauber zurueckschreiben.
                 messages.append(
@@ -542,8 +607,8 @@ class FloAI:
                 max_tokens=self.MAX_TOKENS,
                 temperature=self.TEMPERATURE,
             )
-            return (response.choices[0].message.content or "").strip() \
-                or "Dazu faellt mir gerade nichts ein."
+            text = self._sanitize_output((response.choices[0].message.content or "").strip())
+            return text or "Dazu faellt mir gerade nichts ein."
         except Exception:  # noqa: BLE001
             log.exception("Vision-Aufruf fehlgeschlagen")
             return "Das Bild konnte ich mir gerade nicht anschauen - versuch's gleich nochmal."
