@@ -27,6 +27,7 @@ import bayern
 import casino
 import cmdnorm
 import economy
+import floaktie
 import fun
 import food
 import games
@@ -164,6 +165,9 @@ MERCHANT_ENABLED = merchant.setup()
 # Monats-Lotto ('Flo lotto'): Zufalls-Jackpot in Millionen, Lospreis = Jackpot/80,
 # einmal im Monat Ziehung. Braucht economy (dort liegt der Coin-Topf).
 LOTTO_ENABLED = lotto.setup()
+# FloCorp-Aktie ('Flo floaktie'): Flos eigene Aktie ($FLO). Kurs steigt/faellt mit
+# Kaeufen/Verkaeufen und der Voice-Aktivitaet; Aktionaere kassieren Voice-Dividende.
+FLOAKTIE_ENABLED = floaktie.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -173,6 +177,9 @@ MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
 # Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
 # Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
 LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
+# Takt, in dem die FloCorp-Aktie die Voice-Aktivitaet abtastet und (bei Tages-
+# wechsel) den Kurs neu zieht.
+STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "1800"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -201,7 +208,7 @@ _NEED_MESSAGES = any(
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
      STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED,
-     MERCHANT_ENABLED, LOTTO_ENABLED]
+     MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -369,6 +376,7 @@ _HELP_DATA = {
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
         ("flo händler", "🛒 fahrender Händler: exklusive Titel kaufen & tauschen"),
         ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
+        ("flo floaktie · kauf 10 · top", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
     ]),
     "terraria": ("Terraria", 0x8DB360, [
         ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
@@ -801,6 +809,12 @@ class FloBot(discord.Client):
             await economy.tick_voice(guild)
         except Exception:
             log.exception("Voice-XP-Loop Fehler - laeuft weiter")
+        # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende.
+        if FLOAKTIE_ENABLED:
+            try:
+                await floaktie.pay_voice_dividends(guild)
+            except Exception:
+                log.exception("FloCorp-Dividenden-Zahlung fehlgeschlagen - laeuft weiter")
 
     @tasks.loop(seconds=music.VOICE_HEAL_SECONDS)
     async def voice_heal_loop(self):
@@ -882,6 +896,18 @@ class FloBot(discord.Client):
             await channel.send(content=content, embed=res.embed)
         except discord.HTTPException:
             log.warning("Lotto-Ansage konnte nicht gesendet werden")
+
+    @tasks.loop(seconds=STOCK_SAMPLE_SECONDS)
+    async def floaktie_market_loop(self):
+        """Tastet die Voice-Aktivitaet fuer die FloCorp-Aktie ab und zieht bei
+        Tageswechsel den Kurs neu (viele im Call -> hoch, wenig -> runter)."""
+        guild = self.get_guild(GUILD_ID)
+        if guild is None:
+            return
+        try:
+            await floaktie.sample_and_tick(guild)
+        except Exception:
+            log.exception("FloCorp-Markt-Loop Fehler - laeuft weiter")
 
     @tasks.loop(time=SHOP_REFRESH_TIME)
     async def shop_refresh_loop(self):
@@ -1316,6 +1342,7 @@ class FloBot(discord.Client):
             (STEAL_ENABLED, steal.handle),
             (MERCHANT_ENABLED, merchant.handle),
             (LOTTO_ENABLED, lotto.handle),
+            (FLOAKTIE_ENABLED, floaktie.handle),
             (TERRARIA_ENABLED, terraria.handle),
             (STOCKS_ENABLED, stocks.handle),
             (WORDS_ENABLED, words.handle),
@@ -1347,7 +1374,7 @@ class FloBot(discord.Client):
                     or antwort is food.HANDLED or antwort is words.HANDLED
                     or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
                     or antwort is terraria.HANDLED or antwort is merchant.HANDLED
-                    or antwort is lotto.HANDLED):
+                    or antwort is lotto.HANDLED or antwort is floaktie.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1472,6 +1499,8 @@ class FloBot(discord.Client):
             self.merchant_loop.start()
         if LOTTO_ENABLED and not self.lotto_loop.is_running():
             self.lotto_loop.start()
+        if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
+            self.floaktie_market_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_sweep_loop.is_running():
             self.autodelete_sweep_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_batch_loop.is_running():

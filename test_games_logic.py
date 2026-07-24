@@ -1218,6 +1218,85 @@ def test_fun_dm_roast():
         fun.DMROAST_CHANCE, fun.DMROAST_GLOBAL_COOLDOWN, fun.DMROAST_USER_COOLDOWN = alt_mod
 
 
+def test_floaktie_market():
+    """Kauf hebt/Verkauf senkt den Kurs (arb-frei), Markt-Tick reagiert auf Voice-
+    Aktivitaet, Dividende ist proportional (Groesster doppelt), Leaderboard sortiert."""
+    import floaktie
+    restore_eco = _with_economy({1: 1_000_000, 2: 500_000})
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    alt_noise = floaktie.DAILY_NOISE
+    fa._enabled = True
+    fa._store = _FakeStore({"price": 1000, "day": fa._today(), "day_sum": 0.0,
+                            "day_count": 0, "voice_ema": floaktie.VOICE_BASELINE,
+                            "holdings": {}, "history": [{"day": "d", "price": 1000}]})
+    try:
+        p0 = fa.price()
+        # Kauf: Kurs steigt, (Impact-)Kosten ab, Depot waechst.
+        c0 = economy.get_coins(1)
+        r = asyncio.run(fa.buy(SimpleNamespace(id=1), 50))
+        assert "Gekauft" in r and fa.price() > p0 and fa.shares_of(1) == 50
+        assert c0 - economy.get_coins(1) >= 50 * p0        # Impact -> mind. 50*Startkurs
+
+        # Verkauf: Kurs faellt, Coins zurueck, Depot schrumpft.
+        p1 = fa.price()
+        r = asyncio.run(fa.sell(SimpleNamespace(id=1), 20))
+        assert "Verkauft" in r and fa.price() < p1 and fa.shares_of(1) == 30
+
+        # Kein Gratis-Arbitrage: sofortiger Round-Trip macht Verlust.
+        economy.instance._profile(3)["coins"] = 1_000_000
+        start = economy.get_coins(3)
+        asyncio.run(fa.buy(SimpleNamespace(id=3), 100))
+        asyncio.run(fa.sell(SimpleNamespace(id=3), 100))
+        assert economy.get_coins(3) < start and fa.shares_of(3) == 0
+
+        # Zu wenig Coins -> Ablehnung (String, kein Kauf).
+        economy.instance._profile(4)["coins"] = 10
+        r = asyncio.run(fa.buy(SimpleNamespace(id=4), 100))
+        assert isinstance(r, str) and fa.shares_of(4) == 0
+
+        # Markt-Tick: viel Voice -> Kurs steigt; wenig -> faellt (Rauschen aus).
+        floaktie.DAILY_NOISE = 0.0
+        fa._store.data.update({"price": 1000, "voice_ema": floaktie.VOICE_BASELINE,
+                               "day_sum": 100.0, "day_count": 10})   # Schnitt 10 >> Baseline
+        a, n, drift = fa.market_tick()
+        assert n > a and drift > 0
+        fa._store.data.update({"price": 1000, "voice_ema": floaktie.VOICE_BASELINE,
+                               "day_sum": 0.0, "day_count": 5})        # Schnitt 0 << Baseline
+        a, n, drift = fa.market_tick()
+        assert n < a and drift < 0
+
+        # Dividende proportional; groesster Aktionaer doppelt; Leaderboard sortiert.
+        fa._store.data["holdings"] = {"1": 100, "2": 300}
+        assert fa.top_holder() == 2
+        assert fa.dividend_for(1) == 100 // floaktie.DIVIDEND_DIVISOR
+        assert fa.dividend_for(2) == (300 // floaktie.DIVIDEND_DIVISOR) * 2
+        assert fa.leaderboard()[:2] == [(2, 300), (1, 100)]
+
+        # Voice-Dividende landet bei aktiven Aktionaeren.
+        m1 = SimpleNamespace(id=1, bot=False, voice=SimpleNamespace(self_deaf=False, deaf=False))
+        m2 = SimpleNamespace(id=2, bot=False, voice=SimpleNamespace(self_deaf=False, deaf=False))
+        guild = SimpleNamespace(voice_channels=[SimpleNamespace(id=10, members=[m1, m2])],
+                                afk_channel=None)
+        b1, b2 = economy.get_coins(1), economy.get_coins(2)
+        asyncio.run(fa.pay_voice_dividends(guild))
+        assert economy.get_coins(1) == b1 + fa.dividend_for(1)
+        assert economy.get_coins(2) == b2 + fa.dividend_for(2)
+
+        # handle-Routing: Nicht-Befehl -> None; kauf -> str; top/depot -> Embed.
+        def fmsg(uid, content):
+            return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
+                                   author=SimpleNamespace(id=uid, display_name="T"))
+        assert asyncio.run(fa.handle(fmsg(1, "wie gehts"))) is None
+        assert isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie kauf 1"))), str)
+        assert not isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie top"))), (str, type(None)))
+        assert not isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie depot"))), (str, type(None)))
+    finally:
+        fa._store, fa._enabled = alt
+        floaktie.DAILY_NOISE = alt_noise
+        restore_eco()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

@@ -73,6 +73,8 @@ class CmdNorm:
         "wanderhaendler", "wanderhändler", "trader", "kramer",
         # lotto (Monats-Lotto)
         "lotto", "lottery", "jackpot", "lose", "los", "ziehung",
+        # floaktie (FloCorp-Aktie $FLO)
+        "floaktie", "floaktien", "flostock", "floshare", "flonyse", "floboerse",
         # stocks (Aktienkurse)
         "aktie", "aktien", "stock", "stocks", "kurs", "ticker", "börse",
         "boerse", "share",
