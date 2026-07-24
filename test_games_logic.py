@@ -1364,9 +1364,10 @@ def test_floaktie_market():
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie chart"))) is floaktie.HANDLED
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie"))) is floaktie.HANDLED  # Panel
 
-        # Live-Panel: das zuletzt gepostete 'flo aktie'-Panel wird bei jeder
-        # Kursaenderung (Trade & Aktivitaets-Takt) automatisch nachgezogen.
-        edits = []
+        # Live-Update: das zuletzt gepostete 'flo aktie'-Panel UND der zuletzt
+        # gepostete 'flo aktienkurs'-Chart werden bei jeder Kursaenderung
+        # (Trade & Aktivitaets-Takt) automatisch nachgezogen.
+        edits, chart_edits = [], []
 
         class FakePanel:
             id = 1
@@ -1374,21 +1375,34 @@ def test_floaktie_market():
 
             async def edit(self, **kw):
                 edits.append(kw)
+
+        class FakeChart:
+            id = 2
+            channel = SimpleNamespace(id=1)
+
+            async def edit(self, **kw):
+                chart_edits.append(kw)
         fa._panel_msg = FakePanel()
         fa._panel_uid = 1
+        fa._chart_msg = FakeChart()
+        fa._chart_days = 1
         asyncio.run(fa._refresh_last_panel())
         assert len(edits) == 1 and "embed" in edits[0]            # Panel aktualisiert
+        asyncio.run(fa._refresh_last_chart())
+        assert len(chart_edits) == 1 and "attachments" in chart_edits[0]   # Chart-Bild neu
         economy.instance._profile(1)["coins"] = 1_000_000
         asyncio.run(fa.buy(SimpleNamespace(id=1), 1))
-        assert len(edits) >= 2                                    # Trade zieht Panel nach
-        # Aktivitaets-Takt mit Kursaenderung zieht das Panel ebenfalls nach.
-        n0 = len(edits)
+        assert len(edits) >= 2 and len(chart_edits) >= 2         # Trade zieht beide nach
+        # Aktivitaets-Takt mit Kursaenderung zieht Panel UND Chart nach.
+        n0, c0 = len(edits), len(chart_edits)
         fa._store.data["msg_count"] = 999
         fa._store.data["last_msg_count"] = 0
         asyncio.run(fa.sample_and_tick(SimpleNamespace(voice_channels=[], afk_channel=None)))
-        assert len(edits) > n0
+        assert len(edits) > n0 and len(chart_edits) > c0
     finally:
-        fa._store, fa._enabled, fa._panel_msg = alt[0], alt[1], None
+        fa._store, fa._enabled = alt[0], alt[1]
+        fa._panel_msg = None
+        fa._chart_msg = None
         floaktie.TICK_NOISE = alt_noise
         restore_eco()
 

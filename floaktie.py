@@ -104,6 +104,10 @@ class FloAktie:
         # wurde. Es wird live nachgezogen, sobald sich Kurs/Boersenwert aendern.
         self._panel_msg = None
         self._panel_uid = None
+        # Der ZULETZT gepostete Kurs-Chart ('flo aktienkurs') + sein Zeitraum -
+        # das Bild wird ebenfalls live nachgezogen.
+        self._chart_msg = None
+        self._chart_days = 1
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -240,7 +244,7 @@ class FloAktie:
         self._state()["price"] = neu   # Kauf hebt den Kurs
         self._record_tick()
         await self._save_all()
-        await self._refresh_last_panel()
+        await self._refresh_live()
         stand = economy.get_coins(member.id)
         warn = ""
         if stand < 0:
@@ -268,7 +272,7 @@ class FloAktie:
         self._state()["price"] = neu   # Verkauf drueckt den Kurs
         self._record_tick()
         await self._save_all()
-        await self._refresh_last_panel()
+        await self._refresh_live()
         return (f"📉 Verkauft! **{count}** Anteile {TICKER} für **{self._fmt(proceeds)}** "
                 f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
                 f"· dein Depot: **{rest}** Anteile.")
@@ -351,10 +355,10 @@ class FloAktie:
                 st.setdefault("history", []).append({"day": today, "price": self.price()})
                 st["history"] = st["history"][-HISTORY_MAX:]
             await self._save()
-            # Aendert sich der Kurs (und damit der Boersenwert), das zuletzt
-            # gepostete 'flo aktie'-Panel live nachziehen.
+            # Aendert sich der Kurs (und damit der Boersenwert), Panel UND Chart
+            # (das jeweils zuletzt gepostete) live nachziehen.
             if neu != alt:
-                await self._refresh_last_panel()
+                await self._refresh_live()
             log.info("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
                      "-> Kurs %s->%s (%+.2f%%).", act, people, streams, video, msgs_since,
                      self._fmt(alt), self._fmt(neu), drift * 100)
@@ -464,9 +468,14 @@ class FloAktie:
                 return lbl
         return "Verlauf"
 
+    async def _refresh_live(self):
+        """Zieht das zuletzt gepostete Panel UND den zuletzt geposteten Kurs-Chart
+        nach - wird nach jeder Kursaenderung aufgerufen (Aktivitaets-Takt & Trades)."""
+        await self._refresh_last_panel()
+        await self._refresh_last_chart()
+
     async def _refresh_last_panel(self):
-        """Zieht das ZULETZT gepostete 'flo aktie'-Panel nach (Kurs/Boersenwert live).
-        Wird nach jeder Kursaenderung aufgerufen (Aktivitaets-Takt & Trades)."""
+        """Zieht das ZULETZT gepostete 'flo aktie'-Panel nach (Kurs/Boersenwert live)."""
         msg = self._panel_msg
         if msg is None:
             return
@@ -480,14 +489,34 @@ class FloAktie:
         except Exception:  # noqa: BLE001 - ein Refresh-Fehler darf nichts sprengen
             log.exception("Aktien-Panel-Refresh fehlgeschlagen")
 
+    async def _refresh_last_chart(self):
+        """Rendert den zuletzt geposteten Kurs-Chart neu (gleicher Zeitraum) und
+        tauscht das Bild aus - so bleibt auch 'flo aktienkurs' live."""
+        msg = self._chart_msg
+        if msg is None:
+            return
+        try:
+            file = self._chart_file(self._chart_days, self._range_label(self._chart_days))
+            await msg.edit(attachments=[file])
+        except discord.NotFound:
+            self._chart_msg = None      # Chart geloescht -> vergessen
+        except discord.HTTPException:
+            pass
+        except Exception:  # noqa: BLE001
+            log.exception("Aktien-Chart-Refresh fehlgeschlagen")
+
     async def open_chart(self, message, days=1):
-        """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck."""
+        """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck.
+        Dieser Chart wird gemerkt -> sein Bild wird ab jetzt live nachgezogen,
+        sobald sich der Kurs aendert."""
         view = KursView(days)
         try:
             file = self._chart_file(days, self._range_label(days))
             view.message = await message.reply(
                 file=file, view=view, mention_author=False)
             self._protect(view.message)
+            self._chart_msg = view.message
+            self._chart_days = days
         except Exception:  # noqa: BLE001
             log.exception("Kurs-Chart konnte nicht gesendet werden")
             return "Der Kurs-Chart klemmt gerade - versuch's gleich nochmal."
@@ -718,6 +747,10 @@ class KursView(discord.ui.View):
     async def show(self, interaction, days):
         self.days = days
         self._rebuild()
+        # Dieser Chart ist jetzt der 'aktuelle' - Live-Refresh nutzt seinen Zeitraum.
+        if self.message is not None:
+            instance._chart_msg = self.message
+        instance._chart_days = days
         try:
             file = instance._chart_file(days, instance._range_label(days))
             await interaction.response.edit_message(attachments=[file], view=self)
