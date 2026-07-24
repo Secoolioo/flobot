@@ -473,7 +473,7 @@ class FloAktie:
                    "**Risiko:** Du kannst auf **Kredit** kaufen und ins **Minus** gehen – "
                    "fällt der Kurs, sitzt du auf Schulden. Nur Aktien gehen ins Minus!"),
             inline=False)
-        emb.set_footer(text=f"{self._bot_name} floaktie kauf 10 · verkauf alles · top · depot")
+        emb.set_footer(text=f"{self._bot_name} aktie kauf max · verkauf alles · aktienkurs · top")
         return emb
 
     def _depot_embed(self, member):
@@ -571,10 +571,10 @@ class FloAktie:
 
 # --- Interaktive View --------------------------------------------------------
 class _TradeButton(discord.ui.Button):
-    def __init__(self, label, emoji, style, action, count):
-        super().__init__(label=label, emoji=emoji, style=style)
+    def __init__(self, label, emoji, style, action, count, row=0):
+        super().__init__(label=label, emoji=emoji, style=style, row=row)
         self.action = action     # "buy" | "sell"
-        self.count = count       # int oder "alles"
+        self.count = count       # int oder "max"/"alles"
 
     async def callback(self, interaction):
         await self.view._trade(interaction, self.action, self.count)
@@ -582,7 +582,7 @@ class _TradeButton(discord.ui.Button):
 
 class _InfoButton(discord.ui.Button):
     def __init__(self, label, emoji, kind):
-        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, row=1)
+        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, row=2)
         self.kind = kind         # "depot" | "top"
 
     async def callback(self, interaction):
@@ -599,10 +599,14 @@ class FloAktieView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.message = None
-        self.add_item(_TradeButton("Kauf 1", "📈", discord.ButtonStyle.success, "buy", 1))
-        self.add_item(_TradeButton("Kauf 10", "📈", discord.ButtonStyle.success, "buy", 10))
-        self.add_item(_TradeButton("Verkauf 1", "📉", discord.ButtonStyle.danger, "sell", 1))
-        self.add_item(_TradeButton("Verkauf alles", "💸", discord.ButtonStyle.danger, "sell", "alles"))
+        # Reihe 0: Kaufen (inkl. MAX - so viele, wie das Guthaben hergibt).
+        self.add_item(_TradeButton("Kauf 1", "📈", discord.ButtonStyle.success, "buy", 1, row=0))
+        self.add_item(_TradeButton("Kauf 10", "📈", discord.ButtonStyle.success, "buy", 10, row=0))
+        self.add_item(_TradeButton("Kauf MAX", "🤑", discord.ButtonStyle.success, "buy", "max", row=0))
+        # Reihe 1: Verkaufen (inkl. alles).
+        self.add_item(_TradeButton("Verkauf 1", "📉", discord.ButtonStyle.danger, "sell", 1, row=1))
+        self.add_item(_TradeButton("Verkauf alles", "💸", discord.ButtonStyle.danger, "sell", "alles", row=1))
+        # Reihe 2: Infos.
         self.add_item(_InfoButton("Depot", "💼", "depot"))
         self.add_item(_InfoButton("Top", "🏆", "top"))
 
@@ -610,6 +614,12 @@ class FloAktieView(discord.ui.View):
         try:
             if action == "buy":
                 n = instance._resolve_count(interaction.user, str(count))
+                if n < 1:
+                    await interaction.response.send_message(
+                        "Dein Guthaben reicht gerade für keinen ganzen Anteil. 😬 "
+                        "(Auf Kredit geht's mit `aktie kauf <anzahl>` – Achtung, Minus!)",
+                        ephemeral=True)
+                    return
                 text = await instance.buy(interaction.user, n)
             else:
                 n = instance._resolve_count(interaction.user, str(count), selling=True)
