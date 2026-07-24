@@ -23,6 +23,7 @@ Kurs-Historie in data/floaktie.json.
 import logging
 import os
 import random
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -40,8 +41,14 @@ HANDLED = object()
 NAME = "FloCorp"
 TICKER = "$FLO"
 
-# Befehlswoerter.
-_CMDS = ("floaktie", "floaktien", "flostock", "floshare", "flonyse", "$flo", "floboerse")
+# Befehlswoerter, die das Handels-Panel oeffnen (Kauf/Verkauf der EIGENEN Aktie).
+_CMDS = ("floaktie", "floaktien", "aktie", "aktien", "flostock", "floshare",
+         "flonyse", "$flo", "floboerse")
+# Befehlswoerter, die direkt den Kurs-Chart (mit Zeitraum-Buttons) zeigen.
+_CHART_CMDS = ("aktienkurs", "kurs", "kursverlauf", "chart", "flokurs")
+# Zeitraeume fuer den Chart: (Label, Tage).
+_RANGES = (("1 Tag", 1), ("7 Tage", 7), ("30 Tage", 30), ("Gesamt", 100000))
+HISTORY_TICKS_MAX = 3000
 
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 
@@ -88,7 +95,7 @@ class FloAktie:
             return False
         self._store = JsonStore("floaktie.json", default={
             "price": START_PRICE, "day": "", "day_sum": 0.0, "day_count": 0,
-            "voice_ema": VOICE_BASELINE, "holdings": {}, "history": []})
+            "voice_ema": VOICE_BASELINE, "holdings": {}, "history": [], "ticks": []})
         st = self._state()
         if not st.get("price"):
             st["price"] = START_PRICE
@@ -119,6 +126,16 @@ class FloAktie:
 
     def price(self):
         return int(self._state().get("price", START_PRICE))
+
+    def _record_tick(self, now=None):
+        """Schreibt einen Kurs-Zeitpunkt (fuer den Chart) - bei jedem Trade, Sample
+        und Tages-Tick. Zeitstempel als Epoch, Liste gedeckelt."""
+        st = self._state()
+        ticks = st.setdefault("ticks", [])
+        t = int(now if now is not None else time.time())
+        ticks.append({"t": t, "price": self.price()})
+        if len(ticks) > HISTORY_TICKS_MAX:
+            del ticks[:len(ticks) - HISTORY_TICKS_MAX]
 
     def _holdings(self):
         return self._state().setdefault("holdings", {})
@@ -193,21 +210,22 @@ class FloAktie:
         if count > MAX_SHARES_PER_TRADE:
             count = MAX_SHARES_PER_TRADE
         cost, neu = self._buy_cost(count)
-        guthaben = economy.get_coins(member.id)
-        if guthaben < cost:
-            machbar = self._max_affordable(guthaben)
-            if machbar <= 0:
-                return (f"Ein Anteil {TICKER} kostet gerade **{self._fmt(self.price())}** "
-                        f"{economy.COIN} - so viel hast du nicht.")
-            return (f"Für **{count}** Anteile ({self._fmt(cost)} {economy.COIN}) reicht's "
-                    f"nicht. Du könntest dir **{machbar}** leisten.")
-        economy.add_coins(member.id, -cost, reason="floaktie")
+        # Aktien auf KREDIT: kein Guthaben-Check - man darf beliebig tief ins Minus
+        # (allow_negative). Wie mit Hebel an einer echten Boerse: faellt der Kurs,
+        # sitzt du auf den Schulden. Nur die Aktie holt dich da wieder raus.
+        economy.add_coins(member.id, -cost, reason="floaktie", allow_negative=True)
         self._holdings()[str(member.id)] = self.shares_of(member.id) + count
         self._state()["price"] = neu   # Kauf hebt den Kurs
+        self._record_tick()
         await self._save_all()
+        stand = economy.get_coins(member.id)
+        warn = ""
+        if stand < 0:
+            warn = (f"\n⚠️ Du bist jetzt mit **{self._fmt(stand)}** {economy.COIN} im "
+                    f"**MINUS** – nur steigende Kurse (oder Verkauf) holen dich da raus!")
         return (f"📈 Gekauft! **{count}** Anteile {TICKER} für **{self._fmt(cost)}** "
                 f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
-                f"· dein Depot: **{self.shares_of(member.id)}** Anteile.")
+                f"· dein Depot: **{self.shares_of(member.id)}** Anteile.{warn}")
 
     async def sell(self, member, count):
         count = int(count)
@@ -225,6 +243,7 @@ class FloAktie:
         else:
             self._holdings().pop(str(member.id), None)
         self._state()["price"] = neu   # Verkauf drueckt den Kurs
+        self._record_tick()
         await self._save_all()
         return (f"📉 Verkauft! **{count}** Anteile {TICKER} für **{self._fmt(proceeds)}** "
                 f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
@@ -271,6 +290,7 @@ class FloAktie:
         st["day_sum"] = 0.0
         st["day_count"] = 0
         st["day"] = self._today()
+        self._record_tick()
         log.info("FloCorp Tageskurs: %s -> %s (Voice-EMA %.2f, Drift %+.2f%%).",
                  self._fmt(alt), self._fmt(neu), ema, drift * 100)
         return alt, neu, drift
@@ -297,6 +317,7 @@ class FloAktie:
         try:
             self.sample_voice(self._count_voice(guild))
             await self.tick()
+            self._record_tick()   # laufender Kurs-Punkt fuer den Intraday-Chart
             await self._save()
         except Exception:  # noqa: BLE001
             log.exception("FloCorp Sample/Tick fehlgeschlagen")
@@ -371,6 +392,52 @@ class FloAktie:
             return 0.0
         return (self.price() - ref) / ref * 100
 
+    # --- Kurs-Chart (Bild + Zeitraum-Buttons) -----------------------------
+    def _series(self, days):
+        """Kurs-Reihe (alt->neu) fuer den gewuenschten Zeitraum. Nutzt die feinen
+        Intraday-Ticks; sind fuer den Zeitraum zu wenige da, faellt es auf die
+        Tages-Schlusskurse zurueck. Immer mind. 2 Punkte."""
+        st = self._state()
+        now = time.time()
+        cutoff = now - days * 86400
+        pts = [int(t.get("price", 0)) for t in st.get("ticks", [])
+               if t.get("t", 0) >= cutoff]
+        if len(pts) < 2:
+            hist = [int(h.get("price", 0)) for h in st.get("history", [])]
+            n = max(2, min(len(hist), int(days) + 1)) if hist else 0
+            pts = (hist[-n:] if n else []) + [self.price()]
+        pts = [p for p in pts if p] or [self.price()]
+        if len(pts) == 1:
+            pts = [pts[0], pts[0]]
+        return pts
+
+    def _chart_file(self, days, label):
+        """Rendert den Kursverlauf als PNG (discord.File) fuer den Zeitraum."""
+        import render
+        series = self._series(days)
+        chg = ((series[-1] - series[0]) / series[0] * 100) if series[0] else 0.0
+        buf = render.floaktie_chart(series, TICKER, f"{NAME} · {label}", chg)
+        return discord.File(buf, filename="floaktie_kurs.png")
+
+    def _range_label(self, days):
+        for lbl, dv in _RANGES:
+            if dv == days:
+                return lbl
+        return "Verlauf"
+
+    async def open_chart(self, message, days=1):
+        """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck."""
+        view = KursView(days)
+        try:
+            file = self._chart_file(days, self._range_label(days))
+            view.message = await message.reply(
+                file=file, view=view, mention_author=False)
+            self._protect(view.message)
+        except Exception:  # noqa: BLE001
+            log.exception("Kurs-Chart konnte nicht gesendet werden")
+            return "Der Kurs-Chart klemmt gerade - versuch's gleich nochmal."
+        return HANDLED
+
     def _panel_embed(self, member=None):
         st = self._state()
         preis = self.price()
@@ -402,7 +469,9 @@ class FloAktie:
             value=("Kaufen treibt den Kurs, Verkaufen drückt ihn. Sind viele im Voice, "
                    "steigt $FLO über Tage - sonst fällt er.\n"
                    "**Vorteil:** Aktionäre kassieren im Voice eine **Dividende** (mehr "
-                   "Anteile = mehr Coins pro Runde), der größte Aktionär die doppelte."),
+                   "Anteile = mehr Coins pro Runde), der größte Aktionär die doppelte.\n"
+                   "**Risiko:** Du kannst auf **Kredit** kaufen und ins **Minus** gehen – "
+                   "fällt der Kurs, sitzt du auf Schulden. Nur Aktien gehen ins Minus!"),
             inline=False)
         emb.set_footer(text=f"{self._bot_name} floaktie kauf 10 · verkauf alles · top · depot")
         return emb
@@ -458,12 +527,18 @@ class FloAktie:
         except Exception:  # noqa: BLE001
             cmd = message.content or ""
         parts = cmd.split()
-        if not parts or parts[0].lower().strip(".,;:!?") not in _CMDS:
+        first = parts[0].lower().strip(".,;:!?") if parts else ""
+        if first not in _CMDS and first not in _CHART_CMDS:
             return None
         if not economy.is_enabled():
             return "💤 Gerade gibt's keine Coins - das Economy-System schläft."
+        # 'aktienkurs'/'kurs'/'chart' (oder 'aktie chart') -> Kurs-Chart mit Buttons.
+        if first in _CHART_CMDS:
+            return await self.open_chart(message, 1)
         sub = parts[1].lower() if len(parts) >= 2 else ""
         arg = parts[2].lower() if len(parts) >= 3 else ""
+        if sub in ("chart", "kurs", "kursverlauf", "verlauf", "graph"):
+            return await self.open_chart(message, 1)
         if sub in ("kauf", "kaufen", "buy", "long"):
             return await self.buy(message.author, self._resolve_count(message.author, arg or "1"))
         if sub in ("verkauf", "verkaufen", "sell", "verkaufe", "short", "dump"):
@@ -546,6 +621,55 @@ class FloAktieView(discord.ui.View):
         if self.message is not None:
             try:
                 await self.message.edit(embed=instance._panel_embed(interaction.user), view=self)
+            except discord.HTTPException:
+                pass
+
+
+class _KursButton(discord.ui.Button):
+    def __init__(self, label, days, active):
+        super().__init__(
+            label=label,
+            style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary)
+        self.days = days
+
+    async def callback(self, interaction):
+        await self.view.show(interaction, self.days)
+
+
+class KursView(discord.ui.View):
+    """Kurs-Chart mit Zeitraum-Buttons (1 Tag / 7 Tage / 30 Tage / Gesamt)."""
+
+    def __init__(self, days=1):
+        super().__init__(timeout=300)
+        self.message = None
+        self.days = days
+        self._rebuild()
+
+    def _rebuild(self):
+        self.clear_items()
+        for lbl, dv in _RANGES:
+            self.add_item(_KursButton(lbl, dv, dv == self.days))
+
+    async def show(self, interaction, days):
+        self.days = days
+        self._rebuild()
+        try:
+            file = instance._chart_file(days, instance._range_label(days))
+            await interaction.response.edit_message(attachments=[file], view=self)
+        except Exception:  # noqa: BLE001
+            log.exception("Kurs-Chart-Update fehlgeschlagen")
+            try:
+                await interaction.response.send_message(
+                    "Der Chart klemmt gerade - versuch's gleich nochmal.", ephemeral=True)
+            except discord.HTTPException:
+                pass
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
 

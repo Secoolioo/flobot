@@ -933,6 +933,35 @@ def test_economy_title_helpers():
         restore()
 
 
+# --- economy: Aktien duerfen ins Minus (Casino nicht) --------------------------
+def test_economy_stock_debt():
+    """allow_negative laesst NUR Aktien unter 0; normale Ausgaben enden bei 0 und
+    Gutschriften bauen Schulden korrekt ab (kein faelschliches 0-Clampen)."""
+    restore = _with_economy({1: 100})
+    try:
+        # Normale Ausgabe (Casino & Co.) kann nicht unter 0.
+        economy.add_coins(1, -500, reason="casino")
+        assert economy.get_coins(1) == 0
+        # Aktien duerfen ins Minus (allow_negative=True).
+        economy.add_coins(1, -3000, reason="floaktie", allow_negative=True)
+        assert economy.get_coins(1) == -3000
+        # Gutschrift baut Schulden ab (NICHT auf 0 geklemmt).
+        economy.add_coins(1, 1000, reason="nachricht")
+        assert economy.get_coins(1) == -2000
+        # Normale Ausgabe im Minus ist ein No-Op (kein Geld da).
+        economy.add_coins(1, -500, reason="casino")
+        assert economy.get_coins(1) == -2000
+        # Genug Gutschrift -> wieder ins Plus.
+        economy.add_coins(1, 3000, reason="lotto")
+        assert economy.get_coins(1) == 1000
+        # Konten OHNE Aktien bleiben unveraendert bei 0 Schluss.
+        economy.add_coins(2, 50, reason="daily")
+        economy.add_coins(2, -80, reason="shop")
+        assert economy.get_coins(2) == 0
+    finally:
+        restore()
+
+
 # --- Fahrender Haendler --------------------------------------------------------
 def test_merchant_shop_und_trade():
     """Kaufen (inkl. limitiert/ausverkauft/zu teuer/schon besessen), Tauschen
@@ -1221,6 +1250,7 @@ def test_fun_dm_roast():
 def test_floaktie_market():
     """Kauf hebt/Verkauf senkt den Kurs (arb-frei), Markt-Tick reagiert auf Voice-
     Aktivitaet, Dividende ist proportional (Groesster doppelt), Leaderboard sortiert."""
+    import discord
     import floaktie
     restore_eco = _with_economy({1: 1_000_000, 2: 500_000})
     fa = floaktie.instance
@@ -1250,10 +1280,11 @@ def test_floaktie_market():
         asyncio.run(fa.sell(SimpleNamespace(id=3), 100))
         assert economy.get_coins(3) < start and fa.shares_of(3) == 0
 
-        # Zu wenig Coins -> Ablehnung (String, kein Kauf).
+        # Aktien auf KREDIT: zu wenig Coins -> trotzdem Kauf, Konto geht INS MINUS.
         economy.instance._profile(4)["coins"] = 10
         r = asyncio.run(fa.buy(SimpleNamespace(id=4), 100))
-        assert isinstance(r, str) and fa.shares_of(4) == 0
+        assert isinstance(r, str) and fa.shares_of(4) == 100
+        assert economy.get_coins(4) < 0 and "MINUS" in r
 
         # Markt-Tick: viel Voice -> Kurs steigt; wenig -> faellt (Rauschen aus).
         floaktie.DAILY_NOISE = 0.0
@@ -1284,13 +1315,33 @@ def test_floaktie_market():
         assert economy.get_coins(2) == b2 + fa.dividend_for(2)
 
         # handle-Routing: Nicht-Befehl -> None; kauf -> str; top/depot -> Embed.
+        # 'aktie' ist identisch zu 'floaktie' (nur EINE Aktie).
         def fmsg(uid, content):
             return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
                                    author=SimpleNamespace(id=uid, display_name="T"))
         assert asyncio.run(fa.handle(fmsg(1, "wie gehts"))) is None
         assert isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie kauf 1"))), str)
-        assert not isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie top"))), (str, type(None)))
+        assert isinstance(asyncio.run(fa.handle(fmsg(1, "aktie kauf 1"))), str)   # 'aktie' == 'floaktie'
+        assert not isinstance(asyncio.run(fa.handle(fmsg(1, "aktie top"))), (str, type(None)))
         assert not isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie depot"))), (str, type(None)))
+
+        # Kurs-Chart: Serie hat >=2 Punkte, _chart_file rendert ein PNG.
+        assert len(fa._series(7)) >= 2
+        f = fa._chart_file(7, "7 Tage")
+        assert isinstance(f, discord.File)
+
+        # aktienkurs / aktie chart -> Chart senden (HANDLED) via Fake-reply.
+        class FakeMsg:
+            def __init__(s, uid, content):
+                s.author = SimpleNamespace(id=uid, display_name="T")
+                s.content = content
+                s.guild = SimpleNamespace(id=1)
+
+            async def reply(s, **kw):
+                return SimpleNamespace(id=1, channel=SimpleNamespace(id=1))
+        assert asyncio.run(fa.handle(FakeMsg(1, "aktienkurs"))) is floaktie.HANDLED
+        assert asyncio.run(fa.handle(FakeMsg(1, "aktie chart"))) is floaktie.HANDLED
+        assert asyncio.run(fa.handle(FakeMsg(1, "aktie"))) is floaktie.HANDLED  # Panel
     finally:
         fa._store, fa._enabled = alt
         floaktie.DAILY_NOISE = alt_noise

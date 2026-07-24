@@ -2356,6 +2356,60 @@ class Render:
                    fill=(150, 155, 168))
         return self._png(img)
 
+    def floaktie_chart(self, prices, ticker = "$FLO",
+                       label = "Kursverlauf", change_pct = 0.0):
+        """Zeichnet den Kursverlauf der FloCorp-Aktie als Liniendiagramm (Flaeche,
+        Leuchtkurve, Preisachse, Titel + Change-Badge). 'prices' = Kurse alt->neu."""
+        def euro(v):
+            return f"{int(round(v)):,}".replace(",", ".")
+        W, H = 900, 460
+        L, R, T, B = 96, 34, 100, 46
+        x0, x1, y0, y1 = L, W - R, T, H - B
+        vals = [float(p) for p in (prices or []) if p is not None] or [0.0]
+        if len(vals) == 1:
+            vals = [vals[0], vals[0]]
+        lo, hi = min(vals), max(vals)
+        if hi <= lo:
+            hi = lo + 1
+        pad = (hi - lo) * 0.12
+        lo2, hi2 = lo - pad, hi + pad
+        up = change_pct >= 0
+        line_col = (46, 204, 113) if up else (231, 76, 60)
+        img = self._vgrad(W, H, (20, 26, 40), (9, 12, 22)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        d.rounded_rectangle([6, 6, W - 6, H - 6], radius=22, outline=(255, 255, 255, 26), width=2)
+
+        def px(i):
+            return x0 + (i / (len(vals) - 1)) * (x1 - x0)
+
+        def py(v):
+            return y1 - (v - lo2) / (hi2 - lo2) * (y1 - y0)
+
+        for k in range(5):
+            v = lo2 + (hi2 - lo2) * k / 4
+            yy = py(v)
+            d.line([(x0, yy), (x1, yy)], fill=(255, 255, 255, 16), width=1)
+            d.text((x0 - 12, yy), euro(v), font=self._font(17),
+                   fill=(150, 160, 176), anchor="rm")
+        pts = [(px(i), py(v)) for i, v in enumerate(vals)]
+        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(overlay).polygon(
+            pts + [(pts[-1][0], y1), (pts[0][0], y1)], fill=line_col + (54,))
+        img = Image.alpha_composite(img, overlay)
+        img = self._glow_line(img, pts, line_col + (130,), 16, 6)
+        d = ImageDraw.Draw(img, "RGBA")
+        d.line(pts, fill=line_col, width=5, joint="curve")
+        ex, ey = pts[-1]
+        d.ellipse([ex - 7, ey - 7, ex + 7, ey + 7], fill=(255, 255, 255),
+                  outline=line_col, width=3)
+        d.text((34, 26), ticker, font=self._font(42), fill=self._WHITE)
+        d.text((36, 78), label, font=self._font(19), fill=(150, 160, 176))
+        d.text((W - 34, 30), euro(vals[-1]) + " Coins", font=self._font(30),
+               fill=self._WHITE, anchor="ra")
+        chg = ("▲ +" if up else "▼ -") + f"{abs(change_pct):.1f}%"
+        d.text((W - 34, 74), chg, font=self._font(22), fill=line_col, anchor="ra")
+        return self._png(img)
+
 
 # --- Modul-Fassade --------------------------------------------------------
 # Eine geteilte Instanz + Aliase, damit die bisherigen Modul-Funktionen
@@ -2390,3 +2444,4 @@ slot_machine = instance.slot_machine
 slot_machine_anim = instance.slot_machine_anim
 wheel_fortune_anim = instance.wheel_fortune_anim
 words_card = instance.words_card
+floaktie_chart = instance.floaktie_chart

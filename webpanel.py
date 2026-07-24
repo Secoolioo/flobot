@@ -91,6 +91,8 @@ class WebPanel:
             web.get("/api/servers", self._api_servers),
             web.post("/api/server/sendepause", self._api_sendepause),
             web.post("/api/server/announce", self._api_announce),
+            web.get("/api/features", self._api_features),
+            web.post("/api/feature", self._api_feature),
         ])
         return app
 
@@ -475,6 +477,47 @@ class WebPanel:
             log.exception("Ansage via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "senden fehlgeschlagen"}, status=500)
         return web.json_response({"ok": True})
+
+    # --- API: Funktionen (Laufzeit-Schalter) -----------------------------
+    def _loaded_flags(self):
+        """Start-Flags {key: geladen?} aus bot.py (welche Module aktiv sind)."""
+        try:
+            import bot
+            return dict(getattr(bot, "FEATURE_LOADED", {}) or {})
+        except Exception:  # noqa: BLE001
+            return {}
+
+    async def _api_features(self, request):
+        self._guard(request)
+        try:
+            import features
+            return web.json_response({"ok": True,
+                                      "features": features.state(self._loaded_flags())})
+        except Exception:  # noqa: BLE001
+            log.exception("Feature-Liste fehlgeschlagen")
+            return web.json_response({"ok": True, "features": []})
+
+    async def _api_feature(self, request):
+        self._guard(request)
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        key = str(data.get("key", "")).strip()
+        on = bool(data.get("on", True))
+        try:
+            import features
+            # Nicht geladene Module kann man nicht per Schalter aktivieren.
+            if on and not self._loaded_flags().get(key, False):
+                return web.json_response({"ok": False,
+                                          "error": "Modul ist nicht geladen (Neustart nötig)"}, status=400)
+            res = await features.set_feature(key, on)
+            if res is None:
+                return web.json_response({"ok": False, "error": "unbekanntes Feature"}, status=400)
+        except Exception:  # noqa: BLE001
+            log.exception("Feature-Schalter fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        return web.json_response({"ok": True, "key": key, "on": res})
 
 
 # --- Singleton + Modul-API ---------------------------------------------------

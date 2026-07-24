@@ -276,11 +276,20 @@ class Economy:
     # Huebsche Quellen-Labels fuers Handelsbuch (Modulname -> Anzeige).
     _TRADE_SOURCES = {"games": "spiele", "fun": "chaos", "voicegags": "voice"}
 
-    def add_coins(self, user_id, amount, reason = ""):
-        """Aendert den Kontostand (auch negativ) und gibt den neuen Stand zurueck.
-        Geht nie unter 0. Jede Bewegung landet im Handelsbuch (handel.py):
-        'reason' benennt die Quelle; ohne reason wird das aufrufende Modul
-        ermittelt (casino, spiele, luxus, admin, ...)."""
+    def add_coins(self, user_id, amount, reason = "", allow_negative = False):
+        """Aendert den Kontostand und gibt den neuen Stand zurueck.
+
+        Normalfall: das Konto geht NIE unter 0 (Casino, Shop & Co. enden bei 0).
+        AUSNAHME 'allow_negative=True' (nur die Aktie/floaktie nutzt das): dann darf
+        der Stand beliebig tief ins MINUS gehen - man kauft Anteile 'auf Kredit',
+        wie mit Hebel an einer echten Boerse. Faellt der Kurs, bleibt man auf den
+        Schulden sitzen; nur die Aktie (Verkauf/Kurs-Anstieg) holt einen da wieder
+        raus. Ein Konto, das (nur ueber Aktien) schon im Minus ist, laesst sich per
+        normaler Ausgabe nicht weiter druecken (kein Geld -> No-Op), waehrend jede
+        Gutschrift die Schulden ganz normal abbaut.
+
+        Jede Bewegung landet im Handelsbuch (handel.py); 'reason' benennt die Quelle
+        (ohne reason wird das aufrufende Modul ermittelt: casino, spiele, luxus, ...)."""
         if not self._enabled:
             return 0
         if not reason:
@@ -291,10 +300,18 @@ class Economy:
                 reason = "?"
         prof = self._profile(user_id)
         alt = prof["coins"]
-        prof["coins"] = max(0, alt + amount)
+        if allow_negative:
+            neu = alt + amount                 # Aktien: beliebig tief ins Minus
+        elif amount >= 0:
+            neu = alt + amount                 # Gutschrift: waechst / tilgt Schulden
+        elif alt <= 0:
+            neu = alt                          # Ausgabe ohne Guthaben -> No-Op
+        else:
+            neu = max(0, alt + amount)         # normale Ausgabe: Schluss bei 0
+        prof["coins"] = neu
         # Echtes Delta buchen (bei leerem Konto kann weniger abgehen als gewollt).
-        self._record_trade(user_id, prof["coins"] - alt, reason, prof["coins"])
-        return prof["coins"]
+        self._record_trade(user_id, neu - alt, reason, neu)
+        return neu
 
     def _record_trade(self, uid, delta, source, balance):
         """Meldet eine Coin-Bewegung ans Handelsbuch. Lazy-Import (kein

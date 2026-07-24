@@ -27,6 +27,7 @@ import bayern
 import casino
 import cmdnorm
 import economy
+import features
 import floaktie
 import fun
 import food
@@ -154,9 +155,9 @@ HANDEL_ENABLED = handel.setup()
 # Coin-Raub ('Flo steal @wer'): Heist auf fremde Coins - Erfolgschance, Strafe,
 # Cooldown. Braucht economy (dort liegt der Coin-Topf).
 STEAL_ENABLED = steal.setup()
-# Aktienkurse ('Flo aktie <Name>'): Live-Kurs von Yahoo Finance + freche
-# Kauf/Halten/Verkauf-Empfehlung (keine echte Anlageberatung).
-STOCKS_ENABLED = stocks.setup()
+# Oeffentliche Aktienkurse (Apple & Co.) wurden entfernt - 'Flo aktie' ist jetzt
+# ausschliesslich die EIGENE FloCorp-Aktie ($FLO), siehe floaktie.
+STOCKS_ENABLED = False
 # Terraria-Wiki ('Flo terraria <frage>'): beantwortet JEDE Terraria-Frage mit
 # echten Wiki-Daten + Bildern (MediaWiki-API), auto-erkennt Terraria-Fragen.
 TERRARIA_ENABLED = terraria.setup()
@@ -172,6 +173,20 @@ FLOAKTIE_ENABLED = floaktie.setup()
 # Lokales Web-Panel (Port 9123): Server/User/Coins/Statistiken im Browser
 # verwalten. Laeuft im Bot-Prozess, Start passiert in on_ready.
 WEBPANEL_ENABLED = webpanel.setup()
+# Laufzeit-Schalter: einzelne Funktionen per Panel an/aus (ueberlebt Neustarts).
+features.setup()
+# Welche Feature-Module beim Start geladen wurden - das Panel zeigt/schaltet nur
+# geladene Module (nicht geladene brauchen einen Neustart). features.is_on(key)
+# legt darueber die Laufzeit-Schalter.
+FEATURE_LOADED = {
+    "ki": AI_ENABLED, "music": MUSIC_ENABLED, "games": GAMES_ENABLED,
+    "casino": CASINO_ENABLED, "economy": ECONOMY_ENABLED, "floaktie": FLOAKTIE_ENABLED,
+    "lotto": LOTTO_ENABLED, "merchant": MERCHANT_ENABLED, "steal": STEAL_ENABLED,
+    "handel": HANDEL_ENABLED, "luxus": LUXUS_ENABLED,
+    "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
+    "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
+    "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED,
+}
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -380,7 +395,8 @@ _HELP_DATA = {
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
         ("flo händler", "🛒 fahrender Händler: exklusive Titel kaufen & tauschen"),
         ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
-        ("flo floaktie · kauf 10 · top", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
+        ("flo aktie · kauf 10 · verkauf alles", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
+        ("flo aktienkurs · aktie top", "📊 Kursverlauf als Chart (1 Tag/7 Tage/…) & Aktionäre"),
     ]),
     "terraria": ("Terraria", 0x8DB360, [
         ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
@@ -388,11 +404,6 @@ _HELP_DATA = {
         ("flo terraria random", "🎲 zufällige Seite - lass dich überraschen"),
         ("flo terraria bosse · waffen · items", "Kategorie-Zufall (auch npcs/erze/biome …)"),
         ("flo <terraria-frage>", "Flo erkennt Terraria-Fragen auch ohne Prefix"),
-    ]),
-    "aktien": ("Aktien", 0x2ECC71, [
-        ("flo aktie Apple", "Live-Kurs + Flos Kauf/Verkauf-Tipp"),
-        ("flo aktie AAPL · kurs BMW", "auch per Ticker oder Firmenname"),
-        ("flo aktie ^GDAXI", "Indizes & Co. (Spaß, keine Anlageberatung)"),
     ]),
     "casino": ("Casino", 0xE91E63, [
         ("flo casino", "Übersicht - alles per Button"),
@@ -446,7 +457,7 @@ _HELP_HINTS = {
     "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
     "economy": "level · daily · shop · händler · lotto", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
-    "terraria": "alles aus dem Wiki", "aktien": "kurs + Tipp",
+    "terraria": "alles aus dem Wiki",
     "chaos": "roast · rate · horoskop",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen",
@@ -647,7 +658,6 @@ class FloBot(discord.Client):
             ("casino", "🎰", "Casino", CASINO_ENABLED),
             ("wörter", "📊", "Wörter", WORDS_ENABLED),
             ("terraria", "🌳", "Terraria", TERRARIA_ENABLED),
-            ("aktien", "💹", "Aktien", STOCKS_ENABLED),
             ("chaos", "😈", "Chaos", FUN_ENABLED),
             ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
             ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
@@ -1163,7 +1173,7 @@ class FloBot(discord.Client):
             return
 
         # Kein Admin-Befehl -> normaler KI-Chat (auch mit Bild).
-        if not AI_ENABLED:
+        if not (AI_ENABLED and features.is_on("ki")):
             return
         ai.note_message(message.channel.id, message.author.display_name, content)
         title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
@@ -1172,7 +1182,7 @@ class FloBot(discord.Client):
             tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
         image_url = _first_image_url(message)
         # Terraria-Frage in der DM? -> mit Wiki-Daten (Embed + Bild) antworten.
-        if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
+        if TERRARIA_ENABLED and features.is_on("terraria") and not image_url and terraria.erkennt_frage(content):
             try:
                 res = await terraria.beantworte(message, ai.strip_lead(content) or content)
             except Exception:
@@ -1213,8 +1223,8 @@ class FloBot(discord.Client):
         if message.author.bot:
             # Flo verachtet fremde Bots: postet ein ANDERER Bot (nicht Flo selbst),
             # laestert Flo mit kleiner Wahrscheinlichkeit (Cooldown steckt in fun).
-            if (FUN_ENABLED and message.guild is not None and self.user is not None
-                    and message.author.id != self.user.id):
+            if (FUN_ENABLED and features.is_on("chaos") and message.guild is not None
+                    and self.user is not None and message.author.id != self.user.id):
                 self._spawn(fun.maybe_roast_bot(message))
             return
         if message.guild is None:
@@ -1237,27 +1247,27 @@ class FloBot(discord.Client):
 
         # --- Passive Hooks: sehen JEDE Nachricht (vor dem Flo-Trigger) ---
         # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
-        if ECONOMY_ENABLED:
+        if ECONOMY_ENABLED and features.is_on("economy"):
             self._spawn(economy.on_message(message))
         # Wort-Zaehler: synchron und billig (reine dict-Arbeit, Speichern debounced).
-        if WORDS_ENABLED:
+        if WORDS_ENABLED and features.is_on("words"):
             try:
                 words.note_message(message)
             except Exception:
                 log.exception("Wort-Zaehler-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
-        if FOOD_ENABLED:
+        if FOOD_ENABLED and features.is_on("food"):
             self._spawn(food.on_message_passive(message))
         # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
         # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
-        if GAMES_ENABLED:
+        if GAMES_ENABLED and features.is_on("games"):
             try:
                 if await games.on_message_passive(message):
                     return
             except Exception:
                 log.exception("Spiele-Hook fehlgeschlagen")
         # Seltene Zufalls-Einwuerfe / Auto-Reactions (laeuft nebenher).
-        if FUN_ENABLED:
+        if FUN_ENABLED and features.is_on("chaos"):
             self._spawn(fun.on_message_passive(message))
 
         # --- Ab hier nur, wenn Flo angesprochen wird ---
@@ -1332,28 +1342,31 @@ class FloBot(discord.Client):
         # BEWUSST OHNE channel.typing(): das war ein zusaetzlicher API-Roundtrip VOR
         # jedem Befehl (~100-200 ms Extra-Latenz) - die Spiele antworten schnell
         # genug; nur der (langsame) KI-Fallback tippt weiterhin.
+        # Laufzeit-Schalter (Panel): features.is_on(key) legt sich ueber das
+        # Start-Flag - abgeschaltete Funktionen ueberspringt der Durchlauf. Admin
+        # bleibt IMMER an (sonst sperrt man sich selbst aus).
+        _on = features.is_on
         antwort = None
         for enabled, handler in (
-            (BAYERN_ENABLED, bayern.handle),
-            (MOD_ENABLED, moderation.handle),
+            (BAYERN_ENABLED and _on("bayern"), bayern.handle),
+            (MOD_ENABLED and _on("mod"), moderation.handle),
             (ADMIN_ENABLED, admin.handle),
-            (MUSIC_ENABLED, music.handle),
-            (VOICE_GAGS_ENABLED, voicegags.handle),
-            (GAMES_ENABLED, games.handle),
-            (CASINO_ENABLED, casino.handle),
-            (LUXUS_ENABLED, luxus.handle),
-            (HANDEL_ENABLED, handel.handle),
-            (STEAL_ENABLED, steal.handle),
-            (MERCHANT_ENABLED, merchant.handle),
-            (LOTTO_ENABLED, lotto.handle),
-            (FLOAKTIE_ENABLED, floaktie.handle),
-            (TERRARIA_ENABLED, terraria.handle),
-            (STOCKS_ENABLED, stocks.handle),
-            (WORDS_ENABLED, words.handle),
-            (ECONOMY_ENABLED, economy.handle),
-            (FOOD_ENABLED, food.handle),
-            (MEDIA_ENABLED, media.handle),
-            (FUN_ENABLED, fun.handle),
+            (MUSIC_ENABLED and _on("music"), music.handle),
+            (VOICE_GAGS_ENABLED and _on("voice"), voicegags.handle),
+            (GAMES_ENABLED and _on("games"), games.handle),
+            (CASINO_ENABLED and _on("casino"), casino.handle),
+            (LUXUS_ENABLED and _on("luxus"), luxus.handle),
+            (HANDEL_ENABLED and _on("handel"), handel.handle),
+            (STEAL_ENABLED and _on("steal"), steal.handle),
+            (MERCHANT_ENABLED and _on("merchant"), merchant.handle),
+            (LOTTO_ENABLED and _on("lotto"), lotto.handle),
+            (FLOAKTIE_ENABLED and _on("floaktie"), floaktie.handle),
+            (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
+            (WORDS_ENABLED and _on("words"), words.handle),
+            (ECONOMY_ENABLED and _on("economy"), economy.handle),
+            (FOOD_ENABLED and _on("food"), food.handle),
+            (MEDIA_ENABLED and _on("media"), media.handle),
+            (FUN_ENABLED and _on("chaos"), fun.handle),
         ):
             if not enabled:
                 continue
@@ -1390,7 +1403,7 @@ class FloBot(discord.Client):
             return
 
         # --- KI-Fallback: kein Befehl erkannt -> Flo antwortet wie eine KI ---
-        if not AI_ENABLED:
+        if not (AI_ENABLED and features.is_on("ki")):
             return
         # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je seltener der
         # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
@@ -1403,13 +1416,13 @@ class FloBot(discord.Client):
         # an (Vision), statt nur den Text zu lesen.
         image_url = _first_image_url(message)
         # Dialekt-Modus in diesem Server aktiv? -> Flo antwortet boarisch.
-        bavarian = BAYERN_ENABLED and bayern.is_on(message.guild.id)
+        bavarian = BAYERN_ENABLED and features.is_on("bayern") and bayern.is_on(message.guild.id)
         log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
                  " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
                  content[:150])
         # Klingt die Frage nach Terraria? -> mit ECHTEN Wiki-Daten antworten (Embed
         # mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
-        if TERRARIA_ENABLED and not image_url and terraria.erkennt_frage(content):
+        if TERRARIA_ENABLED and features.is_on("terraria") and not image_url and terraria.erkennt_frage(content):
             async with message.channel.typing():
                 try:
                     res = await terraria.beantworte(message, ai.strip_lead(content) or content)

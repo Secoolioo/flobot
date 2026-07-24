@@ -75,9 +75,9 @@ class CmdNorm:
         "lotto", "lottery", "jackpot", "lose", "los", "ziehung",
         # floaktie (FloCorp-Aktie $FLO)
         "floaktie", "floaktien", "flostock", "floshare", "flonyse", "floboerse",
-        # stocks (Aktienkurse)
-        "aktie", "aktien", "stock", "stocks", "kurs", "ticker", "börse",
-        "boerse", "share",
+        "chart",
+        # floaktie: eigene Aktie ($FLO) - 'aktie'/'kurs'/'aktienkurs' gehoeren jetzt hierher
+        "aktie", "aktien", "kurs", "aktienkurs", "kursverlauf", "flokurs",
         # terraria (Wiki)
         "terraria", "terra", "twiki", "terrariawiki",
         # neue casino-spiele
