@@ -1297,6 +1297,92 @@ def test_floaktie_market():
         restore_eco()
 
 
+def test_webpanel_api():
+    """Web-Panel-Backend: Login-Gate, Overview/Users, Coins geben/nehmen/setzen,
+    XP, Titel geben, Server-Liste, Sendepause - alles hinter Token-Auth."""
+    import webpanel
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001 - ohne aiohttp-Testutils ueberspringen
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+
+    restore_eco = _with_economy({1: 1000, 2: 5000})
+    economy.instance._profile(1)["name"] = "Alice"
+    economy.instance._profile(2)["name"] = "Bob"
+    import admin
+    alt_admin = (admin.instance._enabled, admin.instance._store)
+    admin.instance._enabled = True
+    admin.instance._store = _FakeStore({"sendepause": False})
+
+    wp = webpanel.instance
+    alt = (wp._enabled, wp._user, wp._pass, dict(wp._tokens), wp._client)
+    wp._enabled = True
+    wp._user, wp._pass = "Secoolio", "Secoolio"
+    wp._tokens = {}
+    wp._client = SimpleNamespace(guilds=[], is_closed=lambda: False,
+                                 get_guild=lambda _x: None, get_channel=lambda _x: None)
+    app = wp._build_app()
+
+    async def run_it():
+        async with TestClient(TestServer(app)) as cli:
+            # Auth-Gate: ohne Token/Cookie 401 (vor dem Login pruefen).
+            assert (await cli.get("/api/overview")).status == 401
+            # Login: falsch -> 401, richtig -> Token.
+            assert (await cli.post("/api/login", json={"user": "x", "pass": "y"})).status == 401
+            r = await cli.post("/api/login", json={"user": "Secoolio", "pass": "Secoolio"})
+            j = await r.json()
+            assert j["ok"] and j["token"]
+            H = {"Authorization": f"Bearer {j['token']}"}
+
+            # Overview.
+            j = await (await cli.get("/api/overview", headers=H)).json()
+            assert j["ok"] and j["stats"]["users"] >= 2 and j["stats"]["coins_total"] >= 6000
+            assert any(u["id"] == "2" for u in j["top_coins"])
+
+            # Nutzerliste + Detail.
+            j = await (await cli.get("/api/users?sort=coins", headers=H)).json()
+            assert j["ok"] and j["total"] >= 2
+            j = await (await cli.get("/api/user/1", headers=H)).json()
+            assert j["ok"] and j["user"]["id"] == "1" and "owned" in j["user"]
+
+            # Coins geben / nehmen / setzen.
+            j = await (await cli.post("/api/user/coins",
+                       json={"id": "1", "action": "give", "amount": 500}, headers=H)).json()
+            assert j["ok"] and j["coins"] == 1500
+            j = await (await cli.post("/api/user/coins",
+                       json={"id": "1", "action": "take", "amount": 200}, headers=H)).json()
+            assert j["coins"] == 1300
+            j = await (await cli.post("/api/user/coins",
+                       json={"id": "1", "action": "set", "amount": "9k"}, headers=H)).json()
+            assert j["coins"] == 9000        # '9k' geparst
+
+            # XP geben (Level steigt).
+            j = await (await cli.post("/api/user/xp",
+                       json={"id": "1", "action": "give", "amount": 1000}, headers=H)).json()
+            assert j["ok"] and j["level"] >= 1
+
+            # Titel geben.
+            j = await (await cli.post("/api/user/title",
+                       json={"id": "1", "action": "grant", "text": "Testi",
+                             "label": "🧪 Testi", "rarity": "selten"}, headers=H)).json()
+            assert j["ok"] and economy.owns_title(1, "Testi")
+
+            # Server-Liste (leer, aber ok).
+            j = await (await cli.get("/api/servers", headers=H)).json()
+            assert j["ok"] and j["guilds"] == []
+
+            # Sendepause schalten.
+            j = await (await cli.post("/api/server/sendepause",
+                       json={"on": True}, headers=H)).json()
+            assert j["ok"] and j["sendepause"] is True and admin.is_locked() is True
+
+    asyncio.run(run_it())
+    wp._enabled, wp._user, wp._pass, wp._tokens, wp._client = alt
+    admin.instance._enabled, admin.instance._store = alt_admin
+    restore_eco()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

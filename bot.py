@@ -44,6 +44,7 @@ import steal
 import stocks
 import terraria
 import voicegags
+import webpanel
 import words
 
 # WICHTIG: Der Bot laeuft als 'python bot.py' - dieses Modul heisst dann
@@ -168,6 +169,9 @@ LOTTO_ENABLED = lotto.setup()
 # FloCorp-Aktie ('Flo floaktie'): Flos eigene Aktie ($FLO). Kurs steigt/faellt mit
 # Kaeufen/Verkaeufen und der Voice-Aktivitaet; Aktionaere kassieren Voice-Dividende.
 FLOAKTIE_ENABLED = floaktie.setup()
+# Lokales Web-Panel (Port 9123): Server/User/Coins/Statistiken im Browser
+# verwalten. Laeuft im Bot-Prozess, Start passiert in on_ready.
+WEBPANEL_ENABLED = webpanel.setup()
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
@@ -1501,6 +1505,9 @@ class FloBot(discord.Client):
             self.lotto_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
             self.floaktie_market_loop.start()
+        # Web-Panel starten (idempotent: laeuft nur einmal, egal wie oft on_ready feuert).
+        if WEBPANEL_ENABLED:
+            self._spawn(webpanel.start(self))
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_sweep_loop.is_running():
             self.autodelete_sweep_loop.start()
         if AUTODELETE_CHANNEL_IDS and not self.autodelete_batch_loop.is_running():

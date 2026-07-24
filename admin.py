@@ -70,6 +70,19 @@ class Admin:
         In-Memory-Flag (kein Datei-Zugriff auf dem heissen Pfad)."""
         return self._locked
 
+    async def set_lock(self, on):
+        """Setzt die Sendepause (z. B. aus dem Web-Panel) und persistiert sie.
+        Rueckgabe: der neue Zustand (bool)."""
+        self._locked = bool(on)
+        if self._store is not None:
+            self._store.data["sendepause"] = self._locked
+            try:
+                await self._store.save()
+            except Exception:  # noqa: BLE001
+                log.exception("Sendepause-Zustand konnte nicht gespeichert werden")
+        log.info("SENDEPAUSE %s (via Panel).", "AN" if self._locked else "AUS")
+        return self._locked
+
     # --- Parsen ----------------------------------------------------------------
     def _extract(self, rest):
         """Zieht (ziel_user_id, betrag) aus dem Resttext: erst @-Mention, sonst
@@ -384,6 +397,7 @@ instance = Admin()
 setup = instance.setup
 is_enabled = instance.is_enabled
 is_locked = instance.is_locked
+set_lock = instance.set_lock
 _toggle_lock = instance._toggle_lock
 _extract = instance._extract
 _user_of = instance._user_of
