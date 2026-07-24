@@ -1363,8 +1363,32 @@ def test_floaktie_market():
         assert asyncio.run(fa.handle(FakeMsg(1, "aktienkurs"))) is floaktie.HANDLED
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie chart"))) is floaktie.HANDLED
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie"))) is floaktie.HANDLED  # Panel
+
+        # Live-Panel: das zuletzt gepostete 'flo aktie'-Panel wird bei jeder
+        # Kursaenderung (Trade & Aktivitaets-Takt) automatisch nachgezogen.
+        edits = []
+
+        class FakePanel:
+            id = 1
+            channel = SimpleNamespace(id=1)
+
+            async def edit(self, **kw):
+                edits.append(kw)
+        fa._panel_msg = FakePanel()
+        fa._panel_uid = 1
+        asyncio.run(fa._refresh_last_panel())
+        assert len(edits) == 1 and "embed" in edits[0]            # Panel aktualisiert
+        economy.instance._profile(1)["coins"] = 1_000_000
+        asyncio.run(fa.buy(SimpleNamespace(id=1), 1))
+        assert len(edits) >= 2                                    # Trade zieht Panel nach
+        # Aktivitaets-Takt mit Kursaenderung zieht das Panel ebenfalls nach.
+        n0 = len(edits)
+        fa._store.data["msg_count"] = 999
+        fa._store.data["last_msg_count"] = 0
+        asyncio.run(fa.sample_and_tick(SimpleNamespace(voice_channels=[], afk_channel=None)))
+        assert len(edits) > n0
     finally:
-        fa._store, fa._enabled = alt
+        fa._store, fa._enabled, fa._panel_msg = alt[0], alt[1], None
         floaktie.TICK_NOISE = alt_noise
         restore_eco()
 

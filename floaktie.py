@@ -25,6 +25,7 @@ import os
 import random
 import time
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import discord
@@ -99,6 +100,10 @@ class FloAktie:
         self._enabled = False
         self._bot_name = "Flo"
         self._store = None
+        # Das ZULETZT gepostete 'flo aktie'-Panel (Message) + fuer wen es gepostet
+        # wurde. Es wird live nachgezogen, sobald sich Kurs/Boersenwert aendern.
+        self._panel_msg = None
+        self._panel_uid = None
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -235,6 +240,7 @@ class FloAktie:
         self._state()["price"] = neu   # Kauf hebt den Kurs
         self._record_tick()
         await self._save_all()
+        await self._refresh_last_panel()
         stand = economy.get_coins(member.id)
         warn = ""
         if stand < 0:
@@ -262,6 +268,7 @@ class FloAktie:
         self._state()["price"] = neu   # Verkauf drueckt den Kurs
         self._record_tick()
         await self._save_all()
+        await self._refresh_last_panel()
         return (f"📉 Verkauft! **{count}** Anteile {TICKER} für **{self._fmt(proceeds)}** "
                 f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
                 f"· dein Depot: **{rest}** Anteile.")
@@ -344,6 +351,10 @@ class FloAktie:
                 st.setdefault("history", []).append({"day": today, "price": self.price()})
                 st["history"] = st["history"][-HISTORY_MAX:]
             await self._save()
+            # Aendert sich der Kurs (und damit der Boersenwert), das zuletzt
+            # gepostete 'flo aktie'-Panel live nachziehen.
+            if neu != alt:
+                await self._refresh_last_panel()
             log.info("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
                      "-> Kurs %s->%s (%+.2f%%).", act, people, streams, video, msgs_since,
                      self._fmt(alt), self._fmt(neu), drift * 100)
@@ -452,6 +463,22 @@ class FloAktie:
             if dv == days:
                 return lbl
         return "Verlauf"
+
+    async def _refresh_last_panel(self):
+        """Zieht das ZULETZT gepostete 'flo aktie'-Panel nach (Kurs/Boersenwert live).
+        Wird nach jeder Kursaenderung aufgerufen (Aktivitaets-Takt & Trades)."""
+        msg = self._panel_msg
+        if msg is None:
+            return
+        member = SimpleNamespace(id=self._panel_uid) if self._panel_uid else None
+        try:
+            await msg.edit(embed=self._panel_embed(member))
+        except discord.NotFound:
+            self._panel_msg = None      # Panel geloescht -> vergessen
+        except discord.HTTPException:
+            pass
+        except Exception:  # noqa: BLE001 - ein Refresh-Fehler darf nichts sprengen
+            log.exception("Aktien-Panel-Refresh fehlgeschlagen")
 
     async def open_chart(self, message, days=1):
         """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck."""
@@ -575,12 +602,15 @@ class FloAktie:
             return self._top_embed()
         if sub in ("depot", "portfolio", "anteile", "meins"):
             return self._depot_embed(message.author)
-        # sonst: Panel mit Buttons.
+        # sonst: Panel mit Buttons. Dieses Panel merken -> es wird ab jetzt LIVE
+        # aktualisiert, sobald sich der Boersenwert aendert (jede Minute + bei Trades).
         view = FloAktieView()
         try:
             view.message = await message.reply(
                 embed=self._panel_embed(message.author), view=view, mention_author=False)
             self._protect(view.message)
+            self._panel_msg = view.message
+            self._panel_uid = message.author.id
         except (discord.HTTPException, TypeError):
             log.exception("FloCorp-Panel konnte nicht gesendet werden")
             return "Die Börse klemmt gerade - versuch's gleich nochmal."
@@ -656,11 +686,8 @@ class FloAktieView(discord.ui.View):
             log.exception("FloCorp-Trade (Button) fehlgeschlagen")
             text = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
         await interaction.response.send_message(text, ephemeral=True)
-        if self.message is not None:
-            try:
-                await self.message.edit(embed=instance._panel_embed(interaction.user), view=self)
-            except discord.HTTPException:
-                pass
+        # Das Panel-Embed selbst wird von buy()/sell() ueber _refresh_last_panel()
+        # aktualisiert (das zuletzt gepostete Panel bleibt so immer live).
 
 
 class _KursButton(discord.ui.Button):
