@@ -61,22 +61,27 @@ LIQUIDITY = int(os.getenv("FLOAKTIE_LIQUIDITY", "750") or "750")
 IMPACT_CAP = float(os.getenv("FLOAKTIE_IMPACT_CAP", "0.15") or "0.15")
 MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "100000") or "100000")
 
-# --- Aktivitaets-Modell: der Kurs reagiert LAUFEND auf die Server-Aktivitaet ---
-# Bei JEDEM Sample-Takt (bot.py, alle FLOAKTIE_SAMPLE_SECONDS) wird der Kurs
-# bewegt: viel los (viele im Call + viele Nachrichten) -> er STEIGT sichtbar,
-# wenig los -> er faellt. So spiegelt $FLO die echte Server-Aktivitaet wider.
+# --- Aktivitaets-Modell: der Kurs reagiert JEDE MINUTE auf die Server-Aktivitaet -
+# Bei JEDEM Sample-Takt (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s) wird
+# der Kurs bewegt. Es zaehlen MEHRERE Kriterien:
 #
-#   Aktivitaet = Leute-im-Call + Nachrichten_seit_letztem_Takt / MSG_DIVISOR
+#   Aktivitaet = Leute-im-Call
+#              + STREAM_BONUS * Live-Streamer   (Go Live / Screenshare zaehlt extra)
+#              + VIDEO_BONUS  * Kameras an
+#              + Nachrichten_seit_letztem_Takt / MSG_DIVISOR
 #   Drift/Takt = clamp((Aktivitaet_EMA - BASELINE) * TICK_SENS, +/-TICK_CAP) + Rauschen
 #
-# Beispiel: 15 im Call, ruhiger Chat -> ~+1.2 %/Takt -> bei 10-Min-Takt gut
-# +7 %/Stunde. Leerer Server -> langsames Absacken.
+# Viel los -> Kurs (und damit Boersenwert = Anteile*Kurs) STEIGT jede Minute
+# sichtbar, wenig los -> er faellt. Beispiel: 12 im Call, 6 davon streamen, reger
+# Chat -> deutlich sichtbarer Anstieg pro Minute.
 ACT_BASELINE = float(os.getenv("FLOAKTIE_ACT_BASELINE", "3.0") or "3.0")   # "normale" Aktivitaet
-TICK_SENS = float(os.getenv("FLOAKTIE_TICK_SENS", "0.001") or "0.001")     # Drift je Aktivitaet ueber Baseline
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.06") or "0.06")         # max +/-6 % je Takt
-ACT_ALPHA = float(os.getenv("FLOAKTIE_ACT_ALPHA", "0.6") or "0.6")         # schnelle Glaettung (reagiert flott)
-MSG_DIVISOR = float(os.getenv("FLOAKTIE_MSG_DIVISOR", "8") or "8")         # so viele Nachrichten = 1 "Person"
-TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.004") or "0.004")   # +/-0.4 % Boersen-Rauschen/Takt
+TICK_SENS = float(os.getenv("FLOAKTIE_TICK_SENS", "0.0001") or "0.0001")   # Drift je Aktivitaet ueber Baseline (pro Minute)
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.02") or "0.02")         # max +/-2 % je Takt
+ACT_ALPHA = float(os.getenv("FLOAKTIE_ACT_ALPHA", "0.5") or "0.5")         # schnelle Glaettung (reagiert in 1-2 Min)
+MSG_DIVISOR = float(os.getenv("FLOAKTIE_MSG_DIVISOR", "4") or "4")         # so viele Nachrichten = 1 "Person"
+STREAM_BONUS = float(os.getenv("FLOAKTIE_STREAM_BONUS", "2.0") or "2.0")   # ein Live-Streamer zaehlt so viel extra
+VIDEO_BONUS = float(os.getenv("FLOAKTIE_VIDEO_BONUS", "1.0") or "1.0")     # eine Kamera zaehlt so viel extra
+TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0012") or "0.0012") # +/-0.12 % Boersen-Rauschen/Takt
 
 # Dividende: Coins pro Voice-Runde je 'DIVIDEND_DIVISOR' Anteile (gedeckelt).
 DIVIDEND_DIVISOR = int(os.getenv("FLOAKTIE_DIVIDEND_DIVISOR", "10") or "10")
@@ -278,20 +283,35 @@ class FloAktie:
         st = self._state()
         st["msg_count"] = int(st.get("msg_count", 0)) + 1
 
-    def _count_voice(self, guild):
-        """Wie viele (Nicht-Bot-)Leute stecken gerade in Sprachkanaelen (ohne AFK)?"""
-        total = 0
+    def _measure(self, guild):
+        """Misst die aktuelle Voice-Aktivitaet: (Leute, Live-Streamer, Kameras).
+        Zaehlt alle Nicht-Bots in Sprachkanaelen (ohne AFK); wer streamt (Go Live)
+        oder die Kamera anhat, zaehlt zusaetzlich als Extra-Kriterium."""
+        people = streams = video = 0
         for vc in getattr(guild, "voice_channels", []):
             if guild.afk_channel and vc.id == guild.afk_channel.id:
                 continue
-            total += sum(1 for m in vc.members if not getattr(m, "bot", False))
-        return total
+            for m in vc.members:
+                if getattr(m, "bot", False):
+                    continue
+                people += 1
+                vs = getattr(m, "voice", None)
+                if vs is not None:
+                    if getattr(vs, "self_stream", False):
+                        streams += 1
+                    if getattr(vs, "self_video", False):
+                        video += 1
+        return people, streams, video
 
-    def _activity_tick(self, voice, msgs_since):
-        """EIN Aktivitaets-Takt: viel Aktivitaet (Leute im Call + Nachrichten) treibt
-        den Kurs hoch, wenig druckt ihn. Rueckgabe: (alt, neu, drift, aktivitaet)."""
+    def _activity_tick(self, people, msgs_since, streams=0, video=0):
+        """EIN Aktivitaets-Takt (pro Minute). Kriterien: Leute im Call + Live-Streamer
+        (extra) + Kameras (extra) + Nachrichten. Viel Aktivitaet -> Kurs steigt, wenig
+        -> faellt. Rueckgabe: (alt, neu, drift, aktivitaet)."""
         st = self._state()
-        activity = float(max(0, voice)) + float(max(0, msgs_since)) / MSG_DIVISOR
+        activity = (float(max(0, people))
+                    + STREAM_BONUS * float(max(0, streams))
+                    + VIDEO_BONUS * float(max(0, video))
+                    + float(max(0, msgs_since)) / MSG_DIVISOR)
         ema = ACT_ALPHA * activity + (1 - ACT_ALPHA) * float(st.get("act_ema", ACT_BASELINE))
         st["act_ema"] = ema
         raw = (ema - ACT_BASELINE) * TICK_SENS
@@ -303,18 +323,19 @@ class FloAktie:
         return alt, neu, drift, activity
 
     async def sample_and_tick(self, guild):
-        """Loop-Einstieg (bot.py, alle FLOAKTIE_SAMPLE_SECONDS): misst die aktuelle
-        Aktivitaet (Call-Leute + Nachrichten seit dem letzten Takt) und bewegt den
-        Kurs SOFORT entsprechend - viel los -> steigt, wenig los -> faellt."""
+        """Loop-Einstieg (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s): misst
+        die aktuelle Aktivitaet (Call-Leute + Streamer + Kameras + Nachrichten seit
+        dem letzten Takt) und bewegt den Kurs SOFORT - viel los -> steigt, wenig ->
+        faellt."""
         if not self._enabled or guild is None:
             return
         try:
             st = self._state()
-            voice = self._count_voice(guild)
+            people, streams, video = self._measure(guild)
             total_msgs = int(st.get("msg_count", 0))
             msgs_since = max(0, total_msgs - int(st.get("last_msg_count", total_msgs)))
             st["last_msg_count"] = total_msgs
-            alt, neu, drift, act = self._activity_tick(voice, msgs_since)
+            alt, neu, drift, act = self._activity_tick(people, msgs_since, streams, video)
             self._record_tick()
             # Einmal pro Tag den Schlusskurs fuer den Langzeit-Chart festhalten.
             today = self._today()
@@ -323,8 +344,9 @@ class FloAktie:
                 st.setdefault("history", []).append({"day": today, "price": self.price()})
                 st["history"] = st["history"][-HISTORY_MAX:]
             await self._save()
-            log.info("FloCorp Takt: Aktivitaet %.1f (Voice %d, Msgs %d) -> Kurs %s->%s (%+.2f%%).",
-                     act, voice, msgs_since, self._fmt(alt), self._fmt(neu), drift * 100)
+            log.info("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
+                     "-> Kurs %s->%s (%+.2f%%).", act, people, streams, video, msgs_since,
+                     self._fmt(alt), self._fmt(neu), drift * 100)
         except Exception:  # noqa: BLE001
             log.exception("FloCorp Sample/Tick fehlgeschlagen")
 

@@ -196,9 +196,10 @@ MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
 # Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
 # Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
 LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
-# Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Nachrichten) misst
-# und den Kurs bewegt. 10 Min -> der Kurs reagiert zeitnah sichtbar.
-STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "600"))
+# Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Streamer + Kameras
+# + Nachrichten) misst und den Kurs bewegt. 60 s -> der Kurs steigt/faellt fast in
+# Echtzeit sichtbar.
+STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "60"))
 
 if "--once" in sys.argv:
     MODE = "once"

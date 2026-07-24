@@ -618,6 +618,7 @@ function renderOverview(d,soft){ var st=d.stats||{}; var prev=(S.prevOv&&S.prevO
       {k:"members",lab:"Mitglieder",icon:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',cls:"",icc:"em",val:st.members,sub:"über alle Server"}
     ];
     if(st.floaktie_price!=null) tiles.push({k:"floaktie_price",lab:"$FLO-Kurs",icon:'<polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/>',cls:"gold",icc:"",val:st.floaktie_price,dec:2,pre:"",sub:chgHtml||"Aktienkurs",extra:st.floaktie_holders!=null?("· "+fmt(st.floaktie_holders)+" Halter"):""});
+    if(st.floaktie_marketcap!=null) tiles.push({k:"floaktie_marketcap",lab:"$FLO Börsenwert",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1 1.2-1.8 3-1.8s3 .8 3 1.8-1.2 1.6-3 2-3 1-3 2 1.2 1.8 3 1.8 3-.8 3-1.8"/>',cls:"gold",icc:"em",val:st.floaktie_marketcap,sub:"Anteile × Kurs"});
     if(st.lotto_jackpot!=null) tiles.push({k:"lotto_jackpot",lab:"Lotto-Jackpot",icon:'<path d="M12 2l2.4 7.4H22l-6 4.5 2.3 7.1-6.3-4.6-6.3 4.6L8 13.9 2 9.4h7.6z"/>',cls:"gold",icc:"pl",val:st.lotto_jackpot,sub:st.lotto_house!=null?("Bank: "+fmt(st.lotto_house)+" ⛁"):"Ziehungspool"});
     tiles.forEach(function(t){ var el=ce("div","card kpi reveal"+(t.cls?" "+t.cls:""));
       el.innerHTML='<div class="lab"><span class="ic '+(t.icc||"")+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+t.icon+'</svg></span>'+t.lab+'</div>'+

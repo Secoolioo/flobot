@@ -259,6 +259,8 @@ class WebPanel:
                 stats["floaktie_price"] = floaktie.instance.price()
                 stats["floaktie_holders"] = floaktie.instance.holders_count()
                 stats["floaktie_change"] = round(floaktie.instance._change_pct(1), 2)
+                stats["floaktie_marketcap"] = (floaktie.instance.total_shares()
+                                               * floaktie.instance.price())
                 floaktie_history = [h.get("price", 0)
                                     for h in floaktie.instance._state().get("history", [])][-30:]
         except Exception:  # noqa: BLE001

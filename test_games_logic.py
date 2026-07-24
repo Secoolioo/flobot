@@ -1291,26 +1291,32 @@ def test_floaktie_market():
         fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
         a, n, drift, act = fa._activity_tick(15, 0)          # 15 im Call
         assert n > a and drift > 0
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        fa._store.data.update({"price": 5000, "act_ema": floaktie.ACT_BASELINE})
         a, n, drift, act = fa._activity_tick(0, 0)           # niemand da
-        assert n < a and drift < 0
+        assert drift < 0 and n <= a                          # Tendenz nach unten
         # Auch VIELE NACHRICHTEN treiben den Kurs (msgs / MSG_DIVISOR).
         fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
         a, n, drift, act = fa._activity_tick(0, 200)         # reger Chat
         assert n > a and drift > 0 and act > floaktie.ACT_BASELINE
-        # Ueber mehrere aktive Takte steigt der Kurs deutlich (Boersenwert mit).
+        # Live-Streamer zaehlen EXTRA: gleiche Personen, aber Streams -> mehr Aktivitaet.
         fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
-        for _ in range(20):
-            fa._activity_tick(15, 30)
-        assert fa.price() > 1100                              # klar gestiegen
+        _, _, _, act_plain = fa._activity_tick(12, 0)
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        _, _, _, act_stream = fa._activity_tick(12, 0, streams=6, video=3)
+        assert act_stream > act_plain                        # Streamer/Kameras zaehlen mit
+        # Ueber eine Stunde (60 Min-Takte) aktiver Call -> Kurs klar hoch.
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        for _ in range(60):
+            fa._activity_tick(12, 30, streams=6)
+        assert fa.price() > 1030                             # klar gestiegen (Boersenwert mit)
         # note_message + sample_and_tick: Nachrichten fliessen in die Aktivitaet ein.
         fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE,
                                "msg_count": 0, "last_msg_count": 0, "day": fa._today()})
-        for _ in range(120):
+        for _ in range(200):
             fa.note_message()
         guild0 = SimpleNamespace(voice_channels=[], afk_channel=None)
         asyncio.run(fa.sample_and_tick(guild0))
-        assert fa.price() > 1000                              # Chat allein hob den Kurs
+        assert fa.price() > 1000                             # Chat allein hob den Kurs
 
         # Dividende proportional; groesster Aktionaer doppelt; Leaderboard sortiert.
         fa._store.data["holdings"] = {"1": 100, "2": 300}
