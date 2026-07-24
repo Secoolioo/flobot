@@ -1255,10 +1255,10 @@ def test_floaktie_market():
     restore_eco = _with_economy({1: 1_000_000, 2: 500_000})
     fa = floaktie.instance
     alt = (fa._store, fa._enabled)
-    alt_noise = floaktie.DAILY_NOISE
+    alt_noise = floaktie.TICK_NOISE
     fa._enabled = True
-    fa._store = _FakeStore({"price": 1000, "day": fa._today(), "day_sum": 0.0,
-                            "day_count": 0, "voice_ema": floaktie.VOICE_BASELINE,
+    fa._store = _FakeStore({"price": 1000, "day": fa._today(), "act_ema": floaktie.ACT_BASELINE,
+                            "msg_count": 0, "last_msg_count": 0,
                             "holdings": {}, "history": [{"day": "d", "price": 1000}]})
     try:
         p0 = fa.price()
@@ -1286,16 +1286,31 @@ def test_floaktie_market():
         assert isinstance(r, str) and fa.shares_of(4) == 100
         assert economy.get_coins(4) < 0 and "MINUS" in r
 
-        # Markt-Tick: viel Voice -> Kurs steigt; wenig -> faellt (Rauschen aus).
-        floaktie.DAILY_NOISE = 0.0
-        fa._store.data.update({"price": 1000, "voice_ema": floaktie.VOICE_BASELINE,
-                               "day_sum": 100.0, "day_count": 10})   # Schnitt 10 >> Baseline
-        a, n, drift = fa.market_tick()
+        # Aktivitaets-Takt: viel los -> Kurs STEIGT, wenig -> faellt (Rauschen aus).
+        floaktie.TICK_NOISE = 0.0
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        a, n, drift, act = fa._activity_tick(15, 0)          # 15 im Call
         assert n > a and drift > 0
-        fa._store.data.update({"price": 1000, "voice_ema": floaktie.VOICE_BASELINE,
-                               "day_sum": 0.0, "day_count": 5})        # Schnitt 0 << Baseline
-        a, n, drift = fa.market_tick()
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        a, n, drift, act = fa._activity_tick(0, 0)           # niemand da
         assert n < a and drift < 0
+        # Auch VIELE NACHRICHTEN treiben den Kurs (msgs / MSG_DIVISOR).
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        a, n, drift, act = fa._activity_tick(0, 200)         # reger Chat
+        assert n > a and drift > 0 and act > floaktie.ACT_BASELINE
+        # Ueber mehrere aktive Takte steigt der Kurs deutlich (Boersenwert mit).
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        for _ in range(20):
+            fa._activity_tick(15, 30)
+        assert fa.price() > 1100                              # klar gestiegen
+        # note_message + sample_and_tick: Nachrichten fliessen in die Aktivitaet ein.
+        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE,
+                               "msg_count": 0, "last_msg_count": 0, "day": fa._today()})
+        for _ in range(120):
+            fa.note_message()
+        guild0 = SimpleNamespace(voice_channels=[], afk_channel=None)
+        asyncio.run(fa.sample_and_tick(guild0))
+        assert fa.price() > 1000                              # Chat allein hob den Kurs
 
         # Dividende proportional; groesster Aktionaer doppelt; Leaderboard sortiert.
         fa._store.data["holdings"] = {"1": 100, "2": 300}
@@ -1344,7 +1359,7 @@ def test_floaktie_market():
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie"))) is floaktie.HANDLED  # Panel
     finally:
         fa._store, fa._enabled = alt
-        floaktie.DAILY_NOISE = alt_noise
+        floaktie.TICK_NOISE = alt_noise
         restore_eco()
 
 

@@ -196,9 +196,9 @@ MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
 # Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
 # Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
 LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
-# Takt, in dem die FloCorp-Aktie die Voice-Aktivitaet abtastet und (bei Tages-
-# wechsel) den Kurs neu zieht.
-STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "1800"))
+# Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Nachrichten) misst
+# und den Kurs bewegt. 10 Min -> der Kurs reagiert zeitnah sichtbar.
+STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "600"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -1255,6 +1255,13 @@ class FloBot(discord.Client):
                 words.note_message(message)
             except Exception:
                 log.exception("Wort-Zaehler-Hook fehlgeschlagen")
+        # FloCorp-Aktie: jede Nachricht zaehlt als Aktivitaet (treibt den Kurs mit).
+        # Nur ein Zaehler-Inkrement - gespeichert wird beim Sample-Takt.
+        if FLOAKTIE_ENABLED and features.is_on("floaktie"):
+            try:
+                floaktie.note_message()
+            except Exception:
+                log.exception("FloCorp-Nachrichten-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and features.is_on("food"):
             self._spawn(food.on_message_passive(message))
