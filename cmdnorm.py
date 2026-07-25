@@ -32,6 +32,8 @@ class CmdNorm:
         "level", "lvl", "rank", "rang", "coins", "konto", "kontostand", "münzen",
         "muenzen", "balance", "top", "bestenliste", "rangliste", "leaderboard",
         "daily", "täglich", "taeglich", "tagesbonus", "pay", "zahl", "zahle",
+        "reichste", "reich", "geld", "vermögen", "vermoegen", "reichtum",
+        "geldtop", "moneytop", "coinlb",
         "überweis", "ueberweis", "überweise", "shop", "laden", "store", "kaufen",
         "buy", "kauf", "inventar", "inventory", "titel", "titles", "title",
         "equip", "anlegen", "trage", "tragen", "anziehen", "setze",

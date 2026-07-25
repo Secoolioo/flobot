@@ -25,6 +25,7 @@ import discord
 
 import ai
 import economy
+import numfmt
 from store import JsonStore
 
 log = logging.getLogger("dcbot.admin")
@@ -213,10 +214,10 @@ class Admin:
         await economy.flush()
         name = await self._name_of(message, uid)
         if delta >= 0:
-            return self._emb(f"💰 **{name}** bekommt **+{delta} {economy.COIN}** "
-                             f"→ neuer Stand: **{neu}**.", color=discord.Color.green())
-        return self._emb(f"🪙 **{name}** verliert **{delta} {economy.COIN}** "
-                         f"→ neuer Stand: **{neu}**.", color=discord.Color.orange())
+            return self._emb(f"💰 **{name}** bekommt **+{numfmt.fmt(delta)} {economy.COIN}** "
+                             f"→ neuer Stand: **{numfmt.fmt(neu)}**.", color=discord.Color.green())
+        return self._emb(f"🪙 **{name}** verliert **{numfmt.fmt(delta)} {economy.COIN}** "
+                         f"→ neuer Stand: **{numfmt.fmt(neu)}**.", color=discord.Color.orange())
 
     async def _set_coins(self, message, rest):
         if not economy.is_enabled():
@@ -228,7 +229,7 @@ class Admin:
         neu = economy.add_coins(uid, delta)
         await economy.flush()
         name = await self._name_of(message, uid)
-        return self._emb(f"🎯 Kontostand von **{name}** auf **{neu} {economy.COIN}** gesetzt.")
+        return self._emb(f"🎯 Kontostand von **{name}** auf **{numfmt.fmt(neu)} {economy.COIN}** gesetzt.")
 
     async def _give_xp(self, message, rest):
         uid, amount = self._extract(rest)
@@ -244,7 +245,7 @@ class Admin:
         level = await economy.add_xp(user, amount)
         await economy.flush()
         extra = f" → **Level {level}**! 🎉" if level else ""
-        return self._emb(f"⭐ **{user.display_name}** bekommt **+{amount} XP**{extra}")
+        return self._emb(f"⭐ **{user.display_name}** bekommt **+{numfmt.fmt(amount)} XP**{extra}")
 
     async def _profile(self, message, rest):
         if not economy.is_enabled():
@@ -260,12 +261,12 @@ class Admin:
             return self._emb(f"**{name}** hat noch kein Profil (nie geschrieben).")
         h, rem = divmod(int(row.get("voice_secs", 0)), 3600)
         emb = self._emb(f"👤 **{name}**", color=discord.Color.blurple())
-        emb.add_field(name="Level", value=f"{row.get('level', 0)} ({row.get('xp', 0)} XP)",
+        emb.add_field(name="Level", value=f"{row.get('level', 0)} ({numfmt.fmt(row.get('xp', 0))} XP)",
                       inline=True)
-        emb.add_field(name="Coins", value=f"{row.get('coins', 0)} {economy.COIN}",
+        emb.add_field(name="Coins", value=f"{numfmt.fmt(row.get('coins', 0))} {economy.COIN}",
                       inline=True)
         emb.add_field(name="Aktivität",
-                      value=f"{row.get('msgs', 0)} Nachrichten · {h}h {rem // 60}m Voice",
+                      value=f"{numfmt.fmt(row.get('msgs', 0))} Nachrichten · {numfmt.fmt(h)}h {rem // 60}m Voice",
                       inline=False)
         if row.get("title"):
             emb.add_field(name="Titel", value=row["title"], inline=False)

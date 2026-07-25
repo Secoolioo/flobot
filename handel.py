@@ -24,6 +24,7 @@ import discord
 
 import ai
 import economy
+import numfmt
 import render
 from store import JsonStore
 
@@ -158,8 +159,8 @@ class Handel:
             log.exception("Handels-Karte fehlgeschlagen - Text-Fallback")
             netto = u.get("in", 0) - u.get("out", 0)
             return (f"📒 **{target.display_name}** – {u.get('n', 0)} Transaktionen, "
-                    f"eingenommen +{u.get('in', 0)}, ausgegeben -{u.get('out', 0)}, "
-                    f"Netto {'+' if netto >= 0 else ''}{netto} {economy.COIN}.")
+                    f"eingenommen +{numfmt.fmt(u.get('in', 0))}, ausgegeben -{numfmt.fmt(u.get('out', 0))}, "
+                    f"Netto {'+' if netto >= 0 else ''}{numfmt.fmt(netto)} {economy.COIN}.")
 
 
 # --- Singleton + Modul-API -------------------------------------------------

@@ -26,9 +26,13 @@ import discord
 
 import ai
 import leaderboard_img
+import numfmt
 import render
 import titles
 from store import JsonStore
+
+# Kurz-Alias: deutsche Tausenderpunkte fuer alle Zahlen in Nachrichten.
+fmt = numfmt.fmt
 
 log = logging.getLogger("dcbot.economy")
 
@@ -309,8 +313,12 @@ class Economy:
         else:
             neu = max(0, alt + amount)         # normale Ausgabe: Schluss bei 0
         prof["coins"] = neu
+        delta = neu - alt
+        # Lebenszeit-Verdienst mitzaehlen (nur echte Zufluesse) - fuers Geld-Ranking.
+        if delta > 0:
+            prof["earned"] = int(prof.get("earned", 0)) + delta
         # Echtes Delta buchen (bei leerem Konto kann weniger abgehen als gewollt).
-        self._record_trade(user_id, neu - alt, reason, neu)
+        self._record_trade(user_id, delta, reason, neu)
         return neu
 
     def _record_trade(self, uid, delta, source, balance):
@@ -540,7 +548,7 @@ class Economy:
             return f"Den hast du schon – ich hab dir **{item['label']}** angelegt. 😎"
         if prof["coins"] < item["price"]:
             fehlt = item["price"] - prof["coins"]
-            return f"Zu teuer – dir fehlen noch {fehlt} {self.COIN}."
+            return f"Zu teuer – dir fehlen noch {fmt(fehlt)} {self.COIN}."
         prof["coins"] -= item["price"]
         self._record_trade(member.id, -item["price"], "shop", prof["coins"])
         owned.append({"text": item["text"], "label": item["label"],
@@ -621,7 +629,7 @@ class Economy:
             description=f"{member.mention} ist jetzt **Level {level}**!\n\n{roast}",
             color=discord.Color.gold(),
         )
-        emb.add_field(name="Belohnung", value=f"💰 +{reward} {self.COIN}", inline=True)
+        emb.add_field(name="Belohnung", value=f"💰 +{fmt(reward)} {self.COIN}", inline=True)
         try:
             emb.set_thumbnail(url=member.display_avatar.url)
         except Exception:  # noqa: BLE001 - Avatar ist nur Deko
@@ -698,9 +706,12 @@ class Economy:
         if first in ("coins", "konto", "kontostand", "münzen", "muenzen", "balance", "bal"):
             c = self.get_coins(target.id)
             wer = "Du hast" if target.id == message.author.id else f"{target.display_name} hat"
-            return f"💰 {wer} **{c} {self.COIN}**."
+            return f"💰 {wer} **{fmt(c)} {self.COIN}**."
         if first in ("top", "bestenliste", "rangliste", "leaderboard", "lb"):
             return await self._leaderboard(message.guild)
+        if first in ("reichste", "reich", "geld", "vermögen", "vermoegen",
+                     "reichtum", "geldtop", "moneytop", "coinlb"):
+            return self._money_leaderboard(message.guild)
         if first in ("daily", "täglich", "taeglich", "tagesbonus"):
             return await self._daily(message.author)
         if first in ("pay", "zahl", "zahle", "überweis", "ueberweis", "überweise"):
@@ -787,6 +798,34 @@ class Economy:
         emb.add_field(name="Streak", value=f"🔥 {prof.get('streak', 0)} Tag(e)", inline=True)
         emb.add_field(name="Nachrichten", value=f"💬 {prof.get('msgs', 0)}", inline=True)
         emb.set_footer(text=f"{self._bot_name} top   ·   {self._bot_name} daily   ·   {self._bot_name} shop")
+        return emb
+
+    def _money_leaderboard(self, guild, limit = 15):
+        """Geld-Rangliste: wer hat aktuell am meisten Flo Coins? Unter jedem Namen
+        steht, wie viel er INSGESAMT schon verdient hat (Lebenszeit-Zufluesse)."""
+        rows = []
+        for uid, prof in self._users().items():
+            coins = int(prof.get("coins", 0))
+            # 'insgesamt' nie kleiner als der aktuelle Kontostand (Counter ist neu).
+            earned = max(int(prof.get("earned", 0)), coins, 0)
+            rows.append((uid, coins, earned, prof.get("name") or ""))
+        rows.sort(key=lambda r: r[1], reverse=True)
+        rows = rows[:limit]
+        if not rows:
+            return "Noch hat niemand Flo Coins. 🪙"
+        medal = {0: "🥇", 1: "🥈", 2: "🥉"}
+        zeilen = []
+        for i, (uid, coins, earned, name) in enumerate(rows):
+            member = guild.get_member(int(uid)) if guild else None
+            disp = (getattr(member, "display_name", None) or name or f"User {uid}")
+            pre = medal.get(i, f"**{i + 1}.**")
+            zeilen.append(f"{pre} **{disp}** — 💰 {fmt(coins)} {self.COIN}\n"
+                          f"┗ insgesamt verdient: **{fmt(earned)}** {self.COIN}")
+        emb = discord.Embed(
+            title=f"🤑 Reichste – {self.COIN}-Rangliste",
+            description="\n".join(zeilen),
+            color=discord.Color.gold())
+        emb.set_footer(text=f"Rang nach aktuellem Kontostand · '{self._bot_name} reichste'")
         return emb
 
     def leaderboard_data(self, limit = 10):
@@ -974,7 +1013,7 @@ class Economy:
         prof["coins"] += total
         self._record_trade(member.id, total, "daily", prof["coins"])
         await self._flush()
-        return (f"🎁 Tagesbonus: **+{total} {self.COIN}**! "
+        return (f"🎁 Tagesbonus: **+{fmt(total)} {self.COIN}**! "
                 f"(Streak: {prof['streak']} Tag(e), Bonus +{bonus})")
 
     async def _pay(self, message):
@@ -1002,11 +1041,11 @@ class Economy:
         if betrag is None:
             return f"Wie viel denn? `{self._bot_name} pay @{ziel.display_name} 100` (auch `1k`)"
         if self.get_coins(message.author.id) < betrag:
-            return f"Du hast nicht genug. Kontostand: {self.get_coins(message.author.id)} {self.COIN}."
+            return f"Du hast nicht genug. Kontostand: {fmt(self.get_coins(message.author.id))} {self.COIN}."
         self.add_coins(message.author.id, -betrag, reason="pay")
         self.add_coins(ziel.id, betrag, reason="pay")
         await self._flush()
-        return f"✅ {message.author.display_name} → {ziel.display_name}: **{betrag} {self.COIN}**."
+        return f"✅ {message.author.display_name} → {ziel.display_name}: **{fmt(betrag)} {self.COIN}**."
 
     async def _ensure_shop(self):
         """Sorgt dafuer, dass der heutige Shop existiert (sonst neu wuerfeln+speichern)."""
@@ -1032,7 +1071,7 @@ class Economy:
                 meta = titles.RARITY[e["rarity"]]
                 emb.add_field(
                     name=f"{e['n']}. {e['label']}",
-                    value=f"{meta['emoji']} **{meta['label']}** · 💰 {e['price']} {self.COIN}",
+                    value=f"{meta['emoji']} **{meta['label']}** · 💰 {fmt(e['price'])} {self.COIN}",
                     inline=True,
                 )
             while len(emb.fields) % 3 != 0:
@@ -1130,7 +1169,7 @@ class _ShopBuySelect(discord.ui.Select):
             opts.append(discord.SelectOption(
                 label=f"{e['n']}. {e['text']}"[:100],
                 value=str(e["n"]),
-                description=f"{meta['label']} · {e['price']} {Economy.COIN}"[:100],
+                description=f"{meta['label']} · {fmt(e['price'])} {Economy.COIN}"[:100],
             ))
         super().__init__(placeholder="Titel kaufen…", min_values=1, max_values=1,
                          options=opts, row=0)

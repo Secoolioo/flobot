@@ -34,6 +34,7 @@ import discord
 
 import ai
 import economy
+import numfmt
 import render
 from store import JsonStore
 
@@ -206,10 +207,10 @@ class Casino:
         if bet < MIN_BET:
             return 0, f"Mindesteinsatz ist {MIN_BET} {economy.COIN}."
         if bet > MAX_BET:
-            return 0, f"Maximaleinsatz ist {MAX_BET} {economy.COIN}."
+            return 0, f"Maximaleinsatz ist {numfmt.fmt(MAX_BET)} {economy.COIN}."
         bal = economy.get_coins(uid)
         if bet > bal:
-            return 0, f"Dafür reicht's nicht – du hast {bal} {economy.COIN}."
+            return 0, f"Dafür reicht's nicht – du hast {numfmt.fmt(bal)} {economy.COIN}."
         return bet, None
 
     def _take(self, uid, raw_bet):
@@ -221,16 +222,16 @@ class Casino:
         return bet, None
 
     def _bal_footer(self, uid):
-        return f"Kontostand: {economy.get_coins(uid)} {economy.COIN}"
+        return f"Kontostand: {numfmt.fmt(economy.get_coins(uid))} {economy.COIN}"
 
     def _outcome(self, bet, payout):
         """Farbe + Ergebnis-Feld aus Einsatz und Auszahlung (Auszahlung inkl. Einsatz)."""
         net = payout - bet
         if net > 0:
-            return _C_WIN, "Gewinn", f"+{net} {economy.COIN}"
+            return _C_WIN, "Gewinn", f"+{numfmt.fmt(net)} {economy.COIN}"
         if net == 0:
             return _C_PUSH, "Ergebnis", "±0 – Einsatz zurück"
-        return _C_LOSE, "Verlust", f"-{bet} {economy.COIN}"
+        return _C_LOSE, "Verlust", f"-{numfmt.fmt(bet)} {economy.COIN}"
 
     def _err(self, text):
         return discord.Embed(description=f"⚠️ {text}", color=_C_LOSE)
@@ -591,7 +592,7 @@ class Casino:
         file = discord.File(buf, filename=fn)
         emb = discord.Embed(
             title="🎱 Keno",
-            description=f"**{len(hits)}** von **{len(picks)}** getroffen  →  Faktor **×{mult}**",
+            description=f"**{len(hits)}** von **{len(picks)}** getroffen  →  Faktor **×{numfmt.fmt(mult)}**",
             color=color)
         emb.set_author(name="🎰 Flo Casino")
         emb.add_field(name=res_name, value=res_val, inline=True)
@@ -808,7 +809,7 @@ class Casino:
         color = _C_WIN if net > 0 else (_C_PUSH if net == 0 else _C_LOSE)
         emb = view._embed(color=color,
                           note=f"**Cashout!** 💰 ×{mult:.2f} → "
-                               f"**{'+' if net >= 0 else ''}{net} {economy.COIN}**.")
+                               f"**{'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}**.")
         if view.message is not None:
             try:
                 await view.message.edit(embed=emb, view=view)
@@ -866,7 +867,7 @@ class Casino:
             return HANDLED
         if economy.get_coins(target.id) < bet:
             await self._send(message, embed=self._info(
-                f"**{target.display_name}** hat keine {bet} {economy.COIN} – "
+                f"**{target.display_name}** hat keine {numfmt.fmt(bet)} {economy.COIN} – "
                 "such dir ein reicheres Opfer. 😏"))
             return HANDLED
         view = DuelView(message.author, target, bet)
@@ -900,9 +901,9 @@ class Casino:
         except Exception:
             log.exception("Stats-Karte fehlgeschlagen - Text-Fallback")
             net = prof.get("payout", 0) - prof.get("wagered", 0)
-            emb = self._info(f"**{target.display_name}** – {prof.get('games', 0)} Runden, "
-                        f"gewonnen +{prof.get('won', 0)}, verloren -{prof.get('lost', 0)}, "
-                        f"Netto {'+' if net >= 0 else ''}{net} {economy.COIN}.")
+            emb = self._info(f"**{target.display_name}** – {numfmt.fmt(prof.get('games', 0))} Runden, "
+                        f"gewonnen +{numfmt.fmt(prof.get('won', 0))}, verloren -{numfmt.fmt(prof.get('lost', 0))}, "
+                        f"Netto {'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}.")
             await self._send(message, embed=emb)
             return HANDLED
         fn = f"stats_{target.id}.png"
@@ -1271,7 +1272,7 @@ class BlackjackView(discord.ui.View):
         emb = discord.Embed(title=title, description=note or None, color=color)
         emb.set_author(name="🎰 Flo Casino")
         emb.set_image(url=f"attachment://{fname}")
-        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet} {economy.COIN}")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {numfmt.fmt(self.bet)} {economy.COIN}")
         return emb, file
 
     async def natural_payload(self):
@@ -1282,7 +1283,7 @@ class BlackjackView(discord.ui.View):
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet)
             return await self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
-                                       note=f"Beide haben 21 – Einsatz ({self.bet} {economy.COIN}) zurück.",
+                                       note=f"Beide haben 21 – Einsatz ({numfmt.fmt(self.bet)} {economy.COIN}) zurück.",
                                        state="push", anim="reveal")
         if pv == 21:
             payout = self.bet + (self.bet * 3) // 2     # 3:2
@@ -1290,12 +1291,12 @@ class BlackjackView(discord.ui.View):
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, payout)
             return await self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
-                                       note=f"Natürlicher Blackjack! +{payout - self.bet} {economy.COIN} (3:2).",
+                                       note=f"Natürlicher Blackjack! +{numfmt.fmt(payout - self.bet)} {economy.COIN} (3:2).",
                                        state="blackjack", anim="reveal")
         await economy.flush()
         await record(self.uid, "blackjack", self.bet, 0)
         return await self._payload(reveal=True, title="🂡 Dealer-Blackjack 😬", color=_C_LOSE,
-                                   note=f"Der Dealer hat Blackjack. -{self.bet} {economy.COIN}.",
+                                   note=f"Der Dealer hat Blackjack. -{numfmt.fmt(self.bet)} {economy.COIN}.",
                                    state="lose", anim="reveal")
 
     async def _settle(self):
@@ -1305,7 +1306,7 @@ class BlackjackView(discord.ui.View):
         if pv > 21:     # nur nach Double moeglich
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, 0)
-            return ("bust", f"Über 21 – verloren. -{self.bet} {economy.COIN}.",
+            return ("bust", f"Über 21 – verloren. -{numfmt.fmt(self.bet)} {economy.COIN}.",
                     "🂡 Bust! 💥", _C_LOSE)
         while _hand_value(self.dealer) < 17:
             self.dealer.append(self.deck.pop())
@@ -1315,16 +1316,16 @@ class BlackjackView(discord.ui.View):
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet * 2)
             grund = "Dealer überkauft sich!" if dv > 21 else f"Deine {pv} schlägt {dv}."
-            return ("win", f"{grund} +{self.bet} {economy.COIN}.", "🂡 Gewonnen! 🎉", _C_WIN)
+            return ("win", f"{grund} +{numfmt.fmt(self.bet)} {economy.COIN}.", "🂡 Gewonnen! 🎉", _C_WIN)
         if pv < dv:
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, 0)
-            return ("lose", f"Dealer {dv} schlägt deine {pv}. -{self.bet} {economy.COIN}.",
+            return ("lose", f"Dealer {dv} schlägt deine {pv}. -{numfmt.fmt(self.bet)} {economy.COIN}.",
                     "🂡 Verloren 😬", _C_LOSE)
         economy.add_coins(self.uid, self.bet)
         await economy.flush()
         await record(self.uid, "blackjack", self.bet, self.bet)
-        return ("push", f"Beide {pv} – Einsatz ({self.bet} {economy.COIN}) zurück.",
+        return ("push", f"Beide {pv} – Einsatz ({numfmt.fmt(self.bet)} {economy.COIN}) zurück.",
                 "🂡 Push", _C_PUSH)
 
     async def _mutate(self, action):
@@ -1340,7 +1341,7 @@ class BlackjackView(discord.ui.View):
                         "Verdoppeln geht nur als allererste Aktion.", False)
             if economy.get_coins(self.uid) < self.bet:
                 return (False, "", "🂡 Blackjack", _C_PLAY,
-                        f"Zum Verdoppeln fehlen dir {self.bet} {economy.COIN}.", False)
+                        f"Zum Verdoppeln fehlen dir {numfmt.fmt(self.bet)} {economy.COIN}.", False)
             self.settled = True
             economy.add_coins(self.uid, -self.bet)
             self.bet += self.bet
@@ -1355,7 +1356,7 @@ class BlackjackView(discord.ui.View):
                 await economy.flush()
                 await record(self.uid, "blackjack", self.bet, 0)
                 return (True, "bust", "🂡 Bust! 💥", _C_LOSE,
-                        f"Über 21 – verloren. -{self.bet} {economy.COIN}.", True)
+                        f"Über 21 – verloren. -{numfmt.fmt(self.bet)} {economy.COIN}.", True)
             self._sync_buttons()
             return (False, "", "🂡 Blackjack", _C_PLAY, self._prompt(), False)
         # stand
@@ -1527,12 +1528,12 @@ class MinesView(discord.ui.View):
                                  "Steig mit **Cashout** aus, solange du vorne liegst."),
             color=color or _C_PLAY)
         emb.set_author(name="🎰 Flo Casino")
-        emb.add_field(name="Einsatz", value=f"{self.bet} {economy.COIN}", inline=True)
+        emb.add_field(name="Einsatz", value=f"{numfmt.fmt(self.bet)} {economy.COIN}", inline=True)
         emb.add_field(name="Bomben", value=f"{self.mines} 💣", inline=True)
         emb.add_field(name="Aufgedeckt",
                       value=f"{self.picked}/{_MINES_TILES - self.mines} 💎", inline=True)
         if not self.settled:
-            cash_txt = (f"**{int(self.bet * cur)}** {economy.COIN} (×{cur:.2f})"
+            cash_txt = (f"**{numfmt.fmt(int(self.bet * cur))}** {economy.COIN} (×{cur:.2f})"
                         if self.picked else "_erst ein Feld aufdecken_")
             emb.add_field(name="Cashout", value=cash_txt, inline=True)
             emb.add_field(name="Nächstes Feld", value=f"×{nxt:.2f}", inline=True)
@@ -1584,7 +1585,7 @@ class MinesView(discord.ui.View):
             await record(self.uid, "mines", self.bet, 0)
             emb = self._embed(color=_C_LOSE,
                               note=f"**BOOM!** 💥 Feld {tile.idx + 1} war eine Bombe. "
-                                   f"-{self.bet} {economy.COIN}.")
+                                   f"-{numfmt.fmt(self.bet)} {economy.COIN}.")
             await interaction.response.edit_message(embed=emb, view=self)
             return
         tile.safe_open = True
@@ -1597,7 +1598,7 @@ class MinesView(discord.ui.View):
             await self._cashout(interaction)   # alles sicher aufgedeckt -> auto
             return
         cur = _mines_mult(self.picked, self.mines)
-        self.cash.label = f"Cashout {int(self.bet * cur)}"
+        self.cash.label = f"Cashout {numfmt.fmt(int(self.bet * cur))}"
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
     async def _settle_cashout(self):
@@ -1622,7 +1623,7 @@ class MinesView(discord.ui.View):
         color = _C_WIN if net > 0 else (_C_PUSH if net == 0 else _C_LOSE)
         emb = self._embed(color=color,
                           note=f"**Cashout!** 💰 ×{mult:.2f} → "
-                               f"**{'+' if net >= 0 else ''}{net} {economy.COIN}**.")
+                               f"**{'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}**.")
         await interaction.response.edit_message(embed=emb, view=self)
 
     async def on_timeout(self):
@@ -1637,7 +1638,7 @@ class MinesView(discord.ui.View):
             if self.picked > 0:
                 payout, mult = await self._settle_cashout()
                 note = (f"⏰ Zeit um – automatischer Cashout bei ×{mult:.2f} "
-                        f"(**{payout} {economy.COIN}**).")
+                        f"(**{numfmt.fmt(payout)} {economy.COIN}**).")
             else:
                 economy.add_coins(self.uid, self.bet)
                 await economy.flush()
@@ -1682,7 +1683,7 @@ class DuelView(discord.ui.View):
         emb = discord.Embed(
             title="⚔️ Münz-Duell",
             description=(f"{self.challenger.mention} fordert {self.target.mention} "
-                         f"heraus – Einsatz **{self.bet} {economy.COIN}** pro Kopf.\n"
+                         f"heraus – Einsatz **{numfmt.fmt(self.bet)} {economy.COIN}** pro Kopf.\n"
                          f"{self.challenger.display_name} = **KOPF** · "
                          f"{self.target.display_name} = **ZAHL**.\n"
                          f"{self.target.mention}, nimmst du an? (120s)"),
@@ -1742,7 +1743,7 @@ class DuelView(discord.ui.View):
             title="⚔️ Münz-Duell",
             description=(f"Die Münze zeigt **{face.upper()}**!\n"
                          f"🏆 {winner.mention} gewinnt den Pott: "
-                         f"**+{self.bet} {economy.COIN}** "
+                         f"**+{numfmt.fmt(self.bet)} {economy.COIN}** "
                          f"(von {loser.display_name})."),
             color=_C_WIN)
         emb.set_author(name="🎰 Flo Casino")
@@ -1836,7 +1837,7 @@ class _SerienView(discord.ui.View):
             if self.message is not None:
                 try:
                     await self.message.edit(embed=discord.Embed(
-                        description=(f"⏰ Zeit um – **{wert} {economy.COIN}** "
+                        description=(f"⏰ Zeit um – **{numfmt.fmt(wert)} {economy.COIN}** "
                                      "automatisch ausgezahlt." if wert else
                                      "⏰ Zeit um – Runde verfallen."),
                         color=_C_PUSH), attachments=[], view=self)
@@ -1907,10 +1908,10 @@ class HiloView(_SerienView):
         emb = discord.Embed(
             title="🃏 HiLo",
             description=note or (f"Kommt die nächste Karte **höher** oder **tiefer**? "
-                                 f"Cashout: **{int(self.bet * self.mult)} {economy.COIN}**"),
+                                 f"Cashout: **{numfmt.fmt(int(self.bet * self.mult))} {economy.COIN}**"),
             color=color or _C_PLAY)
         emb.set_author(name="🎰 Flo Casino")
-        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {numfmt.fmt(self.bet)}")
         return emb
 
     async def _zeige(self, interaction, emb, state = ""):
@@ -1935,7 +1936,7 @@ class HiloView(_SerienView):
             self.add_item(_SerienRestart(_hilo_start, self.bet))
             await self._zeige(interaction, self._embed(
                 _C_LOSE, f"**{_RANKS[alt]} → {_RANKS[self.rank_i]}** – daneben. "
-                         f"-{self.bet} {economy.COIN}."), state="lose")
+                         f"-{numfmt.fmt(self.bet)} {economy.COIN}."), state="lose")
             return
         self.streak += 1
         self.mult = round(self.mult * 0.97 / max(p, 1 / 13), 2)
@@ -1957,7 +1958,7 @@ class HiloView(_SerienView):
         self.add_item(_SerienRestart(_hilo_start, self.bet))
         await self._zeige(interaction, self._embed(
             _C_WIN, f"💰 Cashout bei ×{self.mult:.2f} → "
-                    f"**+{payout - self.bet} {economy.COIN}**."), state="win")
+                    f"**+{numfmt.fmt(payout - self.bet)} {economy.COIN}**."), state="win")
 
     def _timeout_wert(self):
         return int(self.bet * self.mult) if self.streak >= 1 else self.bet
@@ -2007,11 +2008,11 @@ class TowerView(_SerienView):
         emb = discord.Embed(
             title="🗼 Tower",
             description=(note or f"Ebene **{self.level + 1}/{_TOWER_LEVELS}** – "
-                                 f"eine der drei Türen knallt. Cashout: **{cash}**")
+                                 f"eine der drei Türen knallt. Cashout: **{numfmt.fmt(cash)}**")
                         + "\n\n" + self._turm_text(boom_door),
             color=color or _C_PLAY)
         emb.set_author(name="🎰 Flo Casino")
-        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {numfmt.fmt(self.bet)}")
         return emb
 
     async def _pick(self, interaction, door):
@@ -2026,7 +2027,7 @@ class TowerView(_SerienView):
             self.add_item(_SerienRestart(_tower_start, self.bet))
             emb = self._embed(_C_LOSE,
                               f"**BOOM!** 💥 Ebene {boom_lv + 1} war's. "
-                              f"-{self.bet} {economy.COIN}.", boom_door=door)
+                              f"-{numfmt.fmt(self.bet)} {economy.COIN}.", boom_door=door)
             await interaction.response.edit_message(embed=emb, view=self)
             return
         self.wahl.append(door)
@@ -2049,7 +2050,7 @@ class TowerView(_SerienView):
         note = (f"🏆 **GANZ OBEN!** ×{_tower_mult(self.level):.2f} → "
                 if self.level >= _TOWER_LEVELS else
                 f"💰 Cashout auf Ebene {self.level} → ")
-        emb = self._embed(_C_WIN, note + f"**+{payout - self.bet} {economy.COIN}**.")
+        emb = self._embed(_C_WIN, note + f"**+{numfmt.fmt(payout - self.bet)} {economy.COIN}**.")
         await interaction.response.edit_message(embed=emb, view=self)
 
     def _timeout_wert(self):
@@ -2083,12 +2084,12 @@ class DonView(_SerienView):
     def _embed(self, color=None, note=None):
         emb = discord.Embed(
             title="🪙 Doppelt oder nichts",
-            description=note or (f"Pott: **{self.pot} {economy.COIN}** "
+            description=note or (f"Pott: **{numfmt.fmt(self.pot)} {economy.COIN}** "
                                  f"(Runde {self.runde}/{_DON_MAX})\n"
                                  f"**KOPF** verdoppelt · **ZAHL** nimmt alles."),
             color=color or _C_PLAY)
         emb.set_author(name="🎰 Flo Casino")
-        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {self.bet}")
+        emb.set_footer(text=f"{_bal_footer(self.uid)}  ·  Einsatz: {numfmt.fmt(self.bet)}")
         return emb
 
     async def _zeige(self, interaction, emb, face):
@@ -2114,7 +2115,7 @@ class DonView(_SerienView):
                 self.add_item(_SerienRestart(_don_start, self.bet))
                 await self._zeige(interaction, self._embed(
                     _C_BJ, f"🤯 **{_DON_MAX} MAL KOPF!** Maximum: "
-                           f"**+{self.pot - self.bet} {economy.COIN}**."), "kopf")
+                           f"**+{numfmt.fmt(self.pot - self.bet)} {economy.COIN}**."), "kopf")
                 return
             await self._zeige(interaction, self._embed(), "kopf")
             return
@@ -2125,7 +2126,7 @@ class DonView(_SerienView):
         self._disable_all()
         self.add_item(_SerienRestart(_don_start, self.bet))
         await self._zeige(interaction, self._embed(
-            _C_LOSE, f"**ZAHL.** Der Pott ({verlust} {economy.COIN}) ist weg. 😵"),
+            _C_LOSE, f"**ZAHL.** Der Pott ({numfmt.fmt(verlust)} {economy.COIN}) ist weg. 😵"),
             "zahl")
 
     @discord.ui.button(label="Cashout", emoji="💰",
@@ -2140,7 +2141,7 @@ class DonView(_SerienView):
         self.add_item(_SerienRestart(_don_start, self.bet))
         net = self.pot - self.bet
         emb = self._embed(_C_WIN if net > 0 else _C_PUSH,
-                          f"💰 Cashout: **{'+' if net >= 0 else ''}{net} "
+                          f"💰 Cashout: **{'+' if net >= 0 else ''}{numfmt.fmt(net)} "
                           f"{economy.COIN}** nach {self.runde} Verdopplung(en).")
         await interaction.response.edit_message(embed=emb, view=self,
                                                 attachments=[])
@@ -2526,8 +2527,8 @@ class CasinoHubView(discord.ui.View):
             log.exception("Bilanz-Karte fehlgeschlagen")
             net = prof.get("payout", 0) - prof.get("wagered", 0)
             await interaction.followup.send(
-                f"{prof.get('games', 0)} Runden, Netto "
-                f"{'+' if net >= 0 else ''}{net} {economy.COIN}.", ephemeral=True)
+                f"{numfmt.fmt(prof.get('games', 0))} Runden, Netto "
+                f"{'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}.", ephemeral=True)
             return
         await interaction.followup.send(
             file=discord.File(buf, filename=f"stats_{uid}.png"), ephemeral=True)
@@ -2637,7 +2638,7 @@ class _Setup(discord.ui.View):
         self.stop()
 
     def _bet_txt(self):
-        return f"**{self.bet} {economy.COIN}**" if self.bet else "_noch nichts gewählt_"
+        return f"**{numfmt.fmt(self.bet)} {economy.COIN}**" if self.bet else "_noch nichts gewählt_"
 
     def _embed(self):    # von den Unterklassen gefuellt
         raise NotImplementedError

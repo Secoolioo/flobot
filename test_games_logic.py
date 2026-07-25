@@ -1493,6 +1493,40 @@ def test_webpanel_api():
     restore_eco()
 
 
+def test_numfmt():
+    """Deutsche Tausenderpunkte ab 1000; kleine/negative/Murks-Werte robust."""
+    import numfmt
+    assert numfmt.fmt(1000000) == "1.000.000"
+    assert numfmt.fmt(2500) == "2.500"
+    assert numfmt.fmt(-5000) == "-5.000"
+    assert numfmt.fmt(999) == "999"
+    assert numfmt.fmt(0) == "0"
+    assert numfmt.fmt(1234567) == "1.234.567"
+
+
+def test_economy_money_leaderboard():
+    """Geld-Rangliste sortiert nach aktuellem Kontostand, zeigt 'insgesamt verdient'
+    (Lebenszeit) mit Tausenderpunkten; earned zaehlt nur echte Zufluesse."""
+    restore = _with_economy({1: 5000, 2: 20000, 3: 100})
+    try:
+        # Gutschrift zaehlt in 'earned'; Ausgabe nicht.
+        economy.add_coins(2, 30000, reason="lotto")     # coins 50.000, earned 30.000
+        assert economy.instance._profile(2).get("earned", 0) == 30000
+        economy.add_coins(2, -1000, reason="casino")    # earned unveraendert
+        assert economy.instance._profile(2).get("earned", 0) == 30000
+
+        guild = SimpleNamespace(get_member=lambda _x: None)
+        emb = economy.instance._money_leaderboard(guild)
+        assert not isinstance(emb, str)                  # discord.Embed
+        d = emb.description
+        assert "insgesamt verdient" in d
+        assert "49.000" in d                             # uid2 Kontostand mit Punkten
+        # #1 (uid2, 49.000) steht vor #2 (uid1, 5.000).
+        assert d.index("49.000") < d.index("5.000")
+    finally:
+        restore()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

@@ -26,6 +26,7 @@ import discord
 import ai
 import casino
 import economy
+import numfmt
 import render
 from store import JsonStore
 
@@ -161,7 +162,7 @@ class _GameBetSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label="Ohne Einsatz (nur Spaß)", value="0",
                                         emoji="🎈", default=True)]
-        options += [discord.SelectOption(label=f"{b} Flo Coins", value=str(b))
+        options += [discord.SelectOption(label=f"{numfmt.fmt(b)} Flo Coins", value=str(b))
                     for b in _BET_CHOICES]
         super().__init__(placeholder="Einsatz wählen…", min_values=1, max_values=1,
                          options=options, row=0)
@@ -202,7 +203,7 @@ class _GameView(discord.ui.View):
                     and economy.get_coins(self.uid) < self.bet)
 
     def _bet_txt(self):
-        return f"**{self.bet}** Flo Coins" if self.bet > 0 else "ohne Einsatz (nur Spaß)"
+        return f"**{numfmt.fmt(self.bet)}** Flo Coins" if self.bet > 0 else "ohne Einsatz (nur Spaß)"
 
     async def _show(self, interaction, emb,
                     buf, fn):
@@ -216,7 +217,7 @@ class _GameView(discord.ui.View):
 
     async def _warn_funds(self, interaction):
         await interaction.response.send_message(
-            f"Du hast nicht genug. Konto: {economy.get_coins(self.uid)} Flo Coins.",
+            f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(self.uid))} Flo Coins.",
             ephemeral=True)
 
     async def on_timeout(self):
@@ -238,7 +239,7 @@ class _SlotView(_GameView):
                          f"Aktueller Einsatz: {self._bet_txt()}"),
             color=discord.Color.gold())
         if economy.is_enabled():
-            emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
+            emb.set_footer(text=f"Konto: {numfmt.fmt(economy.get_coins(self.uid))} Flo Coins")
         return emb
 
     @discord.ui.button(label="Drehen", emoji="🎰",
@@ -262,7 +263,7 @@ class _CoinView(_GameView):
         if self.bet > 0 and economy.is_enabled():
             emb.set_footer(text="Bei Einsatz ist dein Klick (Kopf/Zahl) die Wette.")
         elif economy.is_enabled():
-            emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
+            emb.set_footer(text=f"Konto: {numfmt.fmt(economy.get_coins(self.uid))} Flo Coins")
         return emb
 
     async def _toss(self, interaction, tip):
@@ -348,10 +349,10 @@ class _ReaktionView(discord.ui.View):
         emb = discord.Embed(
             title="⚡ Reaktionstest",
             description=f"**{dt * 1000:.0f} ms** – {note}\n"
-                        f"**{'+' if net >= 0 else ''}{net} Flo Coins**",
+                        f"**{'+' if net >= 0 else ''}{numfmt.fmt(net)} Flo Coins**",
             color=(discord.Color.green() if net > 0 else
                    discord.Color.red() if net < 0 else discord.Color.greyple()))
-        emb.set_footer(text=f"Konto: {economy.get_coins(self.uid)} Flo Coins")
+        emb.set_footer(text=f"Konto: {numfmt.fmt(economy.get_coins(self.uid))} Flo Coins")
         await interaction.response.edit_message(embed=emb, view=self)
         self.stop()
         _release(self.message)
@@ -430,7 +431,7 @@ class _QDuelChallenge(discord.ui.View):
             description=f"**{frage}**",
             color=discord.Color.gold())
         emb.set_footer(text=f"{self.a.display_name} vs {self.b.display_name} · "
-                            f"Pot: {self.bet * 2} Flo Coins · {QDUEL_TIMEOUT}s")
+                            f"Pot: {numfmt.fmt(self.bet * 2)} Flo Coins · {QDUEL_TIMEOUT}s")
         # Runde + Timeout-Watchdog registrieren, BEVOR die Anzeige editiert wird -
         # so greift die Timeout-Erstattung auch, falls das Edit fehlschlaegt.
         instance._qduel[cid] = {"players": {self.a.id, self.b.id}, "answer": antwort,
@@ -485,7 +486,7 @@ class _SSPDuel(discord.ui.View):
     def _emb(self, text, color=None):
         emb = discord.Embed(title="✂️ SSP-Duell", description=text,
                             color=color or discord.Color.blurple())
-        emb.set_footer(text=f"Pot: {self.bet * 2} Flo Coins")
+        emb.set_footer(text=f"Pot: {numfmt.fmt(self.bet * 2)} Flo Coins")
         return emb
 
     async def interaction_check(self, interaction):
@@ -543,7 +544,7 @@ class _SSPDuel(discord.ui.View):
         await interaction.response.edit_message(
             embed=self._emb(f"{_SSP[pa]} vs {_SSP[pb]} – "
                             f"🏆 **{sieger.display_name}** gewinnt "
-                            f"**+{self.bet}** Flo Coins!",
+                            f"**+{numfmt.fmt(self.bet)}** Flo Coins!",
                             discord.Color.green()), view=None)
         self.stop()
         _release(self.message)
@@ -755,18 +756,18 @@ class Games:
                 economy.add_coins(uid, bet)
                 await economy.flush()
                 await casino.record(uid, "coinflip", bet, bet * 2)
-                note, color = f"Gewonnen! **+{bet}** Flo Coins 🎉", discord.Color.green()
+                note, color = f"Gewonnen! **+{numfmt.fmt(bet)}** Flo Coins 🎉", discord.Color.green()
             else:
                 economy.add_coins(uid, -bet)
                 await economy.flush()
                 await casino.record(uid, "coinflip", bet, 0)
-                note, color = f"Verloren! **-{bet}** Flo Coins 😬", discord.Color.red()
+                note, color = f"Verloren! **-{numfmt.fmt(bet)}** Flo Coins 😬", discord.Color.red()
         emb = discord.Embed(
             title="🪙 Münzwurf",
             description=f"Die Münze zeigt: **{ergebnis.upper()}**!" + (f"\n{note}" if note else ""),
             color=color)
         if spielt_um_coins:
-            emb.set_footer(text=f"Konto: {economy.get_coins(uid)} Flo Coins")
+            emb.set_footer(text=f"Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins")
         buf, ext = await self._anim(render.coin_flip_anim, render.coin_flip, ergebnis)
         fn = f"coin_{uid}_{random.randint(1000, 9999)}.{ext}"
         return emb, buf, fn
@@ -780,7 +781,7 @@ class Games:
             if not seite:
                 return f"Auf was setzt du? `{self._bot_name} coinflip {bet} kopf` (oder zahl)."
             if economy.get_coins(uid) < bet:
-                return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
+                return f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         tip = ("kopf" if seite in ("kopf", "heads") else "zahl") if seite else None
         emb, buf, fn = await self._flip_result(uid, bet, tip)
         return await self._send_image(message, emb, buf, fn)
@@ -821,10 +822,10 @@ class Games:
         emb = discord.Embed(title="🎰 Slot-Machine", description=desc, color=color)
         if use_coins:
             net = win - bet
-            emb.set_footer(text=f"{'+' if net >= 0 else ''}{net} Flo Coins  ·  "
-                                f"Konto: {economy.get_coins(uid)}")
+            emb.set_footer(text=f"{'+' if net >= 0 else ''}{numfmt.fmt(net)} Flo Coins  ·  "
+                                f"Konto: {numfmt.fmt(economy.get_coins(uid))}")
         elif win and economy.is_enabled():
-            emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {economy.get_coins(uid)}")
+            emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {numfmt.fmt(economy.get_coins(uid))}")
         buf, ext = await self._anim(render.slot_machine_anim, render.slot_machine,
                                     keys, win=win, jackpot=jackpot)
         fn = f"slot_{uid}_{random.randint(1000, 9999)}.{ext}"
@@ -834,7 +835,7 @@ class Games:
         uid = message.author.id
         bet = self._extract_int(args) or 0
         if bet > 0 and economy.is_enabled() and economy.get_coins(uid) < bet:
-            return f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
+            return f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         emb, buf, fn = await self._spin_slot(uid, bet)
         return await self._send_image(message, emb, buf, fn)
 
@@ -1266,7 +1267,7 @@ class Games:
         if bet is None or bet <= 0:
             return 0, None                    # kein Betrag -> Aufrufer zeigt Hinweis
         if economy.get_coins(uid) < bet:
-            return 0, f"Du hast nicht genug. Konto: {economy.get_coins(uid)} Flo Coins."
+            return 0, f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         economy.add_coins(uid, -bet)
         return bet, None
 
@@ -1298,7 +1299,7 @@ class Games:
                             description=f"## `{aufgabe} = ?`",
                             color=discord.Color.blurple())
         emb.set_footer(text=f"{message.author.display_name} · {MATHE_TIMEOUT}s · "
-                            f"richtig = {bet * 2} Flo Coins")
+                            f"richtig = {numfmt.fmt(bet * 2)} Flo Coins")
         try:
             msg = await message.reply(embed=emb, mention_author=False)
         except discord.HTTPException:
@@ -1321,7 +1322,7 @@ class Games:
         await self._record(runde["uid"], "mathe", runde["bet"], 0)
         try:
             await channel.send(f"⏰ Zu langsam! **{runde['loesung']}** wäre richtig "
-                               f"gewesen. -{runde['bet']} Flo Coins.")
+                               f"gewesen. -{numfmt.fmt(runde['bet'])} Flo Coins.")
         except discord.HTTPException:
             pass
 
@@ -1341,12 +1342,12 @@ class Games:
             await economy.flush()
             await self._record(runde["uid"], "mathe", runde["bet"], payout)
             await self._say(message, f"✅ **{runde['loesung']}** – stark! "
-                                     f"**+{runde['bet']}** Flo Coins. 🧠")
+                                     f"**+{numfmt.fmt(runde['bet'])}** Flo Coins. 🧠")
         else:
             await economy.flush()
             await self._record(runde["uid"], "mathe", runde["bet"], 0)
             await self._say(message, f"❌ Daneben – richtig war **{runde['loesung']}**. "
-                                     f"-{runde['bet']} Flo Coins.")
+                                     f"-{numfmt.fmt(runde['bet'])} Flo Coins.")
         return True
 
     # --- Anagramm --------------------------------------------------------------
@@ -1381,7 +1382,7 @@ class Games:
                             description=f"## `{salat}`\nWelches Wort ist das?",
                             color=discord.Color.blurple())
         emb.set_footer(text=f"{message.author.display_name} · {ANA_TIMEOUT}s · "
-                            f"richtig = {bet * 3} Flo Coins")
+                            f"richtig = {numfmt.fmt(bet * 3)} Flo Coins")
         try:
             msg = await message.reply(embed=emb, mention_author=False)
         except discord.HTTPException:
@@ -1404,7 +1405,7 @@ class Games:
         await self._record(runde["uid"], "anagramm", runde["bet"], 0)
         try:
             await channel.send(f"⏰ Zeit um! Es war **{runde['wort']}**. "
-                               f"-{runde['bet']} Flo Coins.")
+                               f"-{numfmt.fmt(runde['bet'])} Flo Coins.")
         except discord.HTTPException:
             pass
 
@@ -1429,7 +1430,7 @@ class Games:
         await economy.flush()
         await self._record(runde["uid"], "anagramm", runde["bet"], payout)
         await self._say(message, f"✅ **{runde['wort']}**! "
-                                 f"**+{payout - runde['bet']}** Flo Coins. 🔀")
+                                 f"**+{numfmt.fmt(payout - runde['bet'])}** Flo Coins. 🔀")
         return True
 
     # --- Reaktionstest ---------------------------------------------------------
@@ -1447,7 +1448,7 @@ class Games:
                             description="Gleich wird der Button **rot** – dann so "
                                         "schnell wie möglich klicken!",
                             color=discord.Color.blurple())
-        emb.set_footer(text=f"{message.author.display_name} · Einsatz: {bet} Flo Coins")
+        emb.set_footer(text=f"{message.author.display_name} · Einsatz: {numfmt.fmt(bet)} Flo Coins")
         try:
             msg = await message.reply(embed=emb, view=view, mention_author=False)
         except discord.HTTPException:
@@ -1496,7 +1497,7 @@ class Games:
         verlierer = next(u for u in runde["players"] if u != message.author.id)
         await self._record(verlierer, "quizduell", runde["bet"], 0)
         await self._say(message, f"🏆 **{message.author.display_name}** holt den Pot "
-                                 f"(**+{runde['bet']}** Flo Coins)! Antwort: {runde['answer']}")
+                                 f"(**+{numfmt.fmt(runde['bet'])}** Flo Coins)! Antwort: {runde['answer']}")
         return True
 
     async def _quizduell(self, message, args):
@@ -1509,14 +1510,14 @@ class Games:
         if not bet or bet <= 0:
             return f"Um wie viel? `{self._bot_name} quizduell @{gegner.display_name} 100`"
         if economy.get_coins(message.author.id) < bet:
-            return f"Du hast keine {bet} Flo Coins."
+            return f"Du hast keine {numfmt.fmt(bet)} Flo Coins."
         if economy.get_coins(gegner.id) < bet:
-            return f"**{gegner.display_name}** hat keine {bet} Flo Coins."
+            return f"**{gegner.display_name}** hat keine {numfmt.fmt(bet)} Flo Coins."
         view = _QDuelChallenge(message.author, gegner, bet)
         emb = discord.Embed(
             title="🧠 Quiz-Duell",
             description=f"{message.author.mention} fordert {gegner.mention} heraus – "
-                        f"**{bet} Flo Coins** pro Kopf.\nSchnellste richtige Antwort "
+                        f"**{numfmt.fmt(bet)} Flo Coins** pro Kopf.\nSchnellste richtige Antwort "
                         f"nimmt den Pot!",
             color=discord.Color.gold())
         try:
@@ -1536,12 +1537,12 @@ class Games:
         if not bet or bet <= 0:
             return f"Um wie viel? `{self._bot_name} ssp @{gegner.display_name} 100`"
         if economy.get_coins(message.author.id) < bet:
-            return f"Du hast keine {bet} Flo Coins."
+            return f"Du hast keine {numfmt.fmt(bet)} Flo Coins."
         if economy.get_coins(gegner.id) < bet:
-            return f"**{gegner.display_name}** hat keine {bet} Flo Coins."
+            return f"**{gegner.display_name}** hat keine {numfmt.fmt(bet)} Flo Coins."
         view = _SSPDuel(message.author, gegner, bet)
         emb = view._emb(f"{message.author.mention} vs {gegner.mention} – "
-                        f"**{bet} Flo Coins** pro Kopf.\nBeide wählen unten "
+                        f"**{numfmt.fmt(bet)} Flo Coins** pro Kopf.\nBeide wählen unten "
                         f"(der erste Klick des Gegners nimmt an).")
         try:
             msg = await message.reply(embed=emb, view=view, mention_author=False)

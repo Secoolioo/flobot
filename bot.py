@@ -39,6 +39,7 @@ import media
 import merchant
 import moderation
 import music
+import numfmt
 import render
 import schedule_logic
 import steal
@@ -387,6 +388,7 @@ _HELP_DATA = {
     ]),
     "economy": ("Level & Coins", 0xF1C40F, [
         ("flo level · top", "Level-Karte & Bestenliste"),
+        ("flo reichste", "🤑 Geld-Rangliste (wer am meisten Coins hat)"),
         ("flo daily", "Tagesbonus + Streak"),
         ("flo coins · pay @wer 1k", "Kontostand & überweisen (1k = 1000)"),
         ("flo shop · kaufen 3", "Tages-Titel (2 Uhr neu, Legendary wird ausgerufen)"),
@@ -951,7 +953,7 @@ class FloBot(discord.Client):
         if channel is None:
             return
         zeilen = "\n".join(f"**{i.get('label', i.get('text', '?'))}** – "
-                           f"{i.get('price', '?')} {economy.COIN} (Nr. {i.get('n', '?')})"
+                           f"{numfmt.fmt(i.get('price', 0))} {economy.COIN} (Nr. {i.get('n', '?')})"
                            for i in items)
         emb = discord.Embed(
             title="🟡 LEGENDÄRER Titel im Shop!",
