@@ -114,25 +114,32 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # 20 Punkte +2,4 %/min, 40 Punkte +4,8 %/min. Das Tempo bestimmt nur, WIE SCHNELL
 # der Kurs an sein Niveau kommt - wie HOCH er laeuft, legt AKT_WERT/CEIL_FACTOR
 # fest. Deshalb darf es ruhig steil sein.
-TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0012") or "0.0012")
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.06") or "0.06")     # max +6 % in einem Takt
+# 0,006 heisst: 1 Zuhoerer +0,6 %/min, 3 Leute +1,8 %/min, 17 Punkte am Deckel.
+# Bei 3 Leuten im Call kommt ueber einen Vormittag rund das 25- bis 55-fache
+# heraus - genau die Groessenordnung, in der aus 600k Anteilen 23 Mio wurden.
+TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.006") or "0.006")
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.10") or "0.10")     # max +10 % in einem Takt
 IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.00008") or "0.00008")  # ohne Aktivitaet -0,48 %/h
-# Ab welchem Ueberhang ueber dem Zielkurs es merklich gemaechlicher wird
-# (0,35 = beim Anderthalbfachen noch 24 % Tempo, beim Doppelten 6 %). Bis zum
-# Zielkurs geht es also mit VOLLEM Tempo hoch, darueber flacht es schnell ab.
-LEVEL_SOFT = float(os.getenv("FLOAKTIE_LEVEL_SOFT", "0.35") or "0.35")
+# Wie stark es ueber dem Zielkurs gemaechlicher wird. Die Daempfung ist
+# LOGARITHMISCH und damit sehr langatmig: beim Doppelten des Zielkurses noch 78 %
+# Tempo, beim 15-fachen 48 %, beim 150-fachen 33 %. So steigt der Kurs auch dann
+# noch spuerbar, wenn er laengst weit ueber dem "fairen" Wert steht - er wird nur
+# gemaechlicher. (Vorher exponentiell mit 0,35: schon beim Doppelten waren es
+# 6 % Tempo, und ab dem Dreifachen stand der Kurs praktisch still, obwohl Leute
+# im Call sassen.)
+LEVEL_SOFT = float(os.getenv("FLOAKTIE_LEVEL_SOFT", "2.5") or "2.5")
 # Mindest-Anstieg, solange ueberhaupt jemand da ist: EIN Zuhoerer bei hohem Kurs
 # soll den Kurs immer noch heben (+0,48 %/Stunde), nicht nur rechnerisch.
 # BEWUSST genauso gross wie IDLE_DECAY: sonst summiert sich der Mindest-Anstieg
 # bei einem Server, auf dem fast immer jemand online ist, auf +23 %/Tag - und der
 # Kurs laeuft langfristig weg (in der Simulation nach 30 Tagen 50 Millionen).
 MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
-# Obergrenze, damit der Kurs nicht ueber Wochen wegrennt: mehr als das
-# CEIL_FACTOR-fache dessen, was die aktuelle Aktivitaet hergibt, steigt er nicht.
-# Er FAELLT dort aber auch nicht (solange Leute da sind) - er geht seitwaerts, bis
-# die Aktivitaet nachzieht. Bei 2,0 heisst das: 12 Punkte tragen den Kurs bis
-# 24.600, 39 Punkte bis 78.600.
-CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "2.0") or "2.0")
+# Notbremse GANZ weit oben, damit der Kurs nicht in absurde Gleitkomma-Regionen
+# laeuft - im Alltag greift sie nicht. Der Deckel waechst mit der Aktivitaet:
+# 3 Punkte tragen bis 3,3 Mio, 20 Punkte bis 20 Mio, 39 Punkte bis 39 Mio.
+# (Vorher stand er bei 2,0 - da war bei 3 Leuten schon ab Kurs 6.600 Schluss und
+# der Kurs stand komplett still, obwohl Leute im Call waren.)
+CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "1000") or "1000")
 # Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
 # sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
 ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")
@@ -575,8 +582,9 @@ class FloAktie:
             return 0.0          # weit ueber Wert: seitwaerts, aber kein Minus
         tempo = min(TICK_CAP, activity * TICK_GAIN)
         ueberhang = max(0.0, base / ziel - 1.0)
+        daempfung = 1.0 / (1.0 + math.log1p(ueberhang) / max(0.05, LEVEL_SOFT))
         # Nie ganz auf Null bremsen: solange jemand da ist, geht es nach oben.
-        return max(MIN_UP, tempo * math.exp(-ueberhang / max(0.05, LEVEL_SOFT)))
+        return max(MIN_UP, tempo * daempfung)
 
     def _activity_tick(self, people, msgs_since, streams=0, video=0):
         """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet)."""

@@ -1659,18 +1659,40 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             fa._puls(floaktie.PULSE_STREAM, "test")
         assert fa.price() <= vorher * (1 + floaktie.PULSE_MAX_PER_MIN) + 1, fa.price()
 
+        # 7b) DER VORMITTAG: auch mit nur 3 Leuten im Call muss sich ein Depot
+        #     ueber ein paar Stunden VERVIELFACHEN - und zwar auf JEDEM Kursniveau.
+        #     (Regression: eine zu harte Daempfung ueber dem "fairen" Kurs hat den
+        #     Kurs bei 3 Leuten ab Kurs 6.600 komplett stillstehen lassen.)
+        for startkurs in (1_000, 6_600, 50_000):
+            frisch(startkurs)
+            for _ in range(6 * 60):
+                fa._activity_tick(3, 0)
+            faktor = fa.price() / startkurs
+            assert faktor > 8, (startkurs, fa.price(), faktor)
+        # Und mehr Leute muessen auf demselben Niveau schneller sein.
+        frisch(50_000)
+        d3 = fa.drift_fuer(fa.activity_of(3, 0, 0, 0))
+        d10 = fa.drift_fuer(fa.activity_of(10, 0, 0, 0))
+        d10s = fa.drift_fuer(fa.activity_of(10, 10, 0, 0))
+        assert d3 < d10 < d10s or d10s >= floaktie.TICK_CAP * 0.99, (d3, d10, d10s)
+
         # 8) Signal deutlich ueber dem Rauschen - man MUSS es sehen koennen.
         #    (Beim Niveau-Modell zaehlt der Abstand zum Ziel: steht der Kurs auf
         #    Totlast-Niveau, treiben schon 4 Leute im Call ihn klar nach oben.)
         frisch(int(floaktie.FAIR_BASE))
         sig = fa.drift_fuer(fa.activity_of(4, 0, 0, 0))
         assert sig > floaktie.TICK_NOISE * 10, (sig, floaktie.TICK_NOISE)
-        # Solange Leute da sind, geht es NIE runter: steht der Kurs schon weit
-        # ueber seinem Wert, geht es hoechstens seitwaerts.
+        # Solange Leute da sind, geht es NIE runter - und es bleibt auch bei einem
+        # hohen Kurs in Bewegung, nur gemaechlicher (logarithmische Daempfung).
+        akt4 = fa.activity_of(4, 0, 0, 0)
         frisch(5000)
-        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) >= 0
+        schnell = fa.drift_fuer(akt4)
         frisch(500_000)
-        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) == 0
+        langsam = fa.drift_fuer(akt4)
+        assert schnell > langsam > 0, (schnell, langsam)
+        # Erst die Notbremse ganz oben stoppt ihn (Deckel = Zielkurs x CEIL_FACTOR).
+        frisch(int(fa.ziel_base(akt4) * floaktie.CEIL_FACTOR) + 10_000)
+        assert fa.drift_fuer(akt4) == 0
         # Nur ohne jede Aktivitaet faellt er.
         assert fa.drift_fuer(0) < 0
 
