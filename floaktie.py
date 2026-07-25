@@ -21,6 +21,7 @@ Kurs-Historie in data/floaktie.json.
 """
 
 import logging
+import math
 import os
 import random
 import time
@@ -79,34 +80,55 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
 #              + VIDEO_BONUS  * Kameras an
 #              + MSG_WEIGHT   * Nachrichten seit dem letzten Takt (gedeckelt)
 #
-#   Zielkurs   = FAIR_BASE + AKT_WERT * Aktivitaet      ("was ist der Server wert?")
-#   Drift/Takt = Richtung Zielkurs - nach oben schnell, nach unten langsam
+#   Aktivitaet > 0  ->  Kurs STEIGT IMMER. Tempo = Aktivitaet * TICK_GAIN
+#   Aktivitaet = 0  ->  Kurs sinkt langsam (IDLE_DECAY), aber nie unter FAIR_BASE
 #
-# Es ist ein NIVEAU-Modell, genau wie bei einer echten Aktie: VIEL Aktivitaet =
-# hoher Kurs, WENIG Aktivitaet = niedriger Kurs. Der Kurs sammelt also nicht
-# endlos Prozente auf, sondern strebt dem Wert zu, den der Server gerade hergibt -
-# deshalb kann er weder explodieren noch braucht er kuenstliche Deckel.
+# Die Regel ist genau so, wie sie gemeint ist: sitzt EIN Mensch im Call, steigt
+# der Kurs - langsam. Sitzen zehn drin und streamen alle, steigt er rasant. Ist
+# gar nichts los, sinkt er langsam. Es gibt KEINEN Fall, in dem der Kurs faellt,
+# waehrend Leute im Call sind.
 #
-# Beispiele (ohne ausgegebene Anteile): leerer Server -> Ziel 300, 5 im Call ->
-# 900, 12 im Call mit 6 Streams -> knapp 5.000, 10 Leute die ALLE streamen ->
-# 5.700. Nach oben laeuft der Kurs zuegig (bis 3 %/Minute, also sofort sichtbar),
-# nach unten nur langsam - ein kurzer leerer Moment wuergt ihn nicht ab.
+# Damit das trotzdem nicht ins Unendliche laeuft, wirkt die Aktivitaet zusaetzlich
+# als "was ist der Server gerade wert" (Zielkurs): steht der Kurs schon weit
+# darueber, steigt er WEITER - nur immer gemaechlicher (exponentielle Daempfung).
+# Der Kurs laeuft also gegen ungefaehr das Vier- bis Fuenffache dessen, was die
+# aktuelle Aktivitaet hergibt, statt zu explodieren. Faellt die Aktivitaet, sinkt
+# dieser Deckel mit - der Kurs steigt dann nur noch minimal weiter.
 #
-# Zusaetzlich gibt es Sofort-Impulse: wer live geht oder in den Call kommt, schiebt
-# den Kurs augenblicklich ein Stueck nach oben (siehe PULSE_*) - das ist die
-# direkte Reaktion auf das EREIGNIS, unabhaengig vom Niveau.
+#   Zielkurs = FAIR_BASE + AKT_WERT * Aktivitaet
+#   Drift    = min(TICK_CAP, Aktivitaet * TICK_GAIN) * exp(-Ueberhang / LEVEL_SOFT)
 #
-# Vorher war es ein Aufsummier-Modell mit "Normalwert" 3.0, der in JEDER der 1440
-# Tagesminuten abgezogen wurde. Ergebnis: ein Tag mit 5 aktiven Stunden und 8
-# Aktivitaetspunkten landete bei -19 %, 2 Stunden mit 6 Leuten bei -36 % - der
-# Leerlauf hat jede Spitze gefressen. Dazu war das Rauschen (+/-0,12 %) bei 4
-# Leuten im Call 12x groesser als das Signal: man KONNTE den Anstieg nicht sehen.
-FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "300") or "300")     # Kurs bei totem Server
-AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "120") or "120")       # Kurs-Wert je Aktivitaetspunkt
-SPEED_UP = float(os.getenv("FLOAKTIE_SPEED_UP", "0.06") or "0.06")     # Anteil der Luecke pro Minute (rauf)
-SPEED_DOWN = float(os.getenv("FLOAKTIE_SPEED_DOWN", "0.0004") or "0.0004")  # ... und runter (viel langsamer)
+# Vorher wurde von JEDER der 1440 Tagesminuten ein "Normalwert" von 3,0
+# Aktivitaetspunkten ABGEZOGEN. Der Leerlauf hat damit jede Spitze gefressen -
+# nachgemessen: 5 Stunden mit 8 Aktivitaetspunkten endeten bei -19,2 % am Tag,
+# 2 Stunden mit 6 Leuten bei -36,0 %. Dazu war das Rauschen (+/-0,12 %/min) bei 4
+# Leuten im Call 12x GROESSER als das Signal (+0,010 %/min): man KONNTE den
+# Anstieg gar nicht sehen. Beides ist hier behoben.
+FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "300") or "300")     # Kurs eines toten Servers
+# Wert je Aktivitaetspunkt. Merksatz: Zielkurs ~ 1.000 x Aktivitaetspunkte.
+# (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
+# jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
+# stand bei hoher Aktivitaet praktisch still. Genau das war der Fehler.)
+AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
+TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0004") or "0.0004")  # Plus je Aktivitaetspunkt/Minute
 TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.03") or "0.03")     # max +3 % in einem Takt
-IDLE_CAP = float(os.getenv("FLOAKTIE_IDLE_CAP", "0.002") or "0.002")   # max -0,2 % in einem Takt
+IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.00008") or "0.00008")  # ohne Aktivitaet -0,48 %/h
+# Ab welchem Ueberhang ueber dem Zielkurs es merklich gemaechlicher wird
+# (0,35 = beim Anderthalbfachen noch 24 % Tempo, beim Doppelten 6 %). Bis zum
+# Zielkurs geht es also mit VOLLEM Tempo hoch, darueber flacht es schnell ab.
+LEVEL_SOFT = float(os.getenv("FLOAKTIE_LEVEL_SOFT", "0.35") or "0.35")
+# Mindest-Anstieg, solange ueberhaupt jemand da ist: EIN Zuhoerer bei hohem Kurs
+# soll den Kurs immer noch heben (+0,48 %/Stunde), nicht nur rechnerisch.
+# BEWUSST genauso gross wie IDLE_DECAY: sonst summiert sich der Mindest-Anstieg
+# bei einem Server, auf dem fast immer jemand online ist, auf +23 %/Tag - und der
+# Kurs laeuft langfristig weg (in der Simulation nach 30 Tagen 50 Millionen).
+MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
+# Obergrenze, damit der Kurs nicht ueber Wochen wegrennt: mehr als das
+# CEIL_FACTOR-fache dessen, was die aktuelle Aktivitaet hergibt, steigt er nicht.
+# Er FAELLT dort aber auch nicht (solange Leute da sind) - er geht seitwaerts, bis
+# die Aktivitaet nachzieht. Bei 2,0 heisst das: 12 Punkte tragen den Kurs bis
+# 24.600, 39 Punkte bis 78.600.
+CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "2.0") or "2.0")
 # Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
 # sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
 ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")
@@ -531,15 +553,26 @@ class FloAktie:
         return max(MIN_PRICE, int(round(ziel)))
 
     def drift_fuer(self, activity):
-        """Kurs-Drift pro Minute: Richtung Zielkurs. Nach oben zuegig (sofort
-        sichtbar), nach unten langsam. Kein Aufsummieren, keine Explosion."""
+        """Kurs-Drift pro Minute.
+
+        Ist irgendjemand da (Aktivitaet > 0), STEIGT der Kurs - langsam bei einem
+        Zuhoerer, rasant bei einem vollen Call mit Streams. Nur wenn gar nichts
+        los ist, sinkt er langsam. Steht er schon weit ueber dem, was die
+        Aktivitaet hergibt, steigt er weiter - aber immer gemaechlicher."""
         base = self._base()
         if base <= 0:
             return 0.0
-        luecke = self.ziel_base(activity) / base - 1.0
-        if luecke > 0:
-            return min(TICK_CAP, luecke * SPEED_UP)
-        return max(-IDLE_CAP, luecke * SPEED_DOWN)
+        ziel = self.ziel_base(activity)
+        if activity <= 0:
+            # Nichts los -> langsam runter, aber nicht unter den Wert eines
+            # toten Servers.
+            return 0.0 if base <= ziel else -IDLE_DECAY
+        if base >= ziel * max(1.0, CEIL_FACTOR):
+            return 0.0          # weit ueber Wert: seitwaerts, aber kein Minus
+        tempo = min(TICK_CAP, activity * TICK_GAIN)
+        ueberhang = max(0.0, base / ziel - 1.0)
+        # Nie ganz auf Null bremsen: solange jemand da ist, geht es nach oben.
+        return max(MIN_UP, tempo * math.exp(-ueberhang / max(0.05, LEVEL_SOFT)))
 
     def _activity_tick(self, people, msgs_since, streams=0, video=0):
         """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet)."""
@@ -552,7 +585,18 @@ class FloAktie:
         alpha = ACT_ALPHA_UP if activity >= alt_ema else ACT_ALPHA_DOWN
         ema = alpha * activity + (1 - alpha) * alt_ema
         st["act_ema"] = ema
-        drift = self.drift_fuer(ema) + random.uniform(-TICK_NOISE, TICK_NOISE)
+        basis = self.drift_fuer(ema)
+        if basis > 0:
+            # Solange jemand da ist, faellt der Kurs NIE - das Boersen-Rauschen
+            # darf einen Anstieg hoechstens abschwaechen, nicht umdrehen.
+            drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
+        elif basis < 0:
+            drift = basis + random.uniform(-TICK_NOISE, TICK_NOISE)
+        else:
+            # Steht der Kurs weit ueber seinem Wert, geht es SEITWAERTS - hier
+            # bewusst OHNE Rauschen: mit Rauschen plus der Klemme oben waere das
+            # ein reiner Aufwaerts-Zufallslauf (gemessen +14 %/Tag aus nichts).
+            drift = 0.0
         alt = self.price()
         # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
         # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
@@ -834,13 +878,24 @@ class FloAktie:
         # Nachvollziehbar machen, WARUM der Kurs sich bewegt.
         akt = float(st.get("act_ema", 0.0) or 0.0)
         pro_min = self.drift_fuer(akt) * 100
+        # Lesbarer machen: kleine Werte pro STUNDE, grosse pro Minute.
+        if abs(pro_min) >= 0.1:
+            tempo = f"**{pro_min:+.2f} %/min**"
+        else:
+            tempo = f"**{pro_min * 60:+.2f} %/h**"
+        if akt <= 0:
+            hinweis = "Niemand da – der Kurs sinkt langsam."
+        elif pro_min <= 0:
+            hinweis = ("Kurs liegt weit über seinem Wert – er hält sich, bis mehr "
+                       "Aktivität nachkommt.")
+        else:
+            hinweis = "Je mehr im Call und je mehr Livestreams, desto schneller."
         emb.add_field(
             name="Server-Aktivität",
-            value=(f"{akt:.1f} Punkte · **{pro_min:+.2f} %/min** · "
+            value=(f"{akt:.1f} Punkte · {tempo} · "
                    f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}**\n"
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
-                   f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. "
-                   f"Viel los → hoher Kurs, nichts los → er sinkt._"),
+                   f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. {hinweis}_"),
             inline=False)
         top = self.top_holder()
         if top:

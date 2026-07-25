@@ -1614,7 +1614,7 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         assert n > a
         for _ in range(59):
             fa._activity_tick(10, 20, streams=10)
-        assert fa.price() > 3500, fa.price()
+        assert fa.price() > 2500, fa.price()          # nach 1 h fast verdreifacht
 
         # 5) Toter Server: sinkt, aber LANGSAM (nie mehr als IDLE_CAP je Minute).
         frisch(5000)
@@ -1623,25 +1623,32 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             fa._activity_tick(0, 0)
         gefallen = 1 - fa.price() / vorher
         assert 0 < gefallen < 0.15, gefallen
-        # und ueber TAGE deutlich runter, Richtung Wert eines toten Servers
+        # und ueber TAGE deutlich runter (rund -11 %/Tag), Richtung Wert eines
+        # toten Servers - aber nie darunter.
         for _ in range(3 * 1440):
             fa._activity_tick(0, 0)
         drei_tage = fa.price()
-        assert 800 < drei_tage < 1600, drei_tage       # langsam, aber deutlich
-        for _ in range(4 * 1440):
+        assert 3000 < drei_tage < 4200, drei_tage
+        for _ in range(20 * 1440):
             fa._activity_tick(0, 0)
-        assert fa.price() < drei_tage * 0.7, (drei_tage, fa.price())
+        assert fa.price() < drei_tage * 0.4, (drei_tage, fa.price())
+        for _ in range(30 * 1440):
+            fa._activity_tick(0, 0)
+        assert fa.price() >= floaktie.MIN_PRICE, fa.price()
 
-        # 6) Kein Aufsummieren: Dauer-Vollbetrieb laeuft in ein NIVEAU, statt zu
-        #    explodieren (vorher: nach 30 Tagen 10**16).
+        # 6) Kein Aufsummieren: Dauer-Vollbetrieb laeuft in ein NIVEAU (Deckel:
+        #    CEIL_FACTOR x Zielkurs), statt zu explodieren (vorher: 10**16 nach
+        #    30 Tagen). Der Deckel steigt nur, wenn die Aktivitaet steigt.
         frisch()
         for _ in range(4 * 1440):
             fa._activity_tick(10, 40, streams=10)
-        eine_woche = fa.price()
-        for _ in range(10 * 1440):
+        vier_tage = fa.price()
+        for _ in range(20 * 1440):
             fa._activity_tick(10, 40, streams=10)
-        assert eine_woche < 12_000, eine_woche
-        assert fa.price() < eine_woche * 1.2, (eine_woche, fa.price())
+        akt = fa.activity_of(10, 10, 0, 40)
+        deckel = fa.ziel_base(akt) * floaktie.CEIL_FACTOR
+        assert fa.price() <= deckel * 1.02, (fa.price(), deckel)
+        assert fa.price() < vier_tage * 1.05, (vier_tage, fa.price())
 
         # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
         #    aber pro Minute gedeckelt (kein Pump durch Rein-/Rausspringen).
@@ -1658,10 +1665,14 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         frisch(int(floaktie.FAIR_BASE))
         sig = fa.drift_fuer(fa.activity_of(4, 0, 0, 0))
         assert sig > floaktie.TICK_NOISE * 10, (sig, floaktie.TICK_NOISE)
-        # Umgekehrt: steht der Kurs hoch und es ist kaum was los, geht es runter -
-        # genau das ist "wenig Aktivitaet = niedriger Kurs".
+        # Solange Leute da sind, geht es NIE runter: steht der Kurs schon weit
+        # ueber seinem Wert, geht es hoechstens seitwaerts.
         frisch(5000)
-        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) < 0
+        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) >= 0
+        frisch(500_000)
+        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) == 0
+        # Nur ohne jede Aktivitaet faellt er.
+        assert fa.drift_fuer(0) < 0
 
         # 9) Messung ohne Member-Cache: voice_states statt members.
         class _VS:
