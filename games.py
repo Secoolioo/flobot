@@ -54,6 +54,14 @@ MATHE_TIMEOUT = 20
 ANA_TIMEOUT = 30
 QDUEL_TIMEOUT = 45
 
+# --- Schutz gegen Farmen der Geschicklichkeits-Spiele ------------------------
+# mathe (x2), anagramm (x3) und reaktion (x2,5) zahlen bei Erfolg MEHR als den
+# Einsatz und sind mit Uebung/Skript fast immer gewinnbar. Ohne Deckel liess sich
+# damit das Konto beliebig oft verdoppeln (gemessen: 1.000 -> 256.000 in 8
+# Runden). Darum: begrenzter Einsatz + kurze Pause zwischen den Runden.
+SKILL_MAX_BET = int(os.getenv("GAMES_SKILL_MAX_BET", "5000") or "5000")
+SKILL_COOLDOWN = float(os.getenv("GAMES_SKILL_COOLDOWN", "45") or "45")
+
 
 # --- Schere-Stein-Papier -------------------------------------------------
 _SSP = {
@@ -193,7 +201,13 @@ class _GameView(discord.ui.View):
         return True
 
     async def _set_bet(self, interaction, raw):
-        self.bet = int(raw)
+        # Nie einen negativen/kaputten Einsatz uebernehmen (Discord-Select-Werte
+        # sind nicht vertrauenswuerdig - ein gefaelschter Wert kam hier vorher
+        # ungeprueft durch).
+        try:
+            self.bet = max(0, min(int(raw), SKILL_MAX_BET))
+        except (TypeError, ValueError):
+            self.bet = 0
         for opt in self._bet_select.options:
             opt.default = (opt.value == raw)
         await interaction.response.edit_message(embed=self._embed(), view=self)
@@ -416,15 +430,48 @@ class _QDuelChallenge(discord.ui.View):
             _release(self.message)
             return
         self.done = True
-        # ZUERST die Interaction bestaetigen (defer): das Generieren der KI-Frage
+        # SICHERHEIT: Einsaetze SOFORT einziehen - vor jedem 'await'. Wurde erst
+        # nach der (langsamen) KI-Frage abgebucht, konnten beide Spieler ihre Coins
+        # in der Zwischenzeit wegschieben; die Abbuchung lief dann leer, Pot und
+        # Timeout-Erstattung zahlten aber voll aus -> Coins aus dem Nichts.
+        vor_a, vor_b = economy.get_coins(self.a.id), economy.get_coins(self.b.id)
+        economy.add_coins(self.a.id, -self.bet)
+        economy.add_coins(self.b.id, -self.bet)
+        # Gegenpruefen, dass beide Einsaetze WIRKLICH abgebucht wurden.
+        ok = (vor_a - economy.get_coins(self.a.id) == self.bet
+              and vor_b - economy.get_coins(self.b.id) == self.bet)
+        if not ok:
+            economy.add_coins(self.a.id, vor_a - economy.get_coins(self.a.id))
+            economy.add_coins(self.b.id, vor_b - economy.get_coins(self.b.id))
+            await economy.flush()
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="Einer von euch ist zu pleite. 😅",
+                                    color=discord.Color.greyple()), view=None)
+            self.stop()
+            _release(self.message)
+            return
+        await economy.flush()
+        # DANN die Interaction bestaetigen (defer): das Generieren der KI-Frage
         # kann laenger als Discords 3-Sekunden-Antwortfrist dauern - ohne defer
         # wuerde die Erstantwort danach fehlschlagen und beide Einsaetze waeren weg.
         await interaction.response.defer()
-        frage, antwort = await _gen_quiz_frage()
-        # Erst NACH erfolgreicher Frage abbuchen (KI-Fehler kostet dann nichts).
-        economy.add_coins(self.a.id, -self.bet)
-        economy.add_coins(self.b.id, -self.bet)
-        await economy.flush()
+        try:
+            frage, antwort = await _gen_quiz_frage()
+        except Exception:  # noqa: BLE001 - KI-Fehler darf keine Einsaetze fressen
+            log.exception("Quiz-Duell: Frage fehlgeschlagen - Einsaetze zurueck")
+            economy.add_coins(self.a.id, self.bet)
+            economy.add_coins(self.b.id, self.bet)
+            await economy.flush()
+            try:
+                await self.message.edit(
+                    embed=discord.Embed(
+                        description="Die Frage wollte nicht kommen – Einsätze zurück. 🤷",
+                        color=discord.Color.greyple()), view=None)
+            except discord.HTTPException:
+                pass
+            self.stop()
+            _release(self.message)
+            return
         tok = _new_token(cid)
         emb = discord.Embed(
             title="🧠 QUIZ-DUELL",
@@ -598,6 +645,7 @@ class Games:
         self._mathe = {}      # channel_id -> laufende Mathe-Runde
         self._ana = {}        # channel_id -> laufende Anagramm-Runde
         self._qduel = {}      # channel_id -> laufendes Quiz-Duell
+        self._skill_cd = {}   # user_id -> letzte Skill-Spiel-Runde (Anti-Farm)
 
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -791,6 +839,8 @@ class Games:
         """Dreht die Walzen, verrechnet (bei Einsatz) Coins und baut Embed + Bild.
         Gibt (embed, buffer, name) zurueck – wird vom Text-Befehl UND vom
         Button-Menue genutzt. Das Bild ist noch OHNE set_image (macht der Aufrufer)."""
+        # Negative/kaputte Einsaetze koennen nie durchrutschen.
+        bet = max(0, int(bet))
         use_coins = bet > 0 and economy.is_enabled()
         keys = [random.choice(render.SLOT_KEYS) for _ in range(3)]
         jackpot = keys[0] == keys[1] == keys[2]
@@ -803,15 +853,14 @@ class Games:
         else:
             win = 0
 
-        # Coins verbuchen: mit Einsatz wird netto verrechnet; ohne Einsatz gibt es den
-        # Gewinn (falls economy an) geschenkt - wie bisher.
+        # Coins verbuchen: NUR mit echtem Einsatz. Ohne Einsatz ist es ein
+        # Spass-Dreh ohne Coins - vorher gab es hier den Gewinn geschenkt
+        # (Basis 10), was ein unbegrenzter Gratis-Coin-Faucet war (~+9 Coins
+        # pro Dreh, beliebig oft: 'slot' ohne Einsatz, 'slot 0', 'slot abc').
         if use_coins:
             economy.add_coins(uid, win - bet)
             await economy.flush()
             await casino.record(uid, "slots", bet, win)
-        elif win and economy.is_enabled():
-            economy.add_coins(uid, win)
-            await economy.flush()
 
         if jackpot:
             desc, color = "🎉 **JACKPOT!** Drei Gleiche!", discord.Color.gold()
@@ -824,8 +873,10 @@ class Games:
             net = win - bet
             emb.set_footer(text=f"{'+' if net >= 0 else ''}{numfmt.fmt(net)} Flo Coins  ·  "
                                 f"Konto: {numfmt.fmt(economy.get_coins(uid))}")
-        elif win and economy.is_enabled():
-            emb.set_footer(text=f"+{win} Flo Coins  ·  Konto: {numfmt.fmt(economy.get_coins(uid))}")
+        else:
+            # Ohne Einsatz: reiner Spass-Dreh, es fliessen keine Coins.
+            emb.set_footer(text="Ohne Einsatz – nur zum Spaß (keine Coins). "
+                                "Mit Einsatz: `slot 100`")
         buf, ext = await self._anim(render.slot_machine_anim, render.slot_machine,
                                     keys, win=win, jackpot=jackpot)
         fn = f"slot_{uid}_{random.randint(1000, 9999)}.{ext}"
@@ -1260,15 +1311,27 @@ class Games:
             log.exception("Spiel-Statistik fehlgeschlagen")
 
     def _take_bet(self, uid, args):
-        """Einsatz pruefen + abbuchen. (bet, fehlertext|None) - flusht NICHT."""
+        """Einsatz pruefen + abbuchen. (bet, fehlertext|None) - flusht NICHT.
+
+        Gilt fuer die Geschicklichkeits-Spiele (mathe/anagramm/reaktion), die mehr
+        als den Einsatz zurueckzahlen: Einsatz ist gedeckelt und pro Nutzer gilt
+        eine kurze Pause, damit sich das Konto nicht beliebig hochfarmen laesst."""
         if not economy.is_enabled():
             return 0, "Coins sind gerade aus - das Spiel braucht Einsatz."
         bet = self._extract_int(args)
         if bet is None or bet <= 0:
             return 0, None                    # kein Betrag -> Aufrufer zeigt Hinweis
+        if bet > SKILL_MAX_BET:
+            return 0, (f"Hier ist bei **{numfmt.fmt(SKILL_MAX_BET)}** Flo Coins Schluss – "
+                       f"für die großen Einsätze geht's ins Casino (`casino`). 🎰")
+        rest = SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, 0.0))
+        if rest > 0:
+            return 0, (f"⏳ Kurze Pause – noch **{int(rest) + 1}s**, dann darfst du "
+                       f"wieder um Coins spielen.")
         if economy.get_coins(uid) < bet:
             return 0, f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         economy.add_coins(uid, -bet)
+        self._skill_cd[uid] = time.monotonic()
         return bet, None
 
     # --- Mathe-Blitz -----------------------------------------------------------

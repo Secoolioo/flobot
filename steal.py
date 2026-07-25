@@ -203,6 +203,19 @@ class Steal:
         if ziel_coins < MIN_TARGET:
             return random.choice(_POOR_LINES).format(opfer=ziel.display_name)
 
+        # --- Eigenes Risiko sicherstellen ------------------------------------
+        # Wer selbst blank (oder im Minus) ist, koennte sonst RISIKOFREI klauen:
+        # die Strafe bei einem Misserfolg wuerde auf 0 klemmen. Also braucht man
+        # genug fuer die Mindeststrafe, sonst gibt's keinen Raubzug.
+        try:
+            eigen = economy.get_coins(autor.id)
+        except Exception:  # noqa: BLE001
+            eigen = 0
+        if eigen < PENALTY_FLAT_MIN:
+            return (f"🪙 Ohne eigenes Geld kein Risiko – du brauchst mindestens "
+                    f"**{PENALTY_FLAT_MIN}** {economy.COIN} in der Tasche, "
+                    f"bevor du jemanden ausraubst.")
+
         # --- Auslosung: Erfolg oder Erwischt? --------------------------------
         erfolg = random.random() < self._success_chance
         if erfolg:

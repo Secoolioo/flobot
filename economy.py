@@ -336,12 +336,24 @@ class Economy:
         return self._profile(user_id)["coins"] if self._enabled else 0
 
     def parse_amount(self, token):
-        """'1k' -> 1000, '2,5k' -> 2500, '1m' -> 1000000. None wenn keine Zahl."""
-        m = self._AMOUNT_TOKEN_RE.match((token or "").strip().lower())
+        """'1k' -> 1000, '2,5k' -> 2500, '1m' -> 1000000. None wenn keine Zahl.
+
+        Deutsche Schreibweise wird verstanden: der PUNKT trennt Tausender
+        ('1.000.000' -> 1000000), das KOMMA ist das Dezimalzeichen ('2,5k').
+        Wichtig, weil Flo Zahlen selbst mit Tausenderpunkten anzeigt - kopierte
+        Betraege wie '1.000' wurden vorher als 1 gelesen."""
+        roh = (token or "").strip().lower()
+        # Tausenderpunkte entfernen (nur wenn es wirklich 3er-Gruppen sind).
+        if re.fullmatch(r"\d{1,3}(\.\d{3})+(,\d+)?(k|m|mio|mrd|b)?", roh):
+            roh = roh.replace(".", "")
+        m = self._AMOUNT_TOKEN_RE.match(roh)
         if not m:
             return None
-        wert = float(m.group(1).replace(",", "."))
-        betrag = int(round(wert * self._AMOUNT_MULT[(m.group(2) or "").lower()]))
+        try:
+            wert = float(m.group(1).replace(",", "."))
+            betrag = int(round(wert * self._AMOUNT_MULT[(m.group(2) or "").lower()]))
+        except (ValueError, OverflowError):
+            return None            # absurd lange Zahlen o. Ae. -> kein Betrag
         return betrag if betrag > 0 else None
 
     def display_name_of(self, user_id):

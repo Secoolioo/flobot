@@ -1593,6 +1593,93 @@ def test_floaktie_kein_pump_and_dump():
         restore()
 
 
+def test_exploit_fixes_games_und_steal():
+    """REGRESSION für die im Audit bewiesenen Exploits:
+    - Gratis-Slot (Einsatz 0 / negativ) darf KEINE Coins auszahlen,
+    - Skill-Spiele (mathe/anagramm/reaktion) sind gedeckelt + haben Cooldown,
+    - Klauen ohne eigenes Geld (Strafe würde auf 0 klemmen) ist gesperrt,
+    - parse_amount versteht deutsche Tausenderpunkte ('1.000' == 1000)."""
+    import io
+    import casino
+    import games
+    import steal
+
+    # --- Gratis-Slot zahlt nichts mehr aus -------------------------------
+    restore = _with_economy({1: 0})
+    alt_anim = games.instance._anim
+    alt_g = games.instance._enabled
+    alt_c = (casino.instance._enabled, casino.instance._stats)
+    games.instance._enabled = True
+    casino.instance._enabled = True
+    casino.instance._stats = _FakeStore({"stats": {}})
+
+    async def no_anim(*a, **k):          # Bild-Rendering im Test überspringen
+        return (io.BytesIO(b"x"), "png")
+    games.instance._anim = no_anim
+    try:
+        for _ in range(40):
+            asyncio.run(games.instance._spin_slot(1, 0))
+        assert economy.get_coins(1) == 0, "Gratis-Slot ist ein Coin-Faucet!"
+        for _ in range(20):
+            asyncio.run(games.instance._spin_slot(1, -1_000_000))
+        assert economy.get_coins(1) == 0, "negativer Einsatz zahlt aus!"
+        # Bezahlter Slot rechnet weiter normal ab.
+        economy.instance._profile(1)["coins"] = 100_000
+        asyncio.run(games.instance._spin_slot(1, 1000))
+        assert economy.get_coins(1) != 100_000
+    finally:
+        games.instance._anim = alt_anim
+        games.instance._enabled = alt_g
+        casino.instance._enabled, casino.instance._stats = alt_c
+        restore()
+
+    # --- Skill-Spiele: Einsatz gedeckelt + Cooldown ----------------------
+    restore = _with_economy({1: 10_000_000})
+    games.instance._enabled = True
+    games.instance._skill_cd = {}
+    try:
+        bet, err = games.instance._take_bet(1, [str(games.SKILL_MAX_BET * 10)])
+        assert bet == 0 and err, "Einsatz nicht gedeckelt"
+        bet, err = games.instance._take_bet(1, [str(games.SKILL_MAX_BET)])
+        assert bet == games.SKILL_MAX_BET and err is None
+        bet2, err2 = games.instance._take_bet(1, ["100"])
+        assert bet2 == 0 and err2, "kein Cooldown -> farmbar"
+    finally:
+        games.instance._enabled = alt_g
+        games.instance._skill_cd = {}
+        restore()
+
+    # --- Steal braucht eigenes Risiko -----------------------------------
+    restore = _with_economy({1: 10_000_000, 2: 0, 3: -50_000, 4: 5_000})
+    alt_s = (steal.instance._enabled, steal.instance._store)
+    steal.instance._enabled = True
+    steal.instance._store = _FakeStore({"cooldowns": {}})
+
+    def mk(uid):
+        return SimpleNamespace(
+            author=SimpleNamespace(id=uid, bot=False, display_name=f"U{uid}"),
+            content="steal <@1>",
+            mentions=[SimpleNamespace(id=1, bot=False, display_name="Opfer")],
+            guild=SimpleNamespace(id=1))
+    try:
+        for uid in (2, 3):               # blank bzw. im Minus -> gesperrt
+            r = asyncio.run(steal.handle(mk(uid)))
+            assert isinstance(r, str) and "Risiko" in r, (uid, r)
+        steal.instance._store = _FakeStore({"cooldowns": {}})
+        r = asyncio.run(steal.handle(mk(4)))     # mit Guthaben -> erlaubt
+        assert not (isinstance(r, str) and "Risiko" in r)
+    finally:
+        steal.instance._enabled, steal.instance._store = alt_s
+        restore()
+
+    # --- Tausenderpunkte im Betrag --------------------------------------
+    assert economy.parse_amount("1.000") == 1000
+    assert economy.parse_amount("1.000.000") == 1_000_000
+    assert economy.parse_amount("2,5k") == 2500
+    assert economy.parse_amount("9" * 400) is None      # kein OverflowError
+    assert economy.parse_amount("-5") is None
+
+
 def test_numfmt():
     """Deutsche Tausenderpunkte ab 1000; kleine/negative/Murks-Werte robust."""
     import numfmt
