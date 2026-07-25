@@ -494,6 +494,9 @@ function $(s,r){return (r||document).querySelector(s);}
 function ce(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(m){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m];});}
 function fmt(n){ if(n==null||isNaN(n))return "0"; return Math.round(n).toLocaleString("de-DE"); }
+/* Riesige Kursaenderungen als Faktor schreiben: "+12.038,34%" lief aus der
+   Karte heraus und ist ausserdem schlechter zu lesen als "x121,4". */
+function chgTxt(c){ if(c==null)return ""; if(Math.abs(c)>=1000) return "×"+fmtF(1+c/100,1); return (c>=0?"+":"")+fmtF(c,2)+"%"; }
 function fmtF(n,d){ if(n==null||isNaN(n))return "0"; return Number(n).toLocaleString("de-DE",{minimumFractionDigits:d||2,maximumFractionDigits:d||2}); }
 /* Initialen: robust gegen Namen aus Leerzeichen (gab "UNDEFINED" im Kaestchen)
    und gegen Emoji (ein halbes Surrogat-Paar wurde zum Ersatzzeichen). */
@@ -669,7 +672,7 @@ function kpiTiles(st){
   return tiles;
 }
 function kpiSub(t){
-  var chg=(t.chg!=null)?('<span class="chg '+(t.chg>=0?"up":"dn")+'">'+(t.chg>=0?"▲":"▼")+" "+fmtF(Math.abs(t.chg),2)+'%</span>'):"";
+  var chg=(t.chg!=null)?('<span class="chg '+(t.chg>=0?"up":"dn")+'">'+(t.chg>=0?"▲":"▼")+" "+chgTxt(Math.abs(t.chg)).replace("+","")+'</span>'):"";
   return (chg||t.sub||"")+(t.extra?' <span style="color:var(--faint)">'+t.extra+'</span>':"");
 }
 function updateKpiSubs(st){
@@ -735,13 +738,13 @@ function renderOverview(d,soft){ var st=d.stats||{}; var prev=(S.prevOv&&S.prevO
     if(dv===1){
       if(d.floaktie_history&&d.floaktie_history.length){
         if(!updateArea(d.floaktie_history)){ var ap=$("#areaPanel"); if(ap){ ap.innerHTML=areaSVG(d); animateArea(document); } }
-        setChartMeta(1,d.floaktie_history.length,st.floaktie_change);
+        setChartMeta(1,d.floaktie_history.length,st.floaktie_change,istLog(d.floaktie_history));
       }
     } else {
       // 7/30/Gesamt: passende Reihe holen und ebenfalls nur patchen.
       api("/api/stock/series?days="+dv).then(function(r){ if(!r||!r.ok)return;
         if(!updateArea(r.points)){ var ap2=$("#areaPanel"); if(ap2){ ap2.innerHTML=areaSVG({floaktie_history:r.points}); animateArea(document); } }
-        setChartMeta(dv,r.count,r.change); S.chartPts=r.points;
+        setChartMeta(dv,r.count,r.change,istLog(r.points)); S.chartPts=r.points;
       }).catch(function(){});
     }
   } }
@@ -768,19 +771,19 @@ function updateStatus(st){
 /* AREA CHART */
 var RANGES=[["1 Tag",1],["7 Tage",7],["30 Tage",30],["Gesamt",3650]];
 function rangeLabel(dv){ for(var i=0;i<RANGES.length;i++) if(RANGES[i][1]===dv) return RANGES[i][0]; return ""; }
-function chartHead(dv,count,change){
+function chartHead(dv,count,change,log){
   var btns=RANGES.map(function(r){ return '<button class="rng-b'+(r[1]===dv?" on":"")+'" data-d="'+r[1]+'">'+r[0]+'</button>'; }).join("");
   return '<div class="ph"><div class="pt">$FLO-Kursverlauf</div>'+
-    '<div class="pm">'+(count||0)+' Punkte · '+rangeLabel(dv)+
-    (change!=null?(' · <span style="color:'+(change>=0?"#34D8A6":"#F0635B")+'">'+(change>=0?"+":"")+fmtF(change,2)+'%</span>'):"")+
+    '<div class="pm">'+(count||0)+' Punkte · '+rangeLabel(dv)+(log?" · log. Skala":"")+
+    (change!=null?(' · <span style="color:'+(change>=0?"#34D8A6":"#F0635B")+'">'+chgTxt(change)+'</span>'):"")+
     '</div></div><div class="rng-row">'+btns+'</div>';
 }
 /* Nur die Kennzahlen im Chart-Kopf aktualisieren - die Buttons bleiben
    unberuehrt (kein Flackern, kein erneutes bindRangeBtns noetig). */
-function setChartMeta(dv,count,change){
+function setChartMeta(dv,count,change,log){
   var el=document.querySelector("#chartHead .pm"); if(!el)return;
-  el.innerHTML=(count||0)+' Punkte · '+rangeLabel(dv)+
-    (change!=null?(' · <span style="color:'+(change>=0?"#34D8A6":"#F0635B")+'">'+(change>=0?"+":"")+fmtF(change,2)+'%</span>'):"");
+  el.innerHTML=(count||0)+' Punkte · '+rangeLabel(dv)+(log?" · log. Skala":"")+
+    (change!=null?(' · <span style="color:'+(change>=0?"#34D8A6":"#F0635B")+'">'+chgTxt(change)+'</span>'):"");
   Array.prototype.forEach.call(document.querySelectorAll(".rng-b"),function(b){
     b.classList.toggle("on", parseFloat(b.dataset.d)===dv); });
 }
@@ -788,7 +791,7 @@ function chartAreaPanel(d){ var p=ce("div","card panel");
   var change=(d.stats&&d.stats.floaktie_change);
   var pts=(d.floaktie_history||[]);
   S.chartDays=S.chartDays||1;
-  p.innerHTML='<div id="chartHead">'+chartHead(S.chartDays,pts.length,change)+'</div>'+
+  p.innerHTML='<div id="chartHead">'+chartHead(S.chartDays,pts.length,change,istLog(pts))+'</div>'+
               '<div id="areaPanel">'+areaSVG(d)+'</div>';
   setTimeout(function(){ bindRangeBtns(p); },0);
   return p; }
@@ -799,7 +802,7 @@ function bindRangeBtns(root){
       var dv=parseFloat(b.dataset.d)||1; S.chartDays=dv;
       api("/api/stock/series?days="+dv).then(function(r){ if(!r.ok)throw r;
         var host=$("#areaPanel"), head=$("#chartHead");
-        if(head) head.innerHTML=chartHead(dv,r.count,r.change);
+        if(head) head.innerHTML=chartHead(dv,r.count,r.change,istLog(r.points));
         if(host){ host.innerHTML=areaSVG({floaktie_history:r.points}); animateArea(document); }
         S.chartPts=r.points;
         if(S.ov){ S.ov.floaktie_history=r.points; }   // Auto-Refresh nutzt den Zeitraum weiter
@@ -810,13 +813,23 @@ function bindRangeBtns(root){
 }
 /* Geometrie der Kurve - einmal berechnet, von areaSVG (Neuaufbau) UND
    updateArea (fluessiges Live-Update) genutzt. */
+/* Grosse Spannen logarithmisch zeichnen (wie an echten Boersen): bei 1.000 -> 150.000
+   wurde die Linie sonst zum Hockeystick, alles davor klebte platt am Rand. */
+function istLog(vals){
+  if(!vals||vals.length<2)return false;
+  var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
+  return mn>0 && mx/mn>=12;
+}
 function areaGeom(vals){
   vals=(vals&&vals.length)?vals.slice():[]; if(vals.length<2)vals=[1,1];
-  var W=560,H=180,pad=8; var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals); if(mx===mn)mx=mn+1;
-  var n=vals.length; var pts=vals.map(function(val,i){ var x=pad+(i/(n-1))*(W-pad*2); var y=pad+(1-(val-mn)/(mx-mn))*(H-pad*2-14)+7; return [x,y]; });
+  var W=560,H=180,pad=8;
+  var log=istLog(vals);
+  var w=log?vals.map(function(v){return Math.log(Math.max(v,1e-9));}):vals;
+  var mn=Math.min.apply(null,w),mx=Math.max.apply(null,w); if(mx===mn)mx=mn+1;
+  var n=w.length; var pts=w.map(function(val,i){ var x=pad+(i/(n-1))*(W-pad*2); var y=pad+(1-(val-mn)/(mx-mn))*(H-pad*2-14)+7; return [x,y]; });
   var line="M"+pts.map(function(p){return p[0].toFixed(1)+" "+p[1].toFixed(1);}).join(" L ");
   var area=line+" L "+pts[n-1][0].toFixed(1)+" "+H+" L "+pts[0][0].toFixed(1)+" "+H+" Z";
-  return {W:W,H:H,pad:pad,line:line,area:area,last:pts[n-1]};
+  return {W:W,H:H,pad:pad,line:line,area:area,last:pts[n-1],log:log};
 }
 /* LIVE-Update: tauscht nur die Geometrie der vorhandenen Kurve aus. Die
    "Zeichnen"-Animation wird NICHT neu gestartet - vorher baute der 6-Sekunden-

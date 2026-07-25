@@ -760,18 +760,26 @@ class FloAktie:
 
     # --- Kurs-Chart (Bild + Zeitraum-Buttons) -----------------------------
     def _series(self, days):
-        """Kurs-Reihe (alt->neu) fuer den gewuenschten Zeitraum. Nutzt die feinen
-        Intraday-Ticks; sind fuer den Zeitraum zu wenige da, faellt es auf die
-        Tages-Schlusskurse zurueck. Immer mind. 2 Punkte."""
+        """Kurs-Reihe (alt->neu) fuer den gewuenschten Zeitraum.
+
+        Nimmt die feinen Intraday-Ticks fuer den Teil, den sie abdecken, und
+        ERGAENZT davor die Tages-Schlusskurse aus der Historie. Vorher wurden die
+        Tageskurse nur benutzt, wenn es GAR keine Ticks gab - dadurch zeigten
+        '7 Tage', '30 Tage' und 'Gesamt' alle dasselbe Fenster, sobald die Ticks
+        nur ein paar Tage zurueckreichten. Immer mind. 2 Punkte."""
         st = self._state()
         now = time.time()
-        cutoff = now - days * 86400
-        pts = [int(t.get("price", 0)) for t in st.get("ticks", [])
-               if t.get("t", 0) >= cutoff]
-        if len(pts) < 2:
+        cutoff = now - max(0.0, float(days)) * 86400
+        ticks = [t for t in st.get("ticks", []) if t.get("t", 0) >= cutoff]
+        pts = [int(t.get("price", 0)) for t in ticks]
+        # Wie weit reichen die Ticks zurueck? Alles davor kommt aus der Historie.
+        aeltester = min((t.get("t", now) for t in ticks), default=now)
+        tage_offen = max(0.0, (aeltester - cutoff) / 86400.0)
+        if tage_offen >= 1.0 or len(pts) < 2:
             hist = [int(h.get("price", 0)) for h in st.get("history", [])]
-            n = max(2, min(len(hist), int(days) + 1)) if hist else 0
-            pts = (hist[-n:] if n else []) + [self.price()]
+            n = int(tage_offen) + 1 if pts else max(2, int(float(days)) + 1)
+            davor = hist[-n:] if hist and n > 0 else []
+            pts = davor + pts
         pts = [p for p in pts if p] or [self.price()]
         # Der letzte Punkt ist IMMER der aktuelle Kurs - sonst endet die Linie auf
         # einem alten Stand und passt nicht zur angezeigten Kurs-Zahl.

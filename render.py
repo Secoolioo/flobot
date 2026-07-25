@@ -2438,7 +2438,9 @@ class Render:
         def euro(v):
             return f"{int(round(v)):,}".replace(",", ".")
         W, H = 900, 460
-        L, R, T, B = 96, 34, 100, 46
+        # T = 118: darunter beginnt die Achse. Vorher lag das oberste Achsen-Label
+        # ueber dem Untertitel ("normaler Verlauf" wurde von "174.725" ueberschrieben).
+        L, R, T, B = 104, 34, 118, 46
         x0, x1, y0, y1 = L, W - R, T, H - B
         vals = [float(p) for p in (prices or []) if p is not None] or [0.0]
         if len(vals) == 1:
@@ -2446,8 +2448,24 @@ class Render:
         lo, hi = min(vals), max(vals)
         if hi <= lo:
             hi = lo + 1
-        pad = (hi - lo) * 0.12
-        lo2, hi2 = lo - pad, hi + pad
+        # Grosse Spannen LOGARITHMISCH zeichnen (wie an echten Boersen): bei einem
+        # Anstieg von 1.000 auf 150.000 wurde die Linie sonst zum Hockeystick -
+        # alles vor dem Anstieg klebte platt am unteren Rand.
+        log_skala = lo > 0 and hi / lo >= 12
+        if log_skala:
+            import math as _m
+            werte = [_m.log10(max(v, 1e-9)) for v in vals]
+            wlo, whi = min(werte), max(werte)
+            pad = (whi - wlo) * 0.10 or 0.05
+            lo2, hi2 = wlo - pad, whi + pad
+        else:
+            werte = list(vals)
+            pad = (hi - lo) * 0.12
+            # Ein Kurs ist NIE negativ - die Achse darf also nicht ins Minus
+            # laufen (vorher stand da z. B. "-17.466").
+            lo2, hi2 = max(0.0, lo - pad), hi + pad
+            if hi2 <= lo2:
+                hi2 = lo2 + 1
         up = change_pct >= 0
         line_col = (46, 204, 113) if up else (231, 76, 60)
         img = self._vgrad(W, H, (20, 26, 40), (9, 12, 22)).convert("RGBA")
@@ -2464,9 +2482,10 @@ class Render:
             v = lo2 + (hi2 - lo2) * k / 4
             yy = py(v)
             d.line([(x0, yy), (x1, yy)], fill=(255, 255, 255, 16), width=1)
-            d.text((x0 - 12, yy), euro(v), font=self._font(17),
+            echt = (10 ** v) if log_skala else v
+            d.text((x0 - 12, yy), euro(echt), font=self._font(17),
                    fill=(150, 160, 176), anchor="rm")
-        pts = [(px(i), py(v)) for i, v in enumerate(vals)]
+        pts = [(px(i), py(v)) for i, v in enumerate(werte)]
         overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         ImageDraw.Draw(overlay).polygon(
             pts + [(pts[-1][0], y1), (pts[0][0], y1)], fill=line_col + (54,))
@@ -2478,10 +2497,15 @@ class Render:
         d.ellipse([ex - 7, ey - 7, ex + 7, ey + 7], fill=(255, 255, 255),
                   outline=line_col, width=3)
         d.text((34, 26), ticker, font=self._font(42), fill=self._WHITE)
-        d.text((36, 78), label, font=self._font(19), fill=(150, 160, 176))
+        unter = label + ("  ·  log. Skala" if log_skala else "")
+        d.text((36, 78), unter, font=self._font(19), fill=(150, 160, 176))
         d.text((W - 34, 30), euro(vals[-1]) + " Coins", font=self._font(30),
                fill=self._WHITE, anchor="ra")
-        chg = ("▲ +" if up else "▼ -") + f"{abs(change_pct):.1f}%"
+        # Riesige Aenderungen als Faktor: "+12038.3%" ist unlesbar und zu lang.
+        if abs(change_pct) >= 1000:
+            chg = ("▲ ×" if up else "▼ ×") + f"{abs(1 + change_pct / 100):.1f}"
+        else:
+            chg = ("▲ +" if up else "▼ -") + f"{abs(change_pct):.1f}%"
         d.text((W - 34, 74), chg, font=self._font(22), fill=line_col, anchor="ra")
         return self._png(img)
 

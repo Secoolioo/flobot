@@ -1695,6 +1695,50 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         fa._store, fa._enabled, floaktie.TICK_NOISE = alt
 
 
+def test_floaktie_chart_zeitraeume_und_bild():
+    """REGRESSION (Chart): '7 Tage', '30 Tage' und 'Gesamt' zeigten dieselbe Reihe,
+    sobald die Minuten-Ticks nur ein paar Tage zurueckreichten - die Tages-Historie
+    wurde nur benutzt, wenn es GAR keine Ticks gab. Und das Bild bekam bei grossen
+    Spannen eine negative Kurs-Achse."""
+    import floaktie
+    import render
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    jetzt = time.time()
+    # 3 Tage Minuten-Ticks (erst flach, dann steil) + 24 Tage Schlusskurse.
+    ticks, p = [], 1000.0
+    for i in range(3 * 1440):
+        p *= 1.0002 if i < 2 * 1440 else 1.003
+        ticks.append({"t": jetzt - (3 * 1440 - i) * 60, "price": int(p)})
+    fa._store = _FakeStore({
+        "price": int(p), "base": float(p), "day": "x", "act_ema": 20.0,
+        "msg_count": 0, "last_msg_count": 0, "holdings": {},
+        "history": [{"day": f"2026-06-{d:02d}", "price": 800 + d * 30} for d in range(1, 25)],
+        "ticks": ticks})
+    try:
+        fa._sync_price()
+        reihen = {}
+        for tage in (1, 7, 30):
+            pts, chg = fa.series(tage)
+            reihen[tage] = (pts, chg)
+            assert len(pts) >= 2
+            assert pts[-1] == fa.price()          # Linie endet auf dem echten Kurs
+        # Die Zeitraeume muessen sich UNTERSCHEIDEN.
+        assert reihen[1][0] != reihen[7][0], "1 Tag und 7 Tage identisch"
+        assert reihen[7][0] != reihen[30][0], "7 Tage und 30 Tage identisch"
+        # Je laenger der Zeitraum, desto weiter zurueck der erste Punkt.
+        assert reihen[30][0][0] <= reihen[7][0][0]
+
+        # Bild: keine negative Kurs-Achse, log. Skala bei grosser Spanne.
+        buf = render.floaktie_chart(reihen[1][0], "$FLO", "1 Tag", reihen[1][1])
+        assert buf is not None and len(buf.getvalue()) > 5000
+        for pts in ([5000] * 40, [1000, 78000], [50, 1_500_000], [0, 0, 1000]):
+            assert render.floaktie_chart(pts, "$FLO", "x", 1.0) is not None
+    finally:
+        fa._store, fa._enabled = alt
+
+
 def test_floaktie_kein_pump_and_dump():
     """REGRESSION (Exploit): Der Kurs muss pfad-unabhaengig sein - viele kleine
     Kaeufe duerfen den Kurs NICHT staerker heben als ein grosser Kauf, sonst kann
