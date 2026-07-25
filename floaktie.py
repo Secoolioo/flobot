@@ -110,8 +110,12 @@ FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "300") or "300")     # Kurs ei
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
 # stand bei hoher Aktivitaet praktisch still. Genau das war der Fehler.)
 AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
-TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0004") or "0.0004")  # Plus je Aktivitaetspunkt/Minute
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.03") or "0.03")     # max +3 % in einem Takt
+# Plus je Aktivitaetspunkt und Minute. 0,0012 heisst: 1 Zuhoerer +0,12 %/min,
+# 20 Punkte +2,4 %/min, 40 Punkte +4,8 %/min. Das Tempo bestimmt nur, WIE SCHNELL
+# der Kurs an sein Niveau kommt - wie HOCH er laeuft, legt AKT_WERT/CEIL_FACTOR
+# fest. Deshalb darf es ruhig steil sein.
+TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0012") or "0.0012")
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.06") or "0.06")     # max +6 % in einem Takt
 IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.00008") or "0.00008")  # ohne Aktivitaet -0,48 %/h
 # Ab welchem Ueberhang ueber dem Zielkurs es merklich gemaechlicher wird
 # (0,35 = beim Anderthalbfachen noch 24 % Tempo, beim Doppelten 6 %). Bis zum
