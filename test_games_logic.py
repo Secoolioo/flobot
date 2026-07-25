@@ -2276,39 +2276,147 @@ def test_schulden_pay_geht_immer_durch():
     msg = SimpleNamespace(content=f"flo pay <@8> 2500", mentions=[ziel],
                           author=_Autor(), guild=SimpleNamespace(id=1, get_member=lambda _u: None))
     try:
-        antwort = asyncio.run(economy.instance._pay(msg))
+        def text_von(emb):
+            teile = [emb.title or "", emb.description or ""]
+            for f in emb.fields:
+                teile.append(str(f.name)); teile.append(str(f.value))
+            return "\n".join(teile)
+
+        emb = asyncio.run(economy.instance._pay(msg))
         # Coins sind geflossen ...
         assert economy.get_coins(7) == 7500 and economy.get_coins(8) == 2500
-        # ... und die Notiz haengt dran.
-        assert "2.500" in antwort and "Kreide" in antwort
+        # ... und die Karte zeigt Betrag + Kreide-Stand.
+        t = text_von(emb)
+        assert "2.500" in t and "Kreide" in t and "Überweisung" in t
         assert sch.saldo(7, 8) == 2500
 
-        # Zweite Zahlung: der Hinweis zeigt den gewachsenen Stand.
+        # Zweite Zahlung: die Karte zeigt den gewachsenen Stand.
         msg.content = "flo pay <@8> 500"
-        antwort = asyncio.run(economy.instance._pay(msg))
-        assert "3.000" in antwort and sch.saldo(7, 8) == 3000
+        emb = asyncio.run(economy.instance._pay(msg))
+        assert "3.000" in text_von(emb) and sch.saldo(7, 8) == 3000
         assert economy.get_coins(7) == 7000
 
         # Tafel kaputt (wirft) -> Zahlung MUSS trotzdem durchgehen.
         def kaputt(*_a, **_k):
             raise RuntimeError("Tafel kaputt")
-        alt_note = schulden.instance.note_pay
-        schulden.instance.note_pay = kaputt
+        alt_note = schulden.instance.note_pay_block
+        schulden.instance.note_pay_block = kaputt
         try:
             msg.content = "flo pay <@8> 1000"
-            antwort = asyncio.run(economy.instance._pay(msg))
+            emb = asyncio.run(economy.instance._pay(msg))
             assert economy.get_coins(7) == 6000 and economy.get_coins(8) == 4000
-            assert "1.000" in antwort
+            assert "1.000" in text_von(emb)
         finally:
-            schulden.instance.note_pay = alt_note
+            schulden.instance.note_pay_block = alt_note
 
         # Nicht genug Geld -> kein Eintrag auf der Tafel.
         vorher = sch.saldo(7, 8)
         msg.content = "flo pay <@8> 999999"
         antwort = asyncio.run(economy.instance._pay(msg))
-        assert "nicht genug" in antwort.lower() and sch.saldo(7, 8) == vorher
+        assert isinstance(antwort, str) and "nicht genug" in antwort.lower()
+        assert sch.saldo(7, 8) == vorher
     finally:
         economy.instance._flush = alt_flush
+        restore()
+
+
+def test_schulden_automatische_tilgung():
+    """Der Zwang zum Zahlen: von jeder ECHTEN Einnahme wandert ein Anteil
+    automatisch an den groessten Glaeubiger. Coins entstehen dabei nie und
+    verschwinden nie - sie wechseln nur den Besitzer."""
+    import schulden
+    restore, sch = _schulden_setup({1: 0, 2: 0, 3: 0})
+    try:
+        A, B, C = 1, 2, 3
+        sch.record_pay(B, A, 10_000)          # A schuldet B 10.000
+        sch.record_pay(C, A, 4_000)           # A schuldet C  4.000
+        assert sch.saldo(B, A) == 10_000 and sch.saldo(C, A) == 4_000
+        summe_vorher = sum(economy.get_coins(u) for u in (A, B, C))
+
+        # A gewinnt 1.000 im Casino -> 20 % gehen an den GROESSTEN Glaeubiger (B).
+        economy.add_coins(A, 1000, reason="casino")
+        assert economy.get_coins(A) == 800, economy.get_coins(A)
+        assert economy.get_coins(B) == 200
+        assert sch.saldo(B, A) == 9_800       # Schuld ist echt kleiner
+        assert sch.saldo(C, A) == 4_000       # der kleinere Posten bleibt
+        assert sch.getilgt_summe(A) == 200
+        # Coins nur umverteilt (plus die 1.000 Einnahme von aussen).
+        assert sum(economy.get_coins(u) for u in (A, B, C)) == summe_vorher + 1000
+
+        # Kleinstbetraege bleiben unberuehrt.
+        vor = economy.get_coins(A)
+        economy.add_coins(A, 10, reason="spiele")
+        assert economy.get_coins(A) == vor + 10
+
+        # Tabu-Quellen tilgen NICHT (Panel-Korrektur, Aktien, direkte pay).
+        for grund in ("panel", "floaktie", "pay", "schulden-tilgung"):
+            vor = economy.get_coins(A)
+            economy.add_coins(A, 1000, reason=grund)
+            assert economy.get_coins(A) == vor + 1000, grund
+
+        # Ausgaben loesen keine Tilgung aus.
+        vor_b = economy.get_coins(B)
+        economy.add_coins(A, -500, reason="casino")
+        assert economy.get_coins(B) == vor_b
+
+        # Getilgt wird immer beim GROESSTEN Posten - erst B (9.800), dann C.
+        sch.erlassen(B, A, sch.saldo(B, A) - 3_000)   # B nur noch 3.000, C 4.000
+        vor_c = economy.get_coins(C)
+        economy.add_coins(A, 1000, reason="casino")
+        assert economy.get_coins(C) == vor_c + 200    # jetzt ist C der groesste
+        assert sch.saldo(C, A) == 3_800
+
+        # Nie mehr als die Restschuld: alles bis auf 50 erlassen, dann gross gewinnen.
+        sch.erlassen(C, A)                            # C komplett erlassen
+        sch.erlassen(B, A, sch.saldo(B, A) - 50)      # bei B bleiben 50
+        assert sch.saldo(B, A) == 50 and sch.saldo(C, A) == 0
+        vor_b = economy.get_coins(B)
+        economy.add_coins(A, 100_000, reason="spiele")
+        assert economy.get_coins(B) == vor_b + 50     # exakt die Restschuld
+        assert sch.saldo(B, A) == 0
+
+        # Ohne Schulden passiert nichts.
+        vor = economy.get_coins(B)
+        economy.add_coins(B, 5000, reason="casino")
+        assert economy.get_coins(B) == vor + 5000
+
+        # Kein Endlos-Kreislauf: die Tilgung bucht selbst und darf sich nicht
+        # erneut selbst anstossen (sonst haengt der Bot).
+        assert sch._tilgung_laeuft is False
+    finally:
+        restore()
+
+
+def test_schulden_mahnung():
+    """Mahnung per DM: nur ab einer Mindestsumme und hoechstens einmal je Abstand."""
+    import schulden
+    restore, sch = _schulden_setup()
+    try:
+        sch.record_pay(1, 2, 50_000)      # 2 schuldet 1 -> 2 wird gemahnt
+        sch.record_pay(1, 3, 10)          # zu klein -> keine Mahnung
+        gesendet = []
+
+        class _User:
+            def __init__(self, uid):
+                self.id = uid
+
+            async def send(self, **kw):
+                gesendet.append((self.id, kw.get("embed")))
+
+        client = SimpleNamespace(get_user=lambda uid: _User(uid))
+        n = asyncio.run(sch.mahn_tick(client))
+        assert n == 1 and gesendet[0][0] == 2
+        emb = gesendet[0][1]
+        text = (emb.title or "") + (emb.description or "") + "".join(
+            str(f.name) + str(f.value) for f in emb.fields)
+        assert "50.000" in text and "%" in text
+        assert emb.color.value == schulden.FARBE_SCHULDEN
+        # Direkt nochmal -> keine zweite DM (Abstand).
+        assert asyncio.run(sch.mahn_tick(client)) == 0
+        # Nach Ablauf des Abstands wieder.
+        sch._stats(2)["mahnung"] = time.time() - schulden.MAHN_ABSTAND - 5
+        assert asyncio.run(sch.mahn_tick(client)) == 1
+    finally:
         restore()
 
 

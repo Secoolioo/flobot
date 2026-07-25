@@ -319,7 +319,24 @@ class Economy:
             prof["earned"] = int(prof.get("earned", 0)) + delta
         # Echtes Delta buchen (bei leerem Konto kann weniger abgehen als gewollt).
         self._record_trade(user_id, delta, reason, neu)
+        # Kreide-Tafel: wer Schulden hat, gibt von JEDER Einnahme automatisch einen
+        # Teil an seinen Glaeubiger ab. Coins entstehen dabei nicht - sie wechseln
+        # nur den Besitzer. Bewusst NACH der Buchung und komplett gekapselt: geht
+        # hier etwas schief, bleibt die eigentliche Gutschrift unberuehrt.
+        if delta > 0:
+            self._tilgen_falls_schulden(user_id, delta, reason)
         return neu
+
+    def _tilgen_falls_schulden(self, user_id, delta, reason):
+        """Automatische Tilgung anstossen (siehe schulden.py). Nie fatal."""
+        try:
+            import features
+            import schulden
+            if schulden.is_enabled() and features.is_on("schulden"):
+                schulden.tilgen_von_einnahme(user_id, delta, reason)
+        except Exception:  # noqa: BLE001 - Tilgung darf nie eine Gutschrift kippen
+            log.exception("Automatische Schulden-Tilgung fehlgeschlagen")
+        return None
 
     def _record_trade(self, uid, delta, source, balance):
         """Meldet eine Coin-Bewegung ans Handelsbuch. Lazy-Import (kein
@@ -1147,21 +1164,49 @@ class Economy:
         self.add_coins(message.author.id, -betrag, reason="pay")
         self.add_coins(ziel.id, betrag, reason="pay")
         await self._flush()
-        # Kreide-Tafel: Flo schreibt mit, wer wem was gegeben hat, und haengt den
-        # Stand als Notiz an. Rein informativ - die Zahlung ist an dieser Stelle
-        # schon durch und wird davon NIE beeinflusst.
-        notiz = ""
+        # Kreide-Tafel: Flo schreibt mit, wer wem was gegeben hat. Die Zahlung ist
+        # hier schon durch - der Block bestimmt nur, WIE die Bestaetigung aussieht
+        # (rot, wenn beim Zahler noch etwas offen ist).
+        block = None
         try:
             import features
             import schulden
             if schulden.is_enabled() and features.is_on("schulden"):
-                notiz = await schulden.note_pay(
+                block = await schulden.note_pay_block(
                     message.author.id, ziel.id, betrag,
                     ziel_name=ziel.display_name, guild=message.guild)
         except Exception:  # noqa: BLE001 - Notiz ist nie kritisch
             log.exception("Kreide-Notiz nach 'pay' fehlgeschlagen")
-        return (f"✅ {message.author.display_name} → {ziel.display_name}: "
-                f"**{fmt(betrag)} {self.COIN}**.{notiz}")
+        return self._pay_embed(message.author, ziel, betrag, block)
+
+    def _pay_embed(self, autor, ziel, betrag, block=None):
+        """Bestaetigung fuer 'pay' als Karte. Farbe: gruen = alles glatt,
+        gold = du hast etwas zu bekommen, ROT = bei dir ist noch was offen."""
+        farbe = (block or {}).get("farbe", 0x2ECC71)
+        emb = discord.Embed(
+            title="💸 Überweisung",
+            description=(f"**{autor.display_name}** ➜ **{ziel.display_name}**\n"
+                         f"## {fmt(betrag)} {self.COIN}"),
+            color=farbe)
+        emb.add_field(name="Dein Kontostand",
+                      value=f"**{fmt(self.get_coins(autor.id))}** {self.COIN}",
+                      inline=True)
+        emb.add_field(name=f"Neu bei {ziel.display_name}",
+                      value=f"**{fmt(self.get_coins(ziel.id))}** {self.COIN}",
+                      inline=True)
+        if block and block.get("stand"):
+            emb.add_field(name="🧾 Kreide-Tafel", value=block["stand"], inline=False)
+        if block and block.get("warnung"):
+            emb.add_field(
+                name=f"🔴 Bei dir sind noch {fmt(block.get('offen_bei_anderen', 0))} "
+                     f"{self.COIN} offen",
+                value=block["warnung"], inline=False)
+            emb.set_footer(text=f"{self._bot_name} schulden zeigt deine ganze Tafel")
+        try:
+            emb.set_thumbnail(url=ziel.display_avatar.url)
+        except Exception:  # noqa: BLE001 - Bild ist Deko
+            pass
+        return emb
 
     async def _ensure_shop(self):
         """Sorgt dafuer, dass der heutige Shop existiert (sonst neu wuerfeln+speichern)."""

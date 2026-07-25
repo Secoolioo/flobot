@@ -213,6 +213,9 @@ STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "60"))
 # Takt, in dem Giveaways auf Ablauf geprueft werden (Ziehung). 15 s -> die Ziehung
 # passiert praktisch punktgenau zur angekuendigten Zeit.
 GIVEAWAY_TICK_SECONDS = float(os.getenv("GIVEAWAY_TICK_SECONDS", "15"))
+# Takt, in dem die Kreide-Tafel nach offenen Posten schaut. Gemahnt wird pro
+# Person trotzdem nur einmal am Tag (SCHULDEN_MAHN_ABSTAND).
+SCHULDEN_MAHN_SECONDS = float(os.getenv("SCHULDEN_MAHN_SECONDS", "3600"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -934,6 +937,17 @@ class FloBot(discord.Client):
         except discord.HTTPException:
             log.warning("Lotto-Ansage konnte nicht gesendet werden")
 
+    @tasks.loop(seconds=SCHULDEN_MAHN_SECONDS)
+    async def schulden_mahn_loop(self):
+        """Erinnert Schuldner per DM an offene Posten (hoechstens einmal am Tag je
+        Person, siehe schulden.mahn_tick)."""
+        if not features.is_on("schulden"):
+            return
+        try:
+            await schulden.mahn_tick(self)
+        except Exception:
+            log.exception("Mahnungs-Loop Fehler - laeuft weiter")
+
     @tasks.loop(seconds=GIVEAWAY_TICK_SECONDS)
     async def giveaway_loop(self):
         """Lost abgelaufene Giveaways aus und raeumt abgelaufene Assistenten weg.
@@ -1598,6 +1612,8 @@ class FloBot(discord.Client):
             self.merchant_loop.start()
         if LOTTO_ENABLED and not self.lotto_loop.is_running():
             self.lotto_loop.start()
+        if SCHULDEN_ENABLED and not self.schulden_mahn_loop.is_running():
+            self.schulden_mahn_loop.start()
         if GIVEAWAY_ENABLED:
             # Mitmach-Knoepfe laufender Giveaways nach einem Neustart wieder
             # klickbar machen (persistente Views). Nur EINMAL pro Prozess -
