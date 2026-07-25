@@ -2108,6 +2108,63 @@ def test_giveaway_exploit_schutz():
         restore()
 
 
+def test_giveaway_escrow_grenzen():
+    """REGRESSION (vom Exploit-Audit gefunden): _starten bewegt echtes Geld und muss
+    deshalb SELBST alle Grenzen pruefen - nicht darauf vertrauen, dass der Assistent
+    das schon getan hat."""
+    import giveaway
+    # 1) Negativer Einsatz erzeugte Coins: add_coins(uid, -(-500)) = GUTSCHRIFT.
+    restore, gw = _giveaway_setup({1: 1_000})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": -500, "reason": "", "seconds": 60}))
+        assert economy.get_coins(1) == 1_000, "negativer Einsatz druckt Coins!"
+        assert not gw._active()
+        # 0 und unter dem Minimum ebenfalls abgelehnt.
+        for schlecht in (0, 1, giveaway.MIN_STAKE - 1, giveaway.MAX_STAKE + 1):
+            asyncio.run(gw._starten(msg, {"stake": schlecht, "reason": "", "seconds": 60}))
+        assert economy.get_coins(1) == 1_000 and not gw._active()
+        # Unsinnige Dauer ebenfalls (0, negativ, absurd lang).
+        for secs in (0, -60, giveaway.MAX_SECONDS + 1):
+            asyncio.run(gw._starten(msg, {"stake": 500, "reason": "", "seconds": secs}))
+        assert economy.get_coins(1) == 1_000 and not gw._active()
+        # parse_stake gibt selbst nie etwas Negatives zurueck.
+        assert gw.parse_stake("-500", 100_000)[0] >= 0
+    finally:
+        restore()
+
+    # 2) Zwei Assistenten in ZWEI Kanaelen -> nur EIN Giveaway (Escrow-Limit).
+    restore, gw = _giveaway_setup({41: 1_000})
+    try:
+        c1, c2 = _FakeChannel(101), _FakeChannel(102)
+        m1 = _giveaway_msg(host=41, channel=c1)
+        m2 = _giveaway_msg(host=41, channel=c2)
+        asyncio.run(gw.start_wizard(m1))
+        asyncio.run(gw.start_wizard(m2))
+        # Ein Nutzer hat nur EINEN Assistenten (der zweite ersetzt den ersten).
+        assert len([k for k in gw._wizards if k[1] == 41]) == 1
+        asyncio.run(gw._starten(m1, {"stake": 500, "reason": "", "seconds": 60}))
+        asyncio.run(gw._starten(m2, {"stake": 500, "reason": "", "seconds": 60}))
+        assert len(gw._active()) == 1, "zwei Escrows gleichzeitig!"
+        assert economy.get_coins(41) == 500
+    finally:
+        restore()
+
+    # 3) Teilnehmer-Liste mit Strings/Duplikaten: keine doppelte Gewinnchance.
+    restore, gw = _giveaway_setup({1: 5_000, 61: 0, 62: 0})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": 5_000, "reason": "", "seconds": 60}))
+        g = list(gw._active().values())[0]
+        g["entries"] = ["61", 61, 61, "62"]          # haendisch verbogen
+        asyncio.run(gw._auslosen(None, g))
+        # Genau einer der beiden bekommt alles - niemand doppelt.
+        assert sorted([economy.get_coins(61), economy.get_coins(62)]) == [0, 5_000]
+        assert gw._state()["done"][-1]["entries"] == 2, "Duplikate nicht entfernt"
+    finally:
+        restore()
+
+
 def test_giveaway_schnellstart_und_assistent():
     """'giveaway 5k 2h weil ...' liest alles aus einer Zeile; der Assistent fragt
     nur das Fehlende nach und akzeptiert lockere Antworten."""

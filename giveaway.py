@@ -301,6 +301,14 @@ class Giveaway:
         wort = self._wortzahl(s)
         return wort or None
 
+    @staticmethod
+    def _als_id(roh):
+        """Discord-ID aus irgendetwas (String/int) - 0, wenn unbrauchbar."""
+        try:
+            return int(str(roh).strip())
+        except (TypeError, ValueError):
+            return 0
+
     def _hat(self, text, woerter):
         """Ganzes Wort/Wendung im Text? (Wendungen mit Leerzeichen erlaubt)"""
         s = self._norm(text)
@@ -344,7 +352,9 @@ class Giveaway:
         wert = self._zahl(s)
         if wert is None:
             return None, ""
-        return int(wert), ""
+        # Nie negativ zurueckgeben: der Aufrufer soll sich darauf verlassen koennen,
+        # auch wenn er selbst keine Untergrenze prueft.
+        return max(0, int(wert)), ""
 
     def parse_duration(self, text):
         """Dauer in Sekunden aus der Antwort (None = nicht verstanden)."""
@@ -473,6 +483,11 @@ class Giveaway:
             return (f"Für ein Giveaway brauchst du mindestens **{fmt(MIN_STAKE)}** "
                     f"{economy.COIN} – du hast **{fmt(guthaben)}**.")
         data = dict(vorgabe or {})
+        # Ein Nutzer hat immer nur EINEN Assistenten: startet er in einem anderen
+        # Kanal neu, wird der alte verworfen (sonst laufen zwei Frage-Runden
+        # parallel und man kann zwei Einsaetze hinterlegen).
+        for key in [k for k in self._wizards if k[1] == uid]:
+            self._wizards.pop(key, None)
         w = {"step": "stake", "data": data, "deadline": time.time() + WIZARD_TIMEOUT,
              "channel": message.channel.id, "host": uid}
         self._wizards[self._wizard_key(message)] = w
@@ -615,7 +630,36 @@ class Giveaway:
     async def _starten(self, message, data):
         """Bucht den Einsatz ab (geprueft!) und postet das Giveaway."""
         uid = message.author.id
-        stake = int(data["stake"])
+        stake = int(data.get("stake", 0))
+        seconds = int(data.get("seconds", 0))
+        # Hier wird WIRKLICH Geld bewegt - deshalb pruefen wir die Grenzen noch
+        # einmal selbst, egal was der Aufrufer schon geprueft haben will.
+        # Ein negativer Einsatz wuerde sonst zur GUTSCHRIFT (-(-500) = +500) und
+        # Coins aus dem Nichts erzeugen.
+        if stake < MIN_STAKE or stake > MAX_STAKE:
+            log.warning("Giveaway-Start mit unzulaessigem Einsatz abgelehnt (%s: %d).",
+                        uid, stake)
+            await self._send(message.channel, content=(
+                f"Der Einsatz ist ungültig – erlaubt sind **{fmt(MIN_STAKE)}** bis "
+                f"**{fmt(MAX_STAKE)}** {economy.COIN}."))
+            return
+        if seconds < MIN_SECONDS or seconds > MAX_SECONDS:
+            log.warning("Giveaway-Start mit unzulaessiger Dauer abgelehnt (%s: %d).",
+                        uid, seconds)
+            await self._send(message.channel, content=(
+                f"Die Dauer ist ungültig – erlaubt sind "
+                f"{self.dauer_text(MIN_SECONDS)} bis {self.dauer_text(MAX_SECONDS)}."))
+            return
+        # Und auch das Limit nochmal: der Assistent prueft es beim START, aber wer
+        # in ZWEI Kanaelen je einen Assistenten oeffnet, hatte beide Male 0 laufende
+        # Giveaways - und konnte so zwei Einsaetze gleichzeitig hinterlegen.
+        eigene = [g for g in self._active().values() if int(g.get("host", 0)) == uid]
+        if len(eigene) >= MAX_ACTIVE_PER_USER:
+            await self._send(message.channel, content=(
+                f"Du hast schon ein laufendes Giveaway (#{eigene[0]['id']}) – "
+                f"beende das erst (`{self._bot_name} giveaway ziehen` oder "
+                f"`{self._bot_name} giveaway abbrechen`)."))
+            return
         vorher = economy.get_coins(uid)
         if vorher < stake:
             await self._send(message.channel, content=(
@@ -641,8 +685,7 @@ class Giveaway:
         g = {"id": gid, "host": uid, "guild": message.guild.id,
              "channel": message.channel.id, "message": 0, "stake": stake,
              "escrow": stake, "reason": data.get("reason", ""),
-             "started": jetzt, "ends": jetzt + int(data["seconds"]),
-             "entries": []}
+             "started": jetzt, "ends": jetzt + seconds, "entries": []}
         self._active()[str(gid)] = g
         await self._save()
         try:
@@ -657,7 +700,7 @@ class Giveaway:
             view.message = msg
             await self._save()
         log.info("Giveaway #%d gestartet von %s: %d Coins, %s.",
-                 gid, uid, stake, self.dauer_text(int(data["seconds"])))
+                 gid, uid, stake, self.dauer_text(seconds))
 
     # --- Anzeige ----------------------------------------------------------
     def _panel(self, g, host_user=None):
@@ -715,7 +758,10 @@ class Giveaway:
             await self._ephemeral(interaction, "Bots dürfen nicht mitspielen.")
             return
         entries = g.setdefault("entries", [])
-        if uid in entries:
+        # Typunabhaengig vergleichen: stand die ID (z. B. aus einer haendisch
+        # bearbeiteten Datei) als STRING drin, wurde derselbe Nutzer sonst ein
+        # zweites Mal eingetragen - und hatte doppelte Gewinnchance.
+        if any(self._als_id(u) == uid for u in entries):
             await self._ephemeral(
                 interaction, f"Du bist schon dabei – aktuell **{fmt(len(entries))}** Teilnehmer. "
                              f"Gewinnchance: **{100.0 / max(1, len(entries)):.1f}%**")
@@ -780,14 +826,24 @@ class Giveaway:
         """Zieht den Gewinner (oder bucht bei 0 Teilnehmern/Abbruch zurueck)."""
         gid = str(g["id"])
         # Riegel VOR jeder Zahlung: 'giveaway ziehen' und der Tick-Loop koennen
-        # sonst gleichzeitig auslosen und den Einsatz zweimal auszahlen.
-        if g.get("settled"):
+        # sonst gleichzeitig auslosen und den Einsatz zweimal auszahlen. Dafuer
+        # IMMER das Objekt aus dem Store nehmen und nie dem uebergebenen blind
+        # vertrauen - sonst haelt der Riegel nicht, wenn zwei Kopien desselben
+        # Giveaways im Umlauf sind.
+        aktuell = self._active().get(gid)
+        if aktuell is None or aktuell.get("settled"):
             log.info("Giveaway #%s war schon abgerechnet - nichts getan.", gid)
             return
+        g = aktuell
         g["settled"] = True
         self._active().pop(gid, None)
         await self._save()
-        entries = [int(u) for u in g.get("entries", []) if int(u) != int(g.get("host", 0))]
+        host_id = self._als_id(g.get("host"))
+        entries = []
+        for u in g.get("entries", []):
+            wer = self._als_id(u)
+            if wer and wer != host_id and wer not in entries:
+                entries.append(wer)
         betrag = int(g.get("escrow", g.get("stake", 0)))
         gewinner = None
         if abgebrochen or not entries:

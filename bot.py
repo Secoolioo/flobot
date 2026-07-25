@@ -592,6 +592,9 @@ class FloBot(discord.Client):
         # Schutz aktiver Spiele vorm Auto-Loeschen (siehe PROTECT_RELEASE_GRACE oben).
         self._protected_msg_ids = set()   # IDs aktiver Spiel-Nachrichten (nicht loeschen)
         self._releasing_ids = set()       # laufen gerade durch ihre Gnadenfrist
+        # Giveaway-Knoepfe nur einmal pro Prozess anmelden (on_ready feuert auch
+        # bei jedem Reconnect).
+        self._giveaway_views_ready = False
         # Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
         # vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
         self._bg_tasks = set()
@@ -1556,11 +1559,14 @@ class FloBot(discord.Client):
             self.lotto_loop.start()
         if GIVEAWAY_ENABLED:
             # Mitmach-Knoepfe laufender Giveaways nach einem Neustart wieder
-            # klickbar machen (persistente Views).
-            try:
-                giveaway.register_views(self)
-            except Exception:
-                log.exception("Giveaway-Knoepfe konnten nicht angemeldet werden")
+            # klickbar machen (persistente Views). Nur EINMAL pro Prozess -
+            # on_ready feuert auch bei jedem Reconnect erneut.
+            if not self._giveaway_views_ready:
+                try:
+                    giveaway.register_views(self)
+                    self._giveaway_views_ready = True
+                except Exception:
+                    log.exception("Giveaway-Knoepfe konnten nicht angemeldet werden")
             if not self.giveaway_loop.is_running():
                 self.giveaway_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
