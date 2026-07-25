@@ -61,7 +61,11 @@ LIQUIDITY = int(os.getenv("FLOAKTIE_LIQUIDITY", "750") or "750")
 # Gebuehr je Order (jede Richtung). Sorgt dafuer, dass ein sofortiger
 # Hin-und-Her-Trade IMMER verliert (kein risikoloser Gewinn).
 TRADE_FEE = float(os.getenv("FLOAKTIE_TRADE_FEE", "0.02") or "0.02")
-MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "100000") or "100000")
+# Groesste EINZEL-Order. Bewusst in der Groessenordnung der Liquiditaet: eine
+# einzige Order kann den Kurs so maximal etwa verdoppeln, statt ihn (mit
+# Kredit-Kauf) absurd zu verzerren. Mehr geht ueber mehrere Orders - dank der
+# pfad-unabhaengigen Kurve kostet das genau dasselbe.
+MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
 
 # --- Aktivitaets-Modell: der Kurs reagiert JEDE MINUTE auf die Server-Aktivitaet -
 # Bei JEDEM Sample-Takt (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s) wird
