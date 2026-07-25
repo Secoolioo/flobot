@@ -51,6 +51,7 @@ class WebPanel:
         self._ttl = 12 * 3600
         self._html_cache = None
         self._bot_name = "Flo"
+        self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -93,6 +94,7 @@ class WebPanel:
             web.get("/api/servers", self._api_servers),
             web.post("/api/server/sendepause", self._api_sendepause),
             web.post("/api/server/announce", self._api_announce),
+            web.get("/api/avatar/{uid}", self._api_avatar),
             web.get("/api/features", self._api_features),
             web.post("/api/feature", self._api_feature),
         ])
@@ -567,6 +569,46 @@ class WebPanel:
             log.exception("Ansage via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "senden fehlgeschlagen"}, status=500)
         return web.json_response({"ok": True})
+
+    # --- API: Profilbilder ------------------------------------------------
+    _AV_TTL = 3600      # eine Stunde: Discord-CDN-URLs sind stabil genug
+
+    async def _api_avatar(self, request):
+        """Leitet auf das Discord-Profilbild der ID weiter (302).
+
+        Loest den Nutzer notfalls ueber die API auf - so bekommt die Nutzer-Liste
+        auch Bilder von Leuten, die nicht im Cache stehen. Nicht auffindbar -> 404,
+        das Panel zeigt dann das Initial-Kaestchen.
+        Hinweis: <img>-Anfragen schicken keinen Authorization-Header, aber das
+        Login-Cookie - und genau das prueft _guard/_valid mit."""
+        self._guard(request)
+        try:
+            uid = int(request.match_info.get("uid", "0"))
+        except (TypeError, ValueError):
+            raise web.HTTPNotFound()
+        if not uid:
+            raise web.HTTPNotFound()
+        now = time.time()
+        hit = self._av_cache.get(uid)
+        if hit and hit[1] > now:
+            url = hit[0]
+        else:
+            url = None
+            try:
+                user = await economy.instance._resolve_avatar_user(self._guild(), uid)
+                if user is not None:
+                    asset = user.display_avatar
+                    try:
+                        asset = asset.with_size(64)
+                    except Exception:  # noqa: BLE001 - Groesse ist nur Optik
+                        pass
+                    url = str(asset.url)
+            except Exception:  # noqa: BLE001 - Bild ist nie kritisch
+                log.debug("Avatar fuer %s nicht ermittelbar", uid, exc_info=True)
+            self._av_cache[uid] = (url, now + self._AV_TTL)
+        if not url:
+            raise web.HTTPNotFound()
+        raise web.HTTPFound(url)
 
     # --- API: Funktionen (Laufzeit-Schalter) -----------------------------
     def _loaded_flags(self):

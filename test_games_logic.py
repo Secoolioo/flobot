@@ -1487,6 +1487,34 @@ def test_webpanel_api():
                        json={"on": True}, headers=H)).json()
             assert j["ok"] and j["sendepause"] is True and admin.is_locked() is True
 
+            # --- Profilbilder für die Nutzer-Liste (/api/avatar/<id>) -------
+            alt_res = economy.instance._resolve_avatar_user
+
+            class _Asset:
+                url = "https://cdn.discordapp.com/avatars/1/abc.png?size=64"
+
+                def with_size(self, _n):
+                    return self
+
+            async def fake_resolve(_guild, uid):
+                return SimpleNamespace(display_avatar=_Asset()) if uid == 1 else None
+            economy.instance._resolve_avatar_user = fake_resolve
+            wp._av_cache = {}
+            try:
+                # Auflösbar -> Weiterleitung (302) auf die Discord-CDN-URL.
+                r = await cli.get("/api/avatar/1", headers=H, allow_redirects=False)
+                assert r.status == 302, r.status
+                assert "cdn.discordapp.com" in r.headers.get("Location", "")
+                # Nicht auflösbar -> 404 (Panel zeigt dann die Initialen).
+                assert (await cli.get("/api/avatar/999", headers=H,
+                                      allow_redirects=False)).status == 404
+                # Unsinnige ID -> 404, kein Crash.
+                assert (await cli.get("/api/avatar/abc", headers=H,
+                                      allow_redirects=False)).status == 404
+            finally:
+                economy.instance._resolve_avatar_user = alt_res
+                wp._av_cache = {}
+
             # --- Aktien-Anteile per Panel korrigieren (Exploit-Aufräumen) ---
             import floaktie
             alt_fa = (floaktie.instance._store, floaktie.instance._enabled)

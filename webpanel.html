@@ -248,7 +248,14 @@ body{
 .tbl tr.rev.in{opacity:1;transform:none;transition:opacity .5s var(--ease),transform .5s var(--ease)}
 .u-cell{display:flex;align-items:center;gap:12px}
 .avatar{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-size:14px;font-weight:750;flex:none;
-  color:#1a1408;box-shadow:inset 0 1px 1px rgba(255,255,255,.4),var(--sh-sm)}
+  color:#1a1408;box-shadow:inset 0 1px 1px rgba(255,255,255,.4),var(--sh-sm);position:relative;overflow:hidden}
+/* Echtes Discord-Profilbild liegt ueber dem Initial-Kaestchen; laedt es nicht
+   (unbekannte ID / kein Bild), entfernt onerror das img und die Initialen bleiben. */
+.avatar>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.av>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
+.av{position:relative;overflow:hidden}
+.mono-av{position:relative;overflow:hidden}
+.mono-av>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
 .u-nm{font-weight:600}.u-title{font-size:11.5px;color:var(--gold-2);margin-top:1px}
 .u-id{font-family:var(--mono);font-size:12px;color:var(--mute)}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
@@ -469,6 +476,17 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(m){retur
 function fmt(n){ if(n==null||isNaN(n))return "0"; return Math.round(n).toLocaleString("de-DE"); }
 function fmtF(n,d){ if(n==null||isNaN(n))return "0"; return Number(n).toLocaleString("de-DE",{minimumFractionDigits:d||2,maximumFractionDigits:d||2}); }
 function initials(name){ if(!name)return "?"; var p=String(name).trim().split(/\s+/); return (p[0][0]+(p[1]?p[1][0]:"")).toUpperCase(); }
+/* Avatar-Kaestchen: echtes Discord-Profilbild ueber den Initialen. Laedt das Bild
+   nicht (unbekannte ID / kein Zugriff), raeumt onerror es weg und die Initialen
+   bleiben stehen - es gibt also nie ein kaputtes Bild-Symbol. */
+function avatarHtml(u, cls, extraStyle){
+  var id = u && u.id ? String(u.id) : "";
+  var ini = esc(initials(u && u.name));
+  var img = id ? '<img src="/api/avatar/'+encodeURIComponent(id)+'" alt="" loading="lazy" '+
+                 'onerror="this.remove()">' : "";
+  return '<div class="'+(cls||"avatar")+'" style="background:'+avColor(id||(u&&u.name))+
+         (extraStyle?";"+extraStyle:"")+'">'+ini+img+'</div>';
+}
 var HUES=[[212,175,55],[16,185,129],[124,166,255],[199,125,255],[240,150,80],[100,200,180]];
 function avColor(seed){ var h=0,str=String(seed||"x"); for(var i=0;i<str.length;i++)h=(h*31+str.charCodeAt(i))>>>0; var c=HUES[h%HUES.length]; return "linear-gradient(145deg,rgba("+c[0]+","+c[1]+","+c[2]+",.95),rgba("+Math.max(0,c[0]-60)+","+Math.max(0,c[1]-60)+","+Math.max(0,c[2]-60)+",.9))"; }
 
@@ -692,7 +710,7 @@ function animateArea(root){ var l=root.querySelector(".area-line"),f=root.queryS
 function barPanel(d){ var p=ce("div","card panel"); var tc=(d.top_coins||[]).slice(0,7);
   var mx=tc.length?Math.max.apply(null,tc.map(function(x){return x.coins;})):1; if(mx<=0)mx=1;
   var rows=tc.map(function(u){ var pct=Math.max(3,(u.coins/mx)*100);
-    return '<div class="bar-row"><div class="bar-nm" title="'+esc(u.name)+'"><span class="mono-av">'+esc(initials(u.name))+'</span>'+esc(u.name)+'</div>'+
+    return '<div class="bar-row"><div class="bar-nm" title="'+esc(u.name)+'">'+avatarHtml(u,"mono-av")+esc(u.name)+'</div>'+
       '<div class="bar-track"><div class="bar-fill" data-w="'+pct.toFixed(1)+'"></div></div>'+
       '<div class="bar-val">'+fmt(u.coins)+'</div></div>'; }).join("");
   p.innerHTML='<div class="ph"><div class="pt">Top Coins</div><div class="pm">Rangliste</div></div>'+(rows?'<div class="bars">'+rows+'</div>':emptyMini("Keine Daten"));
@@ -756,7 +774,7 @@ function renderUsersTable(d){ var card=$("#uTableCard"); var us=d.users||[];
   var rows=us.map(function(u){
     var titleTxt=u.title?('<div class="u-title">'+esc(u.title)+'</div>'):(u.titles?('<div class="u-title" style="color:var(--mute)">'+esc(u.titles)+' Titel</div>'):"");
     return '<tr class="urow rev" data-id="'+esc(u.id)+'">'+
-      '<td><div class="u-cell"><div class="avatar" style="background:'+avColor(u.id||u.name)+'">'+esc(initials(u.name))+'</div>'+
+      '<td><div class="u-cell">'+avatarHtml(u,"avatar")+
         '<div><div class="u-nm">'+esc(u.name)+'</div>'+titleTxt+'</div></div></td>'+
       '<td class="u-id">'+esc(u.id)+'</td>'+
       '<td class="r"><span class="num gold">'+fmt(u.coins)+'</span></td>'+
@@ -792,7 +810,7 @@ function renderUserModal(ov,u){ var m=ov.querySelector(".modal");
   var statHtml=stats.map(function(s){ return '<div class="mstat"><div class="mv"'+(s[2]==="gold"?' style="background:linear-gradient(180deg,#F1DE9B,#B8912B);-webkit-background-clip:text;background-clip:text;color:transparent"':"")+'>'+s[1]+'</div><div class="ml">'+s[0]+'</div></div>'; }).join("");
   m.innerHTML='<div class="celebrate" id="celeb"></div>'+
     '<div class="m-close" id="mClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>'+
-    '<div class="m-head"><div class="avatar" style="background:'+avColor(u.id||u.name)+'">'+esc(initials(u.name))+'</div>'+
+    '<div class="m-head">'+avatarHtml(u,"avatar")+
       '<div><div class="mn">'+esc(u.name)+'</div><div class="mi">ID '+esc(u.id)+'</div>'+(u.title?'<div class="mt">'+esc(u.title)+'</div>':"")+'</div></div>'+
     '<div class="m-body">'+
       '<div class="mstat-grid">'+statHtml+'</div>'+
@@ -932,7 +950,7 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
     api("/api/users?q="+encodeURIComponent(q)+"&size=8").then(function(r){ if(!r.ok)return;
       if(!r.users.length){ L.innerHTML='<div style="color:var(--mute);font-size:13px">Kein Treffer.</div>'; return; }
       L.innerHTML=r.users.map(function(u){ return '<div class="pk-row" data-id="'+u.id+'" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--hair);border-radius:10px;cursor:pointer">'+
-        '<span class="av" style="width:28px;height:28px;font-size:12px;background:'+avColor(u.id)+'">'+esc(initials(u.name))+'</span>'+
+        avatarHtml(u,"av","width:28px;height:28px;font-size:12px;border-radius:9px")+
         '<b style="flex:1">'+esc(u.name)+'</b><span class="num gold">'+fmt(u.coins)+'</span>'+
         '<span class="num" style="color:var(--blue)">'+fmt(u.shares)+' ▦</span></div>'; }).join("");
       Array.prototype.forEach.call(L.querySelectorAll(".pk-row"),function(el){
