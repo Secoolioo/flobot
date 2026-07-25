@@ -595,6 +595,9 @@ class FloBot(discord.Client):
         # Giveaway-Knoepfe nur einmal pro Prozess anmelden (on_ready feuert auch
         # bei jedem Reconnect).
         self._giveaway_views_ready = False
+        # Damit die "Guild nicht auffindbar"-Warnung der Aktie nicht jede Minute
+        # ins Log rauscht.
+        self._floaktie_guild_warned = False
         # Laufende Hintergrund-Tasks festhalten, damit der Garbage Collector sie nicht
         # vorzeitig einsammelt (asyncio.create_task gibt nur eine schwache Referenz).
         self._bg_tasks = set()
@@ -937,11 +940,20 @@ class FloBot(discord.Client):
 
     @tasks.loop(seconds=STOCK_SAMPLE_SECONDS)
     async def floaktie_market_loop(self):
-        """Tastet die Voice-Aktivitaet fuer die FloCorp-Aktie ab und zieht bei
-        Tageswechsel den Kurs neu (viele im Call -> hoch, wenig -> runter)."""
+        """Tastet jede Minute die Server-Aktivitaet ab und bewegt den Kurs:
+        Leute im Call + Livestreams + Chat -> rauf, gar nichts -> langsam runter."""
+        if not features.is_on("floaktie"):
+            return          # Panel-Schalter gilt auch fuer den Kurs-Takt
         guild = self.get_guild(GUILD_ID)
         if guild is None:
+            # Ohne Guild misst der Takt NICHTS - der Kurs stand dann still, ohne
+            # dass irgendwo etwas im Log auftauchte. Jetzt sagt er es (einmal).
+            if not self._floaktie_guild_warned:
+                self._floaktie_guild_warned = True
+                log.warning("FloCorp: Guild %s nicht auffindbar - die Aktivitaet kann "
+                            "nicht gemessen werden (GUILD_ID falsch gesetzt?).", GUILD_ID)
             return
+        self._floaktie_guild_warned = False
         try:
             await floaktie.sample_and_tick(guild)
         except Exception:
@@ -1279,13 +1291,6 @@ class FloBot(discord.Client):
                 words.note_message(message)
             except Exception:
                 log.exception("Wort-Zaehler-Hook fehlgeschlagen")
-        # FloCorp-Aktie: jede Nachricht zaehlt als Aktivitaet (treibt den Kurs mit).
-        # Nur ein Zaehler-Inkrement - gespeichert wird beim Sample-Takt.
-        if FLOAKTIE_ENABLED and features.is_on("floaktie"):
-            try:
-                floaktie.note_message()
-            except Exception:
-                log.exception("FloCorp-Nachrichten-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and features.is_on("food"):
             self._spawn(food.on_message_passive(message))
@@ -1321,6 +1326,10 @@ class FloBot(discord.Client):
                     and ref.author.id == self.user.id):
                 angesprochen = True
         if not angesprochen:
+            # Normale Chat-Nachricht (kein Befehl an Flo): zaehlt als Server-
+            # Aktivitaet fuer den Aktienkurs. Nur die HAUPT-Guild - Nachrichten aus
+            # fremden Servern haben den Kurs vorher mitbewegt.
+            self._note_chat_activity(message)
             return
 
         # Sendepause (nur der Besitzer schaltet sie per 'Flo sendepause'): ist sie
@@ -1444,6 +1453,8 @@ class FloBot(discord.Client):
             return
 
         # --- KI-Fallback: kein Befehl erkannt -> Flo antwortet wie eine KI ---
+        # Das ist normales Reden, kein Befehl -> zaehlt fuer den Aktienkurs.
+        self._note_chat_activity(message)
         if not (AI_ENABLED and features.is_on("ki")):
             return
         # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je seltener der
@@ -1493,10 +1504,34 @@ class FloBot(discord.Client):
         ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
         await self._reply_chunks(message, antwort)
 
+    def _note_chat_activity(self, message):
+        """Zaehlt eine echte Chat-Nachricht fuer den Aktienkurs (keine Befehle,
+        nur die Haupt-Guild)."""
+        if not (FLOAKTIE_ENABLED and features.is_on("floaktie")):
+            return
+        gid = getattr(getattr(message, "guild", None), "id", 0)
+        if GUILD_ID and gid != GUILD_ID:
+            return
+        try:
+            floaktie.note_message()
+        except Exception:
+            log.exception("FloCorp-Nachrichten-Hook fehlgeschlagen")
+
     async def on_voice_state_update(self, member, before, after):
-        """Join-Sounds: spielt einen Sound, wenn jemand einen Sprachkanal betritt."""
+        """Join-Sounds - und Sofort-Impulse fuer den Aktienkurs (Livestream/Call)."""
         if VOICE_GAGS_ENABLED:
             self._spawn(voicegags.on_voice_state_update(member, before, after))
+        # FloCorp-Aktie: geht ein Livestream AN oder kommt jemand in den Call,
+        # schiebt das den Kurs sofort ein Stueck - man muss nicht auf den
+        # Minuten-Takt warten.
+        if (FLOAKTIE_ENABLED and features.is_on("floaktie")
+                and not getattr(member, "bot", False)):
+            live_neu = getattr(after, "self_stream", False) and not getattr(before, "self_stream", False)
+            call_neu = getattr(after, "channel", None) is not None and getattr(before, "channel", None) is None
+            if live_neu:
+                self._spawn(floaktie.note_stream_start(member))
+            elif call_neu:
+                self._spawn(floaktie.note_voice_join(member))
 
     async def on_ready(self):
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)

@@ -1562,6 +1562,128 @@ def test_webpanel_api():
     restore_eco()
 
 
+def test_floaktie_aktivitaet_treibt_den_kurs():
+    """DIE Regel, in Zahlen: jeder im Call, jeder Livestream und jede Chat-Nachricht
+    heben den Kurs - je mehr, desto schneller. Ist gar nichts los, sinkt er langsam.
+    REGRESSION: vorher wurde von jeder Minute ein 'Normalwert' von 3,0 abgezogen,
+    wodurch ein Tag mit 5 aktiven Stunden bei -19 % landete, und das Rauschen war
+    bei 4 Leuten im Call 12x groesser als das Signal."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+
+    def frisch(preis=1000):
+        fa._store = _FakeStore({"price": preis, "base": float(preis), "day": "x",
+                               "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
+                               "holdings": {}, "history": [], "ticks": []})
+        fa._sync_price()
+
+    try:
+        # 1) Mehr Leute -> hoeherer Zielkurs UND schnellerer Anstieg.
+        frisch()
+        tempo = []
+        for leute in (0, 1, 5, 12, 20):
+            frisch()
+            akt = fa.activity_of(leute, 0, 0, 0)
+            tempo.append((leute, fa.ziel_base(akt), fa.drift_fuer(akt)))
+        ziele = [z for _l, z, _d in tempo]
+        assert ziele == sorted(ziele) and len(set(ziele)) == len(ziele)
+        # Ab dem Punkt, wo das Ziel ueber dem Kurs liegt, steigt es mit den Leuten.
+        steigend = [d for _l, z, d in tempo if z > 1000]
+        assert steigend == sorted(steigend), steigend
+
+        # 2) Livestreams zaehlen EXTRA: 10 Leute die alle streamen schlagen
+        #    10 Leute ohne Stream deutlich.
+        ohne = fa.activity_of(10, 0, 0, 0)
+        mit = fa.activity_of(10, 10, 0, 0)
+        assert mit > ohne * 2, (ohne, mit)
+        assert fa.ziel_base(mit) > fa.ziel_base(ohne)
+
+        # 3) Reiner Chat treibt ihn auch (ohne einen einzigen im Call).
+        frisch()
+        _a, _n, drift, akt = fa._activity_tick(0, 40)
+        assert drift > 0 and akt > 0
+
+        # 4) 10 im Call, ALLE streamen: in der ERSTEN Minute sichtbar (>= 1 %),
+        #    nach einer Stunde vielfach.
+        frisch()
+        a, n, drift, _akt = fa._activity_tick(10, 20, streams=10)
+        assert drift >= 0.01, drift
+        assert n > a
+        for _ in range(59):
+            fa._activity_tick(10, 20, streams=10)
+        assert fa.price() > 3500, fa.price()
+
+        # 5) Toter Server: sinkt, aber LANGSAM (nie mehr als IDLE_CAP je Minute).
+        frisch(5000)
+        vorher = fa.price()
+        for _ in range(60):
+            fa._activity_tick(0, 0)
+        gefallen = 1 - fa.price() / vorher
+        assert 0 < gefallen < 0.15, gefallen
+        # und ueber TAGE deutlich runter, Richtung Wert eines toten Servers
+        for _ in range(3 * 1440):
+            fa._activity_tick(0, 0)
+        drei_tage = fa.price()
+        assert 800 < drei_tage < 1600, drei_tage       # langsam, aber deutlich
+        for _ in range(4 * 1440):
+            fa._activity_tick(0, 0)
+        assert fa.price() < drei_tage * 0.7, (drei_tage, fa.price())
+
+        # 6) Kein Aufsummieren: Dauer-Vollbetrieb laeuft in ein NIVEAU, statt zu
+        #    explodieren (vorher: nach 30 Tagen 10**16).
+        frisch()
+        for _ in range(4 * 1440):
+            fa._activity_tick(10, 40, streams=10)
+        eine_woche = fa.price()
+        for _ in range(10 * 1440):
+            fa._activity_tick(10, 40, streams=10)
+        assert eine_woche < 12_000, eine_woche
+        assert fa.price() < eine_woche * 1.2, (eine_woche, fa.price())
+
+        # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
+        #    aber pro Minute gedeckelt (kein Pump durch Rein-/Rausspringen).
+        frisch()
+        vorher = fa.price()
+        assert fa._puls(floaktie.PULSE_STREAM, "test") > vorher
+        for _ in range(30):
+            fa._puls(floaktie.PULSE_STREAM, "test")
+        assert fa.price() <= vorher * (1 + floaktie.PULSE_MAX_PER_MIN) + 1, fa.price()
+
+        # 8) Signal deutlich ueber dem Rauschen - man MUSS es sehen koennen.
+        #    (Beim Niveau-Modell zaehlt der Abstand zum Ziel: steht der Kurs auf
+        #    Totlast-Niveau, treiben schon 4 Leute im Call ihn klar nach oben.)
+        frisch(int(floaktie.FAIR_BASE))
+        sig = fa.drift_fuer(fa.activity_of(4, 0, 0, 0))
+        assert sig > floaktie.TICK_NOISE * 10, (sig, floaktie.TICK_NOISE)
+        # Umgekehrt: steht der Kurs hoch und es ist kaum was los, geht es runter -
+        # genau das ist "wenig Aktivitaet = niedriger Kurs".
+        frisch(5000)
+        assert fa.drift_fuer(fa.activity_of(4, 0, 0, 0)) < 0
+
+        # 9) Messung ohne Member-Cache: voice_states statt members.
+        class _VS:
+            def __init__(self, stream=False, video=False):
+                self.self_stream, self.self_video = stream, video
+
+        class _VC:
+            id = 5
+            voice_states = {11: _VS(True), 12: _VS(), 13: _VS(video=True)}
+            members = []                      # Cache leer!
+
+        guild = SimpleNamespace(voice_channels=[_VC()], afk_channel=None,
+                               me=SimpleNamespace(id=99),
+                               get_member=lambda _uid: None)
+        assert fa._measure(guild) == (3, 1, 1)
+        # Flo selbst und andere Bots zaehlen nicht mit.
+        _VC.voice_states = {99: _VS(), 11: _VS()}
+        assert fa._measure(guild)[0] == 1
+    finally:
+        fa._store, fa._enabled, floaktie.TICK_NOISE = alt
+
+
 def test_floaktie_kein_pump_and_dump():
     """REGRESSION (Exploit): Der Kurs muss pfad-unabhaengig sein - viele kleine
     Kaeufe duerfen den Kurs NICHT staerker heben als ein grosser Kauf, sonst kann

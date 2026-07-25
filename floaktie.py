@@ -49,7 +49,7 @@ _CMDS = ("floaktie", "floaktien", "aktie", "aktien", "flostock", "floshare",
 _CHART_CMDS = ("aktienkurs", "kurs", "kursverlauf", "chart", "flokurs")
 # Zeitraeume fuer den Chart: (Label, Tage).
 _RANGES = (("1 Tag", 1), ("7 Tage", 7), ("30 Tage", 30), ("Gesamt", 100000))
-HISTORY_TICKS_MAX = 3000
+HISTORY_TICKS_MAX = 20000   # ~14 Tage Minuten-Takte (vorher 50 h -> 7/30/Gesamt sahen gleich aus)
 
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 
@@ -77,20 +77,51 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
 #   Aktivitaet = Leute-im-Call
 #              + STREAM_BONUS * Live-Streamer   (Go Live / Screenshare zaehlt extra)
 #              + VIDEO_BONUS  * Kameras an
-#              + Nachrichten_seit_letztem_Takt / MSG_DIVISOR
-#   Drift/Takt = clamp((Aktivitaet_EMA - BASELINE) * TICK_SENS, +/-TICK_CAP) + Rauschen
+#              + MSG_WEIGHT   * Nachrichten seit dem letzten Takt (gedeckelt)
 #
-# Viel los -> Kurs (und damit Boersenwert = Anteile*Kurs) STEIGT jede Minute
-# sichtbar, wenig los -> er faellt. Beispiel: 12 im Call, 6 davon streamen, reger
-# Chat -> deutlich sichtbarer Anstieg pro Minute.
-ACT_BASELINE = float(os.getenv("FLOAKTIE_ACT_BASELINE", "3.0") or "3.0")   # "normale" Aktivitaet
-TICK_SENS = float(os.getenv("FLOAKTIE_TICK_SENS", "0.0001") or "0.0001")   # Drift je Aktivitaet ueber Baseline (pro Minute)
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.02") or "0.02")         # max +/-2 % je Takt
-ACT_ALPHA = float(os.getenv("FLOAKTIE_ACT_ALPHA", "0.5") or "0.5")         # schnelle Glaettung (reagiert in 1-2 Min)
-MSG_DIVISOR = float(os.getenv("FLOAKTIE_MSG_DIVISOR", "4") or "4")         # so viele Nachrichten = 1 "Person"
-STREAM_BONUS = float(os.getenv("FLOAKTIE_STREAM_BONUS", "2.0") or "2.0")   # ein Live-Streamer zaehlt so viel extra
-VIDEO_BONUS = float(os.getenv("FLOAKTIE_VIDEO_BONUS", "1.0") or "1.0")     # eine Kamera zaehlt so viel extra
-TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0012") or "0.0012") # +/-0.12 % Boersen-Rauschen/Takt
+#   Zielkurs   = FAIR_BASE + AKT_WERT * Aktivitaet      ("was ist der Server wert?")
+#   Drift/Takt = Richtung Zielkurs - nach oben schnell, nach unten langsam
+#
+# Es ist ein NIVEAU-Modell, genau wie bei einer echten Aktie: VIEL Aktivitaet =
+# hoher Kurs, WENIG Aktivitaet = niedriger Kurs. Der Kurs sammelt also nicht
+# endlos Prozente auf, sondern strebt dem Wert zu, den der Server gerade hergibt -
+# deshalb kann er weder explodieren noch braucht er kuenstliche Deckel.
+#
+# Beispiele (ohne ausgegebene Anteile): leerer Server -> Ziel 300, 5 im Call ->
+# 900, 12 im Call mit 6 Streams -> knapp 5.000, 10 Leute die ALLE streamen ->
+# 5.700. Nach oben laeuft der Kurs zuegig (bis 3 %/Minute, also sofort sichtbar),
+# nach unten nur langsam - ein kurzer leerer Moment wuergt ihn nicht ab.
+#
+# Zusaetzlich gibt es Sofort-Impulse: wer live geht oder in den Call kommt, schiebt
+# den Kurs augenblicklich ein Stueck nach oben (siehe PULSE_*) - das ist die
+# direkte Reaktion auf das EREIGNIS, unabhaengig vom Niveau.
+#
+# Vorher war es ein Aufsummier-Modell mit "Normalwert" 3.0, der in JEDER der 1440
+# Tagesminuten abgezogen wurde. Ergebnis: ein Tag mit 5 aktiven Stunden und 8
+# Aktivitaetspunkten landete bei -19 %, 2 Stunden mit 6 Leuten bei -36 % - der
+# Leerlauf hat jede Spitze gefressen. Dazu war das Rauschen (+/-0,12 %) bei 4
+# Leuten im Call 12x groesser als das Signal: man KONNTE den Anstieg nicht sehen.
+FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "300") or "300")     # Kurs bei totem Server
+AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "120") or "120")       # Kurs-Wert je Aktivitaetspunkt
+SPEED_UP = float(os.getenv("FLOAKTIE_SPEED_UP", "0.06") or "0.06")     # Anteil der Luecke pro Minute (rauf)
+SPEED_DOWN = float(os.getenv("FLOAKTIE_SPEED_DOWN", "0.0004") or "0.0004")  # ... und runter (viel langsamer)
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.03") or "0.03")     # max +3 % in einem Takt
+IDLE_CAP = float(os.getenv("FLOAKTIE_IDLE_CAP", "0.002") or "0.002")   # max -0,2 % in einem Takt
+# Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
+# sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
+ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")
+ACT_ALPHA_DOWN = float(os.getenv("FLOAKTIE_ACT_ALPHA_DOWN", "0.15") or "0.15")
+MSG_WEIGHT = float(os.getenv("FLOAKTIE_MSG_WEIGHT", "0.5") or "0.5")       # eine Nachricht = ein halber Zuhoerer
+MSG_MAX_ACT = float(os.getenv("FLOAKTIE_MSG_MAX_ACT", "12") or "12")       # Chat allein kann nicht beliebig pumpen
+STREAM_BONUS = float(os.getenv("FLOAKTIE_STREAM_BONUS", "2.5") or "2.5")   # ein Live-Streamer zaehlt so viel EXTRA
+VIDEO_BONUS = float(os.getenv("FLOAKTIE_VIDEO_BONUS", "1.5") or "1.5")     # eine Kamera zaehlt so viel extra
+TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0002") or "0.0002") # nur noch ein Hauch Boersen-Rauschen
+# Sofort-Impulse fuer Ereignisse (unabhaengig vom Niveau, pro Minute gedeckelt).
+PULSE_STREAM = float(os.getenv("FLOAKTIE_PULSE_STREAM", "0.004") or "0.004")   # Livestream geht an: +0,4 %
+PULSE_JOIN = float(os.getenv("FLOAKTIE_PULSE_JOIN", "0.0015") or "0.0015")     # jemand kommt in den Call: +0,15 %
+PULSE_MAX_PER_MIN = float(os.getenv("FLOAKTIE_PULSE_MAX", "0.02") or "0.02")   # zusammen max +2 %/Minute
+# Alter Name, nur noch fuer den Startwert der Glaettung (nicht mehr im Drift).
+ACT_BASELINE = 0.0
 
 # Dividende: Coins pro Voice-Runde je 'DIVIDEND_DIVISOR' Anteile (gedeckelt).
 DIVIDEND_DIVISOR = int(os.getenv("FLOAKTIE_DIVIDEND_DIVISOR", "10") or "10")
@@ -231,7 +262,17 @@ class FloAktie:
             base = float(START_PRICE)
         if base != base or base in (float("inf"), float("-inf")):   # NaN/inf
             base = float(START_PRICE)
-        return max(BASE_FLOOR, base)
+        return max(self._base_floor(), base)
+
+    def _base_floor(self):
+        """Untergrenze des Basiskurses: genau so tief, dass der ANGEZEIGTE Kurs
+        gerade noch MIN_PRICE ergibt.
+
+        Ohne diese Kopplung lief der Basiskurs unter der MIN_PRICE-Klemme weiter
+        nach unten: der Kurs zeigte stur 50, waehrend der echte Wert bis zum
+        Faktor 5000 darunter lag - und danach brauchte es TAGE Dauer-Aktivitaet,
+        bis die angezeigte Zahl sich ueberhaupt bewegte."""
+        return max(BASE_FLOOR, float(MIN_PRICE) / (1.0 + self.total_shares() / LIQUIDITY))
 
     def _price_at(self, shares_out):
         """Kurs bei 'shares_out' ausgegebenen Anteilen (exakt, ungerundet)."""
@@ -413,23 +454,50 @@ class FloAktie:
 
     # --- Aktivitaets-Modell (Kurs folgt der Server-Aktivitaet) -----------
     def note_message(self):
-        """Zaehlt eine Server-Nachricht als Aktivitaet (treibt den Kurs mit hoch).
-        bot.py ruft das fuer jede Guild-Nachricht auf - nur ein billiger Zaehler,
-        gespeichert wird erst beim naechsten Sample-Takt."""
+        """Zaehlt eine ECHTE Chat-Nachricht als Aktivitaet (treibt den Kurs hoch).
+        bot.py ruft das fuer jede Nachricht der Haupt-Guild auf, die KEIN Befehl an
+        Flo ist - nur ein billiger Zaehler, gespeichert wird beim naechsten Takt.""" 
         if not self._enabled:
             return
         st = self._state()
         st["msg_count"] = int(st.get("msg_count", 0)) + 1
 
     def _measure(self, guild):
-        """Misst die aktuelle Voice-Aktivitaet: (Leute, Live-Streamer, Kameras).
-        Zaehlt alle Nicht-Bots in Sprachkanaelen (ohne AFK); wer streamt (Go Live)
-        oder die Kamera anhat, zaehlt zusaetzlich als Extra-Kriterium."""
+        """Misst die Voice-Aktivitaet: (Leute, Live-Streamer, Kameras).
+
+        Liest bewusst channel.voice_states und nicht channel.members: die
+        voice_states stehen unabhaengig vom Member-Cache zur Verfuegung
+        (discord.py nennt sie ausdruecklich den Ersatz fuer .members, "when the
+        member cache is unavailable"). Damit zaehlt der Takt auch dann richtig,
+        wenn der Cache nach einem Neustart noch leer ist. Fehlt die Property
+        (aeltere discord.py), faellt es auf .members zurueck."""
         people = streams = video = 0
-        for vc in getattr(guild, "voice_channels", []):
-            if guild.afk_channel and vc.id == guild.afk_channel.id:
+        if guild is None:
+            return 0, 0, 0
+        afk_id = getattr(getattr(guild, "afk_channel", None), "id", None)
+        eigene_id = getattr(getattr(guild, "me", None), "id", 0)
+        for vc in (getattr(guild, "voice_channels", None) or []):
+            if afk_id is not None and getattr(vc, "id", None) == afk_id:
                 continue
-            for m in vc.members:
+            states = getattr(vc, "voice_states", None)
+            if states:
+                for uid, vs in list(states.items()):
+                    if uid == eigene_id:
+                        continue                      # Flo selbst zaehlt nicht
+                    m = None
+                    try:
+                        m = guild.get_member(uid)
+                    except Exception:  # noqa: BLE001
+                        m = None
+                    if m is not None and getattr(m, "bot", False):
+                        continue                      # andere Bots auch nicht
+                    people += 1
+                    if getattr(vs, "self_stream", False):
+                        streams += 1
+                    if getattr(vs, "self_video", False):
+                        video += 1
+                continue
+            for m in (getattr(vc, "members", None) or []):
                 if getattr(m, "bot", False):
                     continue
                 people += 1
@@ -441,26 +509,97 @@ class FloAktie:
                         video += 1
         return people, streams, video
 
+    def activity_of(self, people, streams=0, video=0, msgs=0):
+        """Aktivitaetspunkte: jeder im Call zaehlt 1, jeder Livestream EXTRA,
+        jede Kamera extra, Nachrichten anteilig (gedeckelt gegen Spam-Pumpen)."""
+        chat = min(MSG_MAX_ACT, MSG_WEIGHT * float(max(0, msgs)))
+        return (float(max(0, people))
+                + STREAM_BONUS * float(max(0, streams))
+                + VIDEO_BONUS * float(max(0, video))
+                + chat)
+
+    def ziel_base(self, activity):
+        """Basiskurs, den DIESE Aktivitaet hergibt - dorthin strebt der Kurs.
+        Jeder im Call zaehlt 1, jeder Livestream extra, Chat zaehlt mit."""
+        return max(BASE_FLOOR, FAIR_BASE + AKT_WERT * max(0.0, float(activity)))
+
+    def ziel_kurs(self, activity=None):
+        """Derselbe Zielwert als ANGEZEIGTER Kurs (inkl. ausgegebener Anteile)."""
+        if activity is None:
+            activity = float(self._state().get("act_ema", 0.0) or 0.0)
+        ziel = self.ziel_base(activity) * (1.0 + self.total_shares() / LIQUIDITY)
+        return max(MIN_PRICE, int(round(ziel)))
+
+    def drift_fuer(self, activity):
+        """Kurs-Drift pro Minute: Richtung Zielkurs. Nach oben zuegig (sofort
+        sichtbar), nach unten langsam. Kein Aufsummieren, keine Explosion."""
+        base = self._base()
+        if base <= 0:
+            return 0.0
+        luecke = self.ziel_base(activity) / base - 1.0
+        if luecke > 0:
+            return min(TICK_CAP, luecke * SPEED_UP)
+        return max(-IDLE_CAP, luecke * SPEED_DOWN)
+
     def _activity_tick(self, people, msgs_since, streams=0, video=0):
-        """EIN Aktivitaets-Takt (pro Minute). Kriterien: Leute im Call + Live-Streamer
-        (extra) + Kameras (extra) + Nachrichten. Viel Aktivitaet -> Kurs steigt, wenig
-        -> faellt. Rueckgabe: (alt, neu, drift, aktivitaet)."""
+        """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet)."""
         st = self._state()
-        activity = (float(max(0, people))
-                    + STREAM_BONUS * float(max(0, streams))
-                    + VIDEO_BONUS * float(max(0, video))
-                    + float(max(0, msgs_since)) / MSG_DIVISOR)
-        ema = ACT_ALPHA * activity + (1 - ACT_ALPHA) * float(st.get("act_ema", ACT_BASELINE))
+        activity = self.activity_of(people, streams, video, msgs_since)
+        # Asymmetrisch geglaettet: mehr Aktivitaet wird fast sofort uebernommen,
+        # weniger nur langsam - so sieht man den Anstieg, und eine kurze Pause
+        # wuergt den Kurs nicht ab.
+        alt_ema = float(st.get("act_ema", 0.0) or 0.0)
+        alpha = ACT_ALPHA_UP if activity >= alt_ema else ACT_ALPHA_DOWN
+        ema = alpha * activity + (1 - alpha) * alt_ema
         st["act_ema"] = ema
-        raw = (ema - ACT_BASELINE) * TICK_SENS
-        raw = max(-TICK_CAP, min(TICK_CAP, raw))
-        drift = raw + random.uniform(-TICK_NOISE, TICK_NOISE)
+        drift = self.drift_fuer(ema) + random.uniform(-TICK_NOISE, TICK_NOISE)
         alt = self.price()
         # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
         # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
-        st["base"] = max(BASE_FLOOR, self._base() * (1 + drift))
+        st["base"] = max(self._base_floor(), self._base() * (1 + drift))
         neu = self._sync_price()
         return alt, neu, drift, activity
+
+    def _puls(self, staerke, grund):
+        """Sofort-Impuls (Livestream geht an, jemand kommt in den Call): hebt den
+        Kurs AUGENBLICKLICH ein Stueck, ohne auf den Minuten-Takt zu warten.
+        Pro Minute gedeckelt, damit Rein-/Rausspringen kein Pump-Werkzeug wird."""
+        if not self._enabled or staerke <= 0:
+            return 0
+        st = self._state()
+        jetzt = time.time()
+        fenster = float(st.get("pulse_min", 0.0) or 0.0)
+        summe = float(st.get("pulse_sum", 0.0) or 0.0)
+        if jetzt - fenster >= 60:
+            st["pulse_min"], summe = jetzt, 0.0
+        frei = max(0.0, PULSE_MAX_PER_MIN - summe)
+        if frei <= 0:
+            return 0
+        staerke = min(staerke, frei)
+        if staerke <= 0:
+            return 0
+        st["pulse_sum"] = summe + staerke
+        st["base"] = max(self._base_floor(), self._base() * (1 + staerke))
+        neu = self._sync_price()
+        log.info("FloCorp Impuls (%s): +%.2f%% -> Kurs %s.", grund, staerke * 100,
+                 self._fmt(neu))
+        return neu
+
+    async def note_stream_start(self, member=None):
+        """Jemand geht LIVE -> Sofort-Impuls nach oben (und Panel/Chart nachziehen)."""
+        if not self._enabled:
+            return
+        if self._puls(PULSE_STREAM, "Livestream an"):
+            await self._save()
+            await self._refresh_live()
+
+    async def note_voice_join(self, member=None):
+        """Jemand kommt in den Call -> kleiner Sofort-Impuls nach oben."""
+        if not self._enabled:
+            return
+        if self._puls(PULSE_JOIN, "Call-Beitritt"):
+            await self._save()
+            await self._refresh_live()
 
     async def sample_and_tick(self, guild):
         """Loop-Einstieg (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s): misst
@@ -489,8 +628,10 @@ class FloAktie:
             if neu != alt:
                 await self._refresh_live()
             log.info("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
-                     "-> Kurs %s->%s (%+.2f%%).", act, people, streams, video, msgs_since,
-                     self._fmt(alt), self._fmt(neu), drift * 100)
+                     "-> Kurs %s->%s (%+.3f%%/min, Ziel %s).",
+                     act, people, streams, video, msgs_since,
+                     self._fmt(alt), self._fmt(neu), drift * 100,
+                     self.ziel_kurs())
         except Exception:  # noqa: BLE001
             log.exception("FloCorp Sample/Tick fehlgeschlagen")
 
@@ -690,6 +831,17 @@ class FloAktie:
         emb.add_field(name="Börsenwert",
                       value=f"{self._fmt(self.total_shares() * preis)} {economy.COIN}", inline=True)
         emb.add_field(name="Aktionäre", value=str(self.holders_count()), inline=True)
+        # Nachvollziehbar machen, WARUM der Kurs sich bewegt.
+        akt = float(st.get("act_ema", 0.0) or 0.0)
+        pro_min = self.drift_fuer(akt) * 100
+        emb.add_field(
+            name="Server-Aktivität",
+            value=(f"{akt:.1f} Punkte · **{pro_min:+.2f} %/min** · "
+                   f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}**\n"
+                   f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
+                   f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. "
+                   f"Viel los → hoher Kurs, nichts los → er sinkt._"),
+            inline=False)
         top = self.top_holder()
         if top:
             emb.add_field(name="👑 Größter Aktionär",
@@ -932,6 +1084,12 @@ setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle
 note_message = instance.note_message
+note_stream_start = instance.note_stream_start
+note_voice_join = instance.note_voice_join
+activity_of = instance.activity_of
+drift_fuer = instance.drift_fuer
+ziel_base = instance.ziel_base
+ziel_kurs = instance.ziel_kurs
 sample_and_tick = instance.sample_and_tick
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
