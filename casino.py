@@ -282,17 +282,22 @@ class Casino:
             log.exception("Casino-Bilanz konnte nicht gespeichert werden")
 
     # --- Render-Helfer: Animation in Thread, Standbild als Fallback ------------
-    async def _anim(self, anim_fn, static_fn, *args):
+    async def _anim(self, anim_fn, static_fn, *args, **kwargs):
         """Rendert das Spielergebnis als GIF in einem Thread (Event-Loop bleibt
         frei). Faellt die Animation aus, kommt das Standbild (PNG). Rueckgabe:
-        (BytesIO, dateiendung)."""
+        (BytesIO, dateiendung).
+
+        **kwargs muss mitgenommen werden: Baccarat uebergibt hide_hole/dealer_value/
+        player_value/player_state. Ohne das ist JEDE Baccarat-Runde mit einem
+        TypeError abgestuerzt - die Coins waren da schon verrechnet, der Spieler sah
+        aber nur 'Da ist gerade etwas schiefgelaufen'."""
         try:
-            return await asyncio.to_thread(anim_fn, *args), "gif"
+            return await asyncio.to_thread(anim_fn, *args, **kwargs), "gif"
         except Exception:
             log.exception("Animation fehlgeschlagen - nutze Standbild")
             if static_fn is None:
                 raise
-            return await asyncio.to_thread(static_fn, *args), "png"
+            return await asyncio.to_thread(static_fn, *args, **kwargs), "png"
 
     async def _send(self, message, *, embed=None, file=None, view=None):
         """Sendet eine Casino-Antwort als Reply. Gibt die Nachricht zurueck (oder None)."""
@@ -3109,9 +3114,13 @@ class _SiebenSetup(_Setup):
         return emb
 
     async def _wurf(self, interaction, tip):
+        if self.is_finished():        # Doppelklick: nur der erste Wurf zaehlt
+            await interaction.response.defer()
+            return
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
+        self.stop()   # synchron VOR dem Abzug: kein doppelter Einsatz
         economy.add_coins(self.uid, -bet)
         emb, file = await _play_sieben(self.uid, bet, tip)
         again = _AgainView(self.uid, "sieben", {"bet": bet, "target": tip},
@@ -3146,9 +3155,13 @@ class _BaccaratSetup(_Setup):
         return emb
 
     async def _setze(self, interaction, tip):
+        if self.is_finished():        # Doppelklick: nur der erste Einsatz zaehlt
+            await interaction.response.defer()
+            return
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
+        self.stop()   # synchron VOR dem Abzug: kein doppelter Einsatz
         economy.add_coins(self.uid, -bet)
         emb, file = await _play_baccarat(self.uid, bet, tip)
         again = _AgainView(self.uid, "baccarat", {"bet": bet, "target": tip},
@@ -3177,16 +3190,19 @@ class _SerienSetup(_Setup):
 
     @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
     async def _start(self, interaction, _b):
+        if self.is_finished():        # Doppelklick: nur der erste Klick startet
+            await interaction.response.defer()
+            return
         bet = await self._ensure_bet(interaction)
         if bet is None:
             return
+        self.stop()   # synchron VOR dem Abzug: schliesst das Doppelklick-Fenster
         economy.add_coins(self.uid, -bet)
         view, emb, file = await type(self).factory(self.uid, bet)
         await interaction.response.edit_message(
             embed=emb, view=view, attachments=[file] if file else [])
         view.message = interaction.message
         _protect(interaction.message)
-        self.stop()
 
 
 class _HiloSetup(_SerienSetup):
