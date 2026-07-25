@@ -2356,6 +2356,81 @@ class Render:
                    fill=(150, 155, 168))
         return self._png(img)
 
+    def money_card(self, rows, title = "REICHSTE",
+                   subtitle = ""):
+        """Geld-Rangliste als PNG: Platz, Avatar, Name, Kontostand + darunter der
+        Gesamt-Verdienst ('insgesamt'). 'rows': Liste von Dicts mit name, coins,
+        earned und optional avatar (Bytes). Rueckgabe: PNG (BytesIO)."""
+        def fmt(n):
+            return f"{int(n):,}".replace(",", ".")
+        W = 900
+        head, row_h, foot = 118, 78, 52
+        n = max(1, len(rows))
+        H = head + row_h * n + foot
+        img = self._vgrad(W, H, (22, 27, 44), (10, 13, 24)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        d.rounded_rectangle([6, 6, W - 7, H - 7], radius=16,
+                            outline=(255, 255, 255, 30), width=2)
+        # Kopf
+        d.text((34, 30), title, font=self._font(40), fill=(255, 255, 255))
+        d.text((36, 78), subtitle or "Flo Coins", font=self._font(19),
+               fill=(150, 160, 180))
+        # Gold-Muenze oben rechts (gezeichnet - Emojis kann die Schrift nicht).
+        d.ellipse([W - 86, 28, W - 34, 80], fill=(241, 196, 15),
+                  outline=(255, 232, 130), width=3)
+        d.text((W - 60, 53), "F", font=self._font(30), fill=(90, 66, 8), anchor="mm")
+        d.line([(24, head - 10), (W - 24, head - 10)], fill=(255, 255, 255, 28), width=1)
+
+        peak = max((int(r.get("coins", 0)) for r in rows), default=0) or 1
+        medal = {0: (241, 196, 15), 1: (189, 195, 199), 2: (205, 127, 50)}
+        resample = getattr(Image, "Resampling", Image).LANCZOS
+        for i, r in enumerate(rows):
+            y = head + i * row_h
+            cy = y + row_h // 2 - 6
+            farbe = medal.get(i, (120, 130, 150))
+            # Platz
+            d.text((44, cy), f"{i + 1}", font=self._font(30), fill=farbe, anchor="mm")
+            # Avatar (rund) oder Initial-Kreis
+            dia = 46
+            ax, ay = 74, cy - dia // 2
+            av = r.get("avatar")
+            gesetzt = False
+            if av:
+                try:
+                    im = Image.open(io.BytesIO(av)).convert("RGBA").resize((dia, dia), resample)
+                    mask = Image.new("L", (dia, dia), 0)
+                    ImageDraw.Draw(mask).ellipse([0, 0, dia - 1, dia - 1], fill=255)
+                    img.paste(im, (ax, ay), mask)
+                    gesetzt = True
+                except Exception:  # noqa: BLE001 - kaputte Bytes -> Platzhalter
+                    gesetzt = False
+            if not gesetzt:
+                d.ellipse([ax, ay, ax + dia, ay + dia], fill=(45, 54, 82))
+                ini = (self._clean_text(str(r.get("name", "?"))).strip() or "?")[:1].upper()
+                d.text((ax + dia / 2, ay + dia / 2), ini, font=self._font(24),
+                       fill=(210, 218, 235), anchor="mm")
+            d.ellipse([ax - 2, ay - 2, ax + dia + 2, ay + dia + 2],
+                      outline=farbe, width=2)
+            # Name + Verdienst
+            name = self._clean_text(str(r.get("name", "?")))[:22] or "?"
+            d.text((140, cy - 13), name, font=self._font(25), fill=(240, 244, 255))
+            earned = int(r.get("earned", 0))
+            d.text((140, cy + 14), f"insgesamt verdient: {fmt(earned)}",
+                   font=self._font(16), fill=(140, 150, 172))
+            # Kontostand rechts + Balken
+            coins = int(r.get("coins", 0))
+            d.text((W - 34, cy - 13), fmt(coins), font=self._font(27),
+                   fill=(241, 196, 15), anchor="ra")
+            bw = 250
+            bx = W - 34 - bw
+            self._hbar(d, bx, cy + 18, bw, 10, max(0.0, min(1.0, coins / peak)), farbe)
+            if i < n - 1:
+                d.line([(34, y + row_h - 4), (W - 34, y + row_h - 4)],
+                       fill=(255, 255, 255, 14), width=1)
+        d.text((W // 2, H - 30), "Rang nach aktuellem Kontostand",
+               font=self._font(17), fill=(120, 130, 152), anchor="mm")
+        return self._png(img)
+
     def floaktie_chart(self, prices, ticker = "$FLO",
                        label = "Kursverlauf", change_pct = 0.0):
         """Zeichnet den Kursverlauf der FloCorp-Aktie als Liniendiagramm (Flaeche,
@@ -2444,4 +2519,5 @@ slot_machine = instance.slot_machine
 slot_machine_anim = instance.slot_machine_anim
 wheel_fortune_anim = instance.wheel_fortune_anim
 words_card = instance.words_card
+money_card = instance.money_card
 floaktie_chart = instance.floaktie_chart

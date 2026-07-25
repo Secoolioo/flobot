@@ -1691,6 +1691,45 @@ def test_numfmt():
     assert numfmt.fmt(1234567) == "1.234.567"
 
 
+def test_money_leaderboard_bild_und_namen():
+    """'flo reichste' ist ein BILD, und ein fehlender/ID-artiger Name wird zum
+    echten Discord-Namen aufgelöst (war ein Bug: da stand die rohe ID)."""
+    import discord
+    import render
+    restore = _with_economy({111: 1_505_000, 222: 890_000, 333: 250_000})
+    try:
+        economy.instance._profile(111)["name"] = "Secoolio"
+        economy.instance._profile(222)["name"] = ""        # leer
+        economy.instance._profile(333)["name"] = "333"     # rohe ID als Name
+
+        class Guild:
+            def get_member(self, uid):
+                namen = {222: "LunaEcht", 333: "KevinEcht"}
+                if uid in namen:
+                    return SimpleNamespace(display_name=namen[uid])
+                return None
+
+        rows = economy.instance.money_leaderboard_data(10)
+        assert [r["id"] for r in rows] == [111, 222, 333]      # nach Coins sortiert
+        asyncio.run(economy.instance._resolve_names(rows, Guild()))
+        assert [r["name"] for r in rows] == ["Secoolio", "LunaEcht", "KevinEcht"]
+        # Aufgelöster Name wird fürs nächste Mal im Profil gemerkt.
+        assert economy.instance._profile(222)["name"] == "LunaEcht"
+
+        # Bild-Renderer liefert ein gültiges PNG.
+        buf = render.money_card(rows, "REICHSTE", "Test")
+        png = buf.getvalue()
+        assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 5000
+
+        # handle() gibt eine discord.File zurück (kein Embed mehr).
+        msg = SimpleNamespace(content="Flo reichste", guild=Guild(), mentions=[],
+                              author=SimpleNamespace(id=111, display_name="S"))
+        res = asyncio.run(economy.handle(msg))
+        assert isinstance(res, discord.File) and res.filename == "reichste.png"
+    finally:
+        restore()
+
+
 def test_economy_money_leaderboard():
     """Geld-Rangliste sortiert nach aktuellem Kontostand, zeigt 'insgesamt verdient'
     (Lebenszeit) mit Tausenderpunkten; earned zaehlt nur echte Zufluesse."""
@@ -1702,14 +1741,14 @@ def test_economy_money_leaderboard():
         economy.add_coins(2, -1000, reason="casino")    # earned unveraendert
         assert economy.instance._profile(2).get("earned", 0) == 30000
 
-        guild = SimpleNamespace(get_member=lambda _x: None)
-        emb = economy.instance._money_leaderboard(guild)
-        assert not isinstance(emb, str)                  # discord.Embed
-        d = emb.description
-        assert "insgesamt verdient" in d
-        assert "49.000" in d                             # uid2 Kontostand mit Punkten
-        # #1 (uid2, 49.000) steht vor #2 (uid1, 5.000).
-        assert d.index("49.000") < d.index("5.000")
+        # Rangliste: nach Kontostand sortiert, 'earned' als Lebenszeit-Wert.
+        rows = economy.instance.money_leaderboard_data(10)
+        assert [r["id"] for r in rows] == [2, 1, 3]       # 49.000 > 5.000 > 100
+        assert rows[0]["coins"] == 49000
+        # 'insgesamt' wird nie kleiner als der Kontostand angezeigt (Counter ist neu):
+        # roh sind es 30.000 verdiente, angezeigt also der Kontostand 49.000.
+        assert rows[0]["earned"] == 49000
+        assert all(r["earned"] >= r["coins"] for r in rows)
     finally:
         restore()
 

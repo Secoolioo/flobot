@@ -723,7 +723,7 @@ class Economy:
             return await self._leaderboard(message.guild)
         if first in ("reichste", "reich", "geld", "vermögen", "vermoegen",
                      "reichtum", "geldtop", "moneytop", "coinlb"):
-            return self._money_leaderboard(message.guild)
+            return await self._money_leaderboard(message.guild)
         if first in ("daily", "täglich", "taeglich", "tagesbonus"):
             return await self._daily(message.author)
         if first in ("pay", "zahl", "zahle", "überweis", "ueberweis", "überweise"):
@@ -812,27 +812,75 @@ class Economy:
         emb.set_footer(text=f"{self._bot_name} top   ·   {self._bot_name} daily   ·   {self._bot_name} shop")
         return emb
 
-    def _money_leaderboard(self, guild, limit = 15):
-        """Geld-Rangliste: wer hat aktuell am meisten Flo Coins? Unter jedem Namen
-        steht, wie viel er INSGESAMT schon verdient hat (Lebenszeit-Zufluesse)."""
+    def money_leaderboard_data(self, limit = 10):
+        """Geld-Rangliste als Rows: id/name/coins/earned, sortiert nach Kontostand."""
         rows = []
         for uid, prof in self._users().items():
             coins = int(prof.get("coins", 0))
             # 'insgesamt' nie kleiner als der aktuelle Kontostand (Counter ist neu).
             earned = max(int(prof.get("earned", 0)), coins, 0)
-            rows.append((uid, coins, earned, prof.get("name") or ""))
-        rows.sort(key=lambda r: r[1], reverse=True)
-        rows = rows[:limit]
+            try:
+                uid_int = int(uid)
+            except (TypeError, ValueError):
+                uid_int = 0
+            rows.append({"id": uid_int, "name": prof.get("name") or "",
+                         "coins": coins, "earned": earned})
+        rows.sort(key=lambda r: r["coins"], reverse=True)
+        return rows[:limit]
+
+    async def _resolve_names(self, rows, guild):
+        """Ersetzt fehlende/ID-artige Namen durch den ECHTEN Discord-Namen
+        (Member-Cache -> User-Cache -> API) und merkt sich den Namen im Profil.
+        Vorher stand in der Rangliste teils nur die rohe User-ID."""
+        for r in rows:
+            name = (r.get("name") or "").strip()
+            if name and not name.isdigit():
+                continue                       # schon ein brauchbarer Name
+            uid = int(r.get("id") or 0)
+            if not uid:
+                r["name"] = "Unbekannt"
+                continue
+            user = None
+            try:
+                user = await self._resolve_avatar_user(guild, uid)
+            except Exception:  # noqa: BLE001 - Namensauflösung ist nie fatal
+                user = None
+            neu = (getattr(user, "display_name", None)
+                   or getattr(user, "name", None) or "")
+            if neu:
+                r["name"] = neu
+                # Fuer die Zukunft im Profil merken (spart den API-Weg).
+                prof = self._users().get(str(uid))
+                if prof is not None:
+                    prof["name"] = neu
+            else:
+                r["name"] = "Unbekannt"
+
+    async def _money_leaderboard(self, guild, limit = 10):
+        """Geld-Rangliste als BILD (Pillow): wer hat aktuell am meisten Flo Coins?
+        Unter jedem Namen steht der Gesamt-Verdienst. Faellt das Bild aus, kommt
+        der Embed-Fallback."""
+        rows = self.money_leaderboard_data(limit)
         if not rows:
             return "Noch hat niemand Flo Coins. 🪙"
+        await self._resolve_names(rows, guild)
+        try:
+            await self._attach_avatars(rows, guild)
+        except Exception:  # noqa: BLE001 - Avatare sind Deko
+            pass
+        try:
+            stand = datetime.now(self._tz).strftime("Stand: %d.%m.%Y %H:%M")
+            buf = await asyncio.to_thread(render.money_card, rows,
+                                          "REICHSTE", stand)
+            return discord.File(buf, filename="reichste.png")
+        except Exception:  # noqa: BLE001 - Bild ist nice-to-have, nie fatal
+            log.exception("Reichste-Bild fehlgeschlagen - nutze Embed")
         medal = {0: "🥇", 1: "🥈", 2: "🥉"}
         zeilen = []
-        for i, (uid, coins, earned, name) in enumerate(rows):
-            member = guild.get_member(int(uid)) if guild else None
-            disp = (getattr(member, "display_name", None) or name or f"User {uid}")
+        for i, r in enumerate(rows):
             pre = medal.get(i, f"**{i + 1}.**")
-            zeilen.append(f"{pre} **{disp}** — 💰 {fmt(coins)} {self.COIN}\n"
-                          f"┗ insgesamt verdient: **{fmt(earned)}** {self.COIN}")
+            zeilen.append(f"{pre} **{r['name']}** — 💰 {fmt(r['coins'])} {self.COIN}\n"
+                          f"┗ insgesamt verdient: **{fmt(r['earned'])}** {self.COIN}")
         emb = discord.Embed(
             title=f"🤑 Reichste – {self.COIN}-Rangliste",
             description="\n".join(zeilen),
@@ -1360,5 +1408,6 @@ on_message = instance.on_message
 tick_voice = instance.tick_voice
 handle = instance.handle
 leaderboard_data = instance.leaderboard_data
+money_leaderboard_data = instance.money_leaderboard_data
 _attach_avatars = instance._attach_avatars
 _resolve_avatar_user = instance._resolve_avatar_user
