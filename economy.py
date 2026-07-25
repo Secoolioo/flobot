@@ -1147,7 +1147,21 @@ class Economy:
         self.add_coins(message.author.id, -betrag, reason="pay")
         self.add_coins(ziel.id, betrag, reason="pay")
         await self._flush()
-        return f"✅ {message.author.display_name} → {ziel.display_name}: **{fmt(betrag)} {self.COIN}**."
+        # Kreide-Tafel: Flo schreibt mit, wer wem was gegeben hat, und haengt den
+        # Stand als Notiz an. Rein informativ - die Zahlung ist an dieser Stelle
+        # schon durch und wird davon NIE beeinflusst.
+        notiz = ""
+        try:
+            import features
+            import schulden
+            if schulden.is_enabled() and features.is_on("schulden"):
+                notiz = await schulden.note_pay(
+                    message.author.id, ziel.id, betrag,
+                    ziel_name=ziel.display_name, guild=message.guild)
+        except Exception:  # noqa: BLE001 - Notiz ist nie kritisch
+            log.exception("Kreide-Notiz nach 'pay' fehlgeschlagen")
+        return (f"✅ {message.author.display_name} → {ziel.display_name}: "
+                f"**{fmt(betrag)} {self.COIN}**.{notiz}")
 
     async def _ensure_shop(self):
         """Sorgt dafuer, dass der heutige Shop existiert (sonst neu wuerfeln+speichern)."""

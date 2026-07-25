@@ -35,6 +35,7 @@ import games
 import handel
 import giveaway
 import lotto
+import schulden
 import luxus
 import media
 import merchant
@@ -175,6 +176,9 @@ FLOAKTIE_ENABLED = floaktie.setup()
 # Giveaways ('Flo giveaway'): ein Nutzer verlost EIGENE Coins. Flo fragt Einsatz,
 # Grund und Dauer nacheinander ab; der Einsatz liegt bis zur Ziehung bei Flo.
 GIVEAWAY_ENABLED = giveaway.setup()
+# Kreide-Tafel ('Flo schulden'): merkt sich, wer wem etwas ueberwiesen hat, und
+# haengt den Stand als Notiz an jede Zahlung. REIN informativ.
+SCHULDEN_ENABLED = schulden.setup()
 # Lokales Web-Panel (Port 9123): Server/User/Coins/Statistiken im Browser
 # verwalten. Laeuft im Bot-Prozess, Start passiert in on_ready.
 WEBPANEL_ENABLED = webpanel.setup()
@@ -187,7 +191,7 @@ FEATURE_LOADED = {
     "ki": AI_ENABLED, "music": MUSIC_ENABLED, "games": GAMES_ENABLED,
     "casino": CASINO_ENABLED, "economy": ECONOMY_ENABLED, "floaktie": FLOAKTIE_ENABLED,
     "lotto": LOTTO_ENABLED, "merchant": MERCHANT_ENABLED, "steal": STEAL_ENABLED,
-    "giveaway": GIVEAWAY_ENABLED,
+    "giveaway": GIVEAWAY_ENABLED, "schulden": SCHULDEN_ENABLED,
     "handel": HANDEL_ENABLED, "luxus": LUXUS_ENABLED,
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
     "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
@@ -403,6 +407,7 @@ _HELP_DATA = {
         ("flo inventar · titel <name>", "Titel verwalten & anlegen"),
         ("flo luxus · thron", "Prestige bis 1 MILLIARDE & DER THRON"),
         ("flo handel [@wer]", "Coin-Handelsbuch: alle Transaktionen als Statistik"),
+        ("flo schulden · schulden @wer", "🧾 Kreide-Tafel: wer wem was überwiesen hat"),
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
         ("flo händler", "🛒 fahrender Händler: exklusive Titel kaufen & tauschen"),
         ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
@@ -1405,6 +1410,7 @@ class FloBot(discord.Client):
             (CASINO_ENABLED and _on("casino"), casino.handle),
             (LUXUS_ENABLED and _on("luxus"), luxus.handle),
             (HANDEL_ENABLED and _on("handel"), handel.handle),
+            (SCHULDEN_ENABLED and _on("schulden"), schulden.handle),
             (STEAL_ENABLED and _on("steal"), steal.handle),
             (MERCHANT_ENABLED and _on("merchant"), merchant.handle),
             (GIVEAWAY_ENABLED and _on("giveaway"), giveaway.handle),

@@ -2113,6 +2113,205 @@ def _giveaway_setup(coins_by_uid):
     return restore, gw
 
 
+def _schulden_setup(coins_by_uid=None):
+    """schulden + economy mit Fake-Stores. Rueckgabe: (restore, sch)"""
+    import schulden
+    restore_eco = _with_economy(coins_by_uid or {})
+    sch = schulden.instance
+    alt = (sch._store, sch._enabled)
+    sch._store = _FakeStore({"pairs": {}})
+    sch._enabled = True
+
+    def restore():
+        sch._store, sch._enabled = alt
+        restore_eco()
+    return restore, sch
+
+
+def test_schulden_netto_saldo():
+    """Kern der Kreide-Tafel: pro Personen-Paar EIN Netto-Saldo, Rueckzahlungen
+    verrechnen sich automatisch - und die Reihenfolge der IDs ist egal."""
+    restore, sch = _schulden_setup()
+    try:
+        A, B = 111, 222
+        # A gibt B 1.000 -> B steht mit 1.000 bei A in der Kreide.
+        vorher, nachher = sch.record_pay(A, B, 1000)
+        assert (vorher, nachher) == (0, 1000)
+        assert sch.saldo(A, B) == 1000
+        assert sch.saldo(B, A) == -1000            # Gegenrichtung spiegelt
+
+        # B zahlt 400 zurueck -> 600 bleiben offen.
+        vorher, nachher = sch.record_pay(B, A, 400)
+        assert (vorher, nachher) == (-1000, -600)  # aus SICHT von B
+        assert sch.saldo(A, B) == 600
+
+        # B zahlt 600 -> ausgeglichen.
+        sch.record_pay(B, A, 600)
+        assert sch.saldo(A, B) == 0 and sch.saldo(B, A) == 0
+
+        # B zahlt 200 zu viel -> jetzt steht A bei B in der Kreide.
+        sch.record_pay(B, A, 200)
+        assert sch.saldo(B, A) == 200 and sch.saldo(A, B) == -200
+
+        # Nur EIN Paar-Eintrag, egal in welcher Richtung gezahlt wurde.
+        assert len(sch._pairs()) == 1
+        saldo, n, vol, log_ = sch.paar_info(A, B)
+        assert saldo == -200 and n == 4 and vol == 2200 and len(log_) == 4
+
+        # Grosse IDs in umgekehrter Reihenfolge: gleiche Rechnung.
+        C, D = 999999999999999999, 111111111111111111
+        sch.record_pay(C, D, 5000)
+        assert sch.saldo(C, D) == 5000 and sch.saldo(D, C) == -5000
+
+        # Unsinn wird ignoriert (kein Eintrag, kein Crash).
+        vorher_anzahl = len(sch._pairs())
+        for von, an, betrag in ((A, A, 100), (A, B, 0), (A, B, -50), ("x", B, 10)):
+            assert sch.record_pay(von, an, betrag) == (0, 0)
+        assert len(sch._pairs()) == vorher_anzahl
+    finally:
+        restore()
+
+
+def test_schulden_hinweis_texte():
+    """Der Hinweis unter 'pay' muss die vier Faelle unterscheiden: neue Forderung,
+    Teil-Rueckzahlung, Ausgleich und Umkehrung - und an eigene offene Posten
+    erinnern. Er darf NIE eine Zahlung verhindern (er ist nur Text)."""
+    restore, sch = _schulden_setup()
+    try:
+        A, B, C = 111, 222, 333
+        economy.instance._profile(A)["name"] = "Anna"
+        economy.instance._profile(B)["name"] = "Bert"
+        economy.instance._profile(C)["name"] = "Cem"
+
+        # 1) Neue Forderung
+        t = sch.pay_hinweis(A, B, 1000, ziel_name="Bert")
+        assert "Bert" in t and "1.000" in t and "Kreide" in t
+
+        # 2) Teil-Rueckzahlung (B zahlt 400 an A)
+        t = sch.pay_hinweis(B, A, 400, ziel_name="Anna")
+        assert "offen" in t and "600" in t and "1.000" in t   # vorher/nachher
+
+        # 3) Ausgleich
+        t = sch.pay_hinweis(B, A, 600, ziel_name="Anna")
+        assert "ausgeglichen" in t.lower()
+
+        # 4) Umkehrung
+        t = sch.pay_hinweis(B, A, 250, ziel_name="Anna")
+        assert "Anna" in t and "250" in t
+
+        # 5) Erinnerung an EIGENE offene Posten bei Dritten: C schuldet A und B,
+        #    zahlt aber an jemand anderen.
+        sch.record_pay(A, C, 5000)     # C schuldet A 5.000
+        sch.record_pay(B, C, 3000)     # C schuldet B 3.000
+        t = sch.pay_hinweis(C, 444, 100)
+        assert "8.100" in t or "8.000" in t, t     # Summe der eigenen Posten
+        assert "Anna" in t and "Bert" in t         # die zwei groessten
+        # Wer selbst nichts offen hat, bekommt keine Erinnerungszeile.
+        # (A schuldet B nach Schritt 4 tatsaechlich 250 - daher ein frischer Nutzer.)
+        assert sch.summen(A)[1] > 0
+        t = sch.pay_hinweis(777, 888, 100)
+        assert "Bei dir selbst" not in t
+    finally:
+        restore()
+
+
+def test_schulden_posten_summen_und_erlassen():
+    """Uebersicht (wer bekommt, wer schuldet), Summen, Top-Liste und Erlassen."""
+    restore, sch = _schulden_setup()
+    try:
+        A, B, C, D = 1, 2, 3, 4
+        sch.record_pay(A, B, 1000)      # B schuldet A 1.000
+        sch.record_pay(A, C, 2500)      # C schuldet A 2.500
+        sch.record_pay(D, A, 400)       # A schuldet D   400
+
+        forderungen, schulden_ = sch.posten(A)
+        assert forderungen == [(C, 2500), (B, 1000)]     # absteigend
+        assert schulden_ == [(D, 400)]
+        haben, soll, netto = sch.summen(A)
+        assert (haben, soll, netto) == (3500, 400, 3100)
+
+        # Top-Liste serverweit: (glaeubiger, schuldner, betrag)
+        top = sch.top(10)
+        assert top[0] == (A, C, 2500) and (A, B, 1000) in top and (D, A, 400) in top
+
+        # Erlassen: nur der Glaeubiger, teilweise und ganz.
+        weg, rest = sch.erlassen(A, C, 500)
+        assert (weg, rest) == (500, 2000) and sch.saldo(A, C) == 2000
+        weg, rest = sch.erlassen(A, C)                    # der Rest
+        assert (weg, rest) == (2000, 0) and sch.saldo(A, C) == 0
+        # Wer nichts zu bekommen hat, kann nichts erlassen.
+        assert sch.erlassen(C, A, 100) == (0, 0)
+        assert sch.erlassen(A, D, 100)[0] == 0            # A ist hier Schuldner
+        assert sch.saldo(D, A) == 400                     # unveraendert
+        # Mehr erlassen als offen ist -> nur das Offene.
+        weg, rest = sch.erlassen(A, B, 999_999)
+        assert (weg, rest) == (1000, 0)
+    finally:
+        restore()
+
+
+def test_schulden_pay_geht_immer_durch():
+    """WICHTIG: die Tafel ist nur Anzeige. 'pay' bewegt die Coins wie vorher, der
+    Hinweis haengt nur dran - und selbst wenn die Tafel kaputt ist, geht die
+    Zahlung durch."""
+    import schulden
+    restore, sch = _schulden_setup({7: 10_000, 8: 0})
+    alt_flush = economy.instance._flush
+
+    async def kein_flush():
+        return None
+    economy.instance._flush = kein_flush
+
+    class _Autor:
+        id = 7
+        display_name = "Zahler"
+        bot = False
+
+    class _Ziel:
+        id = 8
+        display_name = "Empfänger"
+        bot = False
+
+    ziel = _Ziel()
+    msg = SimpleNamespace(content=f"flo pay <@8> 2500", mentions=[ziel],
+                          author=_Autor(), guild=SimpleNamespace(id=1, get_member=lambda _u: None))
+    try:
+        antwort = asyncio.run(economy.instance._pay(msg))
+        # Coins sind geflossen ...
+        assert economy.get_coins(7) == 7500 and economy.get_coins(8) == 2500
+        # ... und die Notiz haengt dran.
+        assert "2.500" in antwort and "Kreide" in antwort
+        assert sch.saldo(7, 8) == 2500
+
+        # Zweite Zahlung: der Hinweis zeigt den gewachsenen Stand.
+        msg.content = "flo pay <@8> 500"
+        antwort = asyncio.run(economy.instance._pay(msg))
+        assert "3.000" in antwort and sch.saldo(7, 8) == 3000
+        assert economy.get_coins(7) == 7000
+
+        # Tafel kaputt (wirft) -> Zahlung MUSS trotzdem durchgehen.
+        def kaputt(*_a, **_k):
+            raise RuntimeError("Tafel kaputt")
+        alt_note = schulden.instance.note_pay
+        schulden.instance.note_pay = kaputt
+        try:
+            msg.content = "flo pay <@8> 1000"
+            antwort = asyncio.run(economy.instance._pay(msg))
+            assert economy.get_coins(7) == 6000 and economy.get_coins(8) == 4000
+            assert "1.000" in antwort
+        finally:
+            schulden.instance.note_pay = alt_note
+
+        # Nicht genug Geld -> kein Eintrag auf der Tafel.
+        vorher = sch.saldo(7, 8)
+        msg.content = "flo pay <@8> 999999"
+        antwort = asyncio.run(economy.instance._pay(msg))
+        assert "nicht genug" in antwort.lower() and sch.saldo(7, 8) == vorher
+    finally:
+        economy.instance._flush = alt_flush
+        restore()
+
+
 def test_giveaway_sprachverstaendnis():
     """Der Assistent muss Alltagssprache verstehen: viele Formulierungen, die
     dasselbe bedeuten, muessen exakt dasselbe ergeben."""

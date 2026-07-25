@@ -34,6 +34,7 @@ CATALOG = [
     {"key": "merchant", "label": "Fahrender Händler", "emoji": "🛒", "desc": "Täglicher Händler mit exklusiven Titeln"},
     {"key": "steal",    "label": "Coin-Raub",         "emoji": "🥷", "desc": "flo steal @wer – Coins klauen"},
     {"key": "handel",   "label": "Handelsbuch",       "emoji": "📒", "desc": "Alle Coin-Transaktionen als Statistik"},
+    {"key": "schulden", "label": "Kreide-Tafel",      "emoji": "🧾", "desc": "Merkt sich, wer wem was überwiesen hat (nur Anzeige)"},
     {"key": "luxus",    "label": "Luxus & Thron",     "emoji": "👑", "desc": "Prestige-Shop bis 1 Milliarde & DER THRON"},
     {"key": "terraria", "label": "Terraria-Wiki",     "emoji": "🌳", "desc": "Terraria-Fragen mit echten Wiki-Daten"},
     {"key": "media",    "label": "Bilder",            "emoji": "🎨", "desc": "Bilder generieren, Quote-Memes, Bild-Analyse"},
