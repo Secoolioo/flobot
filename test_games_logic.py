@@ -1691,6 +1691,62 @@ def test_numfmt():
     assert numfmt.fmt(1234567) == "1.234.567"
 
 
+def test_namensauflösung_nur_per_id():
+    """REGRESSION: Konten, die NUR per ID angefasst wurden (z. B. Coins über das
+    Web-Panel), hatten keinen Namen im Profil und standen in 'Flo reichste' als
+    'Unbekannt'. Die Auflösung muss bis zur Discord-API gehen (Server-Nickname,
+    sonst globaler Name) - und wenn gar nichts geht, wenigstens die ID zeigen."""
+    import sys
+    import types
+    UID = 1451353124940812353
+    restore = _with_economy({UID: 70_000_000})
+    alt_bot = sys.modules.get("bot")
+    try:
+        economy.instance._profile(UID)["name"] = ""
+
+        fake = types.ModuleType("bot")
+        fake.client = SimpleNamespace(
+            get_user=lambda _u: None,
+            fetch_user=lambda _u: (_ for _ in ()).throw(Exception("404")),
+            guilds=[], get_guild=lambda _g: None, is_closed=lambda: False)
+        sys.modules["bot"] = fake
+
+        class GuildAPI:                      # Cache leer, aber API kennt das Member
+            def get_member(self, _uid):
+                return None
+
+            async def fetch_member(self, _uid):
+                return SimpleNamespace(display_name="JoeAusAPI")
+
+        name = asyncio.run(economy.resolve_display_name(UID, GuildAPI()))
+        assert name == "JoeAusAPI", name
+        # und wird fürs nächste Mal im Profil gemerkt
+        assert economy.instance._profile(UID)["name"] == "JoeAusAPI"
+
+        class GuildLeer:                     # weder Cache noch API finden ihn
+            def get_member(self, _uid):
+                return None
+
+            async def fetch_member(self, _uid):
+                raise Exception("nicht im Server")
+
+        economy.instance._profile(UID)["name"] = ""
+        rows = economy.instance.money_leaderboard_data(5)
+        asyncio.run(economy.instance._resolve_names(rows, GuildLeer()))
+        # Letzte Rettung: identifizierbare ID statt 'Unbekannt'
+        assert str(UID) in rows[0]["name"], rows[0]["name"]
+
+        # Vorhandener Name wird nicht unnötig neu geholt.
+        economy.instance._profile(UID)["name"] = "Secoolio"
+        assert asyncio.run(economy.resolve_display_name(UID, GuildLeer())) == "Secoolio"
+    finally:
+        if alt_bot is not None:
+            sys.modules["bot"] = alt_bot
+        else:
+            sys.modules.pop("bot", None)
+        restore()
+
+
 def test_money_leaderboard_bild_und_namen():
     """'flo reichste' ist ein BILD, und ein fehlender/ID-artiger Name wird zum
     echten Discord-Namen aufgelöst (war ein Bug: da stand die rohe ID)."""

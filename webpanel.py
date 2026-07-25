@@ -212,6 +212,28 @@ class WebPanel:
             "voice_secs": int(prof.get("voice_secs", 0)),
         }
 
+    def _guild(self):
+        """Die Haupt-Guild (fuer Namens-/Avatar-Auflösung), falls verfuegbar."""
+        try:
+            gid = int(os.getenv("GUILD_ID", "0") or "0")
+            if self._client is not None and gid:
+                return self._client.get_guild(gid)
+        except Exception:  # noqa: BLE001
+            pass
+        guilds = getattr(self._client, "guilds", None) or []
+        return guilds[0] if guilds else None
+
+    async def _remember_name(self, uid):
+        """Holt den echten Discord-Namen zu einer ID und merkt ihn im Profil.
+
+        Wird nach JEDER Panel-Aenderung aufgerufen: wer hier nur per ID bearbeitet
+        wird, hatte sonst keinen Namen im Profil - und tauchte in 'Flo reichste'
+        als 'Unbekannt' auf."""
+        try:
+            await economy.resolve_display_name(uid, self._guild())
+        except Exception:  # noqa: BLE001 - reine Kosmetik, nie fatal
+            log.debug("Namens-Merken fuer %s fehlgeschlagen", uid, exc_info=True)
+
     def _parse_amount(self, raw):
         """Nimmt Zahl oder '1k'/'2m' und gibt einen int zurueck (0 bei Murks)."""
         if isinstance(raw, (int, float)):
@@ -360,6 +382,7 @@ class WebPanel:
             economy.add_coins(uid_int, amount - cur, reason="panel")
         else:
             return web.json_response({"ok": False, "error": "aktion?"}, status=400)
+        await self._remember_name(uid_int)
         await economy.flush()
         return web.json_response({"ok": True, "coins": economy.get_coins(uid_int)})
 
@@ -382,6 +405,7 @@ class WebPanel:
             prof["xp"] = max(0, amount)
         else:
             prof["xp"] = max(0, int(prof.get("xp", 0)) + amount)
+        await self._remember_name(uid_int)
         await economy.flush()
         return web.json_response({"ok": True, "xp": prof["xp"],
                                   "level": economy.instance._level_only(prof["xp"])})
@@ -410,12 +434,13 @@ class WebPanel:
             economy.grant_title(uid_int, text, label, rarity)
         # Rolle nachziehen, falls das Mitglied auffindbar ist (best effort).
         try:
-            guild = self._client.get_guild(int(os.getenv("GUILD_ID", "0") or "0")) if self._client else None
+            guild = self._guild()
             member = guild.get_member(uid_int) if guild else None
             if member is not None:
                 await economy.sync_role(member)
         except Exception:  # noqa: BLE001
             pass
+        await self._remember_name(uid_int)
         await economy.flush()
         return web.json_response({"ok": True, "titles": economy.list_titles(uid_int)})
 
@@ -452,6 +477,8 @@ class WebPanel:
         except Exception:  # noqa: BLE001
             log.exception("Anteils-Korrektur via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        await self._remember_name(uid_int)
+        await economy.flush()
         return web.json_response({"ok": True, "shares": shares, "price": kurs,
                                   "total_shares": total})
 

@@ -828,33 +828,75 @@ class Economy:
         rows.sort(key=lambda r: r["coins"], reverse=True)
         return rows[:limit]
 
+    async def resolve_display_name(self, uid, guild = None, *, force = False):
+        """Findet den ECHTEN Discord-Namen zu einer User-ID und merkt ihn im Profil.
+
+        Wichtig fuer Konten, die NUR per ID angefasst wurden (z. B. Coins ueber das
+        Web-Panel zugewiesen): dort ist im Profil kein Name gespeichert, und in der
+        Rangliste stand dann 'Unbekannt'. Die Kette geht bis zur Discord-API:
+        Profil -> Member-Cache -> User-Cache -> Member per API (Server-Nickname!)
+        -> User per API. Rueckgabe: Name oder None (dann wird geloggt, warum)."""
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            return None
+        if not uid:
+            return None
+        prof = self._users().get(str(uid)) if self._enabled else None
+        if not force and prof is not None:
+            vorhanden = (prof.get("name") or "").strip()
+            if vorhanden and not vorhanden.isdigit():
+                return vorhanden
+
+        def brauchbar(obj):
+            n = (getattr(obj, "display_name", None) or getattr(obj, "name", None) or "")
+            n = str(n).strip()
+            return n or None
+
+        client = None
+        try:
+            import bot
+            client = bot.client
+        except Exception:  # noqa: BLE001 - ohne laufenden Bot geht nur der Cache
+            client = None
+
+        # 1) Member-Cache (hat den Server-Nickname)
+        name = brauchbar(guild.get_member(uid)) if guild is not None else None
+        # 2) globaler User-Cache
+        if not name and client is not None:
+            name = brauchbar(client.get_user(uid))
+        # 3) Member per API - liefert den Server-Nickname und geht auch OHNE
+        #    das privilegierte Members-Intent (REST, nicht Gateway).
+        if not name and guild is not None:
+            try:
+                name = brauchbar(await guild.fetch_member(uid))
+            except Exception as exc:  # noqa: BLE001
+                log.debug("fetch_member(%s) fehlgeschlagen: %s", uid, exc)
+        # 4) User per API (globaler Anzeigename)
+        if not name and client is not None:
+            try:
+                name = brauchbar(await client.fetch_user(uid))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Name zu ID %s nicht aufloesbar: %s", uid, exc)
+        if name and prof is not None:
+            prof["name"] = name          # fuer die Zukunft merken
+        return name or None
+
     async def _resolve_names(self, rows, guild):
-        """Ersetzt fehlende/ID-artige Namen durch den ECHTEN Discord-Namen
-        (Member-Cache -> User-Cache -> API) und merkt sich den Namen im Profil.
-        Vorher stand in der Rangliste teils nur die rohe User-ID."""
+        """Sorgt dafuer, dass in der Rangliste ueberall ein echter Name steht -
+        auch bei Konten, die nur per ID angefasst wurden."""
         for r in rows:
             name = (r.get("name") or "").strip()
             if name and not name.isdigit():
                 continue                       # schon ein brauchbarer Name
             uid = int(r.get("id") or 0)
-            if not uid:
-                r["name"] = "Unbekannt"
-                continue
-            user = None
+            neu = None
             try:
-                user = await self._resolve_avatar_user(guild, uid)
+                neu = await self.resolve_display_name(uid, guild)
             except Exception:  # noqa: BLE001 - Namensauflösung ist nie fatal
-                user = None
-            neu = (getattr(user, "display_name", None)
-                   or getattr(user, "name", None) or "")
-            if neu:
-                r["name"] = neu
-                # Fuer die Zukunft im Profil merken (spart den API-Weg).
-                prof = self._users().get(str(uid))
-                if prof is not None:
-                    prof["name"] = neu
-            else:
-                r["name"] = "Unbekannt"
+                log.exception("Namensauflösung fehlgeschlagen (%s)", uid)
+            # Letzte Rettung: die ID zeigen (identifizierbar) statt 'Unbekannt'.
+            r["name"] = neu or (f"ID {uid}" if uid else "Unbekannt")
 
     async def _money_leaderboard(self, guild, limit = 10):
         """Geld-Rangliste als BILD (Pillow): wer hat aktuell am meisten Flo Coins?
@@ -1409,5 +1451,6 @@ tick_voice = instance.tick_voice
 handle = instance.handle
 leaderboard_data = instance.leaderboard_data
 money_leaderboard_data = instance.money_leaderboard_data
+resolve_display_name = instance.resolve_display_name
 _attach_avatars = instance._attach_avatars
 _resolve_avatar_user = instance._resolve_avatar_user
