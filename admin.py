@@ -99,8 +99,24 @@ class Admin:
             if m2:
                 uid = int(m2.group(1))
                 text = text[:m2.start()] + " " + text[m2.end():]
-        m3 = self._AMOUNT_RE.search(text)
-        amount = int(m3.group(0)) if m3 else None
+        # Betrag ueber DENSELBEN Parser wie ueberall sonst lesen: der alte
+        # Ziffern-Regex hat aus 'gib @wer 5k' still 5 Coins gemacht (und aus
+        # '1.000.000' eine 1) - und dann gruen Erfolg gemeldet.
+        amount = None
+        for token in text.split():
+            wert = None
+            try:
+                import economy
+                if economy.is_enabled():
+                    wert = economy.parse_amount(token)
+            except Exception:  # noqa: BLE001 - Parser darf nie den Befehl kippen
+                wert = None
+            if wert is None:
+                m3 = self._AMOUNT_RE.fullmatch(token)
+                wert = int(m3.group(0)) if m3 else None
+            if wert is not None:
+                amount = int(wert)
+                break
         return uid, amount
 
     async def _user_of(self, message, uid):

@@ -25,6 +25,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+import discord
+
 import economy
 
 try:
@@ -182,6 +184,12 @@ class WebPanel:
         return 0
 
     def _note_login_fail(self, ip):
+        # Liste klein halten: abgelaufene Sperren und alte Zaehler wegwerfen.
+        if len(self._fails) > 200:
+            jetzt = time.time()
+            for k, (_n, bis) in list(self._fails.items()):
+                if bis <= jetzt:
+                    self._fails.pop(k, None)
         n, _until = self._fails.get(ip, (0, 0.0))
         n += 1
         until = time.time() + self._LOGIN_BLOCK if n >= self._LOGIN_MAX_FAILS else 0.0
@@ -602,7 +610,15 @@ class WebPanel:
         if action == "give":
             economy.add_coins(uid_int, amount, reason="panel")
         elif action == "take":
+            # Ehrlich bleiben: economy deckelt bei 0, ein Abzug vom leeren Konto
+            # ist also ein No-Op. Vorher meldete das Panel trotzdem gruen Erfolg.
+            vorher = economy.get_coins(uid_int)
             economy.add_coins(uid_int, -amount, reason="panel")
+            if economy.get_coins(uid_int) == vorher and amount:
+                return web.json_response(
+                    {"ok": False, "error": f"Nichts abgezogen – Konto steht auf "
+                                           f"{vorher} und kann nicht ins Minus."},
+                    status=400)
         else:                                   # "set"
             cur = economy.get_coins(uid_int)
             economy.add_coins(uid_int, amount - cur, reason="panel")
@@ -876,7 +892,10 @@ class WebPanel:
             return web.json_response({"ok": False, "error": "Kanal kann keine Nachrichten"},
                                      status=400)
         try:
-            await channel.send(text)
+            # KEINE Massen-Pings aus dem Panel: ein versehentliches '@everyone'
+            # im Ansage-Feld haette sonst den ganzen Server angepingt - das laesst
+            # sich nicht zurueckholen.
+            await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
         except Exception:  # noqa: BLE001
             log.exception("Ansage via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "senden fehlgeschlagen"}, status=500)
@@ -884,6 +903,7 @@ class WebPanel:
 
     # --- API: Profilbilder ------------------------------------------------
     _AV_TTL = 3600      # eine Stunde: Discord-CDN-URLs sind stabil genug
+    _AV_MAX = 500       # so viele Bilder merken wir uns hoechstens
 
     async def _api_avatar(self, request):
         """Leitet auf das Discord-Profilbild der ID weiter (302).
@@ -917,6 +937,14 @@ class WebPanel:
                     url = str(asset.url)
             except Exception:  # noqa: BLE001 - Bild ist nie kritisch
                 log.debug("Avatar fuer %s nicht ermittelbar", uid, exc_info=True)
+            # Cache deckeln: der Bot laeuft monatelang, vorher wuchs das Dict
+            # mit jeder je angesehenen ID weiter.
+            if len(self._av_cache) > self._AV_MAX:
+                for alt_uid, (_u, exp) in list(self._av_cache.items()):
+                    if exp <= now:
+                        self._av_cache.pop(alt_uid, None)
+                while len(self._av_cache) > self._AV_MAX:
+                    self._av_cache.pop(next(iter(self._av_cache)), None)
             self._av_cache[uid] = (url, now + self._AV_TTL)
         if not url:
             raise web.HTTPNotFound()

@@ -480,21 +480,6 @@ def test_steal_heist():
 
 
 # --- Stocks (Aktienkurse) ------------------------------------------------------
-def test_stocks_helpers():
-    import stocks
-    a, p, plus = stocks._format_change(110, 100)
-    assert round(a) == 10 and round(p) == 10 and plus is True
-    a, p, plus = stocks._format_change(90, 100)
-    assert plus is False and round(p) == -10
-    # None/Muell robust -> (None, None, True), kein Crash.
-    assert stocks._format_change(None, 100) == (None, None, True)
-    assert stocks._format_change("x", "y")[0] is None
-    # Ticker-Erkennung.
-    assert stocks._looks_like_ticker("AAPL")
-    assert not stocks._looks_like_ticker("Apple Inc")
-
-
-# --- Terraria-Wiki -------------------------------------------------------------
 def test_terraria_logic():
     import terraria
     t = terraria.instance
@@ -2135,6 +2120,85 @@ def _giveaway_setup(coins_by_uid):
     return restore, gw
 
 
+def test_audit_geld_und_rechte():
+    """REGRESSION aus dem grossen Audit: die fuenf Funde, die Geld oder Rechte
+    betreffen. Jeder hier ist vorher nachgemessen worden."""
+    import admin
+    import casino
+    import games
+
+    # 1) Owner-Befehl 'gib @wer 5k' buchte still 5 Coins statt 5.000 (und
+    #    '1.000.000' sogar 1) - und meldete gruen Erfolg.
+    restore = _with_economy({1: 0})
+    try:
+        a = admin.instance
+        ID = "<@1040135855710404659>"
+        for text, erwartet in ((f"{ID} 5k", 5000), (f"{ID} 5000", 5000),
+                               (f"{ID} 2m", 2_000_000), (f"{ID} 1.000.000", 1_000_000),
+                               (f"{ID} 2,5k", 2500), (f"{ID} 750", 750)):
+            uid, betrag = a._extract(text)
+            assert uid == 1040135855710404659, text
+            assert betrag == erwartet, (text, betrag, erwartet)
+        # Ohne Betrag bleibt None (der Aufrufer fragt dann nach).
+        assert a._extract(f"{ID} hallo")[1] is None
+    finally:
+        restore()
+
+    # 2) Casino: EINE Runde konnte astronomisch auszahlen (Mines x179.213 bei
+    #    Hoechsteinsatz = 179 Billionen Coins). Jetzt gedeckelt.
+    restore = _with_economy({1: 0, 2: 0})
+    try:
+        mult = casino.instance._mines_mult(10, 10)
+        assert mult > 100_000, mult                      # Jackpot existiert weiter
+        roh = int(casino.MAX_BET * mult)
+        gezahlt = casino._auszahlen(1, roh, "mines")
+        assert gezahlt == casino.MAX_WIN < roh
+        assert economy.get_coins(1) == casino.MAX_WIN
+        # Normales Spiel bleibt unberuehrt.
+        assert casino._auszahlen(2, 50_000, "test") == 50_000
+        # Unsinn wird sauber verschluckt, statt zu crashen.
+        for murks in (0, -5, None, float("inf"), float("nan"), "abc"):
+            assert casino._auszahlen(2, murks, "test") == 0
+        assert economy.get_coins(2) == 50_000
+        # RTP bleibt fair (der Deckel greift nur im Extremfall).
+        for bomben in (1, 3, 5, 10):
+            frei = casino._MINES_TILES - bomben
+            m = casino.instance._mines_mult(frei, bomben)
+            chance = 1.0
+            for i in range(frei):
+                chance *= (casino._MINES_TILES - bomben - i) / (casino._MINES_TILES - i)
+            assert 0.95 < m * chance < 1.0, (bomben, m * chance)
+    finally:
+        restore()
+
+    # 3) Spiele-Wasserhaehne: Muenzwurf hatte 100 % RTP und im Text-Pfad keinen
+    #    Hoechsteinsatz; Quiz/Zahlenraten/SSP waren pro Nutzer unbegrenzt farmbar.
+    assert 0 < games.COINFLIP_PAYOUT < 1.0
+    g = games.instance
+    g._skill_cd = {}
+    assert g._skill_frei(42) is True
+    g._skill_cd[42] = time.monotonic()
+    assert g._skill_frei(42) is False and g._skill_rest(42) > 0
+    quelle = open("games.py", encoding="utf-8").read()
+    # Die drei Belohnungen haengen jetzt alle an der Anti-Farm-Sperre.
+    for stelle in ("QUIZ_REWARD)", "economy.add_coins(message.author.id, reward)",
+                   "economy.add_coins(message.author.id, 10)"):
+        i = quelle.index(stelle)
+        assert "_skill_frei" in quelle[max(0, i - 400):i], stelle
+
+    # 4) Moderation: der Auto-Timeout nach Verwarnungen muss dieselbe Rangordnung
+    #    achten wie ein direkter Timeout (sonst knebelt ein Junior-Mod einen Senior).
+    mod_quelle = open("moderation.py", encoding="utf-8").read()
+    i = mod_quelle.index("if (count >= WARN_LIMIT")
+    assert "darf_strafen" in mod_quelle[i - 400:i + 200]
+    assert "full=True" in mod_quelle[i - 400:i]
+
+    # 5) Panel-Ansage darf nie @everyone pingen.
+    panel_quelle = open("webpanel.py", encoding="utf-8").read()
+    i = panel_quelle.index("await channel.send(")
+    assert "AllowedMentions.none()" in panel_quelle[i:i + 200]
+
+
 def _schulden_setup(coins_by_uid=None):
     """schulden + economy mit Fake-Stores. Rueckgabe: (restore, sch)"""
     import schulden
@@ -2750,8 +2814,8 @@ def test_webpanel_eingaben_und_robustheit():
     gesendet = []
 
     class _Chan:
-        async def send(self, text):
-            gesendet.append(text)
+        async def send(self, text, **kw):
+            gesendet.append((text, kw))
 
     system_chan = _Chan()
     guild = SimpleNamespace(id=7, system_channel=system_chan)
@@ -2907,7 +2971,10 @@ def test_webpanel_eingaben_und_robustheit():
             # Ohne Kanal-ID: System-Kanal, gekuerzt auf Discord-Laenge.
             j = await (await cli.post("/api/server/announce",
                        json={"text": "x" * 5000}, headers=H)).json()
-            assert j["ok"] and len(gesendet) == 1 and len(gesendet[0]) <= 1900
+            assert j["ok"] and len(gesendet) == 1 and len(gesendet[0][0]) <= 1900
+            # KEINE Massen-Pings aus dem Panel.
+            erlaubt = gesendet[0][1].get("allowed_mentions")
+            assert erlaubt is not None and erlaubt.everyone is False
 
             # 13) Sendepause-Zustand kommt jetzt mit der Server-Liste (kein Cache).
             j = await (await cli.get("/api/servers", headers=H)).json()

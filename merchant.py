@@ -106,9 +106,9 @@ _KATALOG_BY_ID = {e["id"]: e for e in _KATALOG}
 # --- Freche Begrüßungs-/Abschieds-Sprüche (random.choice) --------------------
 _ARRIVE_LINES = [
     "Ein Karren rumpelt heran… **der fahrende Händler** hat seinen Stand aufgeschlagen! 🛒",
-    "🔔 Glöckchen-Klingeln! **Der fahrende Händler** ist da - und nur **eine Stunde**!",
+    "🔔 Glöckchen-Klingeln! **Der fahrende Händler** ist da - und nur **{dauer}**!",
     "Aus dem Nebel tritt **der fahrende Händler** mit prall gefüllter Truhe. 🧳",
-    "**Der fahrende Händler** ist eingetroffen! Ware, die's im Shop NIE gibt - **1 Stunde**. ⏳",
+    "**Der fahrende Händler** ist eingetroffen! Ware, die's im Shop NIE gibt - **{dauer}**. ⏳",
     "Hört, hört! **Der fahrende Händler** packt Schätze aus, die kein Shop führt. 💼",
 ]
 _LEAVE_LINES = [
@@ -134,6 +134,16 @@ class Merchant:
         self._store = None
         self._present_secs = int(PRESENT_HOURS * 3600)
 
+    def _dauer_text(self):
+        """Verweildauer als Text ('1 Stunde', '90 Minuten') - immer aus dem
+        WIRKLICHEN Wert, nicht hart in die Sprueche geschrieben."""
+        secs = max(60, int(self._present_secs))
+        if secs % 3600 == 0:
+            n = secs // 3600
+            return f"{n} Stunde" if n == 1 else f"{n} Stunden"
+        n = max(1, secs // 60)
+        return f"{n} Minute" if n == 1 else f"{n} Minuten"
+
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
         """Aktiviert den Haendler. Braucht economy (Coins + Titel-Inventar)."""
@@ -144,10 +154,10 @@ class Merchant:
         if not economy.is_enabled():
             log.info("Haendler-Feature aus: economy ist nicht aktiv.")
             return False
-        try:
-            self._present_secs = int(float(os.getenv("MERCHANT_PRESENT_HOURS", "3")) * 3600)
-        except (TypeError, ValueError):
-            self._present_secs = int(PRESENT_HOURS * 3600)
+        # EINE Quelle fuer die Verweildauer: setup() nahm frueher 3 Stunden als
+        # Standard, die Konstante daneben 1 Stunde - je nachdem, wen man fragte,
+        # war der Haendler unterschiedlich lange da.
+        self._present_secs = max(60, int(PRESENT_HOURS * 3600))
         self._store = JsonStore("merchant.json", default={
             "day": "", "appear_at": 0, "depart_at": 0,
             "arrived": False, "departed": False,
@@ -325,7 +335,8 @@ class Merchant:
         st = self._state()
         emb = discord.Embed(
             title="🛒 Der fahrende Händler",
-            description=f"{random.choice(_ARRIVE_LINES)}\n*{random.choice(_HAGGLE)}*",
+            description=(random.choice(_ARRIVE_LINES).format(dauer=self._dauer_text())
+                         + f"\n*{random.choice(_HAGGLE)}*"),
             color=discord.Color.dark_gold())
         # Verkaufs-Angebot.
         zeilen = []

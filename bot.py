@@ -45,7 +45,6 @@ import numfmt
 import render
 import schedule_logic
 import steal
-import stocks
 import terraria
 import voicegags
 import webpanel
@@ -158,16 +157,16 @@ HANDEL_ENABLED = handel.setup()
 # Coin-Raub ('Flo steal @wer'): Heist auf fremde Coins - Erfolgschance, Strafe,
 # Cooldown. Braucht economy (dort liegt der Coin-Topf).
 STEAL_ENABLED = steal.setup()
-# Oeffentliche Aktienkurse (Apple & Co.) wurden entfernt - 'Flo aktie' ist jetzt
-# ausschliesslich die EIGENE FloCorp-Aktie ($FLO), siehe floaktie.
-STOCKS_ENABLED = False
+# Hinweis: oeffentliche Aktienkurse (Apple & Co.) gibt es bewusst nicht mehr -
+# 'Flo aktie' ist ausschliesslich die EIGENE FloCorp-Aktie ($FLO), siehe floaktie.
 # Terraria-Wiki ('Flo terraria <frage>'): beantwortet JEDE Terraria-Frage mit
 # echten Wiki-Daten + Bildern (MediaWiki-API), auto-erkennt Terraria-Fragen.
 TERRARIA_ENABLED = terraria.setup()
 # Fahrender Haendler ('Flo haendler'): taucht einmal taeglich zu zufaelliger Zeit
 # auf und verkauft/tauscht EXKLUSIVE Titel. Braucht economy (Coins + Inventar).
 MERCHANT_ENABLED = merchant.setup()
-# Monats-Lotto ('Flo lotto'): Zufalls-Jackpot in Millionen, Lospreis = Jackpot/80,
+# Monats-Lotto ('Flo lotto'): Zufalls-Jackpot in Millionen, Lospreis haengt am
+# Jackpot (siehe lotto.PRICE_DIVISOR, Standard Jackpot/2000, gedeckelt),
 # einmal im Monat Ziehung. Braucht economy (dort liegt der Coin-Topf).
 LOTTO_ENABLED = lotto.setup()
 # FloCorp-Aktie ('Flo floaktie'): Flos eigene Aktie ($FLO). Kurs steigt/faellt mit
@@ -243,7 +242,7 @@ _NEED_MESSAGES = any(
     [AI_ENABLED, MUSIC_ENABLED, FUN_ENABLED, ECONOMY_ENABLED, GAMES_ENABLED,
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
-     STEAL_ENABLED, STOCKS_ENABLED, TERRARIA_ENABLED,
+     STEAL_ENABLED, TERRARIA_ENABLED,
      MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED]
 )
 intents = discord.Intents.none()
@@ -1461,7 +1460,8 @@ class FloBot(discord.Client):
                     or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
                     or antwort is terraria.HANDLED or antwort is merchant.HANDLED
                     or antwort is lotto.HANDLED or antwort is floaktie.HANDLED
-                    or antwort is giveaway.HANDLED):
+                    or antwort is giveaway.HANDLED or antwort is schulden.HANDLED
+                    or antwort is steal.HANDLED or antwort is bayern.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)

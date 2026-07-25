@@ -272,8 +272,8 @@ class Economy:
         after = self._level_only(prof["xp"])
         if after > before:
             reward = after * 25
-            prof["coins"] += reward
-            self._record_trade(member.id, reward, "levelup", prof["coins"])
+            # Ebenfalls ueber add_coins - siehe _daily.
+            self.add_coins(member.id, reward, reason="levelup")
             return after
         return None
 
@@ -1129,8 +1129,11 @@ class Economy:
         prof["last_daily"] = today
         bonus = min(prof["streak"], 7) * 20
         total = 100 + bonus
-        prof["coins"] += total
-        self._record_trade(member.id, total, "daily", prof["coins"])
+        # ueber add_coins buchen (nicht direkt aufs Profil): nur so laufen der
+        # 'insgesamt verdient'-Zaehler UND die automatische Schulden-Tilgung mit.
+        # Vorher versprach die Kreide-Tafel "20 % jeder Einnahme", der Tagesbonus
+        # kam aber komplett am Abzug vorbei.
+        self.add_coins(member.id, total, reason="daily")
         await self._flush()
         return (f"🎁 Tagesbonus: **+{fmt(total)} {self.COIN}**! "
                 f"(Streak: {prof['streak']} Tag(e), Bonus +{bonus})")

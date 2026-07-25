@@ -343,7 +343,12 @@ class Moderation:
         count = len(lst)
 
         auto_note = None
-        if (count >= WARN_LIMIT and WARN_TIMEOUT_SECONDS > 0
+        # Der harte Auto-Timeout muss DIESELBE Rangordnung achten wie ein direkter
+        # 'timeout'-Befehl. Sonst knebelt ein Junior-Mod per dreimal 'warn' jemanden
+        # mit hoeherer Rolle, den er direkt nicht anfassen duerfte - die Verwarnung
+        # selbst prueft bewusst nur full=False und bleibt weiterhin moeglich.
+        darf_strafen = not self._hierarchy_problem(message, member, full=True)
+        if (count >= WARN_LIMIT and WARN_TIMEOUT_SECONDS > 0 and darf_strafen
                 and self._bot_can(guild, "moderate_members")
                 and isinstance(member, discord.Member) and self._bot_hierarchy_ok(guild, member)):
             if await self._apply_timeout(guild, member, WARN_TIMEOUT_SECONDS,

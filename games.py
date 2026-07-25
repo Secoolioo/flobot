@@ -61,6 +61,9 @@ QDUEL_TIMEOUT = 45
 # Runden). Darum: begrenzter Einsatz + kurze Pause zwischen den Runden.
 SKILL_MAX_BET = int(os.getenv("GAMES_SKILL_MAX_BET", "5000") or "5000")
 SKILL_COOLDOWN = float(os.getenv("GAMES_SKILL_COOLDOWN", "45") or "45")
+# Auszahlung beim Muenzwurf-Sieg (Anteil des Einsatzes). 0,95 = 5 % Hausvorteil -
+# mit 1,0 war Muenzwurf ein risikoloses Dauerspiel mit RTP 100 %.
+COINFLIP_PAYOUT = float(os.getenv("GAMES_COINFLIP_PAYOUT", "0.95") or "0.95")
 
 
 # --- Schere-Stein-Papier -------------------------------------------------
@@ -647,6 +650,14 @@ class Games:
         self._qduel = {}      # channel_id -> laufendes Quiz-Duell
         self._skill_cd = {}   # user_id -> letzte Skill-Spiel-Runde (Anti-Farm)
 
+    def _skill_frei(self, uid):
+        """Ist die Anti-Farm-Sperre fuer diesen Nutzer gerade offen?"""
+        return (time.monotonic() - self._skill_cd.get(uid, 0.0)) >= SKILL_COOLDOWN
+
+    def _skill_rest(self, uid):
+        """Restliche Sperrzeit in Sekunden (0 = frei)."""
+        return max(0.0, SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, 0.0)))
+
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
         self._bg.add(task)
@@ -775,10 +786,15 @@ class Games:
         if user == bot:
             return f"{ub} vs {bb} — **Unentschieden!**"
         if _SSP_BEATS[user] == bot:
-            if economy.is_enabled():
+            # Gratis-Coins nur mit Cooldown: ohne Einsatz und ohne Sperre war das
+            # ein Wasserhahn (Sieg +10, Niederlage kostet nichts) - in einer Minute
+            # liessen sich damit hunderte Coins abgreifen.
+            if economy.is_enabled() and self._skill_frei(message.author.id):
+                self._skill_cd[message.author.id] = time.monotonic()
                 economy.add_coins(message.author.id, 10)
                 await economy.flush()
-            return f"{ub} vs {bb} — **Du gewinnst!** 🎉 (+10 Flo Coins)"
+                return f"{ub} vs {bb} — **Du gewinnst!** 🎉 (+10 Flo Coins)"
+            return f"{ub} vs {bb} — **Du gewinnst!** 🎉"
         return f"{ub} vs {bb} — **Ich gewinne!** 😎"
 
     # --- Render-Helfer: Animation in Thread, Standbild als Fallback ------------
@@ -801,10 +817,13 @@ class Games:
         spielt_um_coins = bet > 0 and economy.is_enabled() and tip in ("kopf", "zahl")
         if spielt_um_coins:
             if tip == ergebnis:
-                economy.add_coins(uid, bet)
+                # Kleiner Hausvorteil wie ueberall sonst: mit 100 % Auszahlung war
+                # Muenzwurf ein risikoloses Dauerspiel (RTP genau 100 %).
+                gewinn = max(1, int(bet * COINFLIP_PAYOUT))
+                economy.add_coins(uid, gewinn)
                 await economy.flush()
-                await casino.record(uid, "coinflip", bet, bet * 2)
-                note, color = f"Gewonnen! **+{numfmt.fmt(bet)}** Flo Coins 🎉", discord.Color.green()
+                await casino.record(uid, "coinflip", bet, bet + gewinn)
+                note, color = f"Gewonnen! **+{numfmt.fmt(gewinn)}** Flo Coins 🎉", discord.Color.green()
             else:
                 economy.add_coins(uid, -bet)
                 await economy.flush()
@@ -828,6 +847,10 @@ class Games:
         if bet and economy.is_enabled():
             if not seite:
                 return f"Auf was setzt du? `{self._bot_name} coinflip {bet} kopf` (oder zahl)."
+            # Der Text-Pfad kannte bisher KEINE Obergrenze - im Menue schon.
+            if bet > SKILL_MAX_BET:
+                return (f"Höchsteinsatz beim Münzwurf: **{numfmt.fmt(SKILL_MAX_BET)}** "
+                        f"Flo Coins.")
             if economy.get_coins(uid) < bet:
                 return f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         tip = ("kopf" if seite in ("kopf", "heads") else "zahl") if seite else None
@@ -1022,11 +1045,16 @@ class Games:
         self._new_token(cid)  # evtl. laufenden Timeout entwerten
         self._release(runde.get("msg"))   # richtig beantwortet -> Frage freigeben
         reward = ""
+        # Belohnung nur, wenn die Anti-Farm-Sperre offen ist: die Runde war bisher
+        # nur pro CHANNEL gesperrt - in mehreren Channels (oder im Sekundentakt)
+        # liess sich die Quiz-Belohnung beliebig oft abholen. XP gibt es weiterhin.
         if economy.is_enabled():
-            economy.add_coins(message.author.id, QUIZ_REWARD)
+            if self._skill_frei(message.author.id):
+                self._skill_cd[message.author.id] = time.monotonic()
+                economy.add_coins(message.author.id, QUIZ_REWARD)
+                reward = f" (+{QUIZ_REWARD} Flo Coins)"
             await economy.add_xp(message.author, 30)
             await economy.flush()
-            reward = f" (+{QUIZ_REWARD} Flo Coins)"
         try:
             await message.reply(
                 f"✅ Richtig, **{message.author.display_name}**! "
@@ -1097,10 +1125,13 @@ class Games:
             tries = runde["tries"]
             reward = max(10, 120 - tries * 10)
             extra = ""
+            # Auch hier: pro Nutzer gesperrt, nicht nur pro Channel.
             if economy.is_enabled():
-                economy.add_coins(message.author.id, reward)
+                if self._skill_frei(message.author.id):
+                    self._skill_cd[message.author.id] = time.monotonic()
+                    economy.add_coins(message.author.id, reward)
+                    extra = f" (+{reward} Flo Coins)"
                 await economy.flush()
-                extra = f" (+{reward} Flo Coins)"
             try:
                 await message.reply(
                     f"🎯 **{message.author.display_name}** hat's mit der {ziel} - "

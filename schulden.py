@@ -38,6 +38,9 @@ from store import JsonStore
 
 log = logging.getLogger("dcbot.schulden")
 
+# So lange werden Aenderungen gesammelt, bevor geschrieben wird (Sekunden).
+SAVE_DEBOUNCE = float(os.getenv("SCHULDEN_SAVE_DEBOUNCE", "3") or "3")
+
 # Sentinel: das Modul hat selbst geantwortet -> bot.py schweigt.
 HANDLED = object()
 
@@ -92,6 +95,8 @@ class Schulden:
         # add_coins - was ohne Riegel wieder die Tilgung anstossen wuerde.
         self._tilgung_laeuft = False
         self._save_tasks = set()
+        self._save_task = None     # laufender Sammel-Speicherer
+        self._dirty = False
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -258,15 +263,34 @@ class Schulden:
         return betrag, glaeubiger
 
     def _save_soon(self):
-        """Speichert nebenher (ohne laufenden Loop passiert nichts - Tests)."""
-        if self._store is None:
+        """Speichern SAMMELN statt bei jeder Buchung neu zu schreiben.
+
+        Vorher startete jede einzelne Coin-Bewegung einen eigenen save()-Task, und
+        store.save serialisiert das ganze Buch SYNCHRON im Event-Loop. Bei einer
+        Casino-Runde mit vielen Buchungen waren das dutzende volle
+        Serialisierungen pro Sekunde - der Bot ruckelt dann fuer alle.
+        Jetzt laeuft hoechstens EIN Speicher-Task; kommt waehrenddessen etwas
+        Neues dazu, wird danach genau einmal nachgespeichert."""
+        self._dirty = True
+        if self._save_task is not None and not self._save_task.done():
             return
         try:
-            task = asyncio.get_running_loop().create_task(self._store.save())
+            self._save_task = asyncio.get_running_loop().create_task(self._save_loop())
         except RuntimeError:
+            self._save_task = None      # kein Loop (Tests) - beim naechsten Mal
             return
-        self._save_tasks.add(task)
-        task.add_done_callback(self._save_tasks.discard)
+        self._save_tasks.add(self._save_task)
+        self._save_task.add_done_callback(self._save_tasks.discard)
+
+    async def _save_loop(self):
+        """Schreibt, solange zwischendurch neue Aenderungen aufgelaufen sind."""
+        try:
+            while self._dirty:
+                self._dirty = False
+                await asyncio.sleep(SAVE_DEBOUNCE)
+                await self._store.save()
+        except Exception:  # noqa: BLE001 - Speichern darf nie ein Spiel sprengen
+            log.exception("Verzoegertes Speichern fehlgeschlagen")
 
     # --- Mahnungen --------------------------------------------------------
     async def mahn_tick(self, client):

@@ -48,6 +48,11 @@ MIN_BET = 1
 # Maximaleinsatz je Runde. Bewusst hoch (1 Milliarde = die Economy-Obergrenze),
 # damit auch dicke Konten voll all-in gehen koennen; per .env feinjustierbar.
 MAX_BET = int(os.getenv("CASINO_MAX_BET", "1000000000") or "1000000000")
+# Harte Obergrenze fuer EINE Auszahlung. Mines ist zwar fair (RTP 97 % bei jeder
+# Bombenzahl), der Volltreffer zahlt aber bis zum 179.213-fachen: mit dem
+# Hoechsteinsatz waeren das 179 BILLIONEN Coins aus einer einzigen Runde. Der
+# Deckel greift nur in diesem absurden Randfall und laesst normales Spiel in Ruhe.
+MAX_WIN = int(os.getenv("CASINO_MAX_WIN", "5000000000") or "5000000000")
 BJ_TIMEOUT = 180        # Sekunden, bis eine offene Blackjack-Runde verfaellt
 MINES_TIMEOUT = 180     # Sekunden, bis eine offene Mines-Runde auto-cashoutet
 
@@ -134,6 +139,28 @@ _TOWER_STEP = 0.97 * _TOWER_DOORS / (_TOWER_DOORS - 1)    # x1.455 je Ebene
 # D.O.N.
 _DON_P = 0.485
 _DON_MAX = 10
+
+
+def _auszahlen(uid, betrag, spiel = ""):
+    """Schreibt einen Gewinn gut - gedeckelt auf MAX_WIN je Runde.
+
+    Zentraler Punkt fuer ALLE Casino-Auszahlungen (auch aus den View-Klassen):
+    einzelne Spiele erreichen astronomische Multiplikatoren - Mines zahlt beim
+    Volltreffer bis zum 179.213-fachen. Mit dem Hoechsteinsatz waeren das 179
+    BILLIONEN Coins aus EINER Runde. Der Deckel greift nur in diesem absurden
+    Randfall; normales Spiel merkt nichts davon."""
+    try:
+        betrag = int(betrag)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if betrag <= 0:
+        return 0
+    if betrag > MAX_WIN:
+        log.warning("Casino-Auszahlung gedeckelt (%s): %d -> %d fuer %s",
+                    spiel or "?", betrag, MAX_WIN, uid)
+        betrag = MAX_WIN
+    economy.add_coins(uid, betrag)
+    return betrag
 
 
 class Casino:
@@ -478,7 +505,7 @@ class Casino:
             # Anzeige fehlgeschlagen -> Runde abbrechen und Einsatz zurueckgeben,
             # sonst waere er stumm weg (die View wurde nie sichtbar/registriert).
             view.stop()
-            economy.add_coins(uid, bet)
+            _auszahlen(uid, bet)
             await economy.flush()
         return HANDLED
 
@@ -523,7 +550,7 @@ class Casino:
         payout = int(bet * target) if cp >= target else 0
         cashed = payout > 0
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "crash", bet, payout)
         color, fname_field, fval = self._outcome(bet, payout)
@@ -586,7 +613,7 @@ class Casino:
         mult = _KENO_TABLE.get((len(picks), len(hits)), 0)
         payout = int(bet * mult)
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "keno", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -648,7 +675,7 @@ class Casino:
         spin = random.randint(0, 36)
         payout, label = self._roulette_payout(target, bet, spin)
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "roulette", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -702,7 +729,7 @@ class Casino:
         mult = _WHEEL_SEGMENTS[idx]
         payout = int(bet * mult)
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "glücksrad", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -753,7 +780,7 @@ class Casino:
         keys, rows, mult = self._scratch_roll()
         payout = bet * mult
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "rubbellos", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -850,7 +877,7 @@ class Casino:
             # Anzeige fehlgeschlagen -> Runde abbrechen, Einsatz zurueck.
             view.settled = True
             view.stop()
-            economy.add_coins(uid, bet)
+            _auszahlen(uid, bet)
             await economy.flush()
         return HANDLED
 
@@ -928,7 +955,7 @@ class Casino:
                else total == 7)
         payout = int(bet * _SIEBEN_MULT[tip]) if hit else 0
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "sieben", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -1008,7 +1035,7 @@ class Casino:
         else:
             payout = 0
         if payout:
-            economy.add_coins(uid, payout)
+            _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "baccarat", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -1284,7 +1311,7 @@ class BlackjackView(discord.ui.View):
         """Sofort-Entscheidung bei Natural (21 auf der Hand). Zahlt aus + flush."""
         pv, dv = _hand_value(self.player), _hand_value(self.dealer)
         if pv == 21 and dv == 21:
-            economy.add_coins(self.uid, self.bet)
+            _auszahlen(self.uid, self.bet)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet)
             return await self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
@@ -1292,7 +1319,7 @@ class BlackjackView(discord.ui.View):
                                        state="push", anim="reveal")
         if pv == 21:
             payout = self.bet + (self.bet * 3) // 2     # 3:2
-            economy.add_coins(self.uid, payout)
+            _auszahlen(self.uid, payout)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, payout)
             return await self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
@@ -1317,7 +1344,7 @@ class BlackjackView(discord.ui.View):
             self.dealer.append(self.deck.pop())
         dv = _hand_value(self.dealer)
         if dv > 21 or pv > dv:
-            economy.add_coins(self.uid, self.bet * 2)
+            _auszahlen(self.uid, self.bet * 2)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet * 2)
             grund = "Dealer überkauft sich!" if dv > 21 else f"Deine {pv} schlägt {dv}."
@@ -1327,7 +1354,7 @@ class BlackjackView(discord.ui.View):
             await record(self.uid, "blackjack", self.bet, 0)
             return ("lose", f"Dealer {dv} schlägt deine {pv}. -{numfmt.fmt(self.bet)} {economy.COIN}.",
                     "🂡 Verloren 😬", _C_LOSE)
-        economy.add_coins(self.uid, self.bet)
+        _auszahlen(self.uid, self.bet)
         await economy.flush()
         await record(self.uid, "blackjack", self.bet, self.bet)
         return ("push", f"Beide {pv} – Einsatz ({numfmt.fmt(self.bet)} {economy.COIN}) zurück.",
@@ -1484,7 +1511,7 @@ class _MinesAgainBtn(discord.ui.Button):
             nv.stop()
             if _mines_views.get((v.channel_id, v.uid)) is nv:
                 _mines_views.pop((v.channel_id, v.uid), None)
-            economy.add_coins(v.uid, bet)
+            _auszahlen(v.uid, bet)
             await economy.flush()
             return
         _protect(interaction.message)
@@ -1610,7 +1637,7 @@ class MinesView(discord.ui.View):
         """Zahlt den aktuellen Stand aus. Rueckgabe: (payout, multiplikator)."""
         mult = _mines_mult(self.picked, self.mines)
         payout = int(self.bet * mult)
-        economy.add_coins(self.uid, payout)
+        _auszahlen(self.uid, payout)
         await economy.flush()
         await record(self.uid, "mines", self.bet, payout)
         return payout, mult
@@ -1645,7 +1672,7 @@ class MinesView(discord.ui.View):
                 note = (f"⏰ Zeit um – automatischer Cashout bei ×{mult:.2f} "
                         f"(**{numfmt.fmt(payout)} {economy.COIN}**).")
             else:
-                economy.add_coins(self.uid, self.bet)
+                _auszahlen(self.uid, self.bet)
                 await economy.flush()
                 note = "⏰ Zeit um – Einsatz zurück."
             if fremd:
@@ -1737,7 +1764,7 @@ class DuelView(discord.ui.View):
         winner = self.challenger if face == "kopf" else self.target
         loser = self.target if face == "kopf" else self.challenger
         pot = self.bet * 2
-        economy.add_coins(winner.id, pot)
+        _auszahlen(winner.id, pot, "duell")
         await economy.flush()
         await record(winner.id, "duell", self.bet, pot)
         await record(loser.id, "duell", self.bet, 0)
@@ -1822,7 +1849,7 @@ class _SerienView(discord.ui.View):
 
     async def _payout(self, betrag):
         if betrag:
-            economy.add_coins(self.uid, betrag)
+            _auszahlen(self.uid, betrag, "mines")
         await economy.flush()
         await record(self.uid, self.spiel, self.bet, betrag)
 
@@ -1835,7 +1862,7 @@ class _SerienView(discord.ui.View):
             self.settled = True
             wert = self._timeout_wert()
             if wert:
-                economy.add_coins(self.uid, wert)
+                _auszahlen(self.uid, wert, "mines-timeout")
             await economy.flush()
             await record(self.uid, self.spiel, self.bet, wert)
             self._disable_all()
@@ -2224,7 +2251,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Blackjack-Formular: Anzeige fehlgeschlagen")
                 if not ended:
                     view.stop()
-                    economy.add_coins(uid, bet)
+                    _auszahlen(uid, bet)
                     await economy.flush()
                 return
             view.message = msg
@@ -2325,7 +2352,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Mines-Formular: Anzeige fehlgeschlagen - Einsatz zurueck")
                 view.settled = True
                 view.stop()
-                economy.add_coins(uid, bet)
+                _auszahlen(uid, bet)
                 await economy.flush()
                 return
             view.message = msg

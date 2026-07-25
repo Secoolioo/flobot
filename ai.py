@@ -28,6 +28,9 @@ except ImportError:  # pragma: no cover - nur relevant ohne Paket
 
 log = logging.getLogger("dcbot.ai")
 
+# So viele Kanaele behaelt das Kurzzeit-Gedaechtnis hoechstens.
+_HISTORY_MAX_CHANNELS = 200
+
 
 class FloAI:
     """Kapselt das komplette KI-Feature: Konfiguration, LLM-Client, geteilte
@@ -460,6 +463,16 @@ class FloAI:
         if dq is None:
             dq = deque(maxlen=self._HIST_MAX)
             self._HISTORY[channel_id] = dq
+            # Tote Kanaele wegraeumen: pro je gesehener Channel-ID blieb sonst
+            # dauerhaft ein Eintrag stehen (der TTL filtert nur beim LESEN).
+            # Der GERADE angelegte Kanal bleibt natuerlich drin.
+            if len(self._HISTORY) > _HISTORY_MAX_CHANNELS:
+                jetzt = time.monotonic()
+                for cid, alt_dq in list(self._HISTORY.items()):
+                    if cid == channel_id or not alt_dq:
+                        continue
+                    if (jetzt - alt_dq[-1].get("t", 0)) > self._HIST_TTL:
+                        self._HISTORY.pop(cid, None)
         dq.append({
             "role": "assistant" if is_bot else "user",
             "name": (name or "?")[:40],

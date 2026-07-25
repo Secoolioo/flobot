@@ -321,7 +321,21 @@ class Giveaway:
         return False
 
     def is_cancel(self, text):
-        return self._hat(text, _ABBRUCH)
+        """Abbruch NUR, wenn die Nachricht wirklich ein Abbruch ist.
+
+        Vorher reichte das Wort irgendwo im Satz - eine Begruendung wie
+        "weil ich Schluss mache", "zum Ende des Monats" oder "ich geh raus feiern"
+        hat den Assistenten damit mitten im Schritt abgewuergt."""
+        s = self._norm(text)
+        if not s:
+            return False
+        if s in _ABBRUCH:
+            return True
+        # Kurze Ansage wie "abbrechen bitte" / "stop das" zaehlt auch noch.
+        woerter = s.split()
+        if len(woerter) <= 3 and woerter[0] in _ABBRUCH:
+            return True
+        return False
 
     def is_yes(self, text):
         s = self._norm(text)
@@ -835,9 +849,12 @@ class Giveaway:
             log.info("Giveaway #%s war schon abgerechnet - nichts getan.", gid)
             return
         g = aktuell
+        # Riegel im Speicher SOFORT setzen (schuetzt gegen doppeltes Auslosen),
+        # aber erst NACH der Auszahlung auf die Platte schreiben: ein Absturz
+        # genau dazwischen haette den Einsatz sonst verschluckt - als erledigt
+        # markiert, aber nie ausgezahlt.
         g["settled"] = True
         self._active().pop(gid, None)
-        await self._save()
         host_id = self._als_id(g.get("host"))
         entries = []
         for u in g.get("entries", []):

@@ -30,6 +30,9 @@ from store import JsonStore
 
 log = logging.getLogger("dcbot.handel")
 
+# So lange werden Buchungen gesammelt, bevor geschrieben wird (Sekunden).
+SAVE_DEBOUNCE = float(os.getenv("HANDEL_SAVE_DEBOUNCE", "3") or "3")
+
 
 class Handel:
     """Kapselt das Handelsbuch: Buchungs-Erfassung, Speicher und den Befehl."""
@@ -51,6 +54,8 @@ class Handel:
         # Referenzen auf laufende Speicher-Tasks halten - sonst kann der GC einen
         # noch nicht fertigen Task einsammeln (asyncio-Doku).
         self._save_tasks = set()
+        self._save_task = None     # laufender Sammel-Speicherer
+        self._dirty = False
 
     def setup(self):
         """Aktiviert das Handelsbuch. Braucht economy (dort liegt der Coin-Topf)."""
@@ -114,15 +119,34 @@ class Handel:
             log.exception("Handelsbuch-Buchung fehlgeschlagen")
 
     def _save_soon(self):
-        """Speichert asynchron (JsonStore serialisiert selbst per Lock). Ohne
-        laufenden Event-Loop (Tests) passiert nichts - der naechste Lauf im Bot
-        schreibt den Stand mit."""
-        try:
-            task = asyncio.get_running_loop().create_task(self._store.save())
-        except RuntimeError:
+        """Speichern SAMMELN statt bei jeder Buchung neu zu schreiben.
+
+        Vorher startete jede einzelne Coin-Bewegung einen eigenen save()-Task, und
+        store.save serialisiert das ganze Buch SYNCHRON im Event-Loop. Bei einer
+        Casino-Runde mit vielen Buchungen waren das dutzende volle
+        Serialisierungen pro Sekunde - der Bot ruckelt dann fuer alle.
+        Jetzt laeuft hoechstens EIN Speicher-Task; kommt waehrenddessen etwas
+        Neues dazu, wird danach genau einmal nachgespeichert."""
+        self._dirty = True
+        if self._save_task is not None and not self._save_task.done():
             return
-        self._save_tasks.add(task)
-        task.add_done_callback(self._save_tasks.discard)
+        try:
+            self._save_task = asyncio.get_running_loop().create_task(self._save_loop())
+        except RuntimeError:
+            self._save_task = None      # kein Loop (Tests) - beim naechsten Mal
+            return
+        self._save_tasks.add(self._save_task)
+        self._save_task.add_done_callback(self._save_tasks.discard)
+
+    async def _save_loop(self):
+        """Schreibt, solange zwischendurch neue Aenderungen aufgelaufen sind."""
+        try:
+            while self._dirty:
+                self._dirty = False
+                await asyncio.sleep(SAVE_DEBOUNCE)
+                await self._store.save()
+        except Exception:  # noqa: BLE001 - Speichern darf nie ein Spiel sprengen
+            log.exception("Verzoegertes Speichern fehlgeschlagen")
 
     # --- Befehl -----------------------------------------------------------
     async def _fetch_avatar(self, user):

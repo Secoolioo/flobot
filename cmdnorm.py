@@ -142,6 +142,9 @@ class CmdNorm:
         # 1 Buchstabe von 'komm'/'spiele' entfernt - gaengige Verben nicht kapern
         # ('kommt ihr?' darf nicht zum Voice-Join werden, 'spielen wir?' nicht zu 'spiele'):
         "kommt", "spielen",
+        # 1 Buchstabe von 'setze'/'trage' entfernt - Alltags-Imperative bleiben
+        # Alltagssprache ('Flo setz dich mal' war vorher 'Titel dich besitzt du nicht').
+        "setz", "trag",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
