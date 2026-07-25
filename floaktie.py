@@ -56,6 +56,9 @@ TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 # --- Balance (per .env justierbar) -------------------------------------------
 START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "1000") or "1000")   # Coins/Anteil
 MIN_PRICE = int(os.getenv("FLOAKTIE_MIN_PRICE", "50") or "50")
+# Absolute Untergrenze fuer den BASISkurs (nicht fuer den angezeigten Kurs!).
+# Nur da, damit die Kurve nie auf 0 kollabiert - siehe _base().
+BASE_FLOOR = 0.01
 # Liquiditaet: so viele Anteile verdoppeln den Kurs. Kleiner = volatiler.
 LIQUIDITY = int(os.getenv("FLOAKTIE_LIQUIDITY", "750") or "750")
 # Gebuehr je Order (jede Richtung). Sorgt dafuer, dass ein sofortiger
@@ -208,7 +211,13 @@ class FloAktie:
     # Hin-und-Her-Trade IMMER verliert. Die Aktivitaet (Call/Chat/Streams)
     # bewegt den BASISKURS - der Kurs reagiert also weiter wie gewohnt.
     def _base(self):
-        """Basiskurs (Kurs bei 0 ausgegebenen Anteilen). Migriert alte Staende."""
+        """Basiskurs (Kurs bei 0 ausgegebenen Anteilen). Migriert alte Staende.
+
+        Untergrenze ist absichtlich winzig (nicht MIN_PRICE): der ANGEZEIGTE Kurs
+        wird in _sync_price auf MIN_PRICE gedeckelt. Mit MIN_PRICE als Basis-
+        Untergrenze liess sich ein niedriger Kurs bei vielen ausgegebenen Anteilen
+        gar nicht setzen - 'Kurs 100' wurde bei 1 Mio Anteilen wieder zu einer
+        riesigen Zahl hochgerechnet."""
         st = self._state()
         base = st.get("base")
         if not base:
@@ -216,7 +225,13 @@ class FloAktie:
             alt_kurs = float(st.get("price", START_PRICE) or START_PRICE)
             base = alt_kurs / (1.0 + self.total_shares() / LIQUIDITY)
             st["base"] = base
-        return max(float(MIN_PRICE), float(base))
+        try:
+            base = float(base)
+        except (TypeError, ValueError):
+            base = float(START_PRICE)
+        if base != base or base in (float("inf"), float("-inf")):   # NaN/inf
+            base = float(START_PRICE)
+        return max(BASE_FLOOR, base)
 
     def _price_at(self, shares_out):
         """Kurs bei 'shares_out' ausgegebenen Anteilen (exakt, ungerundet)."""
@@ -340,9 +355,15 @@ class FloAktie:
             log.exception("Speichern nach FloCorp-Trade fehlgeschlagen")
 
     # --- Admin-API (Web-Panel): Anteile & Kurs korrigieren ----------------
+    # Obergrenzen fuer die Admin-Eingriffe: absurde Werte (10**30 Anteile) haben
+    # die Kurs-Kurve vorher in Gleitkomma-Muell bzw. einen OverflowError gerissen -
+    # danach bekamen unbeteiligte Halter beim Verkauf 0 Coins.
+    ADMIN_MAX_SHARES = 10 ** 9
+    ADMIN_MAX_PRICE = 10 ** 12
+
     async def admin_set_price(self, preis):
         """Setzt den ANGEZEIGTEN Kurs (verankert den Basiskurs passend neu)."""
-        preis = max(MIN_PRICE, int(preis))
+        preis = max(MIN_PRICE, min(int(preis), self.ADMIN_MAX_PRICE))
         st = self._state()
         st["base"] = preis / (1.0 + self.total_shares() / LIQUIDITY)
         neu = self._sync_price()
@@ -360,7 +381,10 @@ class FloAktie:
         Kurs sonst abstuerzen lassen. Der Basiskurs wird deshalb neu verankert.
         Rueckgabe: (neue Anteile des Nutzers, Kurs, Anteile insgesamt)."""
         uid = str(int(uid))
-        amount = max(0, int(amount))
+        # ZUERST deckeln, DANN anfassen: vorher wurde das Depot geaendert und die
+        # Kurs-Rechnung flog danach mit OverflowError raus - Depot verbogen, nichts
+        # gespeichert, jeder weitere Kauf/Verkauf kaputt.
+        amount = max(0, min(int(amount), self.ADMIN_MAX_SHARES))
         hold = self._holdings()
         vorher_kurs = self.price()
         habe = int(hold.get(uid, 0))
@@ -370,6 +394,7 @@ class FloAktie:
             neu_n = max(0, habe - amount)
         else:                              # "set"
             neu_n = amount
+        neu_n = max(0, min(neu_n, self.ADMIN_MAX_SHARES))
         if neu_n > 0:
             hold[uid] = neu_n
         else:
@@ -433,7 +458,7 @@ class FloAktie:
         alt = self.price()
         # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
         # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
-        st["base"] = max(float(MIN_PRICE), self._base() * (1 + drift))
+        st["base"] = max(BASE_FLOOR, self._base() * (1 + drift))
         neu = self._sync_price()
         return alt, neu, drift, activity
 
@@ -530,14 +555,19 @@ class FloAktie:
                        for p in hist)
 
     def _change_pct(self, back):
-        """Kursaenderung (%) gegenueber dem Schlusskurs vor 'back' Tagen (History)."""
-        hist = self._state().get("history", [])
-        if len(hist) < 1:
+        """Kursaenderung (%) ueber die letzten 'back' Tage.
+
+        Nimmt exakt dieselbe Reihe wie Chart und Web-Panel (rollendes Fenster ueber
+        die Intraday-Ticks). Vorher wurde gegen den NEUESTEN History-Eintrag
+        verglichen - also gegen den Kurs vom heutigen Tageswechsel, was bei '7 Tage'
+        sowieso danebenlag und im Panel eine andere Zahl ergab als im Discord."""
+        try:
+            pts = self._series(max(1, int(back)))
+        except Exception:  # noqa: BLE001
             return 0.0
-        ref = hist[-back]["price"] if len(hist) >= back else hist[0]["price"]
-        if not ref:
+        if len(pts) < 2 or not pts[0]:
             return 0.0
-        return (self.price() - ref) / ref * 100
+        return (pts[-1] - pts[0]) / pts[0] * 100
 
     # --- Kurs-Chart (Bild + Zeitraum-Buttons) -----------------------------
     def _series(self, days):
@@ -655,7 +685,7 @@ class FloAktie:
             title=f"📈 {NAME} ({TICKER})",
             description=(f"**Kurs:** {self._fmt(preis)} {economy.COIN} / Anteil  {pfeil}\n"
                          f"`{self._sparkline()}`\n"
-                         f"**Heute:** {d1:+.1f}%  ·  **7 Tage:** {d7:+.1f}%"),
+                         f"**24 h:** {d1:+.1f}%  ·  **7 Tage:** {d7:+.1f}%"),
             color=discord.Color.green() if d1 >= 0 else discord.Color.red())
         emb.add_field(name="Börsenwert",
                       value=f"{self._fmt(self.total_shares() * preis)} {economy.COIN}", inline=True)

@@ -205,6 +205,9 @@ body{
 .bar-fill::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);transform:translateX(-100%);animation:barsheen 2.6s var(--ease) infinite 1s}
 @keyframes barsheen{0%{transform:translateX(-100%)}60%,100%{transform:translateX(240%)}}
 .bar-val{font-family:var(--mono);font-size:12.5px;color:var(--gold-2);font-weight:600;font-variant-numeric:tabular-nums;min-width:58px;text-align:right}
+/* Minus-Kontostaende klar als Schulden kennzeichnen (rot statt Gold). */
+.bar-fill.neg{background:linear-gradient(90deg,#8E2B25,#F0635B);box-shadow:0 0 12px rgba(240,99,91,.32)}
+.bar-val.neg{color:#F0635B}
 
 /* donut */
 .donut-wrap{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
@@ -256,7 +259,16 @@ body{
 .av{position:relative;overflow:hidden}
 .mono-av{position:relative;overflow:hidden}
 .mono-av>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
-.u-nm{font-weight:600}.u-title{font-size:11.5px;color:var(--gold-2);margin-top:1px}
+/* Lange Namen MUESSEN abgeschnitten werden: ein 120-Zeichen-Name hat vorher die
+   Spalten Coins/Level/Aktien/Nachr. aus der Karte geschoben - fuer JEDE Zeile,
+   ohne Scrollbalken. */
+.u-nm{font-weight:600;max-width:min(34vw,320px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.u-title{font-size:11.5px;color:var(--gold-2);margin-top:1px;max-width:min(34vw,320px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.u-cell{min-width:0}
+.tbl td:first-child{max-width:min(38vw,360px)}
+/* Notausgang fuer schmale Fenster: die Tabelle darf seitlich scrollen, statt
+   Spalten unerreichbar hinter dem Kartenrand zu verstecken. */
+.tbl-wrap{overflow-x:auto}
 .u-id{font-family:var(--mono);font-size:12px;color:var(--mute)}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
 .num.gold{color:var(--gold-2)}
@@ -290,7 +302,8 @@ body{
   -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
 .m-head{display:flex;align-items:center;gap:16px;padding:24px 26px;border-bottom:1px solid var(--hair);position:relative}
 .m-head .avatar{width:56px;height:56px;border-radius:15px;font-size:22px}
-.m-head .mn{font-size:19px;font-weight:750;letter-spacing:-.2px}
+.m-head .mn{font-size:19px;font-weight:750;letter-spacing:-.2px;max-width:min(70vw,420px);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m-head .mi{font-family:var(--mono);font-size:12px;color:var(--mute);margin-top:3px}
 .m-head .mt{font-size:12px;color:var(--gold-2);margin-top:4px;font-weight:600}
 .m-close{position:absolute;top:18px;right:18px;width:34px;height:34px;border-radius:10px;cursor:pointer;display:grid;place-items:center;
@@ -482,7 +495,15 @@ function ce(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(m){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m];});}
 function fmt(n){ if(n==null||isNaN(n))return "0"; return Math.round(n).toLocaleString("de-DE"); }
 function fmtF(n,d){ if(n==null||isNaN(n))return "0"; return Number(n).toLocaleString("de-DE",{minimumFractionDigits:d||2,maximumFractionDigits:d||2}); }
-function initials(name){ if(!name)return "?"; var p=String(name).trim().split(/\s+/); return (p[0][0]+(p[1]?p[1][0]:"")).toUpperCase(); }
+/* Initialen: robust gegen Namen aus Leerzeichen (gab "UNDEFINED" im Kaestchen)
+   und gegen Emoji (ein halbes Surrogat-Paar wurde zum Ersatzzeichen). */
+function initials(name){
+  var s=String(name==null?"":name).trim(); if(!s)return "?";
+  var parts=s.split(/\s+/).filter(function(x){return x.length;}); if(!parts.length)return "?";
+  function first(w){ var a=Array.from(String(w)); return a.length?a[0]:""; }
+  var out=first(parts[0])+(parts[1]?first(parts[1]):"");
+  return (out||"?").toUpperCase();
+}
 /* Avatar-Kaestchen: echtes Discord-Profilbild ueber den Initialen. Laedt das Bild
    nicht (unbekannte ID / kein Zugriff), raeumt onerror es weg und die Initialen
    bleiben stehen - es gibt also nie ein kaputtes Bild-Symbol. */
@@ -593,7 +614,7 @@ function renderFeatures(list){
   head.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">'+
     '<div><div style="font-size:17px;font-weight:700">Flos Funktionen steuern</div>'+
     '<div style="color:var(--faint);margin-top:4px;max-width:560px">Schalte einzelne Module <b>live</b> an oder aus – ohne Neustart. Ausgegraute Module sind gerade nicht geladen und brauchen einen Neustart.</div></div>'+
-    '<div class="pill"><b style="color:var(--gold,#d4af37)">'+on+'</b>&nbsp;/&nbsp;'+list.length+' aktiv</div></div>';
+    '<div class="pill" id="featCount"><b style="color:var(--gold,#d4af37)">'+on+'</b>&nbsp;/&nbsp;'+list.length+' aktiv</div></div>';
   v.appendChild(head);
   var grid=ce("div","feat-grid"); v.appendChild(grid);
   list.forEach(function(f,i){
@@ -616,13 +637,45 @@ function renderFeatures(list){
         sw.classList.remove("busy"); if(!r.ok)throw r;
         sw.classList.toggle("on",r.on);
         var fc=sw.closest(".feat"); if(fc)fc.classList.toggle("fon",r.on);
+        updateFeatCount(list.length);       // Zaehler mitziehen (blieb vorher stehen)
         toast((r.on?"Aktiviert":"Deaktiviert")+": "+esc(key),r.on?"ok":"info");
       }).catch(function(e){ sw.classList.remove("busy"); toast((e&&e.error)||"Fehler","err"); });
     });
   });
 }
+/* "N / M aktiv" aus dem WIRKLICHEN Zustand der Schalter neu zaehlen. */
+function updateFeatCount(total){
+  var pill=$("#featCount"); if(!pill)return;
+  var an=document.querySelectorAll(".feat-grid .sw.on").length;
+  var m=(total!=null)?total:document.querySelectorAll(".feat-grid .sw").length;
+  pill.innerHTML='<b style="color:var(--gold,#d4af37)">'+an+'</b>&nbsp;/&nbsp;'+m+' aktiv';
+}
 
 /* ============ OVERVIEW ============ */
+/* Kachel-Definitionen an EINER Stelle: der erste Aufbau und das Live-Update
+   lesen dieselbe Liste - so kann kein Untertitel mehr auf einem alten Stand
+   stehenbleiben, waehrend die Zahl darueber schon weitergelaufen ist. */
+function kpiTiles(st){
+  st=st||{};
+  var tiles=[
+    {k:"users",lab:"Nutzer",icon:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',cls:"",val:st.users,sub:"registrierte Konten"},
+    {k:"coins_total",lab:"Coins gesamt",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M9.5 10c0-1 1-1.5 2.5-1.5s2.5 .8 2.5 1.5"/>',cls:"gold",icc:"",val:st.coins_total,sub:"im Umlauf"},
+    {k:"guilds",lab:"Server",icon:'<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',cls:"",icc:"bl",val:st.guilds,sub:"verbundene Guilds"},
+    {k:"members",lab:"Mitglieder",icon:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',cls:"",icc:"em",val:st.members,sub:"über alle Server"}
+  ];
+  if(st.floaktie_price!=null) tiles.push({k:"floaktie_price",lab:"$FLO-Kurs",icon:'<polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/>',cls:"gold",icc:"",val:st.floaktie_price,chg:st.floaktie_change,sub:"Aktienkurs",extra:st.floaktie_holders!=null?("· "+fmt(st.floaktie_holders)+" Halter"):""});
+  if(st.floaktie_marketcap!=null) tiles.push({k:"floaktie_marketcap",lab:"$FLO Börsenwert",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1 1.2-1.8 3-1.8s3 .8 3 1.8-1.2 1.6-3 2-3 1-3 2 1.2 1.8 3 1.8 3-.8 3-1.8"/>',cls:"gold",icc:"em",val:st.floaktie_marketcap,sub:"Anteile × Kurs"});
+  if(st.lotto_jackpot!=null) tiles.push({k:"lotto_jackpot",lab:"Lotto-Jackpot",icon:'<path d="M12 2l2.4 7.4H22l-6 4.5 2.3 7.1-6.3-4.6-6.3 4.6L8 13.9 2 9.4h7.6z"/>',cls:"gold",icc:"pl",val:st.lotto_jackpot,sub:st.lotto_house!=null?("Bank: "+fmt(st.lotto_house)+" ⛁"):"Ziehungspool"});
+  return tiles;
+}
+function kpiSub(t){
+  var chg=(t.chg!=null)?('<span class="chg '+(t.chg>=0?"up":"dn")+'">'+(t.chg>=0?"▲":"▼")+" "+fmtF(Math.abs(t.chg),2)+'%</span>'):"";
+  return (chg||t.sub||"")+(t.extra?' <span style="color:var(--faint)">'+t.extra+'</span>':"");
+}
+function updateKpiSubs(st){
+  kpiTiles(st).forEach(function(t){ var el=document.querySelector('.kpi .sub[data-sub="'+t.k+'"]');
+    if(el) el.innerHTML=kpiSub(t); });
+}
 function viewOverview(){ var c=$("#content"); c.innerHTML=skeletonOverview();
   api("/api/overview").then(function(d){ if(!d.ok)throw d; S.bot=d.bot_name||S.bot; $("#brandName").textContent=S.bot;
     S.prevOv=S.ov; S.ov=d; renderOverview(d,false);
@@ -634,23 +687,12 @@ function renderOverview(d,soft){ var st=d.stats||{}; var prev=(S.prevOv&&S.prevO
   if(!soft){ c.innerHTML=""; var v=ce("div","view");
     /* KPIs */
     var kp=ce("div","kpis"); v.appendChild(kp);
-    var change=st.floaktie_change;
-    var chgHtml = (change!=null)? '<span class="chg '+(change>=0?"up":"dn")+'">'+(change>=0?"▲":"▼")+" "+fmtF(Math.abs(change),2)+'%</span>' : "";
-    var tiles=[
-      {k:"users",lab:"Nutzer",icon:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',cls:"",val:st.users,sub:"registrierte Konten"},
-      {k:"coins_total",lab:"Coins gesamt",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 8v8M9.5 10c0-1 1-1.5 2.5-1.5s2.5 .8 2.5 1.5"/>',cls:"gold",icc:"",val:st.coins_total,sub:"im Umlauf"},
-      {k:"guilds",lab:"Server",icon:'<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',cls:"",icc:"bl",val:st.guilds,sub:"verbundene Guilds"},
-      {k:"members",lab:"Mitglieder",icon:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',cls:"",icc:"em",val:st.members,sub:"über alle Server"}
-    ];
-    if(st.floaktie_price!=null) tiles.push({k:"floaktie_price",lab:"$FLO-Kurs",icon:'<polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/>',cls:"gold",icc:"",val:st.floaktie_price,dec:2,pre:"",sub:chgHtml||"Aktienkurs",extra:st.floaktie_holders!=null?("· "+fmt(st.floaktie_holders)+" Halter"):""});
-    if(st.floaktie_marketcap!=null) tiles.push({k:"floaktie_marketcap",lab:"$FLO Börsenwert",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1 1.2-1.8 3-1.8s3 .8 3 1.8-1.2 1.6-3 2-3 1-3 2 1.2 1.8 3 1.8 3-.8 3-1.8"/>',cls:"gold",icc:"em",val:st.floaktie_marketcap,sub:"Anteile × Kurs"});
-    if(st.lotto_jackpot!=null) tiles.push({k:"lotto_jackpot",lab:"Lotto-Jackpot",icon:'<path d="M12 2l2.4 7.4H22l-6 4.5 2.3 7.1-6.3-4.6-6.3 4.6L8 13.9 2 9.4h7.6z"/>',cls:"gold",icc:"pl",val:st.lotto_jackpot,sub:st.lotto_house!=null?("Bank: "+fmt(st.lotto_house)+" ⛁"):"Ziehungspool"});
-    tiles.forEach(function(t){ var el=ce("div","card kpi reveal"+(t.cls?" "+t.cls:""));
+    kpiTiles(st).forEach(function(t){ var el=ce("div","card kpi reveal"+(t.cls?" "+t.cls:""));
       el.innerHTML='<div class="lab"><span class="ic '+(t.icc||"")+'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+t.icon+'</svg></span>'+t.lab+'</div>'+
         '<div class="val" data-k="'+t.k+'">0</div>'+
-        '<div class="sub">'+(t.sub||"")+(t.extra?' <span style="color:var(--faint)">'+t.extra+'</span>':"")+'</div>';
+        '<div class="sub" data-sub="'+t.k+'">'+kpiSub(t)+'</div>';
       kp.appendChild(el);
-      var valEl=el.querySelector(".val"); countUp(valEl,t.val||0,{dec:t.dec||0,pre:t.pre||"",dur:1100});
+      var valEl=el.querySelector(".val"); countUp(valEl,t.val||0,{dec:0,dur:1100});
     });
 
     /* Charts row */
@@ -668,11 +710,25 @@ function renderOverview(d,soft){ var st=d.stats||{}; var prev=(S.prevOv&&S.prevO
     c.appendChild(v);
     setTimeout(function(){ animateArea(v); animateBars(v); animateDonut(v); observeReveals(v); },60);
   } else {
-    /* soft update: re-animate KPI numbers, refresh charts data */
-    document.querySelectorAll(".kpi .val").forEach(function(el){ var k=el.dataset.k; var to=st[k]; if(to==null)return;
-      var from=parseFloat(el.textContent.replace(/\./g,"").replace(",","."))||0; var dec=(k==="floaktie_price")?2:0;
-      countUp(el,to,{from:from,dec:dec,dur:800}); });
+    /* Soft-Update: Zahlen zaehlen weiter, ABER auch alles andere wird
+       nachgezogen - Kachel-Untertitel, Chips, Donut, Top-Listen. Vorher liefen
+       nur die grossen Zahlen mit und der Rest fror fuer immer ein (z. B. stand
+       "0,00% · 1 Halter" neben einem Chart, der +50% anzeigte). */
+    /* Kommt eine Kachel dazu oder faellt eine weg (Modul an-/abgeschaltet),
+       reicht ein Soft-Update nicht - dann einmal komplett neu aufbauen. */
+    var soll=kpiTiles(st).map(function(t){return t.k;}).join(",");
+    var ist=Array.prototype.map.call(document.querySelectorAll(".kpi .val"),
+                                    function(el){return el.dataset.k;}).join(",");
+    if(soll!==ist){ renderOverview(d,false); return; }
+    document.querySelectorAll(".kpi .val").forEach(function(el){ var k=el.dataset.k; var to=st[k];
+      if(to==null){ el.textContent="–"; return; }
+      var from=parseFloat(el.textContent.replace(/\./g,"").replace(",","."))||0;
+      countUp(el,to,{from:from,dec:0,dur:800}); });
+    updateKpiSubs(st);
     updateStatus(st);
+    updateBars(d);
+    updateDonut(d);
+    updateMarket(d);
     // refresh area chart softly
     // Chart LIVE nachziehen: nur die Kurve wandert weiter, keine Neu-Animation.
     var dv=S.chartDays||1;
@@ -697,11 +753,17 @@ function statusRow(st){ var row=ce("div","status-row");
   var html="";
   html+=chip('<span class="dot '+(online?"on":"")+'" style="width:12px;height:12px"></span>',"","Bot-Status",'<span data-status="online">'+(online?"Online":"Offline")+'</span>');
   html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="'+(pause?"#D4AF37":"#10B981")+'" stroke-width="2" stroke-linecap="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',"","Sendepause",'<span data-status="pause">'+(pause?"Aktiv":"Inaktiv")+'</span>');
-  if(st.merchant_present!=null) html+=chip('🛒',"","Händler",'<span>'+(st.merchant_present?"Anwesend":"Abwesend")+'</span>');
-  if(st.floaktie_holders!=null) html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="#7CA6FF" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>',"","$FLO-Halter",fmt(st.floaktie_holders));
+  if(st.merchant_present!=null) html+=chip('🛒',"","Händler",'<span data-status="merchant">'+(st.merchant_present?"Anwesend":"Abwesend")+'</span>');
+  if(st.floaktie_holders!=null) html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="#7CA6FF" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>',"","$FLO-Halter",'<span data-status="holders">'+fmt(st.floaktie_holders)+'</span>');
   row.innerHTML=html; return row; }
-function updateStatus(st){ var o=document.querySelector('[data-status="online"]'); if(o)o.textContent=(st.bot_online!==false)?"Online":"Offline";
-  var p=document.querySelector('[data-status="pause"]'); if(p)p.textContent=st.sendepause?"Aktiv":"Inaktiv"; }
+/* Alle Chips live nachziehen - nicht nur Online/Sendepause. */
+function updateStatus(st){
+  function set(name,txt){ var el=document.querySelector('[data-status="'+name+'"]'); if(el)el.textContent=txt; }
+  set("online",(st.bot_online!==false)?"Online":"Offline");
+  set("pause",st.sendepause?"Aktiv":"Inaktiv");
+  if(st.merchant_present!=null) set("merchant",st.merchant_present?"Anwesend":"Abwesend");
+  if(st.floaktie_holders!=null) set("holders",fmt(st.floaktie_holders));
+}
 
 /* AREA CHART */
 var RANGES=[["1 Tag",1],["7 Tage",7],["30 Tage",30],["Gesamt",3650]];
@@ -785,43 +847,76 @@ function animateArea(root){ var l=root.querySelector(".area-line"),f=root.queryS
   requestAnimationFrame(function(){ l.classList.add("draw"); if(f)f.classList.add("draw"); if(dt)dt.classList.add("draw"); }); }
 
 /* BAR CHART */
-function barPanel(d){ var p=ce("div","card panel"); var tc=(d.top_coins||[]).slice(0,7);
-  var mx=tc.length?Math.max.apply(null,tc.map(function(x){return x.coins;})):1; if(mx<=0)mx=1;
-  var rows=tc.map(function(u){ var pct=Math.max(3,(u.coins/mx)*100);
+/* Balken-Skala: die LAENGE zeigt die Groesse des Betrags, die FARBE das
+   Vorzeichen (rot = Schulden). Vorher wurde durch das Maximum geteilt und bei
+   mx<=0 auf 1 gesetzt: -100, -200 und -300 bekamen dann exakt denselben
+   3%-Stummel, und ein 50.000er Schuldenberg sah aus wie ein Konto mit 0 Coins. */
+function barScale(vals){
+  var mx=0; for(var i=0;i<vals.length;i++){ var a=Math.abs(Number(vals[i])||0); if(a>mx)mx=a; }
+  if(!mx)mx=1;
+  return {mx:mx};
+}
+function barWidth(v,sc){ return 3+(Math.abs(Number(v)||0)/sc.mx)*97; }
+function barInner(d){ var tc=(d.top_coins||[]).slice(0,7);
+  var sc=barScale(tc.map(function(x){return Number(x.coins)||0;}));
+  var rows=tc.map(function(u){ var v=Number(u.coins)||0; var pct=barWidth(v,sc);
     return '<div class="bar-row"><div class="bar-nm" title="'+esc(u.name)+'">'+avatarHtml(u,"mono-av")+esc(u.name)+'</div>'+
-      '<div class="bar-track"><div class="bar-fill" data-w="'+pct.toFixed(1)+'"></div></div>'+
-      '<div class="bar-val">'+fmt(u.coins)+'</div></div>'; }).join("");
-  p.innerHTML='<div class="ph"><div class="pt">Top Coins</div><div class="pm">Rangliste</div></div>'+(rows?'<div class="bars">'+rows+'</div>':emptyMini("Keine Daten"));
-  return p; }
+      '<div class="bar-track"><div class="bar-fill'+(v<0?" neg":"")+'" data-w="'+pct.toFixed(1)+'"></div></div>'+
+      '<div class="bar-val'+(v<0?" neg":"")+'">'+fmt(v)+'</div></div>'; }).join("");
+  return '<div class="ph"><div class="pt">Top Coins</div><div class="pm">Rangliste</div></div>'+
+    (rows?'<div class="bars">'+rows+'</div>':emptyMini("Keine Daten"));
+}
+function barPanel(d){ var p=ce("div","card panel"); p.id="barPanel"; p.innerHTML=barInner(d); return p; }
 function animateBars(root){ root.querySelectorAll(".bar-fill").forEach(function(el,i){ setTimeout(function(){ el.style.width=el.dataset.w+"%"; },120+i*70); }); }
+/* Live: neu aufbauen und die Balken SOFORT auf Endbreite - kein Nachwachsen. */
+function updateBars(d){ var p=$("#barPanel"); if(!p)return; p.innerHTML=barInner(d);
+  p.querySelectorAll(".bar-fill").forEach(function(el){ el.style.width=el.dataset.w+"%"; }); }
 
 /* DONUT */
 var LEVEL_COLORS={"0-4":"#646B78","5-9":"#7CA6FF","10-19":"#34D8A6","20-49":"#D4AF37","50+":"#F1DE9B"};
-function donutPanel(d){ var p=ce("div","card panel"); var dist=(d.level_dist||[]);
+/* Prozente nach dem groessten Rest verteilen, damit die Legende IMMER 100%
+   ergibt (drei Baender mit je 33% waren vorher zusammen 99%). */
+function pctParts(counts,total){
+  if(!total) return counts.map(function(){return 0;});
+  var raw=counts.map(function(c){return (c||0)/total*100;});
+  var out=raw.map(function(r){return Math.floor(r);});
+  var rest=100-out.reduce(function(a,b){return a+b;},0);
+  var idx=[]; for(var i=0;i<raw.length;i++) if(counts[i]>0) idx.push(i);
+  idx.sort(function(a,b){ return (raw[b]-Math.floor(raw[b]))-(raw[a]-Math.floor(raw[a])); });
+  for(var j=0;j<rest&&idx.length;j++) out[idx[j%idx.length]]++;
+  return out;
+}
+function donutInner(d){ var dist=(d.level_dist||[]);
   var total=dist.reduce(function(a,b){return a+(b.count||0);},0);
   var C=2*Math.PI*54; var off=0;
   var segs=dist.map(function(seg){ var frac=total?seg.count/total:0; var len=frac*C; var col=LEVEL_COLORS[seg.band]||"#888";
     var s='<circle cx="70" cy="70" r="54" fill="none" stroke="'+col+'" stroke-width="15" stroke-linecap="butt"'+
       ' stroke-dasharray="'+C+'" stroke-dashoffset="'+C+'" data-dash="'+(C-len).toFixed(1)+'"'+
       ' transform="rotate('+(off/C*360-90).toFixed(2)+' 70 70)"/>'; off+=len; return s; }).join("");
-  var legend=dist.map(function(seg){ var pct=total?Math.round(seg.count/total*100):0;
-    return '<div class="leg-i"><span class="leg-sw" style="background:'+(LEVEL_COLORS[seg.band]||"#888")+'"></span>Level '+esc(seg.band)+'<b>'+fmt(seg.count)+' · '+pct+'%</b></div>'; }).join("");
-  p.innerHTML='<div class="ph"><div class="pt">Level-Verteilung</div><div class="pm">'+fmt(total)+' Nutzer</div></div>'+
+  var pcts=pctParts(dist.map(function(s){return s.count||0;}),total);
+  var legend=dist.map(function(seg,i){
+    return '<div class="leg-i"><span class="leg-sw" style="background:'+(LEVEL_COLORS[seg.band]||"#888")+'"></span>Level '+esc(seg.band)+'<b>'+fmt(seg.count)+' · '+pcts[i]+'%</b></div>'; }).join("");
+  return '<div class="ph"><div class="pt">Level-Verteilung</div><div class="pm">'+fmt(total)+' Nutzer</div></div>'+
     '<div class="donut-wrap"><svg class="donut" width="140" height="140" viewBox="0 0 140 140">'+
     '<circle cx="70" cy="70" r="54" fill="none" stroke="rgba(255,255,255,.04)" stroke-width="15"/>'+segs+
     '<text class="center-v" x="70" y="68" text-anchor="middle">'+fmt(total)+'</text>'+
     '<text class="center-l" x="70" y="84" text-anchor="middle">NUTZER</text></svg>'+
     '<div class="legend">'+legend+'</div></div>';
-  return p; }
+}
+function donutPanel(d){ var p=ce("div","card panel"); p.id="donutPanel"; p.innerHTML=donutInner(d); return p; }
 function animateDonut(root){ root.querySelectorAll(".donut circle[data-dash]").forEach(function(el,i){ setTimeout(function(){ el.style.strokeDashoffset=el.dataset.dash; },200+i*130); }); }
+function updateDonut(d){ var p=$("#donutPanel"); if(!p)return; p.innerHTML=donutInner(d);
+  p.querySelectorAll(".donut circle[data-dash]").forEach(function(el){ el.style.strokeDashoffset=el.dataset.dash; }); }
 
 /* MARKET / secondary panel */
-function marketPanel(d){ var p=ce("div","card panel"); var ts=(d.top_shares||[]).slice(0,6); var st=d.stats||{};
+function marketInner(d){ var ts=(d.top_shares||[]).slice(0,6); var st=d.stats||{};
   var rows=ts.length?ts.map(function(u,i){ return '<div class="bar-row" style="grid-template-columns:24px 1fr auto;margin-bottom:11px"><div class="mono-av">'+(i+1)+'</div>'+
     '<div class="bar-nm">'+esc(u.name)+'</div><div class="bar-val" style="color:var(--blue)">'+fmt(u.shares)+' ▦</div></div>'; }).join("") : emptyMini("Keine Aktionäre");
   var lotto = st.lotto_jackpot!=null? '<div class="control-row" style="padding:12px 0;border-top:1px solid var(--hair);margin-top:8px"><div><div class="cl">🎰 Lotto-Jackpot</div><div class="cd">Aktueller Pool</div></div><div class="num gold" style="font-size:17px">'+fmt(st.lotto_jackpot)+'</div></div>':"";
-  p.innerHTML='<div class="ph"><div class="pt">Top Aktionäre</div><div class="pm">$FLO</div></div>'+rows+lotto;
-  return p; }
+  return '<div class="ph"><div class="pt">Top Aktionäre</div><div class="pm">$FLO</div></div>'+rows+lotto;
+}
+function marketPanel(d){ var p=ce("div","card panel"); p.id="marketPanel"; p.innerHTML=marketInner(d); return p; }
+function updateMarket(d){ var p=$("#marketPanel"); if(p)p.innerHTML=marketInner(d); }
 
 /* ============ USERS ============ */
 var searchTimer=null;
@@ -848,7 +943,13 @@ function loadUsers(){ var card=$("#uTableCard"); if(!card)return; card.innerHTML
   api(url).then(function(d){ if(!d.ok)throw d; S.users=d; renderUsersTable(d); }).catch(function(e){ if(e&&e.auth)return; card.innerHTML=errState("Nutzer konnten nicht geladen werden"); }); }
 
 function renderUsersTable(d){ var card=$("#uTableCard"); var us=d.users||[];
-  if(!us.length){ card.innerHTML='<div class="empty"><div class="ei">🔎</div><div class="et">Keine Nutzer gefunden</div><div class="es">Passe deine Suche an.</div></div>'; return; }
+  /* Die Seitenzahl kommt vom Server jetzt schon begrenzt zurueck - trotzdem hier
+     mitfuehren, sonst fragt der naechste Klick wieder die alte (zu hohe) Seite ab. */
+  if(d.page)S.upage=d.page;
+  if(!us.length){ card.innerHTML='<div class="empty"><div class="ei">🔎</div><div class="et">Keine Nutzer gefunden</div><div class="es">Passe deine Suche an.</div>'+
+      (S.uq?'<div style="margin-top:14px"><button class="btn-ghost" id="pgReset">Suche zurücksetzen</button></div>':"")+'</div>';
+    var rs=$("#pgReset"); if(rs)rs.addEventListener("click",function(){ S.uq=""; S.upage=1; var si=$("#uSearch"); if(si)si.value=""; loadUsers(); });
+    return; }
   var rows=us.map(function(u){
     var titleTxt=u.title?('<div class="u-title">'+esc(u.title)+'</div>'):(u.titles?('<div class="u-title" style="color:var(--mute)">'+esc(u.titles)+' Titel</div>'):"");
     return '<tr class="urow rev" data-id="'+esc(u.id)+'">'+
@@ -860,7 +961,7 @@ function renderUsersTable(d){ var card=$("#uTableCard"); var us=d.users||[];
       '<td class="r"><span class="num">'+fmt(u.shares)+'</span></td>'+
       '<td class="r"><span class="num" style="color:var(--dim)">'+fmt(u.msgs)+'</span></td>'+
     '</tr>'; }).join("");
-  card.innerHTML='<table class="tbl"><thead><tr><th>Nutzer</th><th>ID</th><th class="r">Coins</th><th class="r">Level</th><th class="r">Aktien</th><th class="r">Nachr.</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+  card.innerHTML='<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Nutzer</th><th>ID</th><th class="r">Coins</th><th class="r">Level</th><th class="r">Aktien</th><th class="r">Nachr.</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
     '<div class="pager"><div class="info">Seite '+d.page+' von '+d.pages+' · '+fmt(d.total)+' Nutzer</div>'+
     '<div class="pg-btns"><button class="btn-ghost" id="pgPrev"'+(d.page<=1?" disabled":"")+'>‹ Zurück</button>'+
     '<button class="btn-ghost" id="pgNext"'+(d.page>=d.pages?" disabled":"")+'>Weiter ›</button></div></div>';
@@ -884,7 +985,7 @@ function renderUserModal(ov,u){ var m=ov.querySelector(".modal");
   var owned=(u.owned||[]);
   var chips=owned.length?owned.map(function(t){ return '<span class="chip rar-'+esc(t.rarity||"normal")+'">'+(t.label?esc(t.label)+" · ":"")+esc(t.text)+'</span>'; }).join(""):'<span style="color:var(--mute);font-size:12.5px">Keine Titel vergeben</span>';
   var stats=[["Coins",fmt(u.coins),"gold"],["XP",fmt(u.xp),""],["Level",fmt(u.level),""],["Aktien",fmt(u.shares),""],["Streak",fmt(u.streak)+"🔥",""],["Nachr.",fmt(u.msgs),""]];
-  if(u.voice_secs!=null)stats.push(["Voice",Math.round(u.voice_secs/3600)+"h",""]);
+  if(u.voice_secs!=null)stats.push(["Voice",fmt(u.voice_secs/3600)+" h",""]);   /* feste Leerstelle: bricht nicht um */
   var statHtml=stats.map(function(s){ return '<div class="mstat"><div class="mv"'+(s[2]==="gold"?' style="background:linear-gradient(180deg,#F1DE9B,#B8912B);-webkit-background-clip:text;background-clip:text;color:transparent"':"")+'>'+s[1]+'</div><div class="ml">'+s[0]+'</div></div>'; }).join("");
   m.innerHTML='<div class="celebrate" id="celeb"></div>'+
     '<div class="m-close" id="mClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>'+
@@ -942,14 +1043,22 @@ function renderUserModal(ov,u){ var m=ov.querySelector(".modal");
 
   m.querySelector("#tRemove").addEventListener("click",function(){ var text=$("#tText").value.trim(); if(!text){toast("Titel-Text zum Entfernen eingeben","err");return;}
     api("/api/user/title",{method:"POST",body:{id:u.id,action:"remove",text:text}}).then(function(r){ if(!r.ok)throw r;
-      toast('Titel "'+text+'" entfernt',"info"); openUser(u.id); closeModal(ov); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Aktion fehlgeschlagen","err"); }); });
+      /* Ehrliche Rueckmeldung: der Server sagt jetzt, ob der Titel ueberhaupt da war. */
+      if(r.removed===false) toast('Titel "'+text+'" hatte dieser Nutzer nicht',"info");
+      else toast('Titel "'+text+'" entfernt',"info");
+      openUser(u.id); closeModal(ov); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Aktion fehlgeschlagen","err"); }); });
 }
 function celebrate(m){ var c=m.querySelector("#celeb"); if(!c)return; c.classList.remove("go"); void c.offsetWidth; c.classList.add("go"); }
 
 /* ============ SERVERS ============ */
 function viewServers(){ var c=$("#content"); c.innerHTML=skeletonServers();
-  var pause=(S.ov&&S.ov.stats&&S.ov.stats.sendepause)||false;
-  api("/api/servers").then(function(d){ if(!d.ok)throw d; S.srv=d; renderServers(d,pause); }).catch(function(e){ if(e&&e.auth)return; c.innerHTML=errState("Server konnten nicht geladen werden"); }); }
+  /* Sendepause kommt jetzt LIVE aus /api/servers. Vorher stand hier der Wert,
+     den die Uebersicht zuletzt gesehen hatte - war der veraltet, zeigte der
+     Schalter das Falsche und der erste Klick war nur ein Neu-Abgleich. */
+  api("/api/servers").then(function(d){ if(!d.ok)throw d; S.srv=d;
+    var pause=(d.sendepause!=null)?!!d.sendepause:!!(S.ov&&S.ov.stats&&S.ov.stats.sendepause);
+    if(S.ov&&S.ov.stats)S.ov.stats.sendepause=pause;
+    renderServers(d,pause); }).catch(function(e){ if(e&&e.auth)return; c.innerHTML=errState("Server konnten nicht geladen werden"); }); }
 
 function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); var guilds=d.guilds||[];
   var cards=guilds.length?guilds.map(function(g){ var icon=g.icon?'<img src="'+esc(g.icon)+'" alt="">':esc(initials(g.name));
@@ -1021,13 +1130,13 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
   /* Nutzer-Auswahl */
   var picked=null, tmr=null;
   function showPicked(u){ picked=u;
-    $("#pkSel").innerHTML='✓ Gewählt: <b>'+esc(u.name)+'</b> <span class="mono" style="color:var(--mute)">('+u.id+')</span>'+
+    $("#pkSel").innerHTML='✓ Gewählt: <b>'+esc(u.name)+'</b> <span class="mono" style="color:var(--mute)">('+esc(u.id)+')</span>'+
       ' · 💰 <b class="num gold">'+fmt(u.coins)+'</b> · 📈 <b class="num">'+fmt(u.shares)+'</b> Anteile'; }
   function search(){ var q=$("#pkQ").value.trim(); var L=$("#pkList");
     if(!q){ L.innerHTML=""; return; }
     api("/api/users?q="+encodeURIComponent(q)+"&size=8").then(function(r){ if(!r.ok)return;
       if(!r.users.length){ L.innerHTML='<div style="color:var(--mute);font-size:13px">Kein Treffer.</div>'; return; }
-      L.innerHTML=r.users.map(function(u){ return '<div class="pk-row" data-id="'+u.id+'" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--hair);border-radius:10px;cursor:pointer">'+
+      L.innerHTML=r.users.map(function(u){ return '<div class="pk-row" data-id="'+esc(u.id)+'" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--hair);border-radius:10px;cursor:pointer">'+
         avatarHtml(u,"av","width:28px;height:28px;font-size:12px;border-radius:9px")+
         '<b style="flex:1">'+esc(u.name)+'</b><span class="num gold">'+fmt(u.coins)+'</span>'+
         '<span class="num" style="color:var(--blue)">'+fmt(u.shares)+' ▦</span></div>'; }).join("");
@@ -1071,8 +1180,12 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
   /* Kurs */
   $("#qpGo").addEventListener("click",function(){ var p=$("#qpVal").value.trim(); if(!p){toast("Kurs eingeben","err");return;}
     api("/api/stock/price",{method:"POST",body:{price:p}}).then(function(r){ if(!r.ok)throw r;
-      $("#qpRes").innerHTML='✓ Neuer Kurs: <b class="num gold">'+fmt(r.price)+'</b> Coins / Anteil';
-      toast("Kurs gesetzt","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+      /* Wunsch unter dem Mindestkurs? Dann NICHT einfach Erfolg melden. */
+      var abw=(r.requested!=null&&r.requested!==r.price);
+      $("#qpRes").innerHTML='✓ Neuer Kurs: <b class="num gold">'+fmt(r.price)+'</b> Coins / Anteil'+
+        (abw?' <span style="color:var(--gold-2)">(gewünscht war '+fmt(r.requested)+' – Mindestkurs greift)</span>':"");
+      toast(abw?("Kurs auf "+fmt(r.price)+" gesetzt (Mindestkurs)"):"Kurs gesetzt",abw?"info":"ok");
+    }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
 
   observeReveals(v); }
 

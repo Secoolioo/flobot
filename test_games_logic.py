@@ -5,7 +5,9 @@ test_logic.py):  python test_games_logic.py
 """
 
 import asyncio
+import os
 import random
+import time
 from types import SimpleNamespace
 
 import admin
@@ -1879,6 +1881,224 @@ def test_economy_money_leaderboard():
         assert all(r["earned"] >= r["coins"] for r in rows)
     finally:
         restore()
+
+
+def test_webpanel_eingaben_und_robustheit():
+    """REGRESSION (Panel-Backend): unlesbare Eingaben duerfen NIE still etwas
+    aendern, absurde Zahlen muessen abgelehnt werden (bevor Daten angefasst
+    werden), kaputte Profile duerfen keine Liste abschiessen, und ein Login mit
+    Umlaut-Passwort darf nicht in einen 500er laufen."""
+    import webpanel
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    import floaktie
+
+    restore_eco = _with_economy({1: 5000, 2: 100})
+    economy.instance._profile(1)["name"] = "Zacharias"
+    economy.instance._profile(2)["name"] = "Äpfelchen"
+    # Kaputtes Profil (wie nach einem Absturz): coins = None.
+    economy.instance._users()["3"] = {"name": "Kaputt", "coins": None, "xp": "nix"}
+
+    wp = webpanel.instance
+    alt = (wp._enabled, wp._user, wp._pass, dict(wp._tokens), wp._client, dict(wp._fails))
+    alt_fa = (floaktie.instance._store, floaktie.instance._enabled)
+    gesendet = []
+
+    class _Chan:
+        async def send(self, text):
+            gesendet.append(text)
+
+    system_chan = _Chan()
+    guild = SimpleNamespace(id=7, system_channel=system_chan)
+    wp._enabled = True
+    wp._user, wp._pass = "Secoolio", "Pässwörtchen"      # Nicht-ASCII!
+    wp._tokens, wp._fails = {}, {}
+    wp._client = SimpleNamespace(guilds=[], is_closed=lambda: False,
+                                 get_guild=lambda _x: guild,
+                                 get_channel=lambda _x: None)
+    floaktie.instance._enabled = True
+    floaktie.instance._store = _FakeStore(
+        {"price": 1000, "base": 1000.0, "day": "x", "act_ema": floaktie.ACT_BASELINE,
+         "msg_count": 0, "last_msg_count": 0,
+         "holdings": {"1": 10, "4242": 9999}, "history": [], "ticks": []})
+    floaktie.instance._sync_price()
+    app = wp._build_app()
+    os.environ["GUILD_ID"] = "7"
+
+    async def run_it():
+        async with TestClient(TestServer(app)) as cli:
+            # Login mit Umlaut-Passwort: falsch -> 401 (kein 500), richtig -> Token.
+            r = await cli.post("/api/login", json={"user": "Secoolio", "pass": "falsch"})
+            assert r.status == 401, r.status
+            r = await cli.post("/api/login", json={"user": "Secoolio", "pass": "Pässwörtchen"})
+            assert r.status == 200, r.status
+            H = {"Authorization": f"Bearer {(await r.json())['token']}"}
+
+            # 1) UNLESBARER Betrag -> 400, Kontostand unveraendert.
+            #    Vorher wurde daraus 0: 'set' hat still das ganze Guthaben geloescht.
+            for murks in ("abc", "1 000", "", None, {"a": 1}, True, float("nan")):
+                r = await cli.post("/api/user/coins",
+                                   json={"id": "1", "action": "set", "amount": murks},
+                                   headers=H)
+                assert r.status == 400, (murks, r.status)
+            assert economy.get_coins(1) == 5000
+
+            # 2) Absurd grosser Betrag -> 400 (kein OverflowError, kein Wert-Muell).
+            assert (await cli.post("/api/user/coins",
+                    json={"id": "1", "action": "give", "amount": "9" * 40},
+                    headers=H)).status == 400
+            assert economy.get_coins(1) == 5000
+
+            # 3) Ungueltige IDs -> 400 und KEIN Geister-Profil in der Datenbank.
+            for bad in ("-1", "0", "0123", "abc", "", None, "1.5"):
+                assert (await cli.post("/api/user/coins",
+                        json={"id": bad, "action": "give", "amount": 10},
+                        headers=H)).status == 400, bad
+            assert "0" not in economy.instance._users()
+            assert "123" not in economy.instance._users()
+
+            # 4) Riesige Anteils-Zahl -> 400, und die Aktie bleibt handelbar.
+            #    Vorher wurde das Depot VOR der Kursrechnung geaendert, die dann
+            #    mit OverflowError starb: danach war jeder Kauf/Verkauf kaputt.
+            assert (await cli.post("/api/user/shares",
+                    json={"id": "1", "action": "set", "amount": "9" * 400},
+                    headers=H)).status == 400
+            assert (await cli.post("/api/user/shares",
+                    json={"id": "1", "action": "set", "amount": 1e30},
+                    headers=H)).status == 400
+            assert floaktie.instance.shares_of(1) == 10
+            j = await (await cli.post("/api/user/shares",
+                       json={"id": "1", "action": "give", "amount": 5}, headers=H)).json()
+            assert j["ok"] and j["shares"] == 15 and j["price"] > 0
+            # Verkauf bringt weiter echte Coins (kein Gleitkomma-Kollaps).
+            erloes, _ = floaktie.instance._sell_proceeds(5)
+            assert erloes > 0
+
+            # 5) keep_price:"false" ist FALSE (vorher machte der String True).
+            floaktie.instance._holdings()["1"] = 4000
+            floaktie.instance._sync_price()
+            kurs_vor = floaktie.instance.price()
+            j = await (await cli.post("/api/user/shares",
+                       json={"id": "1", "action": "set", "amount": 0,
+                             "keep_price": "false"}, headers=H)).json()
+            assert j["ok"] and j["price"] < kurs_vor, (j["price"], kurs_vor)
+
+            # 6) Kurs-Setzen: zu gross -> 400; unter Mindestkurs -> ehrliche Antwort.
+            assert (await cli.post("/api/stock/price",
+                    json={"price": "9" * 40}, headers=H)).status == 400
+            j = await (await cli.post("/api/stock/price",
+                       json={"price": 1}, headers=H)).json()
+            assert j["price"] == floaktie.MIN_PRICE and j["requested"] == 1
+            # Und ein niedriger Kurs laesst sich auch bei vielen Anteilen setzen.
+            floaktie.instance._holdings()["1"] = 500_000
+            j = await (await cli.post("/api/stock/price",
+                       json={"price": 100}, headers=H)).json()
+            assert j["price"] == 100, j["price"]
+            floaktie.instance._holdings()["1"] = 10
+            await floaktie.admin_set_price(1000)
+
+            # 7) Kaputtes Profil + reiner Aktien-Halter: Listen laufen durch,
+            #    der Halter ohne economy-Profil ist SICHTBAR (zaehlt ja im Wert).
+            j = await (await cli.get("/api/users?size=100", headers=H)).json()
+            assert j["ok"]
+            ids = [u["id"] for u in j["users"]]
+            assert "3" in ids and "4242" in ids, ids
+            assert next(u for u in j["users"] if u["id"] == "3")["coins"] == 0
+            assert next(u for u in j["users"] if u["id"] == "4242")["shares"] == 9999
+            j = await (await cli.get("/api/overview", headers=H)).json()
+            assert j["ok"] and any(u["id"] == "4242" for u in j["top_shares"])
+            assert (await cli.get("/api/user/4242", headers=H)).status == 200
+            assert (await cli.get("/api/user/3", headers=H)).status == 200
+
+            # 8) Zu hohe Seitenzahl wird auf den gueltigen Bereich gezogen
+            #    (vorher: leere Liste ohne Blaetter-Knoepfe = Sackgasse).
+            j = await (await cli.get("/api/users?page=99&size=5", headers=H)).json()
+            assert j["ok"] and j["page"] == j["pages"] and j["users"]
+            # Kaputtes 'size' darf die Seite nicht mitreissen.
+            j = await (await cli.get("/api/users?page=2&size=abc", headers=H)).json()
+            assert j["page"] == 2 or j["pages"] == 1
+
+            # 9) Namens-Sortierung deutsch: Ä sortiert wie A, also VOR Z.
+            j = await (await cli.get("/api/users?sort=name&size=100", headers=H)).json()
+            namen = [u["name"] for u in j["users"]]
+            assert namen.index("Äpfelchen") < namen.index("Zacharias"), namen
+
+            # 10) XP: Murks -> 400, unbekannte Aktion -> 400, 'take' rechnet runter.
+            assert (await cli.post("/api/user/xp",
+                    json={"id": "1", "action": "set", "amount": "abc"},
+                    headers=H)).status == 400
+            assert (await cli.post("/api/user/xp",
+                    json={"id": "1", "action": "quatsch", "amount": 5},
+                    headers=H)).status == 400
+            await cli.post("/api/user/xp", json={"id": "1", "action": "set", "amount": 500},
+                           headers=H)
+            j = await (await cli.post("/api/user/xp",
+                       json={"id": "1", "action": "take", "amount": 200}, headers=H)).json()
+            assert j["xp"] == 300
+
+            # 11) Titel: 'remove' meldet ehrlich, ob der Titel da war.
+            j = await (await cli.post("/api/user/title",
+                       json={"id": "1", "action": "remove", "text": "GibtsNicht"},
+                       headers=H)).json()
+            assert j["ok"] and j["removed"] is False
+            economy.grant_title(1, "Echt", "Echt", "selten")
+            j = await (await cli.post("/api/user/title",
+                       json={"id": "1", "action": "remove", "text": "Echt"},
+                       headers=H)).json()
+            assert j["removed"] is True
+            # Unsinnige Seltenheit -> 400.
+            assert (await cli.post("/api/user/title",
+                    json={"id": "1", "action": "grant", "text": "X", "rarity": "quatsch"},
+                    headers=H)).status == 400
+
+            # 12) Ansage: unbekannte Kanal-ID landet NICHT still im System-Kanal.
+            assert (await cli.post("/api/server/announce",
+                    json={"text": "hallo", "channel_id": "123456789012345"},
+                    headers=H)).status == 400
+            assert gesendet == []
+            # Objekt als Text -> 400 (vorher landete ein Python-repr im Chat).
+            assert (await cli.post("/api/server/announce",
+                    json={"text": {"a": 1}}, headers=H)).status == 400
+            # Ohne Kanal-ID: System-Kanal, gekuerzt auf Discord-Laenge.
+            j = await (await cli.post("/api/server/announce",
+                       json={"text": "x" * 5000}, headers=H)).json()
+            assert j["ok"] and len(gesendet) == 1 and len(gesendet[0]) <= 1900
+
+            # 13) Sendepause-Zustand kommt jetzt mit der Server-Liste (kein Cache).
+            j = await (await cli.get("/api/servers", headers=H)).json()
+            assert "sendepause" in j
+
+            # 14) Login-Bremse: nach genug Fehlversuchen 429 statt endlos raten.
+            wp._fails = {}
+            for _ in range(webpanel.WebPanel._LOGIN_MAX_FAILS):
+                await cli.post("/api/login", json={"user": "x", "pass": "y"})
+            assert (await cli.post("/api/login",
+                    json={"user": "x", "pass": "y"})).status == 429
+            wp._fails = {}
+
+    try:
+        asyncio.run(run_it())
+    finally:
+        os.environ.pop("GUILD_ID", None)
+        floaktie.instance._store, floaktie.instance._enabled = alt_fa
+        (wp._enabled, wp._user, wp._pass, wp._tokens, wp._client, wp._fails) = alt
+        restore_eco()
+
+
+def test_webpanel_token_deckel():
+    """Die Token-Tabelle darf nicht unbegrenzt wachsen (Prozess laeuft monatelang)
+    und abgelaufene Tokens muessen verschwinden."""
+    import webpanel
+    wp = webpanel.WebPanel()
+    wp._ttl = 60
+    wp._tokens = {"alt": time.time() - 5}          # abgelaufen
+    for _ in range(wp._TOKEN_MAX + 20):
+        wp._new_token()
+    assert "alt" not in wp._tokens
+    assert len(wp._tokens) <= wp._TOKEN_MAX
 
 
 def run():

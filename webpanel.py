@@ -22,6 +22,7 @@ import logging
 import os
 import secrets
 import time
+import unicodedata
 from pathlib import Path
 
 import economy
@@ -52,6 +53,7 @@ class WebPanel:
         self._html_cache = None
         self._bot_name = "Flo"
         self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
+        self._fails = {}       # ip -> (Fehlversuche, gesperrt_bis) gegen Raten
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -65,7 +67,10 @@ class WebPanel:
         self._host = os.getenv("WEBPANEL_HOST", "0.0.0.0").strip() or "0.0.0.0"
         try:
             self._port = int(os.getenv("WEBPANEL_PORT", "9123") or "9123")
-        except ValueError:
+        except (TypeError, ValueError):
+            self._port = 9123
+        if not 1 <= self._port <= 65535:
+            log.warning("WEBPANEL_PORT=%s ist kein gueltiger Port - nehme 9123.", self._port)
             self._port = 9123
         self._user = os.getenv("WEBPANEL_USER", "Secoolio") or "Secoolio"
         self._pass = os.getenv("WEBPANEL_PASS", "Secoolio") or "Secoolio"
@@ -114,8 +119,15 @@ class WebPanel:
             await site.start()
             log.info("🌐 Web-Panel laeuft auf http://%s:%d (Login: %s)",
                      self._host, self._port, self._user)
-        except OSError as exc:
-            log.error("Web-Panel konnte Port %d nicht binden: %s", self._port, exc)
+        except Exception as exc:  # noqa: BLE001 - Port belegt/Adresse kaputt/...
+            # Vorher nur OSError: bei einem kaputten Port (z. B. WEBPANEL_PORT=999999)
+            # flog ein OverflowError durch und _runner blieb gesetzt - danach war
+            # jeder weitere start() ein stiller No-Op.
+            log.error("Web-Panel konnte Port %s nicht binden: %s", self._port, exc)
+            try:
+                await self._runner.cleanup()
+            except Exception:  # noqa: BLE001
+                pass
             self._runner = None
 
     async def stop(self):
@@ -127,10 +139,58 @@ class WebPanel:
             self._runner = None
 
     # --- Auth -------------------------------------------------------------
+    _TOKEN_MAX = 50         # so viele Sitzungen gleichzeitig reichen dicke
+    _LOGIN_MAX_FAILS = 8    # danach kurz gesperrt (Bruteforce-Bremse)
+    _LOGIN_BLOCK = 300
+
     def _new_token(self):
+        now = time.time()
+        # Abgelaufene Tokens wegwerfen und die Menge deckeln: der Bot laeuft
+        # monatelang, vorher wuchs das Dict mit jedem Login weiter.
+        for tok, exp in list(self._tokens.items()):
+            if exp < now:
+                self._tokens.pop(tok, None)
+        if len(self._tokens) >= self._TOKEN_MAX:
+            alt = sorted(self._tokens.items(), key=lambda kv: kv[1])
+            for tok, _exp in alt[:len(self._tokens) - self._TOKEN_MAX + 1]:
+                self._tokens.pop(tok, None)
         tok = secrets.token_urlsafe(32)
-        self._tokens[tok] = time.time() + self._ttl
+        self._tokens[tok] = now + self._ttl
         return tok
+
+    def _creds_ok(self, user, pw):
+        """Zugangsdaten zeitkonstant vergleichen - auch mit Umlauten/Emoji.
+
+        secrets.compare_digest wirft bei Nicht-ASCII-Strings einen TypeError;
+        vorher endete so ein Login-Versuch in einem 500er (und mit einem
+        WEBPANEL_PASS mit Umlaut kam man ueberhaupt nicht mehr rein)."""
+        try:
+            ok_u = secrets.compare_digest(str(user).encode("utf-8"),
+                                          str(self._user).encode("utf-8"))
+            ok_p = secrets.compare_digest(str(pw).encode("utf-8"),
+                                          str(self._pass).encode("utf-8"))
+            return bool(ok_u and ok_p)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _login_blocked(self, ip):
+        n, until = self._fails.get(ip, (0, 0.0))
+        if until > time.time():
+            return int(until - time.time()) + 1
+        if until and until <= time.time():
+            self._fails.pop(ip, None)
+        return 0
+
+    def _note_login_fail(self, ip):
+        n, _until = self._fails.get(ip, (0, 0.0))
+        n += 1
+        until = time.time() + self._LOGIN_BLOCK if n >= self._LOGIN_MAX_FAILS else 0.0
+        self._fails[ip] = (n, until)
+        if until:
+            log.warning("Web-Panel: %d Fehl-Logins von %s - %ds gesperrt.",
+                        n, ip, self._LOGIN_BLOCK)
+        else:
+            log.info("Web-Panel: Fehl-Login von %s (%d).", ip, n)
 
     def _valid(self, request):
         # Token aus 'Authorization: Bearer ...' ODER Cookie.
@@ -167,12 +227,18 @@ class WebPanel:
             data = await request.json()
         except Exception:  # noqa: BLE001
             data = {}
-        user = str(data.get("user", ""))
-        pw = str(data.get("pass", ""))
-        ok = (secrets.compare_digest(user, self._user)
-              and secrets.compare_digest(pw, self._pass))
-        if not ok:
+        ip = str(getattr(request, "remote", "") or "?")
+        wart = self._login_blocked(ip)
+        if wart:
+            return web.json_response(
+                {"ok": False, "error": f"Zu viele Versuche - warte {wart}s"}, status=429)
+        user = str(data.get("user", "") if data.get("user") is not None else "")
+        pw = str(data.get("pass", "") if data.get("pass") is not None else "")
+        if not self._creds_ok(user, pw):
+            self._note_login_fail(ip)
             return web.json_response({"ok": False, "error": "Falsche Zugangsdaten"}, status=401)
+        self._fails.pop(ip, None)
+        log.info("Web-Panel: Login von %s ok.", ip)
         tok = self._new_token()
         resp = web.json_response({"ok": True, "token": tok, "bot_name": self._bot_name})
         resp.set_cookie("flo_token", tok, max_age=self._ttl, httponly=True, samesite="Lax")
@@ -192,28 +258,63 @@ class WebPanel:
         return n or f"User {uid}"
 
     def _user_row(self, uid, prof):
-        xp = int(prof.get("xp", 0))
-        level = economy.instance._level_only(xp) if economy.is_enabled() else 0
+        # Kaputte/halbe Profile (z. B. coins=null nach einem Absturz) duerfen die
+        # Liste nicht komplett abschiessen - jedes Feld wird defensiv gelesen.
+        if not isinstance(prof, dict):
+            prof = {}
+        xp = max(0, self._as_int(prof.get("xp"), 0))
+        level = 0
+        if economy.is_enabled():
+            level = self._safe(lambda: economy.instance._level_only(xp), 0) or 0
         shares = 0
         try:
             import floaktie
             if floaktie.is_enabled():
-                shares = floaktie.instance.shares_of(uid)
+                shares = self._as_int(floaktie.instance.shares_of(uid), 0)
         except Exception:  # noqa: BLE001
             pass
+        name = prof.get("name")
+        name = str(name).strip() if isinstance(name, (str, int, float)) else ""
+        titel = prof.get("title")
+        owned = prof.get("owned") or []
         return {
             "id": str(uid),
-            "name": prof.get("name") or f"User {uid}",
-            "coins": int(prof.get("coins", 0)),
+            "name": name or f"User {uid}",
+            "coins": self._as_int(prof.get("coins"), 0),
             "xp": xp,
             "level": level,
-            "title": prof.get("title", ""),
-            "titles": len(prof.get("owned", []) or []),
+            "title": str(titel) if isinstance(titel, (str, int, float)) else "",
+            "titles": len(owned) if isinstance(owned, (list, tuple)) else 0,
             "shares": shares,
-            "streak": int(prof.get("streak", 0)),
-            "msgs": int(prof.get("msgs", 0)),
-            "voice_secs": int(prof.get("voice_secs", 0)),
+            "streak": max(0, self._as_int(prof.get("streak"), 0)),
+            "msgs": max(0, self._as_int(prof.get("msgs"), 0)),
+            "voice_secs": max(0, self._as_int(prof.get("voice_secs"), 0)),
         }
+
+    def _holdings_items(self):
+        """[(uid_str, anteile), ...] aus floaktie - leer, wenn die Aktie aus ist."""
+        try:
+            import floaktie
+            if not floaktie.is_enabled():
+                return []
+            hold = floaktie.instance._holdings() or {}
+            return [(str(u), self._as_int(n, 0)) for u, n in list(hold.items())]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _all_rows(self):
+        """Alle Zeilen: economy-Profile PLUS reine Aktien-Halter.
+
+        Wer nur Anteile besitzt (z. B. per Panel gesetzt, ohne je Coins gehabt zu
+        haben), tauchte vorher in keiner Liste auf - zaehlte aber in den
+        Boersenwert. Genau so verschwinden Anteile aus der Statistik."""
+        rows = [self._user_row(uid, p) for uid, p in list(self._users_dict().items())]
+        gesehen = {r["id"] for r in rows}
+        for uid, n in self._holdings_items():
+            if n > 0 and uid not in gesehen:
+                gesehen.add(uid)
+                rows.append(self._user_row(uid, {}))
+        return rows
 
     def _guild(self):
         """Die Haupt-Guild (fuer Namens-/Avatar-Auflösung), falls verfuegbar."""
@@ -237,26 +338,121 @@ class WebPanel:
         except Exception:  # noqa: BLE001 - reine Kosmetik, nie fatal
             log.debug("Namens-Merken fuer %s fehlgeschlagen", uid, exc_info=True)
 
-    def _parse_amount(self, raw):
-        """Nimmt Zahl oder '1k'/'2m' und gibt einen int zurueck (0 bei Murks)."""
-        if isinstance(raw, (int, float)):
-            return int(raw)
-        s = str(raw or "").strip()
+    # --- Eingabe-Pruefer (jede Panel-Eingabe laeuft hier durch) ------------
+    _MAX_AMOUNT = 10 ** 15      # eine Billiarde: weit ueber allem Echten
+    _MAX_SHARES = 10 ** 9       # Anteile: eine Milliarde ist mehr als genug
+    _MAX_PRICE = 10 ** 12
+    _MAX_XP = 10 ** 12
+
+    @staticmethod
+    def _as_int(raw, default=0):
+        """int aus irgendwas - nie eine Exception (kaputte Profile, Query-Murks)."""
         try:
-            return int(s)
-        except ValueError:
-            pass
-        if economy.is_enabled():
-            v = economy.parse_amount(s)
-            if v:
-                return int(v)
-        return 0
+            if isinstance(raw, bool):
+                return int(raw)
+            return int(raw)
+        except (TypeError, ValueError, OverflowError):
+            return default
+
+    def _parse_amount(self, raw, maximum=None):
+        """Nimmt Zahl oder '1k'/'2m' und gibt einen int zurueck - oder None.
+
+        WICHTIG: bei Murks ('abc', '1 000', leer, null) kommt None heraus und der
+        Aufrufer antwortet mit 400. Vorher kam hier 0 heraus - ein Tippfehler bei
+        'Setzen' hat damit still das ganze Guthaben auf 0 gesetzt, und
+        Geben/Nehmen tat nichts, waehrend die Oberflaeche Erfolg meldete.
+        Zu grosse Werte gelten ebenfalls als Murks (sonst rechnet die Aktien-Kurve
+        sich mit 10**400 in einen OverflowError)."""
+        limit = int(maximum if maximum is not None else self._MAX_AMOUNT)
+        wert = None
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            try:
+                wert = int(raw)                 # NaN/inf fliegen hier raus
+            except (ValueError, OverflowError):
+                return None
+        else:
+            s = str(raw if raw is not None else "").strip()
+            if not s:
+                return None
+            try:
+                wert = int(s)
+            except ValueError:
+                wert = None
+            if wert is None and economy.is_enabled():
+                try:
+                    v = economy.parse_amount(s)
+                except Exception:  # noqa: BLE001
+                    v = None
+                if v:
+                    wert = int(v)
+        if wert is None or abs(wert) > limit:
+            return None
+        return wert
+
+    @staticmethod
+    def _flag(raw, default=True):
+        """Echtes Boolean aus JSON. '{"on":"false"}' war vorher True (truthy)."""
+        if raw is None:
+            return bool(default)
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return raw != 0
+        s = str(raw).strip().lower()
+        if s in ("1", "true", "yes", "on", "an", "ja"):
+            return True
+        if s in ("0", "false", "no", "off", "aus", "nein", ""):
+            return False
+        return bool(default)
+
+    @staticmethod
+    def _uid(raw):
+        """Discord-ID aus der Eingabe - None, wenn unbrauchbar.
+
+        Verhindert Geister-Profile: '-1', '0', '0123' (wurde zu 123) oder Text
+        legten vorher echte Konten in der Datenbank an."""
+        s = str(raw if raw is not None else "").strip()
+        if not s.isdigit() or (len(s) > 1 and s[0] == "0"):
+            return None
+        v = int(s)
+        if v <= 0 or v > 2 ** 63 - 1:
+            return None
+        return v
+
+    @staticmethod
+    def _text(raw, maximum=200):
+        """Nur echte Textwerte annehmen (None -> 400) und auf Laenge kuerzen.
+        Vorher landete ein versehentlich gesendetes dict als Python-repr im Chat."""
+        if raw is None:
+            return ""
+        if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+            return None
+        return str(raw).strip()[:max(1, int(maximum))]
+
+    @staticmethod
+    def _fold(name):
+        """Sortier-Schluessel wie im Duden: Ä wie A, ß wie ss, Emoji nach hinten."""
+        s = str(name if name is not None else "").strip().lower().replace("ß", "ss")
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(c for c in s if not unicodedata.combining(c))
+        return (0 if s[:1].isalpha() else 1, s)
+
+    @staticmethod
+    def _safe(fn, default=None):
+        """Ruft fn() auf und schluckt Fehler - eine kaputte Kennzahl darf nie
+        die ganze Uebersicht (oder die Nachbar-Kennzahlen) mitnehmen."""
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001
+            log.debug("Panel-Kennzahl fehlgeschlagen", exc_info=True)
+            return default
 
     # --- API: Uebersicht --------------------------------------------------
     async def _api_overview(self, request):
         self._guard(request)
-        users = self._users_dict()
-        rows = [self._user_row(uid, p) for uid, p in users.items()]
+        rows = self._all_rows()
         coins_total = sum(r["coins"] for r in rows)
         top_coins = sorted(rows, key=lambda r: r["coins"], reverse=True)[:10]
         top_shares = sorted([r for r in rows if r["shares"] > 0],
@@ -282,41 +478,40 @@ class WebPanel:
         # Quelle wie der Discord-Chart). Vorher kamen hier nur die Tages-
         # Schlusskurse - ein Punkt pro Kalendertag, ohne den aktuellen Kurs. Die
         # Linie passte damit nicht zur angezeigten Kurs-Zahl.
+        # Jede Kennzahl EINZELN abgesichert (_safe): faellt z. B. holders_count aus,
+        # fehlten vorher gleich auch Kurs-Aenderung und Boersenwert - die Kacheln
+        # blieben dann beim alten Wert stehen.
         floaktie_history = []
         try:
             import floaktie
             if floaktie.is_enabled():
-                punkte, chg = floaktie.series(1)
-                stats["floaktie_price"] = floaktie.instance.price()
-                stats["floaktie_holders"] = floaktie.instance.holders_count()
-                stats["floaktie_change"] = chg
-                stats["floaktie_marketcap"] = (floaktie.instance.total_shares()
-                                               * floaktie.instance.price())
-                floaktie_history = punkte
+                preis = self._safe(floaktie.instance.price, 0) or 0
+                punkte, chg = self._safe(lambda: floaktie.series(1), ([], 0.0))
+                stats["floaktie_price"] = preis
+                stats["floaktie_holders"] = self._safe(floaktie.instance.holders_count, 0) or 0
+                stats["floaktie_change"] = chg if chg is not None else 0.0
+                stats["floaktie_marketcap"] = (self._safe(floaktie.instance.total_shares, 0) or 0) * preis
+                floaktie_history = list(punkte or [])
         except Exception:  # noqa: BLE001
             pass
         # Lotto.
         try:
             import lotto
             if lotto.is_enabled():
-                st = lotto.instance._state()
-                stats["lotto_jackpot"] = int(st.get("jackpot", 0))
-                stats["lotto_house"] = int(st.get("house", 0))
+                st = self._safe(lotto.instance._state, {}) or {}
+                stats["lotto_jackpot"] = self._as_int(st.get("jackpot"), 0)
+                stats["lotto_house"] = self._as_int(st.get("house"), 0)
         except Exception:  # noqa: BLE001
             pass
         # Haendler.
         try:
             import merchant
             if merchant.is_enabled():
-                stats["merchant_present"] = merchant.instance.is_present()
+                stats["merchant_present"] = bool(self._safe(merchant.instance.is_present, False))
         except Exception:  # noqa: BLE001
             pass
         # Sendepause.
-        try:
-            import admin
-            stats["sendepause"] = admin.is_locked() if admin.is_enabled() else False
-        except Exception:  # noqa: BLE001
-            stats["sendepause"] = False
+        stats["sendepause"] = self._sendepause_state()
         return web.json_response({
             "ok": True, "bot_name": self._bot_name, "stats": stats,
             "top_coins": top_coins, "top_shares": top_shares,
@@ -324,28 +519,41 @@ class WebPanel:
             "floaktie_history": floaktie_history,
         })
 
+    def _sendepause_state(self):
+        """Aktueller Sendepause-Zustand (fuer Uebersicht UND Server-Seite)."""
+        try:
+            import admin
+            if not admin.is_enabled():
+                return False
+            return bool(self._safe(admin.is_locked, False))
+        except Exception:  # noqa: BLE001
+            return False
+
     # --- API: Nutzerliste -------------------------------------------------
     async def _api_users(self, request):
         self._guard(request)
         q = (request.query.get("q", "") or "").strip().lower()
         sort = request.query.get("sort", "coins")
-        try:
-            page = max(1, int(request.query.get("page", "1")))
-            size = min(100, max(5, int(request.query.get("size", "25"))))
-        except ValueError:
-            page, size = 1, 25
-        rows = [self._user_row(uid, p) for uid, p in self._users_dict().items()]
+        # page und size EINZELN lesen: vorher lagen beide in einem try - ein
+        # kaputtes 'size' setzte auch die Seite still auf 1 zurueck.
+        page = max(1, self._as_int(request.query.get("page", "1"), 1))
+        size = min(100, max(5, self._as_int(request.query.get("size", "25"), 25)))
+        rows = self._all_rows()
         if q:
             rows = [r for r in rows if q in r["name"].lower() or q in r["id"]]
         keyf = {"coins": lambda r: r["coins"], "level": lambda r: r["xp"],
                 "shares": lambda r: r["shares"], "msgs": lambda r: r["msgs"],
-                "name": lambda r: r["name"].lower()}.get(sort, lambda r: r["coins"])
+                "name": lambda r: self._fold(r["name"])}.get(sort, lambda r: r["coins"])
         rows.sort(key=keyf, reverse=(sort != "name"))
         total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        # Seite auf den gueltigen Bereich ziehen: sonst liefert eine zu hohe
+        # Seitenzahl eine leere Liste, und die Oberflaeche zeigte eine
+        # Sackgasse ohne Blaetter-Knoepfe.
+        page = min(page, pages)
         start = (page - 1) * size
         return web.json_response({
-            "ok": True, "total": total, "page": page,
-            "pages": max(1, (total + size - 1) // size),
+            "ok": True, "total": total, "page": page, "pages": pages,
             "users": rows[start:start + size],
         })
 
@@ -355,10 +563,19 @@ class WebPanel:
         users = self._users_dict()
         prof = users.get(str(uid))
         if prof is None:
-            return web.json_response({"ok": False, "error": "unbekannt"}, status=404)
+            # Reiner Aktien-Halter ohne economy-Profil: trotzdem oeffenbar, sonst
+            # ist die Zeile in der Liste ein Klick ins Leere.
+            if any(u == str(uid) and n > 0 for u, n in self._holdings_items()):
+                prof = {}
+            else:
+                return web.json_response({"ok": False, "error": "unbekannt"}, status=404)
+        if not isinstance(prof, dict):
+            prof = {}
         row = self._user_row(uid, prof)
-        row["owned"] = [dict(o) for o in prof.get("owned", []) or []]
-        row["last_daily"] = prof.get("last_daily", "")
+        owned = prof.get("owned") or []
+        row["owned"] = [dict(o) for o in owned if isinstance(o, dict)]
+        letzte = prof.get("last_daily", "")
+        row["last_daily"] = str(letzte) if isinstance(letzte, (str, int, float)) else ""
         return web.json_response({"ok": True, "user": row})
 
     # --- API: Coins geben/nehmen/setzen -----------------------------------
@@ -370,24 +587,25 @@ class WebPanel:
             data = {}
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
-        uid = str(data.get("id", "")).strip()
-        action = str(data.get("action", "give"))
-        amount = self._parse_amount(data.get("amount", 0))
-        if not uid or amount < 0:
-            return web.json_response({"ok": False, "error": "ungueltig"}, status=400)
-        try:
-            uid_int = int(uid)
-        except ValueError:
+        uid_int = self._uid(data.get("id"))
+        if uid_int is None:
             return web.json_response({"ok": False, "error": "ungueltige id"}, status=400)
+        action = str(data.get("action", "give"))
+        if action not in ("give", "take", "set"):
+            return web.json_response({"ok": False, "error": "aktion?"}, status=400)
+        amount = self._parse_amount(data.get("amount"))
+        if amount is None:
+            return web.json_response(
+                {"ok": False, "error": "Betrag nicht lesbar (z. B. 1000, 5k, 2m)"}, status=400)
+        if amount < 0:
+            return web.json_response({"ok": False, "error": "Betrag muss positiv sein"}, status=400)
         if action == "give":
             economy.add_coins(uid_int, amount, reason="panel")
         elif action == "take":
             economy.add_coins(uid_int, -amount, reason="panel")
-        elif action == "set":
+        else:                                   # "set"
             cur = economy.get_coins(uid_int)
             economy.add_coins(uid_int, amount - cur, reason="panel")
-        else:
-            return web.json_response({"ok": False, "error": "aktion?"}, status=400)
         await self._remember_name(uid_int)
         await economy.flush()
         return web.json_response({"ok": True, "coins": economy.get_coins(uid_int)})
@@ -400,17 +618,28 @@ class WebPanel:
             data = {}
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
-        try:
-            uid_int = int(str(data.get("id", "")).strip())
-        except ValueError:
-            return web.json_response({"ok": False, "error": "id?"}, status=400)
+        uid_int = self._uid(data.get("id"))
+        if uid_int is None:
+            return web.json_response({"ok": False, "error": "ungueltige id"}, status=400)
         action = str(data.get("action", "give"))
-        amount = self._parse_amount(data.get("amount", 0))
+        if action not in ("give", "take", "set"):
+            return web.json_response({"ok": False, "error": "aktion?"}, status=400)
+        # XP gedeckelt: Level-Rechnung und Anzeige sollen mit echten Werten
+        # arbeiten, nicht mit 10**30.
+        amount = self._parse_amount(data.get("amount"), maximum=self._MAX_XP)
+        if amount is None:
+            return web.json_response(
+                {"ok": False, "error": "XP-Wert nicht lesbar (z. B. 500, 1k)"}, status=400)
+        if amount < 0:
+            return web.json_response({"ok": False, "error": "Wert muss positiv sein"}, status=400)
         prof = economy.instance._profile(uid_int)
+        alt = max(0, self._as_int(prof.get("xp"), 0))
         if action == "set":
-            prof["xp"] = max(0, amount)
+            prof["xp"] = amount
+        elif action == "take":
+            prof["xp"] = max(0, alt - amount)
         else:
-            prof["xp"] = max(0, int(prof.get("xp", 0)) + amount)
+            prof["xp"] = min(self._MAX_XP, alt + amount)
         await self._remember_name(uid_int)
         await economy.flush()
         return web.json_response({"ok": True, "xp": prof["xp"],
@@ -424,20 +653,34 @@ class WebPanel:
             data = {}
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
-        try:
-            uid_int = int(str(data.get("id", "")).strip())
-        except ValueError:
-            return web.json_response({"ok": False, "error": "id?"}, status=400)
+        uid_int = self._uid(data.get("id"))
+        if uid_int is None:
+            return web.json_response({"ok": False, "error": "ungueltige id"}, status=400)
         action = str(data.get("action", "grant"))
-        text = str(data.get("text", "")).strip()
+        if action not in ("grant", "remove"):
+            return web.json_response({"ok": False, "error": "aktion?"}, status=400)
+        text = self._text(data.get("text"), 64)
+        if text is None:
+            return web.json_response({"ok": False, "error": "titel?"}, status=400)
         if not text:
             return web.json_response({"ok": False, "error": "titel?"}, status=400)
+        entfernt = None
         if action == "remove":
+            # Rueckmelden, ob der Titel ueberhaupt vorhanden war - vorher kam
+            # immer ein froehliches "entfernt", auch bei Tippfehlern.
+            hatte = bool(self._safe(lambda: economy.owns_title(uid_int, text), False))
             economy.remove_title(uid_int, text)
+            entfernt = hatte
         else:
-            label = str(data.get("label", "")).strip() or text
-            rarity = str(data.get("rarity", "selten")).strip() or "selten"
-            economy.grant_title(uid_int, text, label, rarity)
+            label = self._text(data.get("label"), 48)
+            rarity = self._text(data.get("rarity"), 24)
+            if label is None or rarity is None:
+                return web.json_response({"ok": False, "error": "titel?"}, status=400)
+            rarity = (rarity or "selten").lower()
+            erlaubt = self._safe(lambda: __import__("titles").RARITY_ORDER, None)
+            if erlaubt and rarity not in erlaubt:
+                return web.json_response({"ok": False, "error": "seltenheit?"}, status=400)
+            economy.grant_title(uid_int, text, label or text, rarity)
         # Rolle nachziehen, falls das Mitglied auffindbar ist (best effort).
         try:
             guild = self._guild()
@@ -448,7 +691,10 @@ class WebPanel:
             pass
         await self._remember_name(uid_int)
         await economy.flush()
-        return web.json_response({"ok": True, "titles": economy.list_titles(uid_int)})
+        antwort = {"ok": True, "titles": economy.list_titles(uid_int)}
+        if entfernt is not None:
+            antwort["removed"] = entfernt
+        return web.json_response(antwort)
 
     # --- API: Aktien-Anteile korrigieren ----------------------------------
     async def _api_shares(self, request):
@@ -464,27 +710,35 @@ class WebPanel:
             return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
         if not floaktie.is_enabled():
             return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
-        try:
-            uid_int = int(str(data.get("id", "")).strip())
-        except ValueError:
-            return web.json_response({"ok": False, "error": "id?"}, status=400)
+        uid_int = self._uid(data.get("id"))
+        if uid_int is None:
+            return web.json_response({"ok": False, "error": "ungueltige id"}, status=400)
         action = str(data.get("action", "set"))
         if action not in ("give", "take", "set"):
             return web.json_response({"ok": False, "error": "aktion?"}, status=400)
-        amount = self._parse_amount(data.get("amount", 0))
+        # Anteile GEDECKELT einlesen: mit einer 400-stelligen Zahl rechnete die
+        # Kurs-Kurve sich vorher in einen OverflowError - und zwar NACHDEM das
+        # Depot schon geaendert war. Danach war die Aktie komplett blockiert.
+        amount = self._parse_amount(data.get("amount"), maximum=self._MAX_SHARES)
+        if amount is None:
+            return web.json_response(
+                {"ok": False,
+                 "error": f"Anzahl nicht lesbar oder zu groß (max {self._MAX_SHARES:,})".replace(",", ".")},
+                status=400)
         if amount < 0:
-            return web.json_response({"ok": False, "error": "ungueltig"}, status=400)
+            return web.json_response({"ok": False, "error": "Anzahl muss positiv sein"}, status=400)
         # keep_price (Standard an): haelt den Kurs stabil, damit das Streichen
         # grosser Positionen den Markt nicht abstuerzen laesst.
-        keep = data.get("keep_price", True)
+        keep = self._flag(data.get("keep_price"), True)
         try:
             shares, kurs, total = await floaktie.admin_shares(
-                uid_int, action, amount, keep_price=bool(keep))
+                uid_int, action, amount, keep_price=keep)
         except Exception:  # noqa: BLE001
             log.exception("Anteils-Korrektur via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "fehler"}, status=500)
         await self._remember_name(uid_int)
-        await economy.flush()
+        if economy.is_enabled():
+            await economy.flush()
         return web.json_response({"ok": True, "shares": shares, "price": kurs,
                                   "total_shares": total})
 
@@ -503,7 +757,9 @@ class WebPanel:
             return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
         try:
             days = float(request.query.get("days", "1") or "1")
-        except ValueError:
+        except (TypeError, ValueError):
+            days = 1.0
+        if days != days or days in (float("inf"), float("-inf")):   # NaN/inf
             days = 1.0
         days = max(0.04, min(days, 3650.0))     # min ~1 Stunde, max 10 Jahre
         try:
@@ -528,7 +784,10 @@ class WebPanel:
             return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
         if not floaktie.is_enabled():
             return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
-        preis = self._parse_amount(data.get("price", 0))
+        preis = self._parse_amount(data.get("price"), maximum=self._MAX_PRICE)
+        if preis is None:
+            return web.json_response(
+                {"ok": False, "error": "Kurs nicht lesbar oder zu groß"}, status=400)
         if preis <= 0:
             return web.json_response({"ok": False, "error": "kurs?"}, status=400)
         try:
@@ -536,7 +795,10 @@ class WebPanel:
         except Exception:  # noqa: BLE001
             log.exception("Kurs-Korrektur via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "fehler"}, status=500)
-        return web.json_response({"ok": True, "price": neu})
+        # 'requested' mitschicken: liegt der Wunsch unter dem Mindestkurs, steht
+        # in 'price' der WIRKLICH gesetzte Kurs - das Panel meldet dann keinen
+        # Erfolg, den es nicht gegeben hat.
+        return web.json_response({"ok": True, "price": neu, "requested": preis})
 
     # --- API: Server ------------------------------------------------------
     async def _api_servers(self, request):
@@ -556,7 +818,11 @@ class WebPanel:
                 "icon": icon,
                 "owner_id": str(getattr(g, "owner_id", "") or ""),
             })
-        return web.json_response({"ok": True, "guilds": out})
+        # sendepause MITSCHICKEN: die Server-Seite zeigte sonst den zuletzt aus
+        # der Uebersicht gemerkten Zustand - war der veraltet, war der erste
+        # Klick auf den Schalter nur ein Neu-Abgleich und tat gar nichts.
+        return web.json_response({"ok": True, "guilds": out,
+                                  "sendepause": self._sendepause_state()})
 
     async def _api_sendepause(self, request):
         self._guard(request)
@@ -564,7 +830,7 @@ class WebPanel:
             data = await request.json()
         except Exception:  # noqa: BLE001
             data = {}
-        on = bool(data.get("on", True))
+        on = self._flag(data.get("on"), True)
         try:
             import admin
             if not admin.is_enabled():
@@ -581,20 +847,35 @@ class WebPanel:
             data = await request.json()
         except Exception:  # noqa: BLE001
             data = {}
-        text = str(data.get("text", "")).strip()
+        # Discord-Limit ist 2000 Zeichen - laenger schickt man gar nicht erst los.
+        # Und nur echte Texte: ein versehentlich gesendetes Objekt landete vorher
+        # als Python-repr ("{'a': 1}") im Chat.
+        text = self._text(data.get("text"), 1900)
+        if text is None:
+            return web.json_response({"ok": False, "error": "text?"}, status=400)
         if not text:
             return web.json_response({"ok": False, "error": "kein text"}, status=400)
         cid = data.get("channel_id")
+        channel = None
+        if cid not in (None, ""):
+            # Kanal-ID angegeben, aber unbekannt? Dann NICHT still in den
+            # System-Kanal posten - sonst landet die Ansage woanders als gewollt.
+            kid = self._uid(cid)
+            if kid is None:
+                return web.json_response({"ok": False, "error": "Kanal-ID ungueltig"}, status=400)
+            channel = self._safe(lambda: self._client.get_channel(kid), None)
+            if channel is None:
+                return web.json_response({"ok": False, "error": "Kanal nicht gefunden"}, status=400)
+        else:
+            gid = self._as_int(os.getenv("GUILD_ID", "0") or "0", 0)
+            guild = self._safe(lambda: self._client.get_guild(gid), None) if self._client else None
+            channel = getattr(guild, "system_channel", None) if guild else None
+        if channel is None:
+            return web.json_response({"ok": False, "error": "kein channel"}, status=400)
+        if not hasattr(channel, "send"):
+            return web.json_response({"ok": False, "error": "Kanal kann keine Nachrichten"},
+                                     status=400)
         try:
-            channel = None
-            if cid:
-                channel = self._client.get_channel(int(cid))
-            if channel is None:
-                gid = int(os.getenv("GUILD_ID", "0") or "0")
-                guild = self._client.get_guild(gid) if self._client else None
-                channel = guild.system_channel if guild else None
-            if channel is None:
-                return web.json_response({"ok": False, "error": "kein channel"}, status=400)
             await channel.send(text)
         except Exception:  # noqa: BLE001
             log.exception("Ansage via Panel fehlgeschlagen")
@@ -667,7 +948,7 @@ class WebPanel:
         except Exception:  # noqa: BLE001
             data = {}
         key = str(data.get("key", "")).strip()
-        on = bool(data.get("on", True))
+        on = self._flag(data.get("on"), True)
         try:
             import features
             # Nicht geladene Module kann man nicht per Schalter aktivieren.
