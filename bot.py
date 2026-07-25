@@ -33,6 +33,7 @@ import fun
 import food
 import games
 import handel
+import giveaway
 import lotto
 import luxus
 import media
@@ -171,6 +172,9 @@ LOTTO_ENABLED = lotto.setup()
 # FloCorp-Aktie ('Flo floaktie'): Flos eigene Aktie ($FLO). Kurs steigt/faellt mit
 # Kaeufen/Verkaeufen und der Voice-Aktivitaet; Aktionaere kassieren Voice-Dividende.
 FLOAKTIE_ENABLED = floaktie.setup()
+# Giveaways ('Flo giveaway'): ein Nutzer verlost EIGENE Coins. Flo fragt Einsatz,
+# Grund und Dauer nacheinander ab; der Einsatz liegt bis zur Ziehung bei Flo.
+GIVEAWAY_ENABLED = giveaway.setup()
 # Lokales Web-Panel (Port 9123): Server/User/Coins/Statistiken im Browser
 # verwalten. Laeuft im Bot-Prozess, Start passiert in on_ready.
 WEBPANEL_ENABLED = webpanel.setup()
@@ -183,6 +187,7 @@ FEATURE_LOADED = {
     "ki": AI_ENABLED, "music": MUSIC_ENABLED, "games": GAMES_ENABLED,
     "casino": CASINO_ENABLED, "economy": ECONOMY_ENABLED, "floaktie": FLOAKTIE_ENABLED,
     "lotto": LOTTO_ENABLED, "merchant": MERCHANT_ENABLED, "steal": STEAL_ENABLED,
+    "giveaway": GIVEAWAY_ENABLED,
     "handel": HANDEL_ENABLED, "luxus": LUXUS_ENABLED,
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
     "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
@@ -201,6 +206,9 @@ LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
 # + Nachrichten) misst und den Kurs bewegt. 60 s -> der Kurs steigt/faellt fast in
 # Echtzeit sichtbar.
 STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "60"))
+# Takt, in dem Giveaways auf Ablauf geprueft werden (Ziehung). 15 s -> die Ziehung
+# passiert praktisch punktgenau zur angekuendigten Zeit.
+GIVEAWAY_TICK_SECONDS = float(os.getenv("GIVEAWAY_TICK_SECONDS", "15"))
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -400,6 +408,7 @@ _HELP_DATA = {
         ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
         ("flo aktie · kauf 10 · verkauf alles", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
         ("flo aktienkurs · aktie top", "📊 Kursverlauf als Chart (1 Tag/7 Tage/…) & Aktionäre"),
+        ("flo giveaway", "🎉 eigene Coins verlosen - Flo fragt Einsatz, Grund & Dauer ab"),
     ]),
     "terraria": ("Terraria", 0x8DB360, [
         ("flo terraria <frage>", "alles aus dem Terraria-Wiki - mit Bildern"),
@@ -914,6 +923,15 @@ class FloBot(discord.Client):
         except discord.HTTPException:
             log.warning("Lotto-Ansage konnte nicht gesendet werden")
 
+    @tasks.loop(seconds=GIVEAWAY_TICK_SECONDS)
+    async def giveaway_loop(self):
+        """Lost abgelaufene Giveaways aus und raeumt abgelaufene Assistenten weg.
+        Das Modul verkuendet selbst im Ursprungs-Channel (siehe giveaway.tick)."""
+        try:
+            await giveaway.tick(self)
+        except Exception:
+            log.exception("Giveaway-Loop Fehler - laeuft weiter")
+
     @tasks.loop(seconds=STOCK_SAMPLE_SECONDS)
     async def floaktie_market_loop(self):
         """Tastet die Voice-Aktivitaet fuer die FloCorp-Aktie ab und zieht bei
@@ -1268,6 +1286,14 @@ class FloBot(discord.Client):
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and features.is_on("food"):
             self._spawn(food.on_message_passive(message))
+        # Giveaway-Assistent: laeuft gerade eine Frage-Runde ('Einsatz?', 'Dauer?'),
+        # ist DIESE Nachricht die Antwort darauf - und sonst nichts (kein KI-Geplapper).
+        if GIVEAWAY_ENABLED and features.is_on("giveaway"):
+            try:
+                if await giveaway.on_message_passive(message):
+                    return
+            except Exception:
+                log.exception("Giveaway-Hook fehlgeschlagen")
         # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
         # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
         if GAMES_ENABLED and features.is_on("games"):
@@ -1369,6 +1395,7 @@ class FloBot(discord.Client):
             (HANDEL_ENABLED and _on("handel"), handel.handle),
             (STEAL_ENABLED and _on("steal"), steal.handle),
             (MERCHANT_ENABLED and _on("merchant"), merchant.handle),
+            (GIVEAWAY_ENABLED and _on("giveaway"), giveaway.handle),
             (LOTTO_ENABLED and _on("lotto"), lotto.handle),
             (FLOAKTIE_ENABLED and _on("floaktie"), floaktie.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
@@ -1401,7 +1428,8 @@ class FloBot(discord.Client):
                     or antwort is food.HANDLED or antwort is words.HANDLED
                     or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
                     or antwort is terraria.HANDLED or antwort is merchant.HANDLED
-                    or antwort is lotto.HANDLED or antwort is floaktie.HANDLED):
+                    or antwort is lotto.HANDLED or antwort is floaktie.HANDLED
+                    or antwort is giveaway.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1526,6 +1554,15 @@ class FloBot(discord.Client):
             self.merchant_loop.start()
         if LOTTO_ENABLED and not self.lotto_loop.is_running():
             self.lotto_loop.start()
+        if GIVEAWAY_ENABLED:
+            # Mitmach-Knoepfe laufender Giveaways nach einem Neustart wieder
+            # klickbar machen (persistente Views).
+            try:
+                giveaway.register_views(self)
+            except Exception:
+                log.exception("Giveaway-Knoepfe konnten nicht angemeldet werden")
+            if not self.giveaway_loop.is_running():
+                self.giveaway_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
             self.floaktie_market_loop.start()
         # Web-Panel starten (idempotent: laeuft nur einmal, egal wie oft on_ready feuert).

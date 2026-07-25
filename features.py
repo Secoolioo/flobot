@@ -30,6 +30,7 @@ CATALOG = [
     {"key": "economy",  "label": "Level & Coins",     "emoji": "📈", "desc": "XP, Level, Flo Coins, Tages-Shop & Titel"},
     {"key": "floaktie", "label": "FloCorp-Aktie",     "emoji": "💰", "desc": "$FLO handeln + Voice-Dividende"},
     {"key": "lotto",    "label": "Monats-Lotto",      "emoji": "🎟️", "desc": "Monatlicher Millionen-Jackpot"},
+    {"key": "giveaway", "label": "Giveaways",         "emoji": "🎉", "desc": "Nutzer verlosen eigene Coins (Flo fragt alles ab)"},
     {"key": "merchant", "label": "Fahrender Händler", "emoji": "🛒", "desc": "Täglicher Händler mit exklusiven Titeln"},
     {"key": "steal",    "label": "Coin-Raub",         "emoji": "🥷", "desc": "flo steal @wer – Coins klauen"},
     {"key": "handel",   "label": "Handelsbuch",       "emoji": "📒", "desc": "Alle Coin-Transaktionen als Statistik"},

@@ -1883,6 +1883,285 @@ def test_economy_money_leaderboard():
         restore()
 
 
+class _FakeChannel:
+    """Kanal-Attrappe: merkt sich, was Flo gesendet hat."""
+
+    def __init__(self, cid=99):
+        self.id = cid
+        self.sent = []
+
+    async def send(self, content=None, embed=None, view=None, **_kw):
+        self.sent.append({"content": content, "embed": embed, "view": view})
+        return SimpleNamespace(id=len(self.sent), edit=self._edit, channel=self)
+
+    async def _edit(self, **_kw):
+        return None
+
+    async def fetch_message(self, _mid):
+        raise RuntimeError("keine echte Nachricht im Test")
+
+
+_GW_CHANNEL = _FakeChannel()
+
+
+def _giveaway_msg(host=1, text="", channel=None):
+    """Nachrichten-Attrappe fuer den Giveaway-Assistenten."""
+    ch = channel or _GW_CHANNEL
+    return SimpleNamespace(
+        content=text, channel=ch,
+        author=SimpleNamespace(id=host, bot=False, display_name=f"User{host}",
+                               display_avatar=SimpleNamespace(url="http://x/y.png")),
+        guild=SimpleNamespace(id=1))
+
+
+def _giveaway_setup(coins_by_uid):
+    """giveaway + economy mit Fake-Stores. Rueckgabe: (restore, gw)"""
+    import giveaway
+    restore_eco = _with_economy(coins_by_uid)
+    gw = giveaway.instance
+    alt = (gw._store, gw._enabled, dict(gw._wizards), gw._client)
+    gw._store = _FakeStore({"active": {}, "next_id": 1, "done": []})
+    gw._enabled = True
+    gw._wizards = {}
+    gw._client = None
+    # WICHTIG: _protect macht 'import bot' - das wuerde im Test alle setup()s neu
+    # fahren und die Fake-Stores (und damit die Kontostaende) austauschen.
+    alt_protect = gw._protect
+    gw._protect = lambda _msg: None
+
+    def restore():
+        gw._store, gw._enabled, gw._wizards, gw._client = alt
+        gw._protect = alt_protect
+        restore_eco()
+    return restore, gw
+
+
+def test_giveaway_sprachverstaendnis():
+    """Der Assistent muss Alltagssprache verstehen: viele Formulierungen, die
+    dasselbe bedeuten, muessen exakt dasselbe ergeben."""
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        # --- Einsatz ---
+        for text, erwartet in (
+            ("5000", 5000), ("5k", 5000), ("5 k", 5000), ("10.000", 10000),
+            ("10000 coins", 10000), ("2 mio", 2_000_000), ("2m", 2_000_000),
+            ("1,5k", 1500), ("1.5k", 1500), ("2,5 mio", 2_500_000),
+            ("zweitausend", 2000), ("zwei tausend", 2000),
+            ("zweitausendfünfhundert", 2500), ("fünfhundert", 500),
+            ("einundzwanzig", 21), ("dreizehn", 13), ("eine million", 1_000_000),
+            ("drei mrd", 3_000_000_000), ("1 000", 1000),
+        ):
+            betrag, _h = gw.parse_stake(text, 100_000)
+            assert betrag == erwartet, (text, betrag, erwartet)
+        # Anteile am Guthaben
+        assert gw.parse_stake("alles", 100_000)[0] == 100_000
+        assert gw.parse_stake("all in", 100_000)[0] == 100_000
+        assert gw.parse_stake("mein ganzes geld", 100_000)[0] == 100_000
+        assert gw.parse_stake("die hälfte", 100_000)[0] == 50_000
+        assert gw.parse_stake("halb", 100_000)[0] == 50_000
+        assert gw.parse_stake("ein drittel", 99_000)[0] == 33_000
+        assert gw.parse_stake("viertel", 100_000)[0] == 25_000
+        assert gw.parse_stake("25%", 100_000)[0] == 25_000
+        assert gw.parse_stake("10 %", 100_000)[0] == 10_000
+        # Murks bleibt Murks (der Assistent fragt dann nochmal nach)
+        for text in ("keine ahnung", "hä", "", "?!"):
+            assert gw.parse_stake(text, 100_000)[0] is None, text
+
+        # --- Dauer ---
+        for text, secs in (
+            ("10min", 600), ("10 min", 600), ("10 minuten", 600), ("10m", 600),
+            ("10", 600),                                  # nackte Zahl = Minuten
+            ("1h", 3600), ("1 stunde", 3600), ("eine stunde", 3600),
+            ("1 std", 3600), ("60 minuten", 3600), ("1h 30m", 5400),
+            ("1h30", 5400), ("1 stunde 30 minuten", 5400), ("eineinhalb stunden", 5400),
+            ("halbe stunde", 1800), ("eine halbe stunde", 1800),
+            ("viertelstunde", 900), ("dreiviertelstunde", 2700),
+            ("2 tage", 172800), ("zwei tage", 172800), ("1 tag", 86400),
+            ("24h", 86400), ("1 woche", 604800), ("30 sek", 30), ("45 sekunden", 45),
+            ("kurz", 600), ("mittel", 3600), ("lang", 86400),
+            ("über nacht", 43200), ("wochenende", 172800),
+        ):
+            assert gw.parse_duration(text) == secs, (text, gw.parse_duration(text), secs)
+        assert gw.parse_duration("bla") is None
+
+        # --- Ja/Nein/Abbruch ---
+        for t in ("ja", "jo", "jup", "yes", "passt", "klar", "los", "start", "ok",
+                  "👍", "✅", "auf jeden fall", "mach", "bestätigen"):
+            assert gw.is_yes(t), t
+        for t in ("nein", "ne", "nö", "no", "abbrechen", "lieber nicht", "❌", "stop"):
+            assert gw.is_no(t), t
+        for t in ("abbrechen", "stop", "stopp", "cancel", "vergiss es", "nvm"):
+            assert gw.is_cancel(t), t
+        assert not gw.is_yes("nein")
+        assert not gw.is_no("ja")
+
+        # Lesbare Dauer-Ausgabe
+        assert gw.dauer_text(600) == "10 Minuten"
+        assert gw.dauer_text(3600) == "1 Stunde"
+        assert gw.dauer_text(5400) == "1 Stunde 30 Minuten"
+        assert gw.dauer_text(86400) == "1 Tag"
+        assert gw.dauer_text(172800) == "2 Tage"
+    finally:
+        restore()
+
+
+def test_giveaway_geldweg_und_ziehung():
+    """Der Einsatz wird beim Start abgebucht (Escrow), geht am Ende an genau EINEN
+    Gewinner - und bei 0 Teilnehmern/Abbruch komplett zurueck. Coins entstehen nie
+    neu und verschwinden nie."""
+    restore, gw = _giveaway_setup({1: 50_000, 2: 0, 3: 0})
+    try:
+        summe_vorher = sum(economy.get_coins(u) for u in (1, 2, 3))
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": 20_000, "reason": "weil", "seconds": 60}))
+        # Abgebucht, im Escrow, Giveaway laeuft.
+        assert economy.get_coins(1) == 30_000
+        g = list(gw._active().values())[0]
+        assert g["escrow"] == 20_000 and g["host"] == 1
+        assert sum(economy.get_coins(u) for u in (1, 2, 3)) == summe_vorher - 20_000
+
+        # Teilnehmer eintragen (wie der Knopf es tut) und ziehen.
+        g["entries"] = [2, 3]
+        asyncio.run(gw._auslosen(None, g))
+        assert not gw._active(), "Giveaway muss nach der Ziehung weg sein"
+        gewinner = 2 if economy.get_coins(2) else 3
+        verlierer = 3 if gewinner == 2 else 2
+        assert economy.get_coins(gewinner) == 20_000
+        assert economy.get_coins(verlierer) == 0
+        assert economy.get_coins(1) == 30_000
+        # Coin-Summe unveraendert: nur umverteilt.
+        assert sum(economy.get_coins(u) for u in (1, 2, 3)) == summe_vorher
+        hist = gw._state()["done"][-1]
+        assert hist["winner"] == gewinner and hist["stake"] == 20_000
+    finally:
+        restore()
+
+    # Ohne Teilnehmer -> alles zurueck an den Veranstalter.
+    restore, gw = _giveaway_setup({1: 10_000})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": 10_000, "reason": "", "seconds": 60}))
+        assert economy.get_coins(1) == 0
+        g = list(gw._active().values())[0]
+        asyncio.run(gw._auslosen(None, g))
+        assert economy.get_coins(1) == 10_000
+    finally:
+        restore()
+
+    # Abbruch -> Einsatz zurueck, kein Gewinner (auch mit Teilnehmern).
+    restore, gw = _giveaway_setup({1: 10_000, 2: 0})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": 5_000, "reason": "", "seconds": 60}))
+        g = list(gw._active().values())[0]
+        g["entries"] = [2]
+        asyncio.run(gw._auslosen(None, g, abgebrochen=True))
+        assert economy.get_coins(1) == 10_000 and economy.get_coins(2) == 0
+    finally:
+        restore()
+
+
+def test_giveaway_exploit_schutz():
+    """REGRESSION: kein Geld aus dem Nichts. Zu wenig Guthaben, doppeltes Ziehen,
+    Veranstalter als Teilnehmer, mehrere Giveaways gleichzeitig."""
+    restore, gw = _giveaway_setup({1: 1_000, 2: 0})
+    try:
+        msg = _giveaway_msg(host=1)
+        # 1) Einsatz groesser als Guthaben -> nichts passiert, kein Giveaway.
+        asyncio.run(gw._starten(msg, {"stake": 5_000, "reason": "", "seconds": 60}))
+        assert economy.get_coins(1) == 1_000 and not gw._active()
+
+        # 2) Guthaben verschwindet zwischen Frage und Bestaetigung (Casino o. ae.):
+        #    die Abbuchung muss vollstaendig sein, sonst Rueckbuchung + Abbruch.
+        economy.instance._profile(1)["coins"] = 800
+        asyncio.run(gw._starten(msg, {"stake": 800, "reason": "", "seconds": 60}))
+        assert economy.get_coins(1) == 0
+        g = list(gw._active().values())[0]
+
+        # 3) Doppeltes Auslosen darf NICHT doppelt zahlen.
+        g["entries"] = [2]
+        asyncio.run(gw._auslosen(None, g))
+        assert economy.get_coins(2) == 800
+        asyncio.run(gw._auslosen(None, g))          # zweiter Versuch
+        assert economy.get_coins(2) == 800, "doppelte Auszahlung!"
+
+        # 4) Veranstalter zaehlt nie als Teilnehmer (auch nicht manipuliert).
+        economy.instance._profile(1)["coins"] = 5_000
+        asyncio.run(gw._starten(msg, {"stake": 5_000, "reason": "", "seconds": 60}))
+        g = list(gw._active().values())[0]
+        g["entries"] = [1]                           # nur der Host selbst
+        asyncio.run(gw._auslosen(None, g))
+        assert economy.get_coins(1) == 5_000         # Rueckbuchung, kein "Gewinn"
+        assert gw._state()["done"][-1]["winner"] == 0
+    finally:
+        restore()
+
+    # 5) Nur EIN laufendes Giveaway pro Nutzer (sonst mehrfach Escrow).
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw._starten(msg, {"stake": 10_000, "reason": "", "seconds": 60}))
+        antwort = asyncio.run(gw.start_wizard(msg))
+        assert isinstance(antwort, str) and "laufendes Giveaway" in antwort
+        assert len(gw._active()) == 1
+    finally:
+        restore()
+
+
+def test_giveaway_schnellstart_und_assistent():
+    """'giveaway 5k 2h weil ...' liest alles aus einer Zeile; der Assistent fragt
+    nur das Fehlende nach und akzeptiert lockere Antworten."""
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        d = gw._vorgabe_aus_text("5k 2h weil ich 1 mio geknackt habe", 100_000)
+        assert d["stake"] == 5_000 and d["seconds"] == 7200
+        assert "1 mio geknackt" in d["reason"] and not d["reason"].startswith("weil")
+        d = gw._vorgabe_aus_text("10.000 30min", 100_000)
+        assert d["stake"] == 10_000 and d["seconds"] == 1800
+        d = gw._vorgabe_aus_text("alles 1 tag", 100_000)
+        assert d["stake"] == 100_000 and d["seconds"] == 86400
+        # Nur ein Betrag -> Dauer fehlt und wird nachgefragt.
+        d = gw._vorgabe_aus_text("2k", 100_000)
+        assert d["stake"] == 2_000 and "seconds" not in d
+
+        # Assistent: Schritt fuer Schritt, mit lockeren Antworten.
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw.start_wizard(msg))
+        w = gw._wizards[(msg.channel.id, 1)]
+        assert w["step"] == "stake"
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="zwei tausend")))
+        assert w["data"]["stake"] == 2_000 and w["step"] == "reason"
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="einfach so")))
+        assert w["data"]["reason"] == "einfach so" and w["step"] == "seconds"
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="halbe stunde")))
+        assert w["data"]["seconds"] == 1800 and w["step"] == "confirm"
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="passt")))
+        assert len(gw._active()) == 1 and economy.get_coins(1) == 98_000
+        g = list(gw._active().values())[0]
+        assert g["reason"] == "einfach so" and int(g["ends"] - g["started"]) == 1800
+        assert (msg.channel.id, 1) not in gw._wizards
+    finally:
+        restore()
+
+    # Unverstaendliche Antwort -> Assistent bleibt stehen und fragt nochmal.
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw.start_wizard(msg))
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="öhm keine ahnung")))
+        w = gw._wizards[(msg.channel.id, 1)]
+        assert w["step"] == "stake" and "stake" not in w["data"]
+        # Unter dem Minimum -> auch nachfragen, nichts uebernehmen.
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="5")))
+        assert "stake" not in w["data"]
+        # 'abbrechen' beendet sauber, ohne Abbuchung.
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="abbrechen")))
+        assert (msg.channel.id, 1) not in gw._wizards
+        assert economy.get_coins(1) == 100_000 and not gw._active()
+    finally:
+        restore()
+
+
 def test_webpanel_eingaben_und_robustheit():
     """REGRESSION (Panel-Backend): unlesbare Eingaben duerfen NIE still etwas
     aendern, absurde Zahlen muessen abgelehnt werden (bevor Daten angefasst
