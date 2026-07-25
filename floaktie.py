@@ -339,6 +339,53 @@ class FloAktie:
         except Exception:  # noqa: BLE001
             log.exception("Speichern nach FloCorp-Trade fehlgeschlagen")
 
+    # --- Admin-API (Web-Panel): Anteile & Kurs korrigieren ----------------
+    async def admin_set_price(self, preis):
+        """Setzt den ANGEZEIGTEN Kurs (verankert den Basiskurs passend neu)."""
+        preis = max(MIN_PRICE, int(preis))
+        st = self._state()
+        st["base"] = preis / (1.0 + self.total_shares() / LIQUIDITY)
+        neu = self._sync_price()
+        self._record_tick()
+        await self._save()
+        await self._refresh_live()
+        return neu
+
+    async def admin_shares(self, uid, action, amount, keep_price=True):
+        """Korrigiert die Anteile eines Nutzers (Panel: give/take/set) - z. B. um
+        per Exploit erschlichene Anteile zu entfernen.
+
+        keep_price=True haelt den ANGEZEIGTEN Kurs stabil: da der Kurs an den
+        ausgegebenen Anteilen haengt, wuerde das Streichen von 100.000 Anteilen den
+        Kurs sonst abstuerzen lassen. Der Basiskurs wird deshalb neu verankert.
+        Rueckgabe: (neue Anteile des Nutzers, Kurs, Anteile insgesamt)."""
+        uid = str(int(uid))
+        amount = max(0, int(amount))
+        hold = self._holdings()
+        vorher_kurs = self.price()
+        habe = int(hold.get(uid, 0))
+        if action == "give":
+            neu_n = habe + amount
+        elif action == "take":
+            neu_n = max(0, habe - amount)
+        else:                              # "set"
+            neu_n = amount
+        if neu_n > 0:
+            hold[uid] = neu_n
+        else:
+            hold.pop(uid, None)
+        if keep_price:
+            # Kurs festhalten -> Basiskurs an die neue Anteilsmenge anpassen.
+            st = self._state()
+            st["base"] = vorher_kurs / (1.0 + self.total_shares() / LIQUIDITY)
+        kurs = self._sync_price()
+        self._record_tick()
+        await self._save()
+        await self._refresh_live()
+        log.info("Panel: Anteile von %s auf %d gesetzt (%s %d) - Kurs %s.",
+                 uid, neu_n, action, amount, kurs)
+        return neu_n, kurs, self.total_shares()
+
     # --- Aktivitaets-Modell (Kurs folgt der Server-Aktivitaet) -----------
     def note_message(self):
         """Zaehlt eine Server-Nachricht als Aktivitaet (treibt den Kurs mit hoch).
@@ -839,3 +886,7 @@ note_message = instance.note_message
 sample_and_tick = instance.sample_and_tick
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
+admin_shares = instance.admin_shares
+admin_set_price = instance.admin_set_price
+shares_of = instance.shares_of
+total_shares = instance.total_shares

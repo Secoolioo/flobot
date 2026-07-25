@@ -529,7 +529,7 @@ var NAV=[
   {id:"overview",label:"Übersicht",icon:'<path d="M3 3h7v9H3z"/><path d="M14 3h7v5h-7z"/><path d="M14 12h7v9h-7z"/><path d="M3 16h7v5H3z"/>'},
   {id:"users",label:"Nutzer",icon:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'},
   {id:"servers",label:"Server",icon:'<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>'},
-  {id:"coins",label:"Coins",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1-2 2.5-2s2.5 1 2.5 2-1 1.6-2.5 2-2.5 1-2.5 2 1 2 2.5 2 2.5-1 2.5-2"/>'},
+  {id:"coins",label:"Coins & Aktien",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1-2 2.5-2s2.5 1 2.5 2-1 1.6-2.5 2-2.5 1-2.5 2 1 2 2.5 2 2.5-1 2.5-2"/>'},
   {id:"features",label:"Funktionen",icon:'<path d="M12 2l2.09 6.26L20 9l-5 3.5L16.5 20 12 16.5 7.5 20 9 12.5 4 9l5.91-.74z"/>'}
 ];
 function buildNav(){ var n=$("#nav"); n.innerHTML=""; NAV.forEach(function(it){
@@ -538,7 +538,7 @@ function buildNav(){ var n=$("#nav"); n.innerHTML=""; NAV.forEach(function(it){
   d.addEventListener("click",function(){ navigate(it.id); $("#side").classList.remove("open"); });
   n.appendChild(d); }); }
 
-var TITLES={overview:["Übersicht","Echtzeit-Kennzahlen"],users:["Nutzer","Verwaltung & Aktionen"],servers:["Server","Guilds & Broadcast"],coins:["Coins","Schnellaktionen"],features:["Funktionen","Module an- & abschalten"]};
+var TITLES={overview:["Übersicht","Echtzeit-Kennzahlen"],users:["Nutzer","Verwaltung & Aktionen"],servers:["Server","Guilds & Broadcast"],coins:["Coins & Aktien","Coins · Anteile · XP verwalten"],features:["Funktionen","Module an- & abschalten"]};
 function navigate(v){ S.view=v; if(S.refresh){clearInterval(S.refresh);S.refresh=null;}
   document.querySelectorAll(".nav-i").forEach(function(el){el.classList.toggle("active",el.dataset.view===v);});
   $("#pageTitle").textContent=TITLES[v][0]; $("#pageCrumb").textContent=S.bot+" · "+TITLES[v][1];
@@ -802,6 +802,13 @@ function renderUserModal(ov,u){ var m=ov.querySelector(".modal");
         '<select class="sel" id="coinAct"><option value="give">Geben</option><option value="take">Nehmen</option><option value="set">Setzen</option></select>'+
         '<input class="inp sm" id="coinAmt" placeholder="z.B. 1000 · 1k · 2m">'+
         '<button class="btn-sm-gold" id="coinGo">Ausführen</button></div></div>'+
+      '<div class="m-sub">$FLO-Anteile verwalten</div>'+
+      '<div class="act-block"><div class="act-row">'+
+        '<select class="sel" id="shAct"><option value="take">Nehmen</option><option value="set">Setzen</option><option value="give">Geben</option></select>'+
+        '<input class="inp sm" id="shAmt" placeholder="Anteile, z.B. 100000">'+
+        '<button class="btn-sm-gold" id="shGo">Ausführen</button></div>'+
+        '<label style="display:flex;gap:7px;align-items:center;margin-top:9px;color:var(--mute);font-size:12px;cursor:pointer">'+
+        '<input type="checkbox" id="shKeep" checked style="accent-color:#D4AF37"> Kurs stabil halten</label></div>'+
       '<div class="m-sub">XP verwalten</div>'+
       '<div class="act-block"><div class="act-row">'+
         '<select class="sel" id="xpAct"><option value="give">Geben</option><option value="set">Setzen</option></select>'+
@@ -822,6 +829,11 @@ function renderUserModal(ov,u){ var m=ov.querySelector(".modal");
     api("/api/user/coins",{method:"POST",body:{id:u.id,action:a,amount:amt}}).then(function(r){ if(!r.ok)throw r;
       u.coins=r.coins; var mv=m.querySelectorAll(".mstat .mv")[0]; countUp(mv,r.coins,{from:0,dur:700}); celebrate(m);
       toast("Coins aktualisiert: "+fmt(r.coins),"ok"); $("#coinAmt").value=""; if(S.users)loadUsers(); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Aktion fehlgeschlagen","err"); }); });
+
+  m.querySelector("#shGo").addEventListener("click",function(){ var a=$("#shAct").value,amt=$("#shAmt").value.trim(); if(!amt){toast("Anzahl eingeben","err");return;}
+    api("/api/user/shares",{method:"POST",body:{id:u.id,action:a,amount:amt,keep_price:$("#shKeep").checked}}).then(function(r){ if(!r.ok)throw r;
+      u.shares=r.shares; var mvs=m.querySelectorAll(".mstat .mv"); if(mvs[3])countUp(mvs[3],r.shares,{from:0,dur:700}); celebrate(m);
+      toast("Anteile: "+fmt(r.shares)+" · Kurs "+fmt(r.price),"ok"); $("#shAmt").value=""; if(S.users)loadUsers(); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Aktion fehlgeschlagen","err"); }); });
 
   m.querySelector("#xpGo").addEventListener("click",function(){ var a=$("#xpAct").value,amt=$("#xpAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
     api("/api/user/xp",{method:"POST",body:{id:u.id,action:a,amount:amt}}).then(function(r){ if(!r.ok)throw r;
@@ -877,26 +889,95 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
 
 /* ============ COINS QUICK PAGE ============ */
 function viewCoins(){ var c=$("#content"); var v=ce("div","view");
-  v.innerHTML='<div class="sec-h"><h2>Coins-Schnellaktion</h2><div class="ln"></div><div class="tag">Direkt per ID</div></div>'+
-    '<div class="card panel reveal" style="max-width:560px"><div class="ph" style="margin-bottom:16px"><div class="pt">Coins zuweisen</div><div class="pm">/api/user/coins</div></div>'+
-      '<div class="fld"><label>Nutzer-ID</label><input class="inp" id="qcId" placeholder="123456789"></div>'+
-      '<div class="act-row" style="margin-top:6px">'+
+  v.innerHTML='<div class="sec-h"><h2>Nutzer verwalten</h2><div class="ln"></div><div class="tag">Coins · Aktien · XP</div></div>'+
+    /* --- Nutzer wählen (Suche oder ID) --- */
+    '<div class="card panel reveal" style="max-width:620px"><div class="ph" style="margin-bottom:16px"><div class="pt">1 · Nutzer wählen</div><div class="pm">Name oder ID</div></div>'+
+      '<div class="fld"><label>Suche</label><input class="inp" id="pkQ" placeholder="Name tippen oder ID einfügen…" autocomplete="off"></div>'+
+      '<div id="pkList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>'+
+      '<div id="pkSel" style="margin-top:12px;color:var(--mute);font-size:13px">Noch kein Nutzer gewählt.</div></div>'+
+    /* --- Coins --- */
+    '<div class="card panel reveal" style="max-width:620px;margin-top:16px"><div class="ph" style="margin-bottom:16px"><div class="pt">💰 Coins</div><div class="pm">geben · nehmen · setzen</div></div>'+
+      '<div class="act-row">'+
         '<select class="sel" id="qcAct"><option value="give">Geben</option><option value="take">Nehmen</option><option value="set">Setzen</option></select>'+
-        '<input class="inp sm" id="qcAmt" placeholder="z.B. 5k · 2m"><button class="btn-sm-gold" id="qcGo">Ausführen</button></div>'+
-      '<div id="qcRes" style="margin-top:16px;color:var(--dim);font-size:13.5px"></div></div>'+
-    '<div class="card panel reveal" style="max-width:560px;margin-top:16px"><div class="ph" style="margin-bottom:16px"><div class="pt">XP zuweisen</div><div class="pm">/api/user/xp</div></div>'+
-      '<div class="fld"><label>Nutzer-ID</label><input class="inp" id="qxId" placeholder="123456789"></div>'+
-      '<div class="act-row" style="margin-top:6px">'+
+        '<input class="inp sm" id="qcAmt" placeholder="z.B. 5k · 2m · 100000"><button class="btn-sm-gold" id="qcGo">Ausführen</button></div>'+
+      '<div id="qcRes" style="margin-top:14px;color:var(--dim);font-size:13.5px"></div></div>'+
+    /* --- Aktien / Anteile --- */
+    '<div class="card panel reveal" style="max-width:620px;margin-top:16px"><div class="ph" style="margin-bottom:16px"><div class="pt">📈 $FLO-Anteile</div><div class="pm">geben · nehmen · setzen</div></div>'+
+      '<div class="act-row">'+
+        '<select class="sel" id="qsAct"><option value="take">Nehmen</option><option value="set">Setzen</option><option value="give">Geben</option></select>'+
+        '<input class="inp sm" id="qsAmt" placeholder="Anzahl Anteile, z.B. 100000"><button class="btn-sm-gold" id="qsGo">Ausführen</button></div>'+
+      '<label style="display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--mute);font-size:12.5px;cursor:pointer">'+
+        '<input type="checkbox" id="qsKeep" checked style="accent-color:#D4AF37"> Kurs stabil halten (empfohlen – sonst stürzt er beim Streichen großer Positionen ab)</label>'+
+      '<div id="qsRes" style="margin-top:14px;color:var(--dim);font-size:13.5px"></div></div>'+
+    /* --- XP --- */
+    '<div class="card panel reveal" style="max-width:620px;margin-top:16px"><div class="ph" style="margin-bottom:16px"><div class="pt">⭐ XP</div><div class="pm">geben · setzen</div></div>'+
+      '<div class="act-row">'+
         '<select class="sel" id="qxAct"><option value="give">Geben</option><option value="set">Setzen</option></select>'+
         '<input class="inp sm" id="qxAmt" placeholder="z.B. 500"><button class="btn-em" id="qxGo">Ausführen</button></div>'+
-      '<div id="qxRes" style="margin-top:16px;color:var(--dim);font-size:13.5px"></div></div>';
+      '<div id="qxRes" style="margin-top:14px;color:var(--dim);font-size:13.5px"></div></div>'+
+    /* --- Kurs --- */
+    '<div class="card panel reveal" style="max-width:620px;margin-top:16px"><div class="ph" style="margin-bottom:16px"><div class="pt">📊 Aktienkurs setzen</div><div class="pm">gilt für alle · Korrektur</div></div>'+
+      '<div class="act-row">'+
+        '<input class="inp sm" id="qpVal" placeholder="neuer Kurs, z.B. 1000"><button class="btn-sm-gold" id="qpGo">Kurs setzen</button></div>'+
+      '<div id="qpRes" style="margin-top:14px;color:var(--dim);font-size:13.5px"></div></div>';
   c.innerHTML=""; c.appendChild(v);
-  $("#qcGo").addEventListener("click",function(){ var id=$("#qcId").value.trim(); if(!id){toast("Nutzer-ID eingeben","err");return;} var amt=$("#qcAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
+
+  /* Nutzer-Auswahl */
+  var picked=null, tmr=null;
+  function showPicked(u){ picked=u;
+    $("#pkSel").innerHTML='✓ Gewählt: <b>'+esc(u.name)+'</b> <span class="mono" style="color:var(--mute)">('+u.id+')</span>'+
+      ' · 💰 <b class="num gold">'+fmt(u.coins)+'</b> · 📈 <b class="num">'+fmt(u.shares)+'</b> Anteile'; }
+  function search(){ var q=$("#pkQ").value.trim(); var L=$("#pkList");
+    if(!q){ L.innerHTML=""; return; }
+    api("/api/users?q="+encodeURIComponent(q)+"&size=8").then(function(r){ if(!r.ok)return;
+      if(!r.users.length){ L.innerHTML='<div style="color:var(--mute);font-size:13px">Kein Treffer.</div>'; return; }
+      L.innerHTML=r.users.map(function(u){ return '<div class="pk-row" data-id="'+u.id+'" style="display:flex;gap:10px;align-items:center;padding:9px 12px;border:1px solid var(--hair);border-radius:10px;cursor:pointer">'+
+        '<span class="av" style="width:28px;height:28px;font-size:12px;background:'+avColor(u.id)+'">'+esc(initials(u.name))+'</span>'+
+        '<b style="flex:1">'+esc(u.name)+'</b><span class="num gold">'+fmt(u.coins)+'</span>'+
+        '<span class="num" style="color:var(--blue)">'+fmt(u.shares)+' ▦</span></div>'; }).join("");
+      Array.prototype.forEach.call(L.querySelectorAll(".pk-row"),function(el){
+        el.addEventListener("click",function(){
+          var u=r.users.filter(function(x){return x.id===el.dataset.id;})[0];
+          if(u){ showPicked(u); L.innerHTML=""; $("#pkQ").value=u.name; } }); });
+    }).catch(function(){}); }
+  $("#pkQ").addEventListener("input",function(){ clearTimeout(tmr); tmr=setTimeout(search,280); });
+  function targetId(){
+    if(picked) return picked.id;
+    var raw=$("#pkQ").value.trim();
+    if(/^\d{5,25}$/.test(raw)) return raw;   // rohe ID direkt erlaubt
+    toast("Erst einen Nutzer wählen (oder ID eingeben)","err"); return null; }
+
+  /* Coins */
+  $("#qcGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
+    var amt=$("#qcAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
     api("/api/user/coins",{method:"POST",body:{id:id,action:$("#qcAct").value,amount:amt}}).then(function(r){ if(!r.ok)throw r;
-      $("#qcRes").innerHTML='✓ Neuer Kontostand: <b class="num gold">'+fmt(r.coins)+'</b> Coins'; toast("Coins aktualisiert","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
-  $("#qxGo").addEventListener("click",function(){ var id=$("#qxId").value.trim(); if(!id){toast("Nutzer-ID eingeben","err");return;} var amt=$("#qxAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
+      $("#qcRes").innerHTML='✓ Neuer Kontostand: <b class="num gold">'+fmt(r.coins)+'</b> Coins';
+      if(picked)picked.coins=r.coins; toast("Coins aktualisiert","ok");
+    }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+
+  /* Anteile */
+  $("#qsGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
+    var amt=$("#qsAmt").value.trim(); if(!amt){toast("Anzahl eingeben","err");return;}
+    api("/api/user/shares",{method:"POST",body:{id:id,action:$("#qsAct").value,amount:amt,
+                                               keep_price:$("#qsKeep").checked}}).then(function(r){ if(!r.ok)throw r;
+      $("#qsRes").innerHTML='✓ Anteile: <b class="num">'+fmt(r.shares)+'</b> · Kurs <b class="num gold">'+fmt(r.price)+
+        '</b> · gesamt im Umlauf <b class="num">'+fmt(r.total_shares)+'</b>';
+      if(picked)picked.shares=r.shares; toast("Anteile aktualisiert","ok");
+    }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+
+  /* XP */
+  $("#qxGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
+    var amt=$("#qxAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
     api("/api/user/xp",{method:"POST",body:{id:id,action:$("#qxAct").value,amount:amt}}).then(function(r){ if(!r.ok)throw r;
-      $("#qxRes").innerHTML='✓ XP: <b class="num">'+fmt(r.xp)+'</b> · Level <b class="num">'+fmt(r.level)+'</b>'; toast("XP aktualisiert","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+      $("#qxRes").innerHTML='✓ XP: <b class="num">'+fmt(r.xp)+'</b> · Level <b class="num">'+fmt(r.level)+'</b>';
+      toast("XP aktualisiert","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+
+  /* Kurs */
+  $("#qpGo").addEventListener("click",function(){ var p=$("#qpVal").value.trim(); if(!p){toast("Kurs eingeben","err");return;}
+    api("/api/stock/price",{method:"POST",body:{price:p}}).then(function(r){ if(!r.ok)throw r;
+      $("#qpRes").innerHTML='✓ Neuer Kurs: <b class="num gold">'+fmt(r.price)+'</b> Coins / Anteil';
+      toast("Kurs gesetzt","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
+
   observeReveals(v); }
 
 /* ============ SKELETONS / STATES ============ */

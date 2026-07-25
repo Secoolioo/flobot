@@ -88,6 +88,8 @@ class WebPanel:
             web.post("/api/user/coins", self._api_coins),
             web.post("/api/user/xp", self._api_xp),
             web.post("/api/user/title", self._api_title),
+            web.post("/api/user/shares", self._api_shares),
+            web.post("/api/stock/price", self._api_stock_price),
             web.get("/api/servers", self._api_servers),
             web.post("/api/server/sendepause", self._api_sendepause),
             web.post("/api/server/announce", self._api_announce),
@@ -416,6 +418,65 @@ class WebPanel:
             pass
         await economy.flush()
         return web.json_response({"ok": True, "titles": economy.list_titles(uid_int)})
+
+    # --- API: Aktien-Anteile korrigieren ----------------------------------
+    async def _api_shares(self, request):
+        """Anteile eines Nutzers geben/nehmen/setzen (z. B. Exploit-Anteile weg)."""
+        self._guard(request)
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        try:
+            import floaktie
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        if not floaktie.is_enabled():
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        try:
+            uid_int = int(str(data.get("id", "")).strip())
+        except ValueError:
+            return web.json_response({"ok": False, "error": "id?"}, status=400)
+        action = str(data.get("action", "set"))
+        if action not in ("give", "take", "set"):
+            return web.json_response({"ok": False, "error": "aktion?"}, status=400)
+        amount = self._parse_amount(data.get("amount", 0))
+        if amount < 0:
+            return web.json_response({"ok": False, "error": "ungueltig"}, status=400)
+        # keep_price (Standard an): haelt den Kurs stabil, damit das Streichen
+        # grosser Positionen den Markt nicht abstuerzen laesst.
+        keep = data.get("keep_price", True)
+        try:
+            shares, kurs, total = await floaktie.admin_shares(
+                uid_int, action, amount, keep_price=bool(keep))
+        except Exception:  # noqa: BLE001
+            log.exception("Anteils-Korrektur via Panel fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        return web.json_response({"ok": True, "shares": shares, "price": kurs,
+                                  "total_shares": total})
+
+    async def _api_stock_price(self, request):
+        """Setzt den Aktienkurs direkt (Korrektur nach einem Exploit)."""
+        self._guard(request)
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        try:
+            import floaktie
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        if not floaktie.is_enabled():
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        preis = self._parse_amount(data.get("price", 0))
+        if preis <= 0:
+            return web.json_response({"ok": False, "error": "kurs?"}, status=400)
+        try:
+            neu = await floaktie.admin_set_price(preis)
+        except Exception:  # noqa: BLE001
+            log.exception("Kurs-Korrektur via Panel fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        return web.json_response({"ok": True, "price": neu})
 
     # --- API: Server ------------------------------------------------------
     async def _api_servers(self, request):

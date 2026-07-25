@@ -1487,6 +1487,45 @@ def test_webpanel_api():
                        json={"on": True}, headers=H)).json()
             assert j["ok"] and j["sendepause"] is True and admin.is_locked() is True
 
+            # --- Aktien-Anteile per Panel korrigieren (Exploit-Aufräumen) ---
+            import floaktie
+            alt_fa = (floaktie.instance._store, floaktie.instance._enabled)
+            floaktie.instance._enabled = True
+            floaktie.instance._store = _FakeStore(
+                {"price": 300000, "day": "x", "act_ema": floaktie.ACT_BASELINE,
+                 "msg_count": 0, "last_msg_count": 0,
+                 "holdings": {"1": 120000, "2": 5000}, "history": [], "ticks": []})
+            floaktie.instance._base()
+            floaktie.instance._sync_price()
+            try:
+                kurs_vor = floaktie.instance.price()
+                # 120.000 Exploit-Anteile streichen - Kurs muss STABIL bleiben.
+                j = await (await cli.post("/api/user/shares",
+                           json={"id": "1", "action": "set", "amount": 0,
+                                 "keep_price": True}, headers=H)).json()
+                assert j["ok"] and j["shares"] == 0
+                assert j["total_shares"] == 5000
+                assert abs(j["price"] - kurs_vor) <= max(1, kurs_vor // 1000)
+                # geben / nehmen
+                j = await (await cli.post("/api/user/shares",
+                           json={"id": "1", "action": "give", "amount": "100"}, headers=H)).json()
+                assert j["shares"] == 100
+                j = await (await cli.post("/api/user/shares",
+                           json={"id": "1", "action": "take", "amount": "40"}, headers=H)).json()
+                assert j["shares"] == 60
+                # Kurs direkt setzen
+                j = await (await cli.post("/api/stock/price",
+                           json={"price": "1000"}, headers=H)).json()
+                assert j["ok"] and j["price"] == 1000 and floaktie.instance.price() == 1000
+                # Unsinn wird abgelehnt
+                assert (await cli.post("/api/user/shares",
+                        json={"id": "1", "action": "quatsch", "amount": "5"},
+                        headers=H)).status == 400
+                assert (await cli.post("/api/stock/price",
+                        json={"price": "0"}, headers=H)).status == 400
+            finally:
+                floaktie.instance._store, floaktie.instance._enabled = alt_fa
+
     asyncio.run(run_it())
     wp._enabled, wp._user, wp._pass, wp._tokens, wp._client = alt
     admin.instance._enabled, admin.instance._store = alt_admin
