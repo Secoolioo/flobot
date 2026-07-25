@@ -1493,6 +1493,67 @@ def test_webpanel_api():
     restore_eco()
 
 
+def test_floaktie_kein_pump_and_dump():
+    """REGRESSION (Exploit): Der Kurs muss pfad-unabhaengig sein - viele kleine
+    Kaeufe duerfen den Kurs NICHT staerker heben als ein grosser Kauf, sonst kann
+    man hochpumpen und teuer dumpen (Geld aus dem Nichts). Zusaetzlich muss jeder
+    Round-Trip (kaufen+verkaufen) durch die Gebuehr verlieren."""
+    import floaktie
+    START = 5_000_000
+
+    def fresh():
+        restore = _with_economy({1: START})
+        fa = floaktie.instance
+        fa._enabled = True
+        fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x",
+                                "act_ema": floaktie.ACT_BASELINE, "msg_count": 0,
+                                "last_msg_count": 0, "holdings": {}, "history": [],
+                                "ticks": []})
+        return fa, SimpleNamespace(id=1), restore
+
+    fa, M, restore = fresh()
+    try:
+        # 1) Pump & Dump verliert (frueher: +414k Gewinn aus dem Nichts).
+        for _ in range(300):
+            asyncio.run(fa.buy(M, 1))
+        asyncio.run(fa.sell(M, fa.shares_of(1)))
+        assert economy.get_coins(1) < START, "Pump&Dump druckt Geld!"
+    finally:
+        restore()
+
+    # 2) Pfad-Unabhaengigkeit: 300x1 kostet praktisch genauso viel wie 1x300.
+    fa, M, restore = fresh()
+    try:
+        for _ in range(300):
+            asyncio.run(fa.buy(M, 1))
+        klein = START - economy.get_coins(1)
+    finally:
+        restore()
+    fa, M, restore = fresh()
+    try:
+        asyncio.run(fa.buy(M, 300))
+        gross = START - economy.get_coins(1)
+    finally:
+        restore()
+    assert abs(klein - gross) <= gross * 0.01, (klein, gross)   # <=1% (nur Rundung)
+
+    # 3) Round-Trip verliert immer (Gebuehr).
+    fa, M, restore = fresh()
+    try:
+        asyncio.run(fa.buy(M, 200))
+        asyncio.run(fa.sell(M, 200))
+        assert economy.get_coins(1) < START
+        # 4) Verkaufen in Scheiben + Rueckkauf am Stueck bringt auch nichts.
+        asyncio.run(fa.buy(M, 100))
+        bal = economy.get_coins(1)
+        for _ in range(100):
+            asyncio.run(fa.sell(M, 1))
+        asyncio.run(fa.buy(M, 100))
+        assert economy.get_coins(1) <= bal
+    finally:
+        restore()
+
+
 def test_numfmt():
     """Deutsche Tausenderpunkte ab 1000; kleine/negative/Murks-Werte robust."""
     import numfmt

@@ -56,10 +56,11 @@ TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 # --- Balance (per .env justierbar) -------------------------------------------
 START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "1000") or "1000")   # Coins/Anteil
 MIN_PRICE = int(os.getenv("FLOAKTIE_MIN_PRICE", "50") or "50")
-# Liquiditaet: so viele Anteile bewegen den Kurs "voll". Kleiner = volatiler.
+# Liquiditaet: so viele Anteile verdoppeln den Kurs. Kleiner = volatiler.
 LIQUIDITY = int(os.getenv("FLOAKTIE_LIQUIDITY", "750") or "750")
-# Maximaler Kurs-Impact EINER Order (Anteil). 0.15 = +/-15 %.
-IMPACT_CAP = float(os.getenv("FLOAKTIE_IMPACT_CAP", "0.15") or "0.15")
+# Gebuehr je Order (jede Richtung). Sorgt dafuer, dass ein sofortiger
+# Hin-und-Her-Trade IMMER verliert (kein risikoloser Gewinn).
+TRADE_FEE = float(os.getenv("FLOAKTIE_TRADE_FEE", "0.02") or "0.02")
 MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "100000") or "100000")
 
 # --- Aktivitaets-Modell: der Kurs reagiert JEDE MINUTE auf die Server-Aktivitaet -
@@ -119,12 +120,15 @@ class FloAktie:
             log.info("FloCorp-Aktie aus: economy ist nicht aktiv.")
             return False
         self._store = JsonStore("floaktie.json", default={
-            "price": START_PRICE, "day": "", "act_ema": ACT_BASELINE,
-            "msg_count": 0, "last_msg_count": 0,
+            "price": START_PRICE, "base": float(START_PRICE), "day": "",
+            "act_ema": ACT_BASELINE, "msg_count": 0, "last_msg_count": 0,
             "holdings": {}, "history": [], "ticks": []})
         st = self._state()
         if not st.get("price"):
             st["price"] = START_PRICE
+        # Basiskurs aus altem Stand ableiten (Migration) und Kurs synchronisieren.
+        self._base()
+        self._sync_price()
         if not st.get("history"):
             st["history"] = [{"day": self._today(), "price": int(st["price"])}]
         self._enabled = True
@@ -187,32 +191,77 @@ class FloAktie:
     def value_of(self, uid):
         return self.shares_of(uid) * self.price()
 
-    # --- Markt-Impact -----------------------------------------------------
-    def _impact(self, shares):
-        """Kurs-Impact einer Order dieser Groesse (0..IMPACT_CAP)."""
-        if shares <= 0:
-            return 0.0
-        return min(IMPACT_CAP, shares / LIQUIDITY)
+    # --- Markt-Mathematik (pfad-unabhaengige Kurve) -----------------------
+    # WICHTIG (Exploit-Fix): Der Kurs ist eine FUNKTION der ausgegebenen Anteile:
+    #
+    #     Kurs(S) = Basiskurs * (1 + S / LIQUIDITY)
+    #
+    # Kaufen/Verkaufen bezahlt das INTEGRAL unter dieser Kurve. Dadurch kostet
+    # "750x 1 Anteil" exakt dasselbe wie "1x 750 Anteile" (pfad-unabhaengig) -
+    # frueher konnte man mit vielen Klein-Kaeufen den Kurs multiplikativ hoch-
+    # pumpen und dann mit gedeckeltem Impact teuer dumpen (Geld aus dem Nichts).
+    # Zusaetzlich liegt auf jeder Order eine Gebuehr, damit ein sofortiger
+    # Hin-und-Her-Trade IMMER verliert. Die Aktivitaet (Call/Chat/Streams)
+    # bewegt den BASISKURS - der Kurs reagiert also weiter wie gewohnt.
+    def _base(self):
+        """Basiskurs (Kurs bei 0 ausgegebenen Anteilen). Migriert alte Staende."""
+        st = self._state()
+        base = st.get("base")
+        if not base:
+            # Alter Stand: aus dem gespeicherten Kurs + Anteilen zurueckrechnen.
+            alt_kurs = float(st.get("price", START_PRICE) or START_PRICE)
+            base = alt_kurs / (1.0 + self.total_shares() / LIQUIDITY)
+            st["base"] = base
+        return max(float(MIN_PRICE), float(base))
+
+    def _price_at(self, shares_out):
+        """Kurs bei 'shares_out' ausgegebenen Anteilen (exakt, ungerundet)."""
+        return self._base() * (1.0 + max(0, shares_out) / LIQUIDITY)
+
+    def _integral(self, s_from, s_to):
+        """Flaeche unter der Kurve zwischen zwei Anteils-Staenden (= Geldbetrag).
+        Telescopiert exakt -> viele kleine Orders kosten wie eine grosse."""
+        b = self._base()
+        lo, hi = float(min(s_from, s_to)), float(max(s_from, s_to))
+        return b * ((hi - lo) + (hi * hi - lo * lo) / (2.0 * LIQUIDITY))
+
+    def _sync_price(self):
+        """Haelt den angezeigten Kurs (st['price']) mit der Kurve synchron."""
+        st = self._state()
+        st["price"] = max(MIN_PRICE, int(round(self._price_at(self.total_shares()))))
+        return st["price"]
 
     def _buy_cost(self, shares):
-        """Was 'shares' Anteile JETZT kosten (zum bereits angehobenen Kurs)."""
-        f = self._impact(shares)
-        neu = self.price() * (1 + f)
-        return int(round(shares * neu)), int(round(neu))
+        """Kosten fuer 'shares' Anteile (Integral + Gebuehr) und der Kurs danach."""
+        s = self.total_shares()
+        brutto = self._integral(s, s + max(0, shares))
+        cost = int(brutto * (1.0 + TRADE_FEE)) + 1 if brutto > 0 else 0
+        neu = max(MIN_PRICE, int(round(self._price_at(s + max(0, shares)))))
+        return cost, neu
 
     def _sell_proceeds(self, shares):
-        """Was 'shares' Anteile JETZT einbringen (zum bereits gedrueckten Kurs)."""
-        f = self._impact(shares)
-        neu = max(MIN_PRICE, self.price() * (1 - f))
-        return int(round(shares * neu)), int(round(neu))
+        """Erloes fuer 'shares' Anteile (Integral - Gebuehr) und der Kurs danach."""
+        s = self.total_shares()
+        shares = max(0, min(int(shares), s))
+        brutto = self._integral(s - shares, s)
+        proceeds = max(0, int(brutto * (1.0 - TRADE_FEE)))
+        neu = max(MIN_PRICE, int(round(self._price_at(s - shares))))
+        return proceeds, neu
 
     def _max_affordable(self, coins):
-        """Wie viele Anteile man sich mit 'coins' sicher leisten kann (inkl. Impact)."""
-        p = self.price()
-        if p <= 0:
+        """Wie viele Anteile man sich mit 'coins' leisten kann (inkl. Gebuehr).
+        Binaersuche auf der Kurve - nie mehr, als das Guthaben wirklich deckt."""
+        coins = int(coins)
+        if coins <= 0:
             return 0
-        # Konservativ: rechnet mit dem hoechstmoeglichen Impact -> immer bezahlbar.
-        return int(coins // (p * (1 + IMPACT_CAP)))
+        lo, hi = 0, MAX_SHARES_PER_TRADE
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._buy_cost(mid)[0] <= coins:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
 
     # --- Handel -----------------------------------------------------------
     def _resolve_count(self, member, token, *, selling=False):
@@ -235,13 +284,15 @@ class FloAktie:
             return "Kauf mindestens **1** Anteil. 📈"
         if count > MAX_SHARES_PER_TRADE:
             count = MAX_SHARES_PER_TRADE
-        cost, neu = self._buy_cost(count)
+        # Kosten IMMER vor der Depot-Aenderung berechnen (Kurve haengt an den
+        # ausgegebenen Anteilen).
+        cost, _ = self._buy_cost(count)
         # Aktien auf KREDIT: kein Guthaben-Check - man darf beliebig tief ins Minus
         # (allow_negative). Wie mit Hebel an einer echten Boerse: faellt der Kurs,
         # sitzt du auf den Schulden. Nur die Aktie holt dich da wieder raus.
         economy.add_coins(member.id, -cost, reason="floaktie", allow_negative=True)
         self._holdings()[str(member.id)] = self.shares_of(member.id) + count
-        self._state()["price"] = neu   # Kauf hebt den Kurs
+        neu = self._sync_price()       # Kauf hebt den Kurs (Kurve neu auswerten)
         self._record_tick()
         await self._save_all()
         await self._refresh_live()
@@ -262,14 +313,14 @@ class FloAktie:
         if count < 1:
             return "Verkauf mindestens **1** Anteil. 📉"
         count = min(count, habe)
-        proceeds, neu = self._sell_proceeds(count)
+        proceeds, _ = self._sell_proceeds(count)
         economy.add_coins(member.id, proceeds, reason="floaktie")
         rest = habe - count
         if rest > 0:
             self._holdings()[str(member.id)] = rest
         else:
             self._holdings().pop(str(member.id), None)
-        self._state()["price"] = neu   # Verkauf drueckt den Kurs
+        neu = self._sync_price()       # Verkauf drueckt den Kurs (Kurve neu)
         self._record_tick()
         await self._save_all()
         await self._refresh_live()
@@ -329,8 +380,10 @@ class FloAktie:
         raw = max(-TICK_CAP, min(TICK_CAP, raw))
         drift = raw + random.uniform(-TICK_NOISE, TICK_NOISE)
         alt = self.price()
-        neu = max(MIN_PRICE, int(round(alt * (1 + drift))))
-        st["price"] = neu
+        # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
+        # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
+        st["base"] = max(float(MIN_PRICE), self._base() * (1 + drift))
+        neu = self._sync_price()
         return alt, neu, drift, activity
 
     async def sample_and_tick(self, guild):
