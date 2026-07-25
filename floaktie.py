@@ -554,9 +554,28 @@ class FloAktie:
             n = max(2, min(len(hist), int(days) + 1)) if hist else 0
             pts = (hist[-n:] if n else []) + [self.price()]
         pts = [p for p in pts if p] or [self.price()]
+        # Der letzte Punkt ist IMMER der aktuelle Kurs - sonst endet die Linie auf
+        # einem alten Stand und passt nicht zur angezeigten Kurs-Zahl.
+        if pts[-1] != self.price():
+            pts.append(self.price())
         if len(pts) == 1:
             pts = [pts[0], pts[0]]
         return pts
+
+    def series(self, days = 1):
+        """Oeffentliche Kurs-Reihe fuer Charts (Web-Panel & Discord nutzen dieselbe
+        Quelle). Rueckgabe: (punkte, veraenderung_prozent)."""
+        pts = self._series(max(0, float(days)) or 1)
+        # Fuer die Anzeige auf eine handliche Punktzahl verdichten (gleichmaessig
+        # ausduennen, erster und letzter Punkt bleiben erhalten).
+        MAX_PUNKTE = 120
+        if len(pts) > MAX_PUNKTE:
+            schritt = len(pts) / float(MAX_PUNKTE)
+            dünn = [pts[int(i * schritt)] for i in range(MAX_PUNKTE)]
+            dünn[-1] = pts[-1]
+            pts = dünn
+        chg = ((pts[-1] - pts[0]) / pts[0] * 100.0) if pts and pts[0] else 0.0
+        return pts, round(chg, 2)
 
     def _chart_file(self, days, label):
         """Rendert den Kursverlauf als PNG (discord.File) fuer den Zeitraum."""
@@ -886,6 +905,7 @@ note_message = instance.note_message
 sample_and_tick = instance.sample_and_tick
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
+series = instance.series
 admin_shares = instance.admin_shares
 admin_set_price = instance.admin_set_price
 shares_of = instance.shares_of

@@ -91,6 +91,7 @@ class WebPanel:
             web.post("/api/user/title", self._api_title),
             web.post("/api/user/shares", self._api_shares),
             web.post("/api/stock/price", self._api_stock_price),
+            web.get("/api/stock/series", self._api_stock_series),
             web.get("/api/servers", self._api_servers),
             web.post("/api/server/sendepause", self._api_sendepause),
             web.post("/api/server/announce", self._api_announce),
@@ -277,18 +278,21 @@ class WebPanel:
             "members": members,
             "bot_online": bool(self._client and not getattr(self._client, "is_closed", lambda: True)()),
         }
-        # Aktie.
+        # Aktie. WICHTIG: fuer den Chart die FEINEN Intraday-Ticks nehmen (gleiche
+        # Quelle wie der Discord-Chart). Vorher kamen hier nur die Tages-
+        # Schlusskurse - ein Punkt pro Kalendertag, ohne den aktuellen Kurs. Die
+        # Linie passte damit nicht zur angezeigten Kurs-Zahl.
         floaktie_history = []
         try:
             import floaktie
             if floaktie.is_enabled():
+                punkte, chg = floaktie.series(1)
                 stats["floaktie_price"] = floaktie.instance.price()
                 stats["floaktie_holders"] = floaktie.instance.holders_count()
-                stats["floaktie_change"] = round(floaktie.instance._change_pct(1), 2)
+                stats["floaktie_change"] = chg
                 stats["floaktie_marketcap"] = (floaktie.instance.total_shares()
                                                * floaktie.instance.price())
-                floaktie_history = [h.get("price", 0)
-                                    for h in floaktie.instance._state().get("history", [])][-30:]
+                floaktie_history = punkte
         except Exception:  # noqa: BLE001
             pass
         # Lotto.
@@ -483,6 +487,33 @@ class WebPanel:
         await economy.flush()
         return web.json_response({"ok": True, "shares": shares, "price": kurs,
                                   "total_shares": total})
+
+    async def _api_stock_series(self, request):
+        """Kursverlauf fuer den Chart: ?days=1|7|30|3650 (Gesamt).
+
+        Nutzt exakt dieselbe Quelle wie der Discord-Chart (floaktie.series), damit
+        Panel und Bot immer dasselbe zeigen - inklusive des AKTUELLEN Kurses als
+        letztem Punkt."""
+        self._guard(request)
+        try:
+            import floaktie
+        except Exception:  # noqa: BLE001
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        if not floaktie.is_enabled():
+            return web.json_response({"ok": False, "error": "aktie aus"}, status=400)
+        try:
+            days = float(request.query.get("days", "1") or "1")
+        except ValueError:
+            days = 1.0
+        days = max(0.04, min(days, 3650.0))     # min ~1 Stunde, max 10 Jahre
+        try:
+            punkte, chg = floaktie.series(days)
+        except Exception:  # noqa: BLE001
+            log.exception("Kursverlauf konnte nicht gebaut werden")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        return web.json_response({"ok": True, "days": days, "points": punkte,
+                                  "change": chg, "price": floaktie.instance.price(),
+                                  "count": len(punkte)})
 
     async def _api_stock_price(self, request):
         """Setzt den Aktienkurs direkt (Korrektur nach einem Exploit)."""

@@ -1708,6 +1708,50 @@ def test_exploit_fixes_games_und_steal():
     assert economy.parse_amount("-5") is None
 
 
+def test_floaktie_chart_serie():
+    """REGRESSION (Dashboard-Chart war falsch): Die Kurs-Reihe muss aus den FEINEN
+    Intraday-Ticks kommen (nicht nur aus den Tages-Schlusskursen) und IMMER auf dem
+    aktuellen Kurs enden - sonst passt die Linie nicht zur angezeigten Kurs-Zahl."""
+    import time as _t
+    import floaktie
+    restore = _with_economy({1: 1000})
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    now = _t.time()
+    # 2 Tage Minuten-Ticks (steigend) + nur 2 Tages-Schlusskurse
+    ticks = [{"t": int(now - (2 * 24 * 60 - i) * 60), "price": 1000 + i}
+             for i in range(2 * 24 * 60)]
+    fa._store = _FakeStore({"price": 1000 + len(ticks) - 1, "base": 1000.0,
+                            "holdings": {}, "ticks": ticks,
+                            "history": [{"day": "d1", "price": 1000},
+                                        {"day": "d2", "price": 1500}],
+                            "day": "x", "act_ema": floaktie.ACT_BASELINE,
+                            "msg_count": 0, "last_msg_count": 0})
+    try:
+        punkte, chg = fa.series(1)
+        # Kommt aus den Ticks (viele Punkte), nicht aus den 2 History-Einträgen.
+        assert len(punkte) > 10, len(punkte)
+        # Endet EXAKT auf dem aktuellen Kurs.
+        assert punkte[-1] == fa.price(), (punkte[-1], fa.price())
+        # Änderung passt zur gezeigten Reihe.
+        erwartet = round((punkte[-1] - punkte[0]) / punkte[0] * 100, 2)
+        assert abs(chg - erwartet) < 0.01, (chg, erwartet)
+        # Auf eine handliche Punktzahl verdichtet (nicht 2880 Punkte ins SVG).
+        assert len(punkte) <= 120
+        # Größerer Zeitraum -> größere Spanne, immer noch am aktuellen Kurs.
+        p7, chg7 = fa.series(7)
+        assert p7[-1] == fa.price() and p7[0] <= punkte[0]
+        # Ohne jede Historie bleibt es robust (2 Punkte, kein Crash).
+        fa._store.data["ticks"] = []
+        fa._store.data["history"] = []
+        p0, c0 = fa.series(1)
+        assert len(p0) >= 2 and p0[-1] == fa.price() and c0 == 0.0
+    finally:
+        fa._store, fa._enabled = alt
+        restore()
+
+
 def test_numfmt():
     """Deutsche Tausenderpunkte ab 1000; kleine/negative/Murks-Werte robust."""
     import numfmt
