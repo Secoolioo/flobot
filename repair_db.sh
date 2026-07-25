@@ -22,8 +22,14 @@
 #     --coins-max N           ab so vielen Coins gilt ein Konto als auffaellig
 #                             (Standard 70000000 = 70 Mio)
 #     --shares-max N          ab so vielen $FLO-Anteilen auffaellig (Standard 1000)
-#     --reset-coins N         auf so viele Coins zuruecksetzen (Standard 1000000)
+#     --reset-coins N         Coins-DECKEL fuer auffaellige Konten (Standard
+#                             1000000). Es wird NIE erhoeht - wer weniger hat,
+#                             behaelt seinen Stand.
 #     --reset-shares N        auf so viele Anteile zuruecksetzen (Standard 0)
+#     --include-owner         auch das Owner-Konto pruefen (standardmaessig
+#                             ausgenommen: dessen Admin-Gutschriften zaehlen als
+#                             'verdient' und sind kein Exploit)
+#     --skip ID[,ID,...]      diese Konten komplett ueberspringen
 #     --price N               Aktienkurs danach auf N setzen
 #     --keep-price            Kurs unveraendert lassen (statt ihn ehrlich neu
 #                             aus dem Basiskurs zu bestimmen)
@@ -34,13 +40,19 @@
 # ============================================================================
 set -euo pipefail
 
-APPLY=0; FORCE=0; KEEP_PRICE=0; KEEP_STATS=0
+APPLY=0; FORCE=0; KEEP_PRICE=0; KEEP_STATS=0; INCLUDE_OWNER=0
 COINS_MAX=70000000
 SHARES_MAX=1000
 RESET_COINS=1000000
 RESET_SHARES=0
 SET_PRICE=""
+SKIP_IDS=""
 DATA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/data"
+# Owner-ID: aus der .env lesen, sonst der eingebaute Standard (wie in bot.py).
+# ('|| true': fehlt die .env oder die Zeile, darf 'set -e' nicht zuschlagen.)
+OWNER_ID="$( { grep -E '^OWNER_ID=' "$(dirname "${BASH_SOURCE[0]}")/.env" 2>/dev/null \
+               | tail -1 | cut -d= -f2 | tr -d ' "'"'"'\r'; } || true )"
+OWNER_ID="${OWNER_ID:-1040135855710404659}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +60,8 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1 ;;
     --keep-price) KEEP_PRICE=1 ;;
     --keep-stats) KEEP_STATS=1 ;;
+    --include-owner) INCLUDE_OWNER=1 ;;
+    --skip) SKIP_IDS="${2:?}"; shift ;;
     --coins-max) COINS_MAX="${2:?}"; shift ;;
     --shares-max) SHARES_MAX="${2:?}"; shift ;;
     --reset-coins) RESET_COINS="${2:?}"; shift ;;
@@ -91,7 +105,8 @@ fi
 
 DATA_DIR="$DATA_DIR" APPLY="$APPLY" COINS_MAX="$COINS_MAX" SHARES_MAX="$SHARES_MAX" \
 RESET_COINS="$RESET_COINS" RESET_SHARES="$RESET_SHARES" SET_PRICE="$SET_PRICE" \
-KEEP_PRICE="$KEEP_PRICE" KEEP_STATS="$KEEP_STATS" python3 - <<'PYTHON'
+KEEP_PRICE="$KEEP_PRICE" KEEP_STATS="$KEEP_STATS" OWNER_ID="$OWNER_ID" \
+INCLUDE_OWNER="$INCLUDE_OWNER" SKIP_IDS="$SKIP_IDS" python3 - <<'PYTHON'
 import json, os, sys
 from pathlib import Path
 
@@ -104,6 +119,11 @@ RESET_SHARES = int(os.environ["RESET_SHARES"])
 SET_PRICE  = os.environ["SET_PRICE"].strip()
 KEEP_PRICE = os.environ["KEEP_PRICE"] == "1"
 KEEP_STATS = os.environ["KEEP_STATS"] == "1"
+OWNER_ID   = os.environ.get("OWNER_ID", "").strip()
+INCLUDE_OWNER = os.environ.get("INCLUDE_OWNER") == "1"
+SKIP = {s.strip() for s in os.environ.get("SKIP_IDS", "").split(",") if s.strip()}
+if OWNER_ID and not INCLUDE_OWNER:
+    SKIP.add(OWNER_ID)
 
 MIN_PRICE = 50          # wie in floaktie.py
 LIQUIDITY = 750         # wie in floaktie.py
@@ -152,17 +172,30 @@ print(f"  Modus:            {'REPARIEREN (--apply)' if APPLY else 'nur Bericht (
 print("")
 
 # --- Auffaellige Konten finden ---------------------------------------------
+# WICHTIG: Coins werden NIE erhoeht. Wer schon weniger hat als der Deckel (z. B.
+# weil du manuell heruntergesetzt hast), behaelt seinen Stand - repariert wird nur,
+# was wirklich zu hoch ist. Und es wird nur angefasst, was auffaellig IST:
+# jemand mit Exploit-ANTEILEN behaelt seine Coins.
 flagged = []
 for uid, prof in users.items():
+    if str(uid) in SKIP:
+        continue
     coins  = int(prof.get("coins", 0) or 0)
     earned = int(prof.get("earned", 0) or 0)
     shares = int(holdings.get(str(uid), 0) or 0)
-    grund = []
-    if coins  > COINS_MAX:  grund.append(f"Coins {fmt(coins)}")
-    if earned > COINS_MAX:  grund.append(f"verdient {fmt(earned)}")
-    if shares > SHARES_MAX: grund.append(f"Anteile {fmt(shares)}")
+    grund, plan = [], {}
+    if coins > COINS_MAX:
+        grund.append(f"Coins {fmt(coins)}")
+        plan["coins"] = min(coins, RESET_COINS)          # nur runter, nie hoch
+    if earned > COINS_MAX:
+        grund.append(f"verdient {fmt(earned)}")
+        # Lebenszeit-Wert deckeln, aber nie unter den (bleibenden) Kontostand.
+        plan["earned"] = max(plan.get("coins", coins), min(earned, RESET_COINS))
+    if shares > SHARES_MAX:
+        grund.append(f"Anteile {fmt(shares)}")
+        plan["shares"] = min(shares, RESET_SHARES)
     if grund:
-        flagged.append((uid, prof, coins, earned, shares, grund))
+        flagged.append((uid, prof, coins, earned, shares, grund, plan))
 
 flagged.sort(key=lambda t: t[2], reverse=True)
 
@@ -192,20 +225,27 @@ if not flagged:
 print("───────────────────────────────────────────────────────────────────")
 print(f"  {len(flagged)} auffaellige(s) Konto/Konten:")
 print("───────────────────────────────────────────────────────────────────")
-for uid, prof, coins, earned, shares, grund in flagged:
+for uid, prof, coins, earned, shares, grund, plan in flagged:
     name = (prof.get("name") or "?")[:24]
     print(f"    ⚠️  {uid}  ({name})")
     print(f"        Grund:   {', '.join(grund)}")
-    print(f"        Coins:   {fmt(coins)}  ->  {fmt(RESET_COINS)}")
-    if earned > COINS_MAX:
-        print(f"        Verdient:{fmt(earned)}  ->  {fmt(RESET_COINS)}")
-    if shares > SHARES_MAX:
-        print(f"        Anteile: {fmt(shares)}  ->  {fmt(RESET_SHARES)}")
+    if "coins" in plan:
+        print(f"        Coins:   {fmt(coins)}  ->  {fmt(plan['coins'])}")
+    else:
+        print(f"        Coins:   {fmt(coins)}  (unverändert)")
+    if "earned" in plan:
+        print(f"        Verdient:{fmt(earned)}  ->  {fmt(plan['earned'])}")
+    if "shares" in plan:
+        print(f"        Anteile: {fmt(shares)}  ->  {fmt(plan['shares'])}")
     if cas and not KEEP_STATS and str(uid) in (cas.get("stats") or {}):
         st = cas["stats"][str(uid)]
         print(f"        Casino:  {st.get('games', 0)} Runden, "
               f"gewonnen {fmt(st.get('won', 0))}  ->  Statistik wird geleert")
 print("")
+if SKIP:
+    print(f"  (ausgenommen: {', '.join(sorted(SKIP))}"
+          f"{' - Owner' if OWNER_ID in SKIP and not INCLUDE_OWNER else ''})")
+    print("")
 
 if not APPLY:
     print("═══════════════════════════════════════════════════════════════════")
@@ -221,13 +261,14 @@ if not APPLY:
     sys.exit(0)
 
 # --- Reparieren -------------------------------------------------------------
-for uid, prof, coins, earned, shares, _g in flagged:
-    prof["coins"] = RESET_COINS
-    if earned > COINS_MAX:
-        prof["earned"] = RESET_COINS
-    if shares > SHARES_MAX:
-        if RESET_SHARES > 0:
-            holdings[str(uid)] = RESET_SHARES
+for uid, prof, coins, earned, shares, _g, plan in flagged:
+    if "coins" in plan:
+        prof["coins"] = plan["coins"]
+    if "earned" in plan:
+        prof["earned"] = plan["earned"]
+    if "shares" in plan:
+        if plan["shares"] > 0:
+            holdings[str(uid)] = plan["shares"]
         else:
             holdings.pop(str(uid), None)
     if cas and not KEEP_STATS:
