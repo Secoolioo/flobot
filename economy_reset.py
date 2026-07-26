@@ -21,6 +21,7 @@ moderation, voicegags, admin, features, games), werden nicht angefasst.
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -30,9 +31,40 @@ DATA_DIR = Path(os.getenv("FLO_DATA_DIR")
 DRY_RUN = (os.getenv("FLO_DRY_RUN", "0").strip().lower()
            in ("1", "true", "yes", "on"))
 
-# Startwerte muessen zu den Modulen passen (floaktie.py / luxus.py).
-START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "1000") or "1000")
-THRONE_START = int(os.getenv("LUXUS_THRONE_START", "50000") or "50000")
+# Startwerte muessen zu den Modulen passen. Sie werden direkt aus dem Quelltext
+# gelesen statt hier abgeschrieben: importieren geht nicht (die Module ziehen
+# discord mit), und eine Kopie laeuft irgendwann auseinander - genau das ist
+# passiert (Thron stand nach dem Reset auf dem ALTEN Startpreis).
+_HIER = Path(__file__).resolve().parent
+
+
+def _konstante(datei, name, default):
+    """Liest 'NAME = 12_345' aus einer Python-Datei (ohne sie zu importieren)."""
+    try:
+        quelle = (_HIER / datei).read_text(encoding="utf-8")
+    except OSError:
+        return default
+    m = re.search(rf"^{re.escape(name)}\s*=\s*([0-9_]+)", quelle, re.MULTILINE)
+    if m:
+        try:
+            return int(m.group(1).replace("_", ""))
+        except ValueError:
+            pass
+    # Variante mit os.getenv-Standard: NAME = int(os.getenv("X", "1000") or "1000")
+    m = re.search(rf"^{re.escape(name)}\s*=.*?getenv\([^,]+,\s*\"([0-9_]+)\"",
+                  quelle, re.MULTILINE)
+    if m:
+        try:
+            return int(m.group(1).replace("_", ""))
+        except ValueError:
+            pass
+    return default
+
+
+START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "")
+                  or _konstante("floaktie.py", "START_PRICE", 1000))
+THRONE_START = int(os.getenv("LUXUS_THRONE_START", "")
+                   or _konstante("luxus.py", "THRONE_START", 100_000))
 
 # --- Ausgabe ----------------------------------------------------------------
 _FARBE = sys.stdout.isatty() and not os.getenv("NO_COLOR")
@@ -215,6 +247,9 @@ def reset_floaktie(d, bericht):
         "price": START_PRICE, "base": float(START_PRICE), "day": "",
         "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
         "leer_min": 0, "pulse_min": 0, "pulse_sum": 0.0,
+        # Tagesbremse (Circuit Breaker) MIT zuruecksetzen - sonst klemmt das Band
+        # von gestern den frischen Startkurs sofort wieder nach oben.
+        "open_day": "", "open_base": 0,
         "holdings": {}, "history": [], "ticks": [],
     })
     bericht.append(f"Kurs {fmt(alt_kurs or 0)} → {fmt(START_PRICE)} Coins, "

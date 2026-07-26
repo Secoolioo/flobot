@@ -3284,6 +3284,88 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
+def test_economy_reset_umfang():
+    """Das Reset-Skript muss GENAU das treffen, was es soll: alles Coin-nahe auf 0,
+    aber Level/XP, Voice-Stunden und Chat-Nachrichten unangetastet.
+
+    Zwei Fehler sind hier schon aufgefallen (beide vom End-zu-End-Lauf gefunden):
+    die Tagesbremse der Aktie blieb stehen (Kurs sprang danach auf 5.123 statt
+    1.000) und die Startwerte waren vom Modul abgeschrieben, statt daraus gelesen
+    (Thron stand nach dem Reset auf dem ALTEN Startpreis)."""
+    import importlib.util
+    import floaktie
+    import luxus
+
+    spec = importlib.util.spec_from_file_location("_reset", "economy_reset.py")
+    er = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(er)
+
+    # 1) Startwerte kommen aus den Modulen - keine abgeschriebene Kopie.
+    assert er.START_PRICE == floaktie.START_PRICE, (er.START_PRICE, floaktie.START_PRICE)
+    assert er.THRONE_START == luxus.THRONE_START, (er.THRONE_START, luxus.THRONE_START)
+
+    # 2) Profile: was bleibt, bleibt - was Geld ist, geht auf 0.
+    prof = {"xp": 5000, "coins": 23_000_000, "earned": 90_000_000, "streak": 9,
+            "last_daily": "2026-07-25", "voice_secs": 720_000, "msgs": 12_345,
+            "title": "🔱 X", "title_rarity": "exklusiv",
+            "owned": [{"label": "🔱 X"}], "name": "flo", "eigenes_feld": "bleibt"}
+    d = {"users": {"1": dict(prof), "2": "kaputt"}, "shop": {"date": "x", "items": [1]}}
+    n, coins = er.reset_economy(d, [])
+    p = d["users"]["1"]
+    assert (p["xp"], p["voice_secs"], p["msgs"], p["name"]) == (5000, 720_000, 12_345, "flo")
+    assert p["eigenes_feld"] == "bleibt"          # Unbekanntes wird nicht angefasst
+    for key in er.PROFIL_RESET:
+        assert p[key] == er.PROFIL_RESET[key], key
+    # Beide Profile zaehlen: das echte (hatte Coins) und das kaputte (neu gebaut).
+    assert n == 2 and coins == 23_000_000, (n, coins)
+    assert isinstance(d["users"]["2"], dict) and d["users"]["2"]["coins"] == 0
+    assert d["shop"] == {"date": "", "items": []}
+    # Die geschuetzten Felder duerfen NIE in der Reset-Liste stehen.
+    assert not set(er.PROFIL_RESET) & set(er.PROFIL_BEHALTEN)
+    assert set(er.PROFIL_BEHALTEN) == {"xp", "voice_secs", "msgs", "name"}
+
+    # 3) Aktie: Depots, Kurs, Verlauf UND die Tagesbremse zurueck auf Start.
+    fd = {"price": 79_192_961, "base": 61234.5, "day": "2026-07-26", "act_ema": 12.4,
+          "msg_count": 90210, "last_msg_count": 90000, "leer_min": 40,
+          "open_day": "2026-07-26", "open_base": 51234.0,
+          "holdings": {"1": 150, "2": 150}, "history": [1, 2], "ticks": [1, 2, 3]}
+    er.reset_floaktie(fd, [])
+    assert fd["price"] == floaktie.START_PRICE and fd["base"] == float(floaktie.START_PRICE)
+    assert fd["holdings"] == {} and fd["history"] == [] and fd["ticks"] == []
+    assert fd["act_ema"] == 0.0 and fd["leer_min"] == 0 and fd["msg_count"] == 0
+    assert not fd["open_day"] and not fd["open_base"], "Tagesbremse blieb stehen!"
+
+    # 4) Die uebrigen Dateien - jede muss ihren Geld-Teil leeren.
+    ld = {"users": {"1": ["gold"]}, "throne": {"owner": "1", "preis": 9_000_000, "n": 14}}
+    er.reset_luxus(ld, [])
+    assert ld["users"] == {} and ld["throne"] == {"owner": "", "preis": luxus.THRONE_START,
+                                                  "n": 0}
+    lo = {"month": "2026-07", "jackpot": 41_000_000, "ticket_price": 20500,
+          "entries": {"1": {"n": 40}}, "house": 1_234_567, "history": [1]}
+    er.reset_lotto(lo, [])
+    assert (lo["jackpot"], lo["house"], lo["entries"], lo["history"]) == (0, 0, {}, [])
+    for fn, daten, pruef in (
+            (er.reset_handel, {"users": {"1": {}}}, lambda x: x["users"] == {}),
+            (er.reset_casino, {"stats": {"1": {}}}, lambda x: x["stats"] == {}),
+            (er.reset_steal, {"cooldowns": {"1": 1}}, lambda x: x["cooldowns"] == {}),
+            (er.reset_schulden, {"pairs": {"1:2": {}}, "stats": {"1": {}}},
+             lambda x: x["pairs"] == {} and x["stats"] == {}),
+            (er.reset_giveaway, {"active": {"7": {}}, "next_id": 8, "done": [1]},
+             lambda x: x["active"] == {} and x["next_id"] == 1 and x["done"] == []),
+            (er.reset_merchant, {"trades": [1], "sold": {"a": 1}, "stock": [1],
+                                 "arrived": True, "departed": True, "day": "x",
+                                 "appear_at": 1, "depart_at": 2},
+             lambda x: x["trades"] == [] and x["sold"] == {} and x["arrived"] is False)):
+        fn(daten, [])
+        assert pruef(daten), fn.__name__
+
+    # 5) Nicht-Geld-Dateien stehen NICHT in der Reset-Liste.
+    dateien = {name for name, _fn, _b in er.DATEIEN}
+    assert not dateien & {"words.json", "moderation.json", "voicegags.json",
+                          "admin.json", "features.json", "games.json"}
+    assert "economy.json" in dateien and "floaktie.json" in dateien
+
+
 def test_embeds_statt_fliesstext():
     """Die haeufigsten Antworten muessen ECHTE Embeds sein (mit Farbe, Feldern und
     allem, was man nach der Aktion wissen will) - vorher waren das ein bis zwei
