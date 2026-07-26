@@ -539,6 +539,21 @@ class Economy:
         betrag = int(ueber * self.TAX_RATE)
         return betrag if betrag >= self.TAX_MIN else 0
 
+    def depot_wert(self, uid):
+        """Wert der Aktien-Anteile dieses Nutzers (0, wenn die Aktie aus ist).
+
+        Wichtig fuer die Steuer: sonst waere das Depot ein steuerfreier Parkplatz -
+        1 Mio auf dem Konto und 20 Mio in Anteilen haetten NICHTS gekostet, und
+        man haette kurz vor 2 Uhr umparken koennen. Lazy-Import, weil floaktie
+        umgekehrt economy importiert."""
+        try:
+            import floaktie
+            if not floaktie.is_enabled():
+                return 0
+            return max(0, int(floaktie.shares_of(uid)) * int(floaktie.price()))
+        except Exception:  # noqa: BLE001 - ohne Aktie zaehlt nur das Konto
+            return 0
+
     async def vermoegenssteuer(self, force=False):
         """Zieht einmal pro Tag die Vermoegenssteuer ein - die Coins sind DANACH
         WEG (kein Gegenkonto, keine Hauskasse). Idempotent: laeuft pro Kalendertag
@@ -557,7 +572,12 @@ class Economy:
         for uid, prof in list(self._users().items()):
             if not isinstance(prof, dict):
                 continue
-            betrag = self.steuer_fuer(prof.get("coins", 0) or 0)
+            # Besteuert wird das GESAMTE Vermoegen (Konto + Aktien-Depot),
+            # abgebucht wird aber nur vom Konto. Wer alles in Anteilen haelt,
+            # zahlt also wenig - dafuer kostet ihn der Verkauf die gestaffelte
+            # Verkaufssteuer (bis 35 %). Steuerfrei parken geht damit nicht mehr.
+            vermoegen = int(prof.get("coins", 0) or 0) + self.depot_wert(uid)
+            betrag = self.steuer_fuer(vermoegen)
             if betrag <= 0:
                 continue
             # Ueber add_coins buchen: so landet die Steuer im Handelsbuch und
@@ -1647,6 +1667,7 @@ refresh_shop = instance.refresh_shop
 refresh_shop_async = instance.refresh_shop_async
 vermoegenssteuer = instance.vermoegenssteuer
 steuer_fuer = instance.steuer_fuer
+depot_wert = instance.depot_wert
 get_shop_items = instance.get_shop_items
 ensure_roles = instance.ensure_roles
 on_message = instance.on_message

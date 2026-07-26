@@ -3305,8 +3305,13 @@ def test_vermoegenssteuer_als_senke():
     spielte, hatte gar keine Senke - der Server lief mit Faktor 1,69x pro Tag in
     die Inflation. Die Steuer verbrennt taeglich einen Anteil oberhalb des
     Freibetrags und bringt jedes Einkommen in ein Gleichgewicht."""
+    import floaktie as _fa_mod
     eco = economy.instance
     restore = _with_economy({})
+    # Fuer den ersten Teil die Aktie AUS: hier geht es nur um Konto-Guthaben.
+    # (Sonst zaehlt ein Depot aus einem frueheren Test mit in die Steuer.)
+    _fa_alt = _fa_mod.instance._enabled
+    _fa_mod.instance._enabled = False
     try:
         # Kleine Konten zahlen NICHTS - die Steuer trifft nur echtes Vermoegen.
         for c in (0, 50_000, eco.TAX_FREE - 1, eco.TAX_FREE):
@@ -3333,6 +3338,33 @@ def test_vermoegenssteuer_als_senke():
         n3, weg3 = asyncio.run(eco.vermoegenssteuer())
         assert n3 == 1 and weg3 > 0
 
+        # Das AKTIEN-DEPOT ist kein steuerfreier Parkplatz: 1 Mio auf dem Konto
+        # plus 36 Mio in Anteilen hat vorher NICHTS gekostet, und man haette kurz
+        # vor 2 Uhr umparken koennen.
+        fa = _fa_mod.instance
+        alt_fa = (fa._store, fa._enabled)
+        fa._enabled = True
+        fa._store = _FakeStore({"price": 200_000, "base": 200_000.0, "day": "x",
+                                "act_ema": 5.0, "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "holdings": {"11": 150},
+                                "history": [], "ticks": []})
+        fa._sync_price()
+        try:
+            eco._users().clear()
+            eco._profile(11)["coins"] = eco.TAX_FREE     # genau am Freibetrag
+            eco._profile(12)["coins"] = eco.TAX_FREE     # gleich viel, ohne Depot
+            depot = eco.depot_wert(11)
+            assert depot > 30_000_000, depot
+            assert eco.depot_wert(12) == 0
+            eco._store.data["tax_day"] = ""
+            n, weg = asyncio.run(eco.vermoegenssteuer())
+            assert n == 1 and weg == int(depot * eco.TAX_RATE), (n, weg, depot)
+            assert eco.get_coins(12) == eco.TAX_FREE      # ohne Depot: steuerfrei
+            assert eco.get_coins(11) < eco.TAX_FREE       # mit Depot: zahlt
+        finally:
+            fa._store, fa._enabled = alt_fa
+        eco._users().clear()
+
         # Gleichgewicht: Einkommen X pro Tag landet bei Freibetrag + X/Satz.
         # Genau das macht die Steuer selbst-skalierend - sie waechst mit der
         # Inflation mit, statt als fester Betrag zu verpuffen.
@@ -3350,6 +3382,7 @@ def test_vermoegenssteuer_als_senke():
             erwartet = eco.TAX_FREE + tages_einkommen / eco.TAX_RATE
             assert abs(stand - erwartet) < erwartet * 0.05, (tages_einkommen, stand, erwartet)
     finally:
+        _fa_mod.instance._enabled = _fa_alt
         restore()
 
 
