@@ -1601,22 +1601,24 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             fa._activity_tick(10, 20, streams=10)
         assert fa.price() > 2500, fa.price()          # nach 1 h fast verdreifacht
 
-        # 5) Toter Server: sinkt, aber LANGSAM (nie mehr als IDLE_CAP je Minute).
-        frisch(5000)
-        vorher = fa.price()
-        for _ in range(60):
+        # 5) Toter Server: sinkt GESTAFFELT - kurze Pause tut kaum was, langer
+        #    Leerlauf laesst den Kurs deutlich einbrechen (das war der Wunsch:
+        #    "die muss doch sinken wenn nix los ist").
+        frisch(200_000)
+        for _ in range(5):
             fa._activity_tick(0, 0)
-        gefallen = 1 - fa.price() / vorher
-        assert 0 < gefallen < 0.15, gefallen
-        # und ueber TAGE deutlich runter (rund -11 %/Tag), Richtung Wert eines
-        # toten Servers - aber nie darunter.
-        for _ in range(3 * 1440):
+        assert (1 - fa.price() / 200_000) < 0.01           # 5 min Pause: fast nichts
+        for _ in range(115):
             fa._activity_tick(0, 0)
-        drei_tage = fa.price()
-        assert 3000 < drei_tage < 4200, drei_tage
-        for _ in range(20 * 1440):
-            fa._activity_tick(0, 0)
-        assert fa.price() < drei_tage * 0.4, (drei_tage, fa.price())
+        nach_2h = 1 - fa.price() / 200_000
+        assert 0.15 < nach_2h < 0.40, nach_2h              # nach 2 h klar sichtbar
+        # Beim SINKEN gibt es kein Rauschen - jede Leerlauf-Minute geht wirklich
+        # runter (vorher stieg der Kurs in ~30 % der Minuten durch Zufall).
+        frisch(200_000)
+        for _ in range(300):
+            _a, n, d, _akt = fa._activity_tick(0, 0)
+            assert d <= 0
+        # ... aber nie unter den Wert eines toten Servers.
         for _ in range(30 * 1440):
             fa._activity_tick(0, 0)
         assert fa.price() >= floaktie.MIN_PRICE, fa.price()

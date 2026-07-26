@@ -81,7 +81,7 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
 #              + MSG_WEIGHT   * Nachrichten seit dem letzten Takt (gedeckelt)
 #
 #   Aktivitaet > 0  ->  Kurs STEIGT IMMER. Tempo = Aktivitaet * TICK_GAIN
-#   Aktivitaet = 0  ->  Kurs sinkt langsam (IDLE_DECAY), aber nie unter FAIR_BASE
+#   Aktivitaet = 0  ->  Kurs sinkt (je laenger leer, desto schneller), nie unter FAIR_BASE
 #
 # Die Regel ist genau so, wie sie gemeint ist: sitzt EIN Mensch im Call, steigt
 # der Kurs - langsam. Sitzen zehn drin und streamen alle, steigt er rasant. Ist
@@ -119,7 +119,16 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # heraus - genau die Groessenordnung, in der aus 600k Anteilen 23 Mio wurden.
 TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.006") or "0.006")
 TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.10") or "0.10")     # max +10 % in einem Takt
-IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.00008") or "0.00008")  # ohne Aktivitaet -0,48 %/h
+# Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
+# schneller faellt der Kurs (wie eine Aktie, die keiner mehr will). Eine kurze
+# Pause tut fast nichts, stundenlanger Leerlauf laesst den Kurs deutlich sinken.
+#   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
+# IDLE_RATE 0,0025 = bis zu -0,25 %/min = -15 %/h bei vollem Leerlauf.
+IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.0025") or "0.0025")
+# Nach so vielen zusammenhaengenden Leerlauf-Minuten ist der Verfall voll da.
+IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "25") or "25")
+# Alt (nur noch als Startwert der Rampe, damit auch die erste Minute schon sinkt).
+IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.0003") or "0.0003")
 # Wie stark es ueber dem Zielkurs gemaechlicher wird. Die Daempfung ist
 # LOGARITHMISCH und damit sehr langatmig: beim Doppelten des Zielkurses noch 78 %
 # Tempo, beim 15-fachen 48 %, beim 150-fachen 33 %. So steigt der Kurs auch dann
@@ -575,9 +584,11 @@ class FloAktie:
             return 0.0
         ziel = self.ziel_base(activity)
         if activity <= 0:
-            # Nichts los -> langsam runter, aber nicht unter den Wert eines
-            # toten Servers.
-            return 0.0 if base <= ziel else -IDLE_DECAY
+            # Nichts los -> runter Richtung Wert eines toten Servers, und zwar
+            # je laenger leer, desto schneller (siehe _leerlauf_verfall).
+            if base <= ziel:
+                return 0.0
+            return -self._leerlauf_verfall()
         if base >= ziel * max(1.0, CEIL_FACTOR):
             return 0.0          # weit ueber Wert: seitwaerts, aber kein Minus
         tempo = min(TICK_CAP, activity * TICK_GAIN)
@@ -585,6 +596,13 @@ class FloAktie:
         daempfung = 1.0 / (1.0 + math.log1p(ueberhang) / max(0.05, LEVEL_SOFT))
         # Nie ganz auf Null bremsen: solange jemand da ist, geht es nach oben.
         return max(MIN_UP, tempo * daempfung)
+
+    def _leerlauf_verfall(self):
+        """Verfall pro Minute bei leerem Server - waechst mit der Leerlauf-Dauer.
+        Erste Minute schon spuerbar (IDLE_DECAY), nach IDLE_RAMP_MIN voll (IDLE_RATE)."""
+        leer = float(self._state().get("leer_min", 0.0) or 0.0)
+        anteil = min(1.0, leer / max(1.0, IDLE_RAMP_MIN))
+        return max(IDLE_DECAY, IDLE_RATE * anteil)
 
     def _activity_tick(self, people, msgs_since, streams=0, video=0):
         """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet)."""
@@ -597,13 +615,23 @@ class FloAktie:
         alpha = ACT_ALPHA_UP if activity >= alt_ema else ACT_ALPHA_DOWN
         ema = alpha * activity + (1 - alpha) * alt_ema
         st["act_ema"] = ema
+        # Leerlauf-Zaehler: zaehlt zusammenhaengende Minuten OHNE echte Aktivitaet
+        # (roher Messwert, nicht das geglaettete EMA) - er treibt den Verfall.
+        roh_aktiv = self.activity_of(people, streams, video, msgs_since)
+        if roh_aktiv > 0:
+            st["leer_min"] = 0.0
+        else:
+            st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + 1.0
         basis = self.drift_fuer(ema)
         if basis > 0:
             # Solange jemand da ist, faellt der Kurs NIE - das Boersen-Rauschen
             # darf einen Anstieg hoechstens abschwaechen, nicht umdrehen.
             drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
         elif basis < 0:
-            drift = basis + random.uniform(-TICK_NOISE, TICK_NOISE)
+            # Beim SINKEN kein Rauschen: der Verfall soll klar sichtbar sein und
+            # nicht von Zufalls-Aufwaertstupfern ueberdeckt werden (vorher stieg
+            # der Kurs in ~30 % der Leerlauf-Minuten sogar).
+            drift = basis
         else:
             # Steht der Kurs weit ueber seinem Wert, geht es SEITWAERTS - hier
             # bewusst OHNE Rauschen: mit Rauschen plus der Klemme oben waere das
@@ -904,7 +932,14 @@ class FloAktie:
         else:
             tempo = f"**{pro_min * 60:+.2f} %/h**"
         if akt <= 0:
-            hinweis = "Niemand da – der Kurs sinkt langsam."
+            leer = int(float(st.get("leer_min", 0.0) or 0.0))
+            if leer >= 60:
+                hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt jetzt "
+                           f"({self.drift_fuer(0) * 60 * 100:+.0f} %/h). "
+                           f"Je länger nichts los ist, desto schneller.")
+            else:
+                hinweis = ("Niemand da – der Kurs sinkt und wird immer schneller, "
+                           "je länger es leer bleibt.")
         elif pro_min <= 0:
             hinweis = ("Kurs liegt weit über seinem Wert – er hält sich, bis mehr "
                        "Aktivität nachkommt.")
