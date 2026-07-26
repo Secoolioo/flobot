@@ -906,6 +906,22 @@ class _FakeStore:
         pass
 
 
+def _embed_text(antwort):
+    """Alles Lesbare aus einer Bot-Antwort (Embed ODER Text) als ein String.
+    Viele Antworten sind von Fliesstext auf Embeds umgestellt worden - die Tests
+    pruefen den INHALT, nicht die Verpackung."""
+    import discord
+    if not isinstance(antwort, discord.Embed):
+        return str(antwort)
+    teile = [antwort.title or "", antwort.description or ""]
+    for f in antwort.fields:
+        teile.append(f.name or "")
+        teile.append(f.value or "")
+    if antwort.footer is not None:
+        teile.append(antwort.footer.text or "")
+    return "\n".join(teile)
+
+
 def _with_economy(coins_by_uid=None):
     """Aktiviert economy mit Fake-Store; gibt (restore_fn) zurueck."""
     alt = (economy.instance._store, economy.instance._enabled)
@@ -1277,13 +1293,16 @@ def test_floaktie_market():
         # Kauf: Kurs steigt, (Impact-)Kosten ab, Depot waechst.
         c0 = economy.get_coins(1)
         r = asyncio.run(fa.buy(SimpleNamespace(id=1), 50))
-        assert "Gekauft" in r and fa.price() > p0 and fa.shares_of(1) == 50
+        # Bestaetigung ist ein Embed (vorher zwei Zeilen Fliesstext).
+        assert _embed_text(r).count("Gekauft") == 1, _embed_text(r)
+        assert fa.price() > p0 and fa.shares_of(1) == 50
         assert c0 - economy.get_coins(1) >= 50 * p0        # Impact -> mind. 50*Startkurs
 
         # Verkauf: Kurs faellt, Coins zurueck, Depot schrumpft.
         p1 = fa.price()
         r = asyncio.run(fa.sell(SimpleNamespace(id=1), 20))
-        assert "Verkauft" in r and fa.price() < p1 and fa.shares_of(1) == 30
+        assert "Verkauft" in _embed_text(r)
+        assert fa.price() < p1 and fa.shares_of(1) == 30
 
         # Kein Gratis-Arbitrage: sofortiger Round-Trip macht Verlust.
         economy.instance._profile(3)["coins"] = 1_000_000
@@ -1302,8 +1321,8 @@ def test_floaktie_market():
         # Mit echtem Guthaben greift der Hebel: Kauf ueber dem Guthaben -> Minus.
         economy.instance._profile(5)["coins"] = 60_000
         r = asyncio.run(fa.buy(SimpleNamespace(id=5), 100))
-        assert isinstance(r, str) and fa.shares_of(5) > 0, r
-        assert economy.get_coins(5) < 0 and "MINUS" in r
+        assert fa.shares_of(5) > 0, r
+        assert economy.get_coins(5) < 0 and "MINUS" in _embed_text(r)
 
         # Aktivitaets-Takt: viel los -> Kurs STEIGT, wenig -> faellt (Rauschen aus).
         floaktie.TICK_NOISE = 0.0
@@ -1358,14 +1377,19 @@ def test_floaktie_market():
         assert economy.get_coins(1) == b1 + fa.dividend_for(1)
         assert economy.get_coins(2) == b2 + fa.dividend_for(2)
 
-        # handle-Routing: Nicht-Befehl -> None; kauf -> str; top/depot -> Embed.
+        # handle-Routing: Nicht-Befehl -> None; kauf/top/depot -> Embed.
         # 'aktie' ist identisch zu 'floaktie' (nur EINE Aktie).
         def fmsg(uid, content):
             return SimpleNamespace(content=content, guild=SimpleNamespace(id=1),
                                    author=SimpleNamespace(id=uid, display_name="T"))
         assert asyncio.run(fa.handle(fmsg(1, "wie gehts"))) is None
-        assert isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie kauf 1"))), str)
-        assert isinstance(asyncio.run(fa.handle(fmsg(1, "aktie kauf 1"))), str)   # 'aktie' == 'floaktie'
+        # Der Kurs ist durch die Takte oben weit gelaufen -> Konto auffuellen,
+        # sonst scheitert der Kauf an der Kreditlinie (das ist hier nicht der Test).
+        economy.instance._profile(1)["coins"] = 10_000_000_000
+        assert "Gekauft" in _embed_text(asyncio.run(fa.handle(fmsg(1, "floaktie kauf 1"))))
+        # 'aktie' == 'floaktie'
+        economy.instance._profile(1)["coins"] = 10_000_000_000
+        assert "Gekauft" in _embed_text(asyncio.run(fa.handle(fmsg(1, "aktie kauf 1"))))
         assert not isinstance(asyncio.run(fa.handle(fmsg(1, "aktie top"))), (str, type(None)))
         assert not isinstance(asyncio.run(fa.handle(fmsg(1, "floaktie depot"))), (str, type(None)))
 
@@ -3258,6 +3282,71 @@ def test_floaktie_grenzen_gegen_hyperinflation():
     finally:
         restore_eco()
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
+
+
+def test_embeds_statt_fliesstext():
+    """Die haeufigsten Antworten muessen ECHTE Embeds sein (mit Farbe, Feldern und
+    allem, was man nach der Aktion wissen will) - vorher waren das ein bis zwei
+    Zeilen Fliesstext."""
+    import discord
+    import floaktie
+
+    # --- Tagesbonus ------------------------------------------------------
+    restore = _with_economy({7: 0})
+    eco = economy.instance
+    try:
+        m = SimpleNamespace(id=7, display_name="T",
+                            display_avatar=SimpleNamespace(url="http://x/y.png"))
+        e = asyncio.run(eco._daily(m))
+        assert isinstance(e, discord.Embed), e
+        txt = _embed_text(e)
+        assert "Tagesbonus" in txt and "Serie" in txt
+        assert str(economy.fmt(eco.DAILY_BASE)) in txt
+        assert "🔥" in txt                       # Streak-Kette sichtbar
+        assert economy.get_coins(7) == eco.DAILY_BASE + eco.DAILY_STREAK_STEP
+        # Zweiter Versuch am selben Tag: eigenes Embed, KEIN Geld.
+        vorher = economy.get_coins(7)
+        e2 = asyncio.run(eco._daily(m))
+        assert isinstance(e2, discord.Embed)
+        assert "schon" in _embed_text(e2).lower()
+        assert economy.get_coins(7) == vorher
+        # Streak-Kette waechst und ist bei DAILY_STREAK_MAX voll.
+        assert eco._streak_balken(0).count("🔥") == 0
+        assert eco._streak_balken(3).count("🔥") == 3
+        assert eco._streak_balken(99).count("🔥") == eco.DAILY_STREAK_MAX
+        assert "▫️" not in eco._streak_balken(eco.DAILY_STREAK_MAX)
+    finally:
+        restore()
+
+    # --- Aktien-Bestaetigung ---------------------------------------------
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    restore = _with_economy({8: 5_000_000})
+    fa._enabled = True
+    fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x", "act_ema": 0.0,
+                            "msg_count": 0, "last_msg_count": 0, "leer_min": 0.0,
+                            "holdings": {}, "history": [], "ticks": []})
+    fa._sync_price()
+    try:
+        e = asyncio.run(fa.buy(SimpleNamespace(id=8), 20))
+        assert isinstance(e, discord.Embed)
+        txt = _embed_text(e)
+        for muss in ("Gekauft", "Kurs", "Dein Depot", "Kontostand", "▲"):
+            assert muss in txt, (muss, txt)
+        assert "▰" in txt                        # Depot-Balken
+        e = asyncio.run(fa.sell(SimpleNamespace(id=8), 20))
+        txt = _embed_text(e)
+        assert "Verkauft" in txt and "Verkaufssteuer" in txt and "▼" in txt
+        # Und das Panel nennt Deckel, Depot-Grenze und Steuer.
+        p = _embed_text(fa._panel_embed(SimpleNamespace(id=8)))
+        assert "Deckel" in p and str(floaktie.MAX_SHARES_PER_USER) in p
+        assert "Verkaufssteuer" in p
+        # Abgeschaltete Aktie: sauberes Embed, kein Durchfallen an die KI.
+        aus = _embed_text(fa.aus_embed())
+        assert "deaktiviert" in aus and "Anteile" in aus
+    finally:
+        fa._store, fa._enabled = alt
+        restore()
 
 
 def test_webpanel_token_deckel():

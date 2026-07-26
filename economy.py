@@ -1139,11 +1139,30 @@ class Economy:
         self._protect(msg)
         return HANDLED
 
+    def _streak_balken(self, streak):
+        """Streak als Kette: die ersten DAILY_STREAK_MAX Tage bauen den Bonus auf."""
+        voll = max(0, min(self.DAILY_STREAK_MAX, int(streak)))
+        return "🔥" * voll + "▫️" * (self.DAILY_STREAK_MAX - voll)
+
     async def _daily(self, member):
         prof = self._profile(member.id)
         today = self._today()
         if prof.get("last_daily") == today:
-            return "🕒 Deinen Tagesbonus hast du heute schon abgeholt. Komm morgen wieder!"
+            streak = int(prof.get("streak", 0) or 0)
+            e = discord.Embed(
+                title="🕒 Heute schon abgeholt",
+                description=("Deinen Tagesbonus hast du für heute schon kassiert.\n"
+                             "**Morgen** wieder – und lass die Serie nicht reißen!"),
+                colour=discord.Colour.from_rgb(120, 126, 138))
+            e.add_field(name="Deine Serie",
+                        value=f"{self._streak_balken(streak)}  **{streak}** Tag(e)",
+                        inline=False)
+            naechster = min(self.DAILY_STREAK_MAX, streak + 1) * self.DAILY_STREAK_STEP
+            e.add_field(name="Morgen gibt's",
+                        value=f"**{fmt(self.DAILY_BASE + naechster)}** {self.COIN}",
+                        inline=True)
+            e.set_footer(text=f"{self._bot_name} daily · zurückgesetzt um 00:00")
+            return e
         # Streak: gestern abgeholt -> +1, sonst zurueck auf 1.
         yesterday = (datetime.now(self._tz).toordinal() - 1)
         last = prof.get("last_daily") or ""
@@ -1161,8 +1180,31 @@ class Economy:
         # kam aber komplett am Abzug vorbei.
         self.add_coins(member.id, total, reason="daily")
         await self._flush()
-        return (f"🎁 Tagesbonus: **+{fmt(total)} {self.COIN}**! "
-                f"(Streak: {prof['streak']} Tag(e), Bonus +{bonus})")
+        streak = int(prof["streak"])
+        voll = streak >= self.DAILY_STREAK_MAX
+        e = discord.Embed(
+            title="🎁 Tagesbonus",
+            description=f"# +{fmt(total)} {self.COIN}",
+            colour=discord.Colour.from_rgb(255, 196, 61) if voll
+            else discord.Colour.from_rgb(87, 242, 135))
+        e.add_field(name="Grundbetrag", value=f"{fmt(self.DAILY_BASE)}", inline=True)
+        e.add_field(name="Serien-Bonus",
+                    value=f"+{fmt(bonus)}" if bonus else "–", inline=True)
+        e.add_field(name="Neuer Stand",
+                    value=f"**{fmt(self.get_coins(member.id))}**", inline=True)
+        e.add_field(
+            name=f"Serie · {streak} Tag(e)",
+            value=(f"{self._streak_balken(streak)}\n"
+                   + ("_Maximaler Bonus erreicht – halte sie am Leben!_" if voll else
+                      f"_Noch {self.DAILY_STREAK_MAX - streak} Tag(e) bis zum "
+                      f"vollen Bonus (+{fmt(self.DAILY_STREAK_MAX * self.DAILY_STREAK_STEP)})._")),
+            inline=False)
+        try:
+            e.set_thumbnail(url=member.display_avatar.url)
+        except Exception:  # noqa: BLE001 - Avatar ist Deko
+            pass
+        e.set_footer(text=f"{self._bot_name} daily · jeden Tag, sonst faellt die Serie")
+        return e
 
     async def _pay(self, message):
         if not message.mentions:

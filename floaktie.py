@@ -594,6 +594,7 @@ class FloAktie:
             count = frei
         # Kosten IMMER vor der Depot-Aenderung berechnen (Kurve haengt an den
         # ausgegebenen Anteilen).
+        alt_kurs = self.price()
         cost, _ = self._buy_cost(count)
         # Aktien auf KREDIT: erlaubt (das ist der Reiz), aber nur bis zur
         # Kreditlinie. Ohne die konnte ein Konto mit 0 Coins 150 Anteile auf Pump
@@ -623,13 +624,7 @@ class FloAktie:
         await self._save_all()
         await self._refresh_live()
         stand = economy.get_coins(member.id)
-        warn = ""
-        if stand < 0:
-            warn = (f"\n⚠️ Du bist jetzt mit **{self._fmt(stand)}** {economy.COIN} im "
-                    f"**MINUS** – nur steigende Kurse (oder Verkauf) holen dich da raus!")
-        return (f"📈 Gekauft! **{count}** Anteile {TICKER} für **{self._fmt(cost)}** "
-                f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
-                f"· dein Depot: **{self.shares_of(member.id)}** Anteile.{warn}")
+        return self._trade_embed("kauf", member, count, cost, alt_kurs, neu, stand)
 
     async def _sell(self, member, count):
         if self.is_off():
@@ -641,6 +636,8 @@ class FloAktie:
         if count < 1:
             return "Verkauf mindestens **1** Anteil. 📉"
         count = min(count, habe)
+        alt_kurs = self.price()
+        steuer = self._sell_fee()
         proceeds, _ = self._sell_proceeds(count)
         economy.add_coins(member.id, proceeds, reason="floaktie")
         rest = habe - count
@@ -652,9 +649,55 @@ class FloAktie:
         self._record_tick()
         await self._save_all()
         await self._refresh_live()
-        return (f"📉 Verkauft! **{count}** Anteile {TICKER} für **{self._fmt(proceeds)}** "
-                f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
-                f"· dein Depot: **{rest}** Anteile.")
+        return self._trade_embed("verkauf", member, count, proceeds, alt_kurs, neu,
+                                 economy.get_coins(member.id), steuer=steuer)
+
+    def _trade_embed(self, art, member, count, betrag, alt_kurs, neu_kurs, stand,
+                     steuer=None):
+        """Kauf-/Verkaufs-Bestaetigung als Embed (vorher zwei Zeilen Fliesstext).
+        Zeigt alles, was man nach einem Trade wissen will: Stueckzahl, Summe,
+        Kursbewegung, Depot-Auslastung, neuer Kontostand."""
+        kauf = art == "kauf"
+        pfeil = "📈" if kauf else "📉"
+        farbe = (discord.Colour.from_rgb(87, 242, 135) if kauf
+                 else discord.Colour.from_rgb(235, 69, 158))
+        if stand < 0:
+            farbe = discord.Colour.from_rgb(237, 66, 69)
+        meine = self.shares_of(member.id)
+        e = discord.Embed(
+            title=f"{pfeil} {'Gekauft' if kauf else 'Verkauft'} · {TICKER}",
+            description=(f"**{count}** {'Anteil' if count == 1 else 'Anteile'}\n"
+                         f"## {'−' if kauf else '+'}{self._fmt(betrag)} {economy.COIN}"),
+            colour=farbe)
+        richtung = "▲" if neu_kurs > alt_kurs else ("▼" if neu_kurs < alt_kurs else "▬")
+        e.add_field(name="Kurs",
+                    value=(f"{self._fmt(alt_kurs)} {richtung} **{self._fmt(neu_kurs)}**"),
+                    inline=True)
+        e.add_field(name="Dein Depot",
+                    value=f"**{meine}**/{MAX_SHARES_PER_USER}\n{self._depot_balken(meine)}",
+                    inline=True)
+        e.add_field(name="Kontostand",
+                    value=(f"**{self._fmt(stand)}**" if stand >= 0
+                           else f"⚠️ **{self._fmt(stand)}**"),
+                    inline=True)
+        if steuer:
+            e.add_field(name="Verkaufssteuer",
+                        value=(f"{steuer * 100:.0f} % einbehalten\n"
+                               f"_steigt, je höher die Blase_"),
+                        inline=False)
+        if stand < 0:
+            e.add_field(
+                name="Du stehst im MINUS",
+                value=("Der Kauf lief auf **Kredit**. Nur steigende Kurse oder ein "
+                       "Verkauf holen dich da raus – Ausgeben kannst du erst wieder "
+                       "ab null."),
+                inline=False)
+        if kauf and meine >= MAX_SHARES_PER_USER:
+            e.set_footer(text=f"Depot voll ({MAX_SHARES_PER_USER} Anteile) · "
+                              f"{self._bot_name} aktie verkauf alles")
+        else:
+            e.set_footer(text=f"{self._bot_name} aktie · aktienkurs · depot · top")
+        return e
 
     async def _save_all(self):
         try:
@@ -1380,23 +1423,30 @@ class FloAktieView(discord.ui.View):
         self.add_item(_InfoButton("Top", "🏆", "top"))
 
     async def _trade(self, interaction, action, count):
+        antwort = None
         try:
             if action == "buy":
                 n = instance._resolve_count(interaction.user, str(count))
                 if n < 1:
                     await interaction.response.send_message(
                         "Dein Guthaben reicht gerade für keinen ganzen Anteil. 😬 "
-                        "(Auf Kredit geht's mit `aktie kauf <anzahl>` – Achtung, Minus!)",
+                        "(Mit Guthaben als Sicherheit geht auch `aktie kauf <anzahl>` "
+                        "auf Kredit – Achtung, Minus!)",
                         ephemeral=True)
                     return
-                text = await instance.buy(interaction.user, n)
+                antwort = await instance.buy(interaction.user, n)
             else:
                 n = instance._resolve_count(interaction.user, str(count), selling=True)
-                text = await instance.sell(interaction.user, n)
+                antwort = await instance.sell(interaction.user, n)
         except Exception:  # noqa: BLE001
             log.exception("FloCorp-Trade (Button) fehlgeschlagen")
-            text = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
-        await interaction.response.send_message(text, ephemeral=True)
+            antwort = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
+        # buy()/sell() antworten mit einem Embed (Bestaetigung) oder mit Text
+        # (Fehlerfall) - beides muss hier durchgehen.
+        if isinstance(antwort, discord.Embed):
+            await interaction.response.send_message(embed=antwort, ephemeral=True)
+        else:
+            await interaction.response.send_message(str(antwort), ephemeral=True)
         # Das Panel-Embed selbst wird von buy()/sell() ueber _refresh_last_panel()
         # aktualisiert (das zuletzt gepostete Panel bleibt so immer live).
 
