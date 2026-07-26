@@ -63,45 +63,62 @@ PRESENT_HOURS = float(os.getenv("MERCHANT_PRESENT_HOURS", "1") or "1")
 # Stunde am Tag zu haben. Preise wie ueberall aus dem Tageseinkommen abgeleitet. Jeder Titel hat eine feste Seltenheit
 # (economy schreibt sie beim Kauf ins Inventar -> passende Farb-Rolle).
 _KATALOG = [
-    # --- EXKLUSIV (🔱) - gibt's NUR hier, hoeher als Legendaer ---
+    # --- GOETTLICH (✨) - das absolute Maximum, gibt es NUR hier und selten ---
+    {"id": "haendler:allvater", "text": "Allvater",
+     "label": "☀️ Allvater", "rarity": "goettlich", "price": 78_000_000},
+    {"id": "haendler:schoepfer", "text": "Der Schöpfer",
+     "label": "♾️ Der Schöpfer", "rarity": "goettlich", "price": 64_000_000},
+    {"id": "haendler:lichtbringer", "text": "Lichtbringer",
+     "label": "💫 Lichtbringer", "rarity": "goettlich", "price": 52_000_000},
+    # --- EXKLUSIV (🔱) - hoeher als Legendaer, nur beim Haendler ---
     {"id": "haendler:weltenherrscher", "text": "Weltenherrscher",
-     "label": "🔱 Weltenherrscher", "rarity": "exklusiv", "price": 620000},
+     "label": "🔱 Weltenherrscher", "rarity": "exklusiv", "price": 12_500_000},
     {"id": "haendler:gottkaiser", "text": "Gottkaiser",
-     "label": "👑 Gottkaiser", "rarity": "exklusiv", "price": 560000},
+     "label": "👑 Gottkaiser", "rarity": "exklusiv", "price": 11_000_000},
     {"id": "haendler:der_eine", "text": "Der Auserwählte",
-     "label": "✴️ Der Auserwählte", "rarity": "exklusiv", "price": 430000},
+     "label": "✴️ Der Auserwählte", "rarity": "exklusiv", "price": 7_200_000},
     {"id": "haendler:sternengott", "text": "Sternengott",
-     "label": "🌌 Sternengott", "rarity": "exklusiv", "price": 480000},
+     "label": "🌌 Sternengott", "rarity": "exklusiv", "price": 8_400_000},
     {"id": "haendler:ewiger", "text": "Der Ewige",
-     "label": "♾️ Der Ewige", "rarity": "exklusiv", "price": 700000},
+     "label": "♾️ Der Ewige", "rarity": "exklusiv", "price": 13_800_000},
     {"id": "haendler:drachenkoenig", "text": "Drachenkönig",
-     "label": "🐲 Drachenkönig", "rarity": "exklusiv", "price": 520000},
+     "label": "🐲 Drachenkönig", "rarity": "exklusiv", "price": 9_600_000},
+    # --- Relikt (🟠) - im Shop extrem selten, hier verlaesslich ---
+    {"id": "haendler:aschebewahrer", "text": "Aschebewahrer",
+     "label": "🏺 Aschebewahrer", "rarity": "relikt", "price": 2_100_000},
+    {"id": "haendler:zeitwaechter", "text": "Zeitwächter",
+     "label": "⏳ Zeitwächter", "rarity": "relikt", "price": 2_600_000},
+    {"id": "haendler:steintafel", "text": "Träger der Steintafel",
+     "label": "📜 Träger der Steintafel", "rarity": "relikt", "price": 1_800_000},
     # --- Legendär (🟡 gold) - die Kronjuwelen ---
     {"id": "haendler:drachenlord", "text": "Drachenlord",
-     "label": "🐉 Drachenlord", "rarity": "legendary", "price": 150000},
+     "label": "🐉 Drachenlord", "rarity": "legendary", "price": 520_000},
     {"id": "haendler:schattenkaiser", "text": "Schattenkaiser",
-     "label": "🌑 Schattenkaiser", "rarity": "legendary", "price": 135000},
+     "label": "🌑 Schattenkaiser", "rarity": "legendary", "price": 460_000},
     {"id": "haendler:weltenbrenner", "text": "Weltenbrenner",
-     "label": "🔥 Weltenbrenner", "rarity": "legendary", "price": 165000},
+     "label": "🔥 Weltenbrenner", "rarity": "legendary", "price": 580_000},
     {"id": "haendler:goetterbote", "text": "Götterbote",
-     "label": "🪽 Götterbote", "rarity": "legendary", "price": 120000},
+     "label": "🪽 Götterbote", "rarity": "legendary", "price": 410_000},
     {"id": "haendler:unsterblich", "text": "Der Unsterbliche",
-     "label": "💀 Der Unsterbliche", "rarity": "legendary", "price": 175000},
+     "label": "💀 Der Unsterbliche", "rarity": "legendary", "price": 640_000},
     {"id": "haendler:sturmbaendiger", "text": "Sturmbändiger",
-     "label": "⚡ Sturmbändiger", "rarity": "legendary", "price": 105000},
-    # --- Mythisch (🟣 lila) - der guenstigere Einstieg ---
-    {"id": "haendler:sternenjaeger", "text": "Sternenjäger",
-     "label": "🌠 Sternenjäger", "rarity": "mythisch", "price": 30000},
-    {"id": "haendler:nebelwandler", "text": "Nebelwandler",
-     "label": "🌫️ Nebelwandler", "rarity": "mythisch", "price": 21000},
+     "label": "⚡ Sturmbändiger", "rarity": "legendary", "price": 350_000},
+    # --- Episch (🟪) - der guenstigere Einstieg beim Haendler ---
     {"id": "haendler:klingentaenzer", "text": "Klingentänzer",
-     "label": "🗡️ Klingentänzer", "rarity": "mythisch", "price": 25000},
+     "label": "🗡️ Klingentänzer", "rarity": "episch", "price": 26_000},
+    {"id": "haendler:maskenspieler", "text": "Maskenspieler",
+     "label": "🎭 Maskenspieler", "rarity": "episch", "price": 19_000},
     {"id": "haendler:runenmeister", "text": "Runenmeister",
-     "label": "🔮 Runenmeister", "rarity": "mythisch", "price": 27000},
+     "label": "⚜️ Runenmeister", "rarity": "episch", "price": 31_000},
+    # --- Mythisch (🟣) - solide Mittelklasse ---
+    {"id": "haendler:sternenjaeger", "text": "Sternenjäger",
+     "label": "🌠 Sternenjäger", "rarity": "mythisch", "price": 92_000},
+    {"id": "haendler:nebelwandler", "text": "Nebelwandler",
+     "label": "🌫️ Nebelwandler", "rarity": "mythisch", "price": 68_000},
     {"id": "haendler:frostfuerst", "text": "Frostfürst",
-     "label": "❄️ Frostfürst", "rarity": "mythisch", "price": 18000},
+     "label": "❄️ Frostfürst", "rarity": "mythisch", "price": 55_000},
     {"id": "haendler:phoenix", "text": "Phönix",
-     "label": "🦅 Phönix", "rarity": "mythisch", "price": 33000},
+     "label": "🦅 Phönix", "rarity": "mythisch", "price": 118_000},
 ]
 _KATALOG_BY_ID = {e["id"]: e for e in _KATALOG}
 
@@ -230,14 +247,21 @@ class Merchant:
                  today, datetime.fromtimestamp(appear_at, TIMEZONE).strftime("%H:%M"))
         return True
 
+    # Was als "Highlight" gilt (davon ist IMMER mindestens eines im Angebot) und
+    # wie stark die Stufen gezogen werden. Goettlich ist bewusst ganz selten -
+    # der Haendler hat es nur an ungefaehr jedem zwanzigsten Tag ueberhaupt dabei.
+    _HIGHLIGHTS = ("legendary", "relikt", "exklusiv", "goettlich")
+    _STOCK_GEWICHT = {"episch": 5, "mythisch": 5, "legendary": 4,
+                      "relikt": 3, "exklusiv": 2, "goettlich": 1}
+
     def _roll_stock(self):
-        """Wuerfelt 3 Verkaufs-Titel (nur mythisch/legendaer/EXKLUSIV - krasser als
-        der Shop) und 1-2 Tausch-Deals. Es ist IMMER mindestens ein legendaerer oder
-        exklusiver Brocken dabei. Schreibt beides in den Zustand."""
+        """Wuerfelt 3 Verkaufs-Titel (episch bis GOETTLICH - krasser als der Shop)
+        und 1-2 Tausch-Deals. Es ist IMMER mindestens ein Highlight dabei
+        (legendaer/Relikt/exklusiv/goettlich). Schreibt beides in den Zustand."""
         st = self._state()
-        # Verkauf: gewichtet Richtung 'krass'. Mythisch als bezahlbarer Einstieg,
-        # dazu fast immer Legendaeres und mit etwas Glueck das EXKLUSIVE Top-Zeug.
-        gewicht = {"mythisch": 4, "legendary": 3, "exklusiv": 2}
+        # Verkauf: gewichtet Richtung 'krass'. Episch/Mythisch als bezahlbarer
+        # Einstieg, dazu fast immer ein Brocken und mit Glueck das Top-Zeug.
+        gewicht = self._STOCK_GEWICHT
         pool = list(_KATALOG)
         gewichte = [gewicht.get(e["rarity"], 1) for e in pool]
         stock = []
@@ -254,9 +278,9 @@ class Merchant:
             eintrag["limit"] = random.choice([0, 0, 1, 2, 3])  # 0 = unbegrenzt
             stock.append(eintrag)
         # Garantie: mindestens EIN Highlight (legendaer/exklusiv) im Angebot.
-        if not any(e["rarity"] in ("legendary", "exklusiv") for e in stock):
+        if not any(e["rarity"] in self._HIGHLIGHTS for e in stock):
             highlights = [e for e in _KATALOG
-                          if e["rarity"] in ("legendary", "exklusiv")
+                          if e["rarity"] in self._HIGHLIGHTS
                           and e["id"] not in gewaehlt_ids]
             if highlights and stock:
                 e = dict(random.choice(highlights))
@@ -269,17 +293,20 @@ class Merchant:
         # bekomm einen krasseren. Belohnung != bereits im Verkauf (mehr Abwechslung).
         trades = []
         rewards = [e for e in _KATALOG
-                   if e["rarity"] in ("legendary", "exklusiv")
+                   if e["rarity"] in self._HIGHLIGHTS
                    and e["id"] not in gewaehlt_ids]
         random.shuffle(rewards)
         anzahl_trades = random.choice([1, 2])
         for reward in rewards[:anzahl_trades]:
-            if reward["rarity"] == "exklusiv":
-                need = "legendary"
-                aufzahlung = random.choice([20000, 25000, 30000, 40000])
-            else:  # legendary
-                need = "mythisch"
-                aufzahlung = random.choice([8000, 10000, 12000, 15000])
+            # Einsatz ist immer die Stufe DIREKT darunter, die Aufzahlung ein
+            # Bruchteil des Preisunterschieds - eine Stelle statt einer if-Kette,
+            # damit neue Stufen automatisch mitspielen.
+            rang = titles.RANK.get(reward["rarity"], 1)
+            need = next((r for r in titles.RARITY_ORDER
+                         if titles.RANK.get(r, 0) == max(0, rang - 1)),
+                        "mythisch")
+            basis = int(reward["price"] * random.choice([0.18, 0.22, 0.26, 0.30]))
+            aufzahlung = max(1000, int(round(basis, -3)))
             trades.append({
                 "id": "trade:" + reward["id"],
                 "need_rarity": need,

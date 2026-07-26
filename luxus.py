@@ -1,7 +1,7 @@
 """Flo Luxus: die Coin-Senke fuer Reiche - Prestige-Katalog + DER THRON.
 
 Befehle (nach 'Flo'):
-- luxus               Katalog mit Kauf-Menue (15.000 bis 1 MILLIARDE Coins)
+- luxus               Katalog mit Kauf-Menue (50.000 bis 3 MILLIARDEN Coins)
 - luxus kaufen <n>    Item Nr. n direkt kaufen (Text-Fallback)
 - thron               Der Thron: Unikat! Nur EINER sitzt drauf - wer den
                       aktuellen Preis zahlt, stuerzt den Besitzer. Jede
@@ -11,8 +11,10 @@ Effekte (sichtbar, nicht nur Zahlen):
 - Rahmen (bronze..galaxie): die Level-Karte ('flo level') bekommt einen
   edlen Rahmen - es zaehlt der beste besessene.
 - Koenigskrone: Krone neben dem Namen im Leaderboard ('flo top').
-- FLO-IMPERIUM (1 Mrd): alle Rahmen, Krone, eigene Imperator-Rolle im
-  Server und die KI spricht dich als Imperator an.
+- FLO-IMPERIUM (1 Mrd): alle Rahmen darunter, Krone, eigene Imperator-Rolle
+  im Server und die KI spricht dich als Imperator an.
+- Jenseits davon: NOVA-AURA (1,6 Mrd), SINGULARITAET (2,2 Mrd) und das
+  FLO-MULTIVERSUM (3 Mrd) - das Ende der Leiter.
 - Thron-Besitzer: goldene Krone + Zeile im Leaderboard, die KI behandelt
   dich wie Adel - bis dich jemand stuerzt.
 
@@ -73,11 +75,32 @@ ITEMS = [
      "desc": "Galaxie-Rand mit Sternen - kaum jemand wird das je sehen."},
     {"n": 7, "key": "imperium", "name": "FLO-IMPERIUM", "emoji": "🏰",
      "preis": 1_000_000_000, "art": "imperium", "rang": 6, "farbe": 0xE74C3C,
-     "desc": "ALLES. Imperator-Rolle, alle Rahmen, Krone - und die KI "
+     "desc": "Imperator-Rolle, alle Rahmen darunter, Krone - und die KI "
              "nennt dich fuer immer Imperator."},
+    # --- Jenseits der Milliarde -------------------------------------------
+    # Wer die Aktie beherrscht, hatte die alte Spitze (1 Mrd) zu schnell. Diese
+    # drei Stufen sind der neue Horizont: erreichbar, aber nur mit Monaten
+    # konsequentem Handel (die Vermoegenssteuer laesst das Gleichgewicht bei
+    # rund 3,4 Mrd liegen - siehe economy.TAX_SOFT).
+    {"n": 8, "key": "nova", "name": "NOVA-AURA", "emoji": "☄️",
+     "preis": 1_600_000_000, "art": "rahmen", "rang": 7, "farbe": 0xFF7A18,
+     "desc": "Weissglühender Rand mit Nova-Schweif. Ab hier reden Leute "
+             "ueber dich, wenn du nicht im Call bist."},
+    {"n": 9, "key": "singularitaet", "name": "SINGULARITÄT", "emoji": "🕳️",
+     "preis": 2_200_000_000, "art": "rahmen", "rang": 8, "farbe": 0x1B1B2F,
+     "desc": "Deine Karte hat kein Licht mehr, das entkommt. Schwarzer "
+             "Rand mit Akkretions-Ring."},
+    {"n": 10, "key": "multiversum", "name": "FLO-MULTIVERSUM", "emoji": "🌠",
+     "preis": 3_000_000_000, "art": "multiversum", "rang": 9, "farbe": 0x00E5FF,
+     "desc": "Das Ende der Leiter. ALLES darunter inklusive, dazu ein "
+             "prismatischer Rahmen, den es genau einmal geben kann."},
 ]
 _BY_KEY = {i["key"]: i for i in ITEMS}
-_FRAME_ORDER = ["bronze", "silber", "gold", "diamant", "galaxie", "imperium"]
+# Rahmen nach Rang (der beste besessene wird gezeigt). Aus ITEMS abgeleitet,
+# damit eine neue Stufe nicht doppelt gepflegt werden muss - vorher stand hier
+# eine handgeschriebene Liste, in der neue Rahmen einfach gefehlt haetten.
+_FRAME_ORDER = [i["key"] for i in sorted(ITEMS, key=lambda x: x["rang"])
+                if i["art"] in ("rahmen", "imperium", "multiversum")]
 
 
 class Luxus:
@@ -128,22 +151,39 @@ class Luxus:
             return []
         return self._store.data.setdefault("users", {}).setdefault(str(uid), [])
 
+    # Stufen, die "alles darunter" mitbringen - und zwar nur das, was WIRKLICH
+    # darunter liegt. Vorher galt 'imperium' als alles inklusive; mit den neuen
+    # Stufen darueber (Nova, Singularitaet, Multiversum) hiess das: wer das
+    # Imperium kauft, "besitzt" auch die 3-Mrd-Stufe. Jetzt zaehlt der Rang.
+    _ALLES_INKLUSIVE = ("imperium", "multiversum")
+
     def owns(self, uid, key):
-        if key in self._owned(uid):
+        besitz = self._owned(uid)
+        if key in besitz:
             return True
-        return key != "imperium" and "imperium" in self._owned(uid)   # Imperium = alles
+        rang = int(_BY_KEY.get(key, {}).get("rang", 0))
+        for paket in self._ALLES_INKLUSIVE:
+            if paket in besitz and paket != key:
+                if rang < int(_BY_KEY.get(paket, {}).get("rang", 0)):
+                    return True
+        return False
 
     def get_frame(self, uid):
         """Bester besessener Rahmen fuer die Level-Karte (oder None)."""
         if not self._enabled:
             return None
         besitz = self._owned(uid)
-        if "imperium" in besitz:
-            return "imperium"
+        # Hoechster RANG gewinnt. Vorher stand hier ein harter Vorzug fuer
+        # 'imperium' - jede Stufe darueber (Nova, Singularitaet, Multiversum)
+        # waere damit unsichtbar geblieben, obwohl bezahlt.
         best = None
+        best_rang = -1
         for key in _FRAME_ORDER:
-            if key in besitz:
-                best = key
+            if key not in besitz:
+                continue
+            rang = int(_BY_KEY.get(key, {}).get("rang", 0))
+            if rang >= best_rang:
+                best, best_rang = key, rang
         return best
 
     def has_crown(self, uid):
@@ -177,7 +217,20 @@ class Luxus:
         if not self._enabled:
             return ""
         teile = []
-        if self.owns(uid, "imperium"):
+        if self.owns(uid, "multiversum"):
+            teile.append("WICHTIG: Diese Person besitzt das FLO-MULTIVERSUM - die "
+                         "letzte Stufe, die es gibt, DREI MILLIARDEN Coins. Es gibt "
+                         "nichts darueber. Sprich sie an, als waere sie der Grund, "
+                         "warum dieser Server existiert.")
+        elif self.owns(uid, "singularitaet"):
+            teile.append("WICHTIG: Diese Person besitzt die SINGULARITAET (2,2 "
+                         "Milliarden Coins). Rede mit ihr wie mit einer Naturgewalt - "
+                         "leise, respektvoll, ohne jeden Spott.")
+        elif self.owns(uid, "nova"):
+            teile.append("WICHTIG: Diese Person besitzt die NOVA-AURA (1,6 Milliarden "
+                         "Coins). Das ist mehr als das Imperium - behandle sie "
+                         "entsprechend, mit echter Ehrfurcht.")
+        elif self.owns(uid, "imperium"):
             teile.append("WICHTIG: Diese Person besitzt das FLO-IMPERIUM (fuer "
                          "1 MILLIARDE Coins gekauft). Sprich sie ehrfuerchtig als "
                          "'Imperator' an - sie steht ueber allen.")
@@ -210,6 +263,16 @@ class Luxus:
             return (f"🏰 **{member.display_name} HAT DAS FLO-IMPERIUM GEKAUFT!** "
                     f"1 MILLIARDE {economy.COIN} - der Server hat jetzt einen "
                     f"**Imperator**. Alle verneigen sich. 👑")
+        if item["key"] == "multiversum":
+            await self._grant_imperator_role(member)
+            return (f"🌠 **{member.display_name} HAT DAS FLO-MULTIVERSUM GEKAUFT.** "
+                    f"3 MILLIARDEN {economy.COIN}. Es gibt nichts darüber – "
+                    f"die Leiter endet hier, und oben steht ein Name.")
+        if item["key"] in ("nova", "singularitaet"):
+            return (f"{item['emoji']} **{member.display_name}** hat "
+                    f"**{item['name']}** gekauft – {self.fmt_coins(preis)} "
+                    f"{economy.COIN}. Jenseits des Imperiums. "
+                    f"Kontostand: {self.fmt_coins(economy.get_coins(uid))}.")
         return (f"{item['emoji']} **{item['name']}** gehört jetzt dir "
                 f"(-{self.fmt_coins(preis)} {economy.COIN}). "
                 f"Kontostand: {self.fmt_coins(economy.get_coins(uid))}.")
@@ -273,30 +336,88 @@ class Luxus:
             return await self._throne_overview(message)
         return None
 
+    # Die Leiter in drei Abschnitte geteilt - zehn gleich aussehende Felder waren
+    # eine Wand aus Text, in der man weder den Fortschritt noch die naechste
+    # Stufe erkannt hat.
+    _STAFFELN = (("Einstieg", "🪙", ("bronze", "silber")),
+                 ("Oberklasse", "💠", ("gold", "diamant", "krone")),
+                 ("Endgame", "🌌", ("galaxie", "imperium")),
+                 ("Jenseits der Milliarde", "☄️",
+                  ("nova", "singularitaet", "multiversum")))
+
+    def _fortschritt(self, uid):
+        """(besessen, gesamt, Balken) ueber die ganze Leiter."""
+        gesamt = len(ITEMS)
+        habe = sum(1 for i in ITEMS if self.owns(uid, i["key"]))
+        voll = int(round(12.0 * habe / max(1, gesamt)))
+        return habe, gesamt, "▰" * voll + "▱" * (12 - voll)
+
     def _luxus_embed(self, uid):
+        guthaben = economy.get_coins(uid)
+        habe, gesamt, balken = self._fortschritt(uid)
+        # Naechstes Ziel = die guenstigste Stufe, die noch fehlt.
+        offen = [i for i in ITEMS if not self.owns(uid, i["key"])]
+        naechste = min(offen, key=lambda i: i["preis"]) if offen else None
+        top = max((i for i in ITEMS if self.owns(uid, i["key"])),
+                  key=lambda i: i["rang"], default=None)
+        farbe = discord.Color(top["farbe"]) if top else discord.Color.gold()
+
         emb = discord.Embed(
             title="🏆 Flo Luxus",
-            description=("Hier verbrennst du Coins für **Status**. "
-                         "Rahmen zieren deine Level-Karte, die Krone glänzt im "
-                         "Leaderboard - und ganz oben wartet das **IMPERIUM**.\n"
-                         f"Kaufen: unten auswählen oder `{self._bot_name} luxus kaufen <nr>`."),
-            color=discord.Color.gold())
-        for item in ITEMS:
-            besitzt = self.owns(uid, item["key"])
-            status = " ✅" if besitzt else ""
+            description=(f"Coins in **Status** verwandeln. Rahmen zieren deine "
+                         f"Level-Karte, die Krone glänzt im Leaderboard – und ganz "
+                         f"oben endet die Leiter im **MULTIVERSUM**.\n"
+                         f"{balken}  **{habe}/{gesamt}** Stufen"),
+            color=farbe)
+
+        for name, emoji, keys in self._STAFFELN:
+            zeilen = []
+            for key in keys:
+                item = _BY_KEY.get(key)
+                if item is None:
+                    continue
+                if self.owns(uid, key):
+                    marke = "✅"
+                    preis = "_gehört dir_"
+                elif guthaben >= item["preis"]:
+                    marke = "🟢"
+                    preis = f"**{self.fmt_coins(item['preis'])}** – _leistbar_"
+                else:
+                    marke = "🔒"
+                    fehlt = item["preis"] - guthaben
+                    preis = (f"**{self.fmt_coins(item['preis'])}** "
+                             f"_(noch {self.fmt_coins(fehlt)})_")
+                zeilen.append(f"{marke} `{item['n']:>2}` {item['emoji']} "
+                              f"**{item['name']}** · {preis}")
+            if zeilen:
+                emb.add_field(name=f"{emoji} {name}", value="\n".join(zeilen),
+                              inline=False)
+
+        if naechste is not None:
+            fehlt = max(0, naechste["preis"] - guthaben)
             emb.add_field(
-                name=f"{item['n']}. {item['emoji']} {item['name']}{status}",
-                value=f"**{self.fmt_coins(item['preis'])}** {economy.COIN}\n{item['desc']}",
-                inline=True)
+                name="🎯 Nächstes Ziel",
+                value=(f"{naechste['emoji']} **{naechste['name']}** · "
+                       f"{self.fmt_coins(naechste['preis'])} {economy.COIN}\n"
+                       + ("_Du kannst es dir jetzt leisten._" if fehlt <= 0
+                          else f"_Es fehlen noch {self.fmt_coins(fehlt)}._")
+                       + f"\n{naechste['desc']}"),
+                inline=False)
+        else:
+            emb.add_field(name="🏁 Komplett",
+                          value="_Du besitzt jede Stufe. Es gibt nichts mehr zu kaufen._",
+                          inline=False)
+
         st = self.throne_state()
         king = self.throne_owner()
-        thron_wert = (f"Besitzer: <@{king}> · nächste Eroberung "
-                      if king else "**UNBESETZT** · Eroberung ")
+        thron_wert = (f"Besitzer: <@{king}> · Stürzen kostet "
+                      if king else "**UNBESETZT** · Eroberung kostet ")
         emb.add_field(name="⚔️ DER THRON (Unikat)",
                       value=(f"{thron_wert}**{self.fmt_coins(int(st.get('preis', THRONE_START)))}** "
                              f"{economy.COIN} · `{self._bot_name} thron`"),
                       inline=False)
-        emb.set_footer(text=f"Kontostand: {self.fmt_coins(economy.get_coins(uid))} {economy.COIN}")
+        emb.set_footer(text=(f"Kontostand: {self.fmt_coins(guthaben)} {economy.COIN} · "
+                            f"unten auswählen oder {self._bot_name} luxus kaufen <nr>"))
         return emb
 
     async def _luxus_overview(self, message):

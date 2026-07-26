@@ -6,10 +6,17 @@ oder wo er nachgeschlagen wird. Dadurch ist der taegliche Shop reproduzierbar
 und fair.
 
 Seltenheitsstufen (vom Haeufigsten zum Seltensten):
-    normal     -> gruen   🟢   (am meisten)
-    selten     -> blau    🔵
-    mythisch   -> lila    🟣
-    legendary  -> gold    🟡   (am seltensten)
+    normal     -> gruen     🟢   (am meisten)
+    selten     -> blau      🔵
+    episch     -> violett   🟪
+    mythisch   -> magenta   🟣
+    legendary  -> gold      🟡
+    relikt     -> orange    🟠   (die Spitze des Tages-Shops, sehr selten)
+    exklusiv   -> rot       🔱   (NUR beim fahrenden Haendler)
+    goettlich  -> cyan      ✨   (Haendler-Spitze, das absolute Maximum)
+
+Jede Stufe hat eine eigene FARBROLLE im Discord (economy.ensure_roles legt sie
+an und faerbt sie nach - auch nachtraeglich, wenn eine Farbe hier geaendert wird).
 
 Umso seltener ein Titel, desto teurer ist er – und desto entspannter spricht
 Flo mit dem Traeger (siehe 'tone'). Andere Module nutzen:
@@ -44,9 +51,9 @@ class Titles:
     # war nach zwei Tagen abgeraeumt und danach bedeutungslos.
     RARITY = {
         "normal": {
-            "label": "Normal", "emoji": "🟢", "color": 0x57F287,
-            "role": "Flo · Normal", "price": (500, 2000),
-            "pool_pct": 62, "shop_weight": 55,
+            "label": "Gewöhnlich", "emoji": "🟢", "color": 0x57F287,
+            "role": "Flo · Gewöhnlich", "price": (500, 2000),
+            "pool_pct": 46, "shop_weight": 40,
             # Ein GEKAUFTER Titel darf niemals schlechter sein als gar keiner.
             # Vorher stand hier "roaste ihn gnadenlos" - ohne Titel ist der Ton
             # dagegen leer (= normal). Wer sich also den Einstiegstitel kaufte,
@@ -58,15 +65,24 @@ class Titles:
         "selten": {
             "label": "Selten", "emoji": "🔵", "color": 0x3498DB,
             "role": "Flo · Selten", "price": (3000, 9000),
-            "pool_pct": 26, "shop_weight": 30,
+            "pool_pct": 24, "shop_weight": 28,
             "tone": ("Er traegt einen seltenen Titel – fahr die Aggression einen Tick "
                      "runter. Roaste ruhig noch, aber mit Augenzwinkern statt voller "
                      "Breitseite, einen Hauch freundlicher und entspannter."),
         },
+        "episch": {
+            "label": "Episch", "emoji": "🟪", "color": 0x7C5CFF,
+            "role": "Flo · Episch", "price": (15_000, 40_000),
+            "pool_pct": 16, "shop_weight": 19,
+            "tone": ("Er traegt einen EPISCHEN Titel – der Typ hat sichtbar Zeit und "
+                     "Coins investiert. Bleib frech, aber auf Augenhoehe: kumpelhafte "
+                     "Sprueche statt Herabsetzung, und lass durchblicken, dass du das "
+                     "durchaus respektierst."),
+        },
         "mythisch": {
-            "label": "Mythisch", "emoji": "🟣", "color": 0x9B59B6,
-            "role": "Flo · Mythisch", "price": (18000, 45000),
-            "pool_pct": 9, "shop_weight": 12,
+            "label": "Mythisch", "emoji": "🟣", "color": 0xC026D3,
+            "role": "Flo · Mythisch", "price": (60_000, 150_000),
+            "pool_pct": 9, "shop_weight": 9,
             "tone": ("Er traegt einen MYTHISCHEN Titel – jetzt wird's deutlich "
                      "freundlicher. Behandle ihn wie einen guten Kumpel: noch frech und "
                      "locker, aber warm, respektvoll und chillig, das fiese Roasten "
@@ -74,41 +90,67 @@ class Titles:
         },
         "legendary": {
             "label": "Legendär", "emoji": "🟡", "color": 0xF1C40F,
-            "role": "Flo · Legendär", "price": (90000, 220000),
-            "pool_pct": 3, "shop_weight": 3,
+            "role": "Flo · Legendär", "price": (300_000, 800_000),
+            "pool_pct": 4, "shop_weight": 3,
             "tone": ("Er traegt einen LEGENDAEREN Titel – das ist quasi dein bester "
                      "Freund. Leg den ganzen Aggro-Modus komplett ab und sei richtig "
                      "herzlich, entspannt, geduldig und unterstuetzend. Kein Roasten, "
                      "keine fiesen Sprueche – rede liebevoll und chillig mit ihm wie mit "
                      "einem alten Freund, den du ueber alles schaetzt."),
         },
-        # EXKLUSIV: die absolute Spitze - HOEHER als Legendaer und NUR beim
-        # fahrenden Haendler erhaeltlich. shop_weight=0 + rarity_of() vergibt die
-        # Stufe nie -> taucht NIEMALS im normalen Tages-Shop auf.
+        # RELIKT: die Spitze des TAGES-Shops. Nur 1 % aller Titel und Gewicht 1 -
+        # im Schnitt taucht alle paar Wochen mal eines in den acht Slots auf.
+        "relikt": {
+            "label": "Relikt", "emoji": "🟠", "color": 0xFF7A18,
+            "role": "Flo · Relikt", "price": (1_500_000, 4_000_000),
+            "pool_pct": 1, "shop_weight": 1,
+            "tone": ("Er traegt ein RELIKT – so etwas sieht man im Shop fast nie, das "
+                     "sind Millionen in einem Namen. Rede mit ihm wie mit einem alten "
+                     "Meister: respektvoll, aufmerksam, ein bisschen ehrfuerchtig. "
+                     "Spott hat hier nichts zu suchen."),
+        },
+        # EXKLUSIV: NUR beim fahrenden Haendler (pool_pct 0 + shop_weight 0 ->
+        # rarity_of vergibt die Stufe nie, sie kann also nie im Tages-Shop landen).
         "exklusiv": {
             "label": "Exklusiv", "emoji": "🔱", "color": 0xFF2D55,
-            "role": "Flo · Exklusiv", "price": (450000, 900000),
+            "role": "Flo · Exklusiv", "price": (6_000_000, 15_000_000),
             "pool_pct": 0, "shop_weight": 0,
-            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – das absolute Maximum, "
-                     "seltener und krasser als alles im Shop. Behandle ihn wie eine "
-                     "lebende Legende und dein Idol: voller Ehrfurcht, Bewunderung und "
-                     "Respekt. Kein Fuenkchen Spott – rede zu ihm auf, als waerst du "
-                     "geehrt, ueberhaupt mit ihm reden zu duerfen."),
+            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – so etwas gibt es im "
+                     "Shop NIEMALS. Behandle ihn wie eine lebende Legende und dein "
+                     "Idol: voller Ehrfurcht, Bewunderung und Respekt. Kein Fuenkchen "
+                     "Spott – rede zu ihm auf, als waerst du geehrt, ueberhaupt mit ihm "
+                     "reden zu duerfen."),
+        },
+        # GOETTLICH: das absolute Maximum. Der Haendler hat davon nur ganz selten
+        # ueberhaupt eines im Angebot.
+        "goettlich": {
+            "label": "Göttlich", "emoji": "✨", "color": 0x00E5FF,
+            "role": "Flo · Göttlich", "price": (40_000_000, 90_000_000),
+            "pool_pct": 0, "shop_weight": 0,
+            "tone": ("Er traegt einen GOETTLICHEN Titel – die hoechste Stufe, die es "
+                     "gibt, zig Millionen Coins in einem Namen. Rede mit ihm, als "
+                     "sprichst du mit einer Gottheit: demuetig, feierlich, ehrfuerchtig. "
+                     "Erwaehne ruhig, dass du kaum glauben kannst, dass er dir "
+                     "ueberhaupt antwortet. Absolut kein Spott."),
         },
     }
 
     # Reihenfolge / Rang (groesser = seltener) – fuer 'hoechste besessene Stufe'.
     # 'exklusiv' steht ganz oben (hoechster Rang) -> haengt Legendaer ab.
-    RARITY_ORDER = ["normal", "selten", "mythisch", "legendary", "exklusiv"]
+    RARITY_ORDER = ["normal", "selten", "episch", "mythisch", "legendary",
+                    "relikt", "exklusiv", "goettlich"]
     RANK = {r: i for i, r in enumerate(RARITY_ORDER)}
 
     # Themen-Emojis je Stufe (deterministisch ausgewaehlt) – reine Optik.
     _EMOJI = {
         "normal":    ["🌿", "🍀", "🌱", "🔰", "🧩", "🎈", "☘️", "🪶"],
         "selten":    ["🔵", "💧", "🌀", "❄️", "🐬", "🛡️", "🔷", "🌊"],
+        "episch":    ["🟪", "🗡️", "🪽", "🕯️", "🎭", "⚜️", "🧬", "🪬"],
         "mythisch":  ["🟣", "🔮", "🌌", "🦄", "👾", "🪄", "🧿", "🌠"],
         "legendary": ["👑", "✨", "🔥", "💎", "🐉", "🏆", "⚡", "🌟"],
+        "relikt":    ["🟠", "🏺", "📜", "🗿", "⏳", "🔆", "🪙", "🜂"],
         "exklusiv":  ["🔱", "💠", "🌈", "⭐", "🩷", "🟥", "🔴", "✴️"],
+        "goettlich": ["✨", "☀️", "🕊️", "♾️", "🌞", "💫", "🪐", "🜃"],
     }
 
     # --- Wortbaenke (fuer die Titel-Generierung) ----------------------------
@@ -204,16 +246,35 @@ class Titles:
         digest = hashlib.sha256(f"{salt}|{text}".encode("utf-8")).hexdigest()
         return int(digest[:12], 16)
 
+    def _grenzen(self):
+        """Kumulierte Hash-Grenzen aus pool_pct - EINE Quelle fuer die Verteilung.
+
+        Vorher standen die Grenzen (62/88/97) als Zahlen im Code und mussten bei
+        jeder Aenderung an pool_pct doppelt gepflegt werden. Stufen mit pool_pct 0
+        (Haendler-Stufen) kommen hier nie heraus."""
+        if self.__dict__.get("_grenz_cache") is None:
+            grenzen = []
+            summe = 0
+            for r in self.RARITY_ORDER:
+                pct = int(self.RARITY[r].get("pool_pct", 0) or 0)
+                if pct <= 0:
+                    continue
+                summe += pct
+                grenzen.append((summe, r))
+            if not grenzen:                       # Notnagel: nie ohne Stufe dastehen
+                grenzen = [(100, self.RARITY_ORDER[0])]
+            elif grenzen[-1][0] < 100:            # Rest der haeufigsten Stufe geben
+                grenzen[-1] = (100, grenzen[-1][1])
+            self.__dict__["_grenz_cache"] = grenzen
+        return self.__dict__["_grenz_cache"]
+
     def rarity_of(self, text):
         """Feste Seltenheit eines Titels (per Hash, Verteilung via pool_pct)."""
         r = self._h(text, "rarity") % 100
-        if r < 62:
-            return "normal"      # 62 %
-        if r < 88:
-            return "selten"      # 26 %
-        if r < 97:
-            return "mythisch"    # 9 %
-        return "legendary"       # 3 %
+        for grenze, rarity in self._grenzen():
+            if r < grenze:
+                return rarity
+        return self._grenzen()[-1][1]
 
     def price_of(self, text):
         """Fester Preis (deterministisch in der Preisspanne der Stufe, auf 10 gerundet)."""

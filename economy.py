@@ -98,6 +98,15 @@ class Economy:
     TAX_FREE = int(os.getenv("ECONOMY_TAX_FREE", "5000000") or "5000000")
     TAX_RATE = float(os.getenv("ECONOMY_TAX_RATE", "0.02") or "0.02")
     TAX_MIN = 100                # unter diesem Betrag lohnt die Buchung nicht
+    # DEGRESSIV ganz oben: ab TAX_SOFT greift nur noch TAX_RATE_TOP. Sonst waere
+    # bei 2 % das Gleichgewicht selbst fuer den besten Haendler bei ~1 Mrd, und
+    # jede Luxus-Stufe darueber (Nova 1,6 Mrd, Singularitaet 2,2 Mrd,
+    # Multiversum 3 Mrd) waere fuer IMMER unerreichbar - totes Inhalt. Mit
+    # 0,4 % oberhalb von 400 Mio liegt das Gleichgewicht bei rund 3,4 Mrd: die
+    # Spitze ist erreichbar, aber nur mit Monaten konsequentem Handel. Fuer
+    # normale Konten aendert sich nichts (die kommen nie in diesen Bereich).
+    TAX_SOFT = int(os.getenv("ECONOMY_TAX_SOFT", "400000000") or "400000000")
+    TAX_RATE_TOP = float(os.getenv("ECONOMY_TAX_RATE_TOP", "0.004") or "0.004")
 
     # Muenzeinheit
     COIN = "Flo Coins"
@@ -537,11 +546,18 @@ class Economy:
 
     # --- Vermoegenssteuer (taeglich, verbrennt Coins) ------------------------
     def steuer_fuer(self, coins):
-        """Wie viel dieses Vermoegen heute an Steuer kostet (0 bei kleinen Konten)."""
-        ueber = int(coins) - self.TAX_FREE
+        """Wie viel dieses Vermoegen heute an Steuer kostet (0 bei kleinen Konten).
+
+        Zwei Stufen: TAX_RATE zwischen Freibetrag und TAX_SOFT, darueber nur noch
+        TAX_RATE_TOP (siehe Kommentar bei den Konstanten)."""
+        coins = int(coins)
+        ueber = coins - self.TAX_FREE
         if ueber <= 0 or self.TAX_RATE <= 0:
             return 0
-        betrag = int(ueber * self.TAX_RATE)
+        soft = max(self.TAX_FREE, self.TAX_SOFT)
+        mitte = min(coins, soft) - self.TAX_FREE
+        oben = max(0, coins - soft)
+        betrag = int(mitte * self.TAX_RATE + oben * max(0.0, self.TAX_RATE_TOP))
         return betrag if betrag >= self.TAX_MIN else 0
 
     def depot_wert(self, uid):
@@ -631,29 +647,106 @@ class Economy:
             log.warning("Konnte Rolle '%s' nicht anlegen (Rechte?).", name)
             return None
 
+    # Rollen, die Flo frueher angelegt hat und die heute anders heissen. Beim Start
+    # werden sie UMBENANNT statt liegengelassen - sonst haengt am Server eine
+    # verwaiste "Flo · Normal" herum, waehrend daneben "Flo · Gewöhnlich" entsteht
+    # und die Nutzer beide Farben tragen.
+    _LEGACY_ROLLEN = {"Flo · Normal": "normal"}
+
     async def ensure_roles(self, guild):
-        """Legt beim Start ALLE vier Rarity-Rollen (in ihren Farben) im Server an,
-        falls sie noch fehlen. Idempotent: vorhandene Rollen bleiben unangetastet.
-        Fehlertolerant – fehlende Rechte sprengen nie den Start. Gibt eine Statistik
-        {'created'|'existed'|'failed': [Rollennamen]} zurueck."""
-        stats = {"created": [], "existed": [], "failed": []}
+        """Baut die Seltenheits-Rollen im Server AUF DEN AKTUELLEN STAND - Flo macht
+        das selbst, man muss im Discord nichts von Hand anlegen:
+
+        - fehlende Rollen werden angelegt (in der Farbe der Stufe)
+        - vorhandene Rollen werden UMGEFAERBT, wenn sich die Farbe geaendert hat
+        - alte Rollennamen werden umbenannt (siehe _LEGACY_ROLLEN)
+        - die Reihenfolge wird gesetzt: seltener = weiter oben
+
+        Idempotent und fehlertolerant - fehlende Rechte sprengen nie den Start.
+        Rueckgabe: {'created'|'existed'|'recolored'|'renamed'|'failed': [Namen]}."""
+        stats = {"created": [], "existed": [], "recolored": [], "renamed": [],
+                 "failed": []}
         if not self._enabled or guild is None:
             return stats
-        for rarity in titles.RARITY_ORDER:
-            name = titles.RARITY[rarity]["role"]
-            if discord.utils.get(guild.roles, name=name) is not None:
-                stats["existed"].append(name)
+
+        # 1) Alte Namen einsammeln und auf den neuen Namen ziehen.
+        for alt_name, rarity in self._LEGACY_ROLLEN.items():
+            meta = titles.RARITY.get(rarity)
+            if meta is None or meta["role"] == alt_name:
                 continue
-            role = await self._find_or_create_role(guild, rarity)
-            (stats["created"] if role is not None else stats["failed"]).append(name)
+            alt_role = discord.utils.get(guild.roles, name=alt_name)
+            if alt_role is None:
+                continue
+            if discord.utils.get(guild.roles, name=meta["role"]) is not None:
+                continue        # neue Rolle existiert schon -> alte einfach lassen
+            try:
+                await alt_role.edit(name=meta["role"],
+                                    colour=discord.Colour(meta["color"]),
+                                    reason="Flo: Seltenheitsstufe umbenannt")
+                stats["renamed"].append(f"{alt_name} -> {meta['role']}")
+            except (discord.Forbidden, discord.HTTPException):
+                log.warning("Konnte Rolle '%s' nicht umbenennen (Rechte?).", alt_name)
+
+        # 2) Anlegen bzw. Farbe nachziehen.
+        for rarity in titles.RARITY_ORDER:
+            meta = titles.RARITY[rarity]
+            name = meta["role"]
+            role = discord.utils.get(guild.roles, name=name)
+            if role is None:
+                neu_role = await self._find_or_create_role(guild, rarity)
+                (stats["created"] if neu_role is not None
+                 else stats["failed"]).append(name)
+                continue
+            stats["existed"].append(name)
+            if int(getattr(role.colour, "value", 0)) != int(meta["color"]):
+                try:
+                    await role.edit(colour=discord.Colour(meta["color"]),
+                                    reason="Flo: Farbe der Seltenheitsstufe")
+                    stats["recolored"].append(name)
+                except (discord.Forbidden, discord.HTTPException):
+                    log.warning("Konnte Farbe von '%s' nicht setzen (Rechte?).", name)
+
+        await self._order_roles(guild)
+
         if stats["created"]:
-            log.info("Rarity-Rollen angelegt in '%s': %s",
+            log.info("Seltenheits-Rollen angelegt in '%s': %s",
                      guild.name, ", ".join(stats["created"]))
+        if stats["recolored"]:
+            log.info("Seltenheits-Rollen umgefaerbt in '%s': %s",
+                     guild.name, ", ".join(stats["recolored"]))
+        if stats["renamed"]:
+            log.info("Seltenheits-Rollen umbenannt in '%s': %s",
+                     guild.name, ", ".join(stats["renamed"]))
         if stats["failed"]:
-            log.warning("Rarity-Rollen NICHT anlegbar in '%s' (fehlt 'Rollen verwalten' "
-                        "oder Bot-Rolle zu weit unten?): %s",
+            log.warning("Seltenheits-Rollen NICHT anlegbar in '%s' (fehlt 'Rollen "
+                        "verwalten' oder Bot-Rolle zu weit unten?): %s",
                         guild.name, ", ".join(stats["failed"]))
         return stats
+
+    async def _order_roles(self, guild):
+        """Sortiert die Flo-Seltenheits-Rollen untereinander: seltener = weiter oben.
+
+        Discord zeigt die Farbe der HOECHSTEN Rolle. Ein Nutzer traegt zwar nur eine
+        Flo-Rolle, aber die Reihenfolge in der Serverliste soll trotzdem die Leiter
+        widerspiegeln. Rein kosmetisch und komplett fehlertolerant: Discord laesst
+        Positionen ueber der eigenen Bot-Rolle nicht zu, das ignorieren wir."""
+        try:
+            vorhanden = []
+            for rarity in titles.RARITY_ORDER:
+                role = discord.utils.get(guild.roles, name=titles.RARITY[rarity]["role"])
+                if role is not None:
+                    vorhanden.append(role)
+            if len(vorhanden) < 2:
+                return
+            # Niedrigste vorhandene Position als Basis, dann aufsteigend verteilen.
+            basis = min(r.position for r in vorhanden)
+            plan = {r: basis + i for i, r in enumerate(vorhanden)}
+            if all(r.position == p for r, p in plan.items()):
+                return
+            await guild.edit_role_positions(positions=plan,
+                                            reason="Flo: Seltenheits-Leiter sortieren")
+        except Exception:  # noqa: BLE001 - Reihenfolge ist reine Deko
+            log.debug("Rollen-Reihenfolge konnte nicht gesetzt werden.", exc_info=True)
 
     async def _sync_role(self, member):
         """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
@@ -1392,29 +1485,69 @@ class Economy:
             return await self.refresh_shop_async(force=False)
         return st
 
-    def _shop_embed(self, items, *, with_fields = False):
+    def _shop_embed(self, items, *, with_fields = False, member = None):
         """Shop-Embed. Normalfall: schlank – die Titel zeigt das Banner-BILD. Nur als
         Notfall (Bild liess sich nicht rendern) werden die Titel als Textfelder
-        nachgereicht (with_fields=True)."""
+        nachgereicht (with_fields=True).
+
+        Zeigt zusaetzlich die Seltenheits-LEITER (welche Stufe kostet was) und, wenn
+        ein Mitglied bekannt ist, was davon heute leistbar ist - vorher stand da nur
+        "je seltener, desto edler", ohne dass man die Stufen ueberhaupt kannte."""
         rar_best = max(items, key=lambda e: titles.RANK.get(e["rarity"], 0))["rarity"]
+        guthaben = self.get_coins(member.id) if member is not None else None
         emb = discord.Embed(
             title="🛒 Flo Shop — Titel des Tages",
-            description=("Jeden Tag um **2 Uhr** frische Titel. Je seltener, desto edler "
-                         "die Farbe – und desto **entspannter quatscht Flo** mit dir.\n"
+            description=("Jeden Tag um **2 Uhr** acht frische Titel. Je seltener, desto "
+                         "teurer – und desto **entspannter quatscht Flo** mit dir.\n"
+                         "Jeder Kauf bringt die **farbige Rolle** der Stufe.\n"
                          "**Kaufen:** unten im Dropdown auswählen. 👇"),
             color=discord.Color(titles.RARITY[rar_best]["color"]),
         )
+
+        # Das Highlight des Tages ausdruecklich benennen (sonst uebersieht man das
+        # eine Relikt zwischen sieben gewoehnlichen Titeln).
+        top = max(items, key=lambda e: (titles.RANK.get(e["rarity"], 0), e["price"]))
+        top_meta = titles.RARITY[top["rarity"]]
+        if titles.RANK.get(top["rarity"], 0) >= titles.RANK.get("episch", 2):
+            emb.add_field(
+                name=f"{top_meta['emoji']} Highlight heute · {top_meta['label']}",
+                value=(f"**{top['label']}** — {fmt(top['price'])} {self.COIN}"
+                       + ("" if guthaben is None else
+                          ("\n_leistbar_ ✅" if guthaben >= top["price"]
+                           else f"\n_es fehlen noch {fmt(top['price'] - guthaben)}_"))),
+                inline=False)
+
         if with_fields:
             for e in items:
                 meta = titles.RARITY[e["rarity"]]
+                marke = ""
+                if guthaben is not None:
+                    marke = " ✅" if guthaben >= e["price"] else " 🔒"
                 emb.add_field(
-                    name=f"{e['n']}. {e['label']}",
+                    name=f"{e['n']}. {e['label']}{marke}",
                     value=f"{meta['emoji']} **{meta['label']}** · 💰 {fmt(e['price'])} {self.COIN}",
                     inline=True,
                 )
             while len(emb.fields) % 3 != 0:
                 emb.add_field(name="​", value="​", inline=True)
-        emb.set_footer(text=f"{len(items)} Titel heute · beim Kauf gibt's die farbige Rarity-Rolle")
+
+        # Die Leiter: kurz, in EINER Zeile je Stufe, mit dem Preisband.
+        leiter = []
+        for rarity in titles.RARITY_ORDER:
+            meta = titles.RARITY[rarity]
+            lo, hi = meta["price"]
+            nur_haendler = int(meta.get("shop_weight", 0) or 0) <= 0
+            heute = sum(1 for e in items if e["rarity"] == rarity)
+            wo = " · _nur beim Händler_" if nur_haendler else (f" · **{heute}× heute**" if heute else "")
+            leiter.append(f"{meta['emoji']} **{meta['label']}** {fmt(lo)}–{fmt(hi)}{wo}")
+        emb.add_field(name="Die Leiter", value="\n".join(leiter), inline=False)
+
+        if guthaben is not None:
+            leistbar = sum(1 for e in items if guthaben >= e["price"])
+            emb.set_footer(text=(f"Kontostand {fmt(guthaben)} {self.COIN} · "
+                                f"{leistbar} von {len(items)} Titeln leistbar"))
+        else:
+            emb.set_footer(text=f"{len(items)} Titel heute · Kauf gibt die farbige Rolle")
         return emb
 
     def _shop_banner_file(self, items, date):
@@ -1441,7 +1574,8 @@ class Economy:
                 description="Der Shop ist gerade leer – schau gleich nochmal rein.",
                 color=discord.Color.blurple())
         file = self._shop_banner_file(items, st.get("date", ""))
-        emb = self._shop_embed(items, with_fields=(file is None))
+        emb = self._shop_embed(items, with_fields=(file is None),
+                               member=message.author)
         if file is not None:
             emb.set_image(url="attachment://shop.png")
         view = _ShopView(items)

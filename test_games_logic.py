@@ -759,10 +759,26 @@ def test_luxus_katalog():
     assert len(set(preise)) == len(preise), "keine zwei gleich teuren Stufen"
     # Einstieg: ein paar Tage normal spielen, nicht ein Monat.
     assert 20_000 <= preise[0] <= 80_000, preise[0]
-    assert preise[-1] == 1_000_000_000              # das 1-Mrd-Endziel
-    # Jede Stufe muss sich deutlich anfuehlen (mind. x3), aber keine Mauer sein.
+    # Die Leiter endet jenseits der Milliarde (1 Mrd war fuer Aktien-Haendler zu
+    # schnell erreicht) - aber im erreichbaren Bereich: das Gleichgewicht der
+    # Vermoegenssteuer liegt bei rund 3,4 Mrd (economy.TAX_SOFT/TAX_RATE_TOP).
+    assert preise[-1] == 3_000_000_000
+    hoechst = economy.instance.TAX_FREE
+    lo, hi = 0, 10 ** 13
+    for _ in range(200):                      # Gleichgewicht bei 20 Mio/Tag suchen
+        m = (lo + hi) // 2
+        if economy.instance.steuer_fuer(m) < 20_000_000:
+            lo = m
+        else:
+            hi = m
+    hoechst = lo
+    assert preise[-1] <= hoechst, (preise[-1], hoechst)   # kein totes Inhalt
+    # Stufen muessen sich anfuehlen. Unten grosse Spruenge (x5), oben flacher -
+    # dort bremst die Steuer, jeder Schritt dauert dann ohnehin Wochen.
     for a, b in zip(preise, preise[1:]):
-        assert 3.0 <= b / a <= 10.0, (a, b, round(b / a, 2))
+        faktor = b / a
+        grenze = 1.2 if a >= 1_000_000_000 else 3.0
+        assert grenze <= faktor <= 10.0, (a, b, round(faktor, 2))
     assert len({i["key"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
     assert len({i["n"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
     assert luxus.THRONE_FACTOR > 1.0                # Thron wird immer teurer
@@ -1058,33 +1074,77 @@ def test_merchant_shop_und_trade():
         m._store.data["departed"] = True
         assert isinstance(asyncio.run(m.handle(hmsg(1, "haendler"))), str)
 
-        # _roll_stock ist KRASSER als der Shop: nur mythisch/legendaer/exklusiv,
-        # immer mind. ein Highlight; Tausch-Belohnungen sind legendaer/exklusiv.
-        for _ in range(25):
+        # _roll_stock ist KRASSER als der Shop: keine gewoehnlichen/seltenen Titel,
+        # immer mind. ein Highlight; Tausch-Belohnungen sind ebenfalls Highlights.
+        import titles as _t
+        erlaubt = {"episch", "mythisch", "legendary", "relikt", "exklusiv", "goettlich"}
+        gesehen = set()
+        for _ in range(60):
             m._roll_stock()
             stock = m._state()["stock"]
-            assert stock and all(e["rarity"] in ("mythisch", "legendary", "exklusiv")
-                                 for e in stock)
-            assert any(e["rarity"] in ("legendary", "exklusiv") for e in stock)
+            assert stock and all(e["rarity"] in erlaubt for e in stock), stock
+            assert any(e["rarity"] in merchant.Merchant._HIGHLIGHTS for e in stock)
+            gesehen.update(e["rarity"] for e in stock)
             for t in m._state()["trades"]:
-                assert t["reward_rarity"] in ("legendary", "exklusiv")
+                assert t["reward_rarity"] in merchant.Merchant._HIGHLIGHTS
+                # Einsatz ist immer die Stufe DIREKT unter der Belohnung.
+                assert (_t.RANK[t["need_rarity"]]
+                        == _t.RANK[t["reward_rarity"]] - 1), t
+                assert t["surcharge"] >= 1000
+        # Ueber 60 Tage muss auch die Spitze mal auftauchen (sonst ist sie toter Code).
+        assert "goettlich" in gesehen or "exklusiv" in gesehen, gesehen
+        # Jeder Katalog-Preis passt in die Spanne seiner Stufe (hier: nie teurer).
+        for e in merchant._KATALOG:
+            lo, hi = _t.RARITY[e["rarity"]]["price"]
+            assert lo * 0.2 <= e["price"] <= hi, (e["id"], e["price"], lo, hi)
     finally:
         m._store, m._enabled = alt
         restore_eco()
 
 
-# --- Titel: die neue EXKLUSIV-Stufe (nur beim Haendler) ------------------------
-def test_titles_exklusiv_tier():
-    """'exklusiv' ist die hoechste Stufe und taucht NIE im normalen Shop/Pool auf."""
+# --- Titel: die Seltenheits-Leiter -------------------------------------------
+def test_titles_leiter():
+    """Acht Stufen, saubere Verteilung, eigene Farbe/Rolle je Stufe - und die
+    Haendler-Stufen tauchen NIE im normalen Shop auf."""
     import titles
-    assert "exklusiv" in titles.RARITY
-    assert titles.RANK["exklusiv"] == max(titles.RANK.values())   # hoechster Rang
-    assert titles.RARITY["exklusiv"]["shop_weight"] == 0
-    assert titles.counts().get("exklusiv", 0) == 0                # kein Pool-Titel
-    assert all(e["rarity"] != "exklusiv" for e in titles.random_titles(40))
-    # rarity_of vergibt die Stufe grundsaetzlich nie.
-    assert all(titles.rarity_of(t) != "exklusiv"
+    ordnung = titles.RARITY_ORDER
+    assert len(ordnung) == 8 and len(set(ordnung)) == 8
+    # Jede Stufe hat alles, was Shop, Rolle, Bild und KI brauchen.
+    for r in ordnung:
+        meta = titles.RARITY[r]
+        for key in ("label", "emoji", "color", "role", "price", "pool_pct",
+                    "shop_weight", "tone"):
+            assert key in meta and meta[key] not in (None, ""), (r, key)
+        assert meta["role"].startswith("Flo · ")
+    # Farben und Rollennamen muessen EINDEUTIG sein (sonst zwei Stufen, eine Rolle).
+    farben = [titles.RARITY[r]["color"] for r in ordnung]
+    rollen = [titles.RARITY[r]["role"] for r in ordnung]
+    assert len(set(farben)) == len(farben), farben
+    assert len(set(rollen)) == len(rollen), rollen
+    # Preise steigen streng mit dem Rang und ueberlappen nicht.
+    spannen = [titles.RARITY[r]["price"] for r in ordnung]
+    for (lo1, hi1), (lo2, hi2) in zip(spannen, spannen[1:]):
+        assert lo1 < hi1 <= lo2 < hi2, (lo1, hi1, lo2, hi2)
+    # Verteilung: pool_pct summiert auf 100 und die Hash-Grenzen passen dazu.
+    assert sum(titles.RARITY[r]["pool_pct"] for r in ordnung) == 100
+    anzahl = titles.counts()
+    gesamt = titles.total()
+    for r in ordnung:
+        pct = titles.RARITY[r]["pool_pct"]
+        if pct == 0:
+            assert anzahl.get(r, 0) == 0, r          # Haendler-Stufe: kein Pool
+            continue
+        anteil = anzahl.get(r, 0) / gesamt * 100
+        assert abs(anteil - pct) < 2.0, (r, round(anteil, 2), pct)
+    # Haendler-Stufen kommen NIE aus dem Shop.
+    nur_haendler = [r for r in ordnung if titles.RARITY[r]["shop_weight"] == 0]
+    assert set(nur_haendler) == {"exklusiv", "goettlich"}
+    for e in titles.random_titles(60):
+        assert e["rarity"] not in nur_haendler
+    assert all(titles.rarity_of(t) not in nur_haendler
                for t in ("Goldener König", "Wilder Wolf", "Titan des Chaos"))
+    # 'goettlich' ist die hoechste Stufe.
+    assert titles.RANK["goettlich"] == max(titles.RANK.values())
 
 
 # --- Monats-Lotto --------------------------------------------------------------
@@ -3351,6 +3411,160 @@ def test_floaktie_impuls_respektiert_deckel():
         fa._store, fa._enabled, fa._today = alt
 
 
+def test_luxus_jenseits_der_milliarde():
+    """Die neuen Stufen ueber dem Imperium muessen WIRKEN: sichtbarer Rahmen,
+    richtige Besitz-Logik, eigener KI-Ton. REGRESSION: get_frame() hatte einen
+    harten Vorzug fuer 'imperium' - jede Stufe darueber waere unsichtbar geblieben,
+    obwohl bezahlt. Und owns() gab 'imperium' als "alles inklusive" aus, wodurch
+    der Imperium-Kaeufer die 3-Mrd-Stufe gratis "besessen" haette."""
+    import render
+    lx = luxus.instance
+    alt = (lx._store, lx._enabled)
+    lx._enabled = True
+    try:
+        neu = [i for i in luxus.ITEMS if i["preis"] > 1_000_000_000]
+        assert len(neu) >= 3, "keine Stufen ueber der Milliarde"
+        # Jede neue Stufe hat einen eigenen Rahmen-Stil im Bild-Renderer.
+        for item in neu:
+            if item["art"] in ("rahmen", "multiversum"):
+                assert item["key"] in render.Render._FRAME_STYLES, item["key"]
+        # Rahmen-Reihenfolge kommt aus ITEMS (keine handgepflegte Liste mehr).
+        assert luxus._FRAME_ORDER[-1] == "multiversum"
+        assert luxus._FRAME_ORDER.index("imperium") < luxus._FRAME_ORDER.index("nova")
+
+        lx._store = _FakeStore({"users": {
+            "1": ["imperium"], "2": ["multiversum"], "3": ["bronze", "nova"]},
+            "throne": {"owner": "", "preis": luxus.THRONE_START, "n": 0}})
+        # Der beste besessene Rahmen gewinnt - nach RANG, nicht nach Sonderfall.
+        assert lx.get_frame(1) == "imperium"
+        assert lx.get_frame(2) == "multiversum"
+        assert lx.get_frame(3) == "nova"
+        # 'alles inklusive' gilt nur nach UNTEN.
+        assert lx.owns(1, "gold") and not lx.owns(1, "nova")
+        assert not lx.owns(1, "multiversum")
+        assert lx.owns(2, "gold") and lx.owns(2, "nova") and lx.owns(2, "imperium")
+        assert not lx.owns(3, "gold")            # Nova bringt nichts darunter mit
+        # Eigener Ton je Spitze (sonst redet Flo mit dem 3-Mrd-Besitzer wie mit
+        # einem Imperator).
+        t2 = lx.get_tone_extra(2)
+        assert "MULTIVERSUM" in t2 and "Imperator" not in t2
+        assert "NOVA" in lx.get_tone_extra(3)
+    finally:
+        lx._store, lx._enabled = alt
+
+
+def test_bilder_grosse_zahlen():
+    """REGRESSION (Design): Seit der Wirtschafts-Umstellung sind Millionen und
+    Milliarden normal. '3.000.000.000' war breiter als seine Spalte und lief in die
+    Nachbarzahl hinein; im Shop-Banner stand '90000000' ohne Trenner; und das Label
+    des Singularitaets-Rahmens war dunkelgrau auf schwarz (unlesbar)."""
+    import render
+    r = render.instance
+    # Kompakte Betraege: lesbar und schmal.
+    assert r._coin_kurz(1150) == "1.150"
+    assert r._coin_kurz(445_850) == "445.850"
+    assert r._coin_kurz(3_774_410) == "3,77 Mio"
+    assert r._coin_kurz(90_000_000) == "90 Mio"
+    assert r._coin_kurz(3_000_000_000) == "3 Mrd"
+    assert r._coin_kurz("quatsch") == "0"          # nie ein Absturz
+    for v in (0, 7, 10 ** 15):
+        assert isinstance(r._coin_kurz(v), str)
+    # Helligkeit entscheidet die Textfarbe (Label auf dunklem Rahmen).
+    assert r._helligkeit((255, 255, 255)) > 200
+    assert r._helligkeit((18, 18, 28)) < 40
+    # Level-Karte mit Extremwerten: rendert, und die Zahl bleibt in ihrer Spalte.
+    from PIL import Image, ImageDraw
+    for frame in ("singularitaet", "multiversum", None):
+        buf = render.level_card(
+            None, name="EinSehrLangerNameDerNichtPasst", level=999, into=5, step=6,
+            place=1, total=99, xp=10 ** 12, coins=123_456_789_012, msgs=9_999_999,
+            voice_secs=99 * 3600, streak=365, title="✨ Ein sehr langer Titel hier",
+            accent=(0, 229, 255), frame=frame)
+        img = Image.open(buf)
+        assert img.size == (1000, 320), img.size
+    # Die Stat-Spalten sind ~180 px breit - der kompakte Text muss darunter bleiben.
+    d = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    f = r._font(23)
+    for v in (123_456_789_012, 3_000_000_000, 9_999_999):
+        assert d.textlength(r._coin_kurz(v), font=f) < 170, v
+
+
+def test_seltenheits_rollen_werden_gepflegt():
+    """Flo baut die Rollen selbst: fehlende anlegen, geaenderte Farben nachziehen,
+    alte Namen umbenennen. Ohne das haengen nach einer Farb-Aenderung Rollen in der
+    ALTEN Farbe im Server - und die umbenannte Stufe doppelt."""
+    import titles
+    eco = economy.instance
+    restore = _with_economy({})
+
+    class FakeRole:
+        def __init__(self, name, value, position=1):
+            self.name, self.position = name, position
+            self.colour = SimpleNamespace(value=value)
+            self.edits = []
+
+        async def edit(self, **kw):
+            self.edits.append(kw)
+            if "name" in kw:
+                self.name = kw["name"]
+            if "colour" in kw:
+                self.colour = SimpleNamespace(value=kw["colour"].value)
+
+    class FakeGuild:
+        def __init__(self, roles):
+            self.name = "Testserver"
+            self.roles = list(roles)
+            self.created = []
+            self.positions = None
+
+        async def create_role(self, *, name, colour, **kw):
+            rolle = FakeRole(name, colour.value, position=len(self.roles) + 1)
+            self.roles.append(rolle)
+            self.created.append(name)
+            return rolle
+
+        async def edit_role_positions(self, *, positions, reason=None):
+            self.positions = positions
+
+    try:
+        # Ausgangslage: eine Rolle mit ALTEM Namen und eine mit falscher Farbe.
+        falsch = FakeRole(titles.RARITY["selten"]["role"], 0x000000, position=3)
+        veraltet = FakeRole("Flo · Normal", 0x57F287, position=2)
+        guild = FakeGuild([veraltet, falsch])
+        stats = asyncio.run(eco.ensure_roles(guild))
+
+        # Alter Name wurde auf den neuen gezogen (keine Dublette).
+        assert veraltet.name == titles.RARITY["normal"]["role"]
+        assert any("Flo · Normal ->" in x for x in stats["renamed"]), stats
+        namen = [r.name for r in guild.roles]
+        assert namen.count(titles.RARITY["normal"]["role"]) == 1
+        # Falsche Farbe wurde korrigiert.
+        assert falsch.colour.value == titles.RARITY["selten"]["color"]
+        assert titles.RARITY["selten"]["role"] in stats["recolored"]
+        # Alle acht Stufen existieren danach, jede in ihrer Farbe.
+        for r in titles.RARITY_ORDER:
+            meta = titles.RARITY[r]
+            rolle = next((x for x in guild.roles if x.name == meta["role"]), None)
+            assert rolle is not None, meta["role"]
+            assert rolle.colour.value == meta["color"], meta["role"]
+        # Reihenfolge gesetzt: seltener = weiter oben.
+        assert guild.positions, "Reihenfolge wurde nicht gesetzt"
+        nach_rang = sorted(guild.positions.items(),
+                           key=lambda kv: titles.RANK[
+                               next(r for r in titles.RARITY_ORDER
+                                    if titles.RARITY[r]["role"] == kv[0].name)])
+        werte = [p for _r, p in nach_rang]
+        assert werte == sorted(werte), werte
+
+        # Zweiter Lauf aendert nichts mehr (idempotent).
+        vorher = len(guild.created)
+        stats2 = asyncio.run(eco.ensure_roles(guild))
+        assert len(guild.created) == vorher
+        assert not stats2["created"] and not stats2["recolored"]
+    finally:
+        restore()
+
+
 def test_vermoegenssteuer_als_senke():
     """Die Wirtschaft braucht eine WIEDERKEHRENDE Senke: alle Einnahmen sind
     zeitbasiert, alle alten Senken waren einmalig (ein Titel, ein Rahmen, ein
@@ -3370,6 +3584,14 @@ def test_vermoegenssteuer_als_senke():
         for c in (0, 50_000, eco.TAX_FREE - 1, eco.TAX_FREE):
             assert eco.steuer_fuer(c) == 0, c
         assert eco.steuer_fuer(eco.TAX_FREE + 1_000_000) == int(1_000_000 * eco.TAX_RATE)
+        # DEGRESSIV ganz oben: ab TAX_SOFT nur noch der kleine Satz. Ohne das laege
+        # das Gleichgewicht selbst fuer den besten Haendler bei ~1 Mrd - jede
+        # Luxus-Stufe darueber waere fuer immer unerreichbar (totes Inhalt).
+        assert 0 < eco.TAX_RATE_TOP < eco.TAX_RATE
+        mitte = int((eco.TAX_SOFT - eco.TAX_FREE) * eco.TAX_RATE)
+        assert eco.steuer_fuer(eco.TAX_SOFT) == mitte
+        assert eco.steuer_fuer(eco.TAX_SOFT + 1_000_000_000) == \
+            mitte + int(1_000_000_000 * eco.TAX_RATE_TOP)
 
         # Einzug: verbrennt Coins (kein Gegenkonto!) und laeuft pro Tag nur EINMAL.
         eco._profile(1)["coins"] = 21_000_000
@@ -3453,8 +3675,18 @@ def test_vermoegenssteuer_als_senke():
                 if abs(neu - stand) <= max(1, tages_einkommen // 1000):
                     break
                 stand = neu
-            erwartet = eco.TAX_FREE + tages_einkommen / eco.TAX_RATE
-            assert abs(stand - erwartet) < erwartet * 0.05, (tages_einkommen, stand, erwartet)
+            # Erwartung aus der Steuerformel selbst zurueckgerechnet (die Steuer ist
+            # oben degressiv: ab TAX_SOFT nur noch TAX_RATE_TOP).
+            lo, hi = 0, 10 ** 14
+            for _ in range(200):
+                m = (lo + hi) // 2
+                if eco.steuer_fuer(m) < tages_einkommen:
+                    lo = m
+                else:
+                    hi = m
+            erwartet = lo
+            assert abs(stand - erwartet) < max(1000, erwartet * 0.05), \
+                (tages_einkommen, stand, erwartet)
     finally:
         _fa_mod.instance._enabled = _fa_alt
         restore()

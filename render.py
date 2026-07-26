@@ -865,6 +865,31 @@ class Render:
         return f, text
 
 
+    @staticmethod
+    def _helligkeit(rgb):
+        """Wahrgenommene Helligkeit 0-255 (fuer die Wahl der Textfarbe)."""
+        try:
+            r, g, b = rgb[0], rgb[1], rgb[2]
+        except (TypeError, IndexError):
+            return 255
+        return int(0.299 * r + 0.587 * g + 0.114 * b)
+
+    @staticmethod
+    def _coin_kurz(n):
+        """Betrag kurz und deutsch: 1.150 · 28.190 · 3,77 Mio · 90 Mio · 3 Mrd.
+
+        Bilder haben feste Breite - eine achtstellige Zahl sprengt jede Pille."""
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return "0"
+        for teiler, einheit in ((1_000_000_000, "Mrd"), (1_000_000, "Mio")):
+            if abs(n) >= teiler:
+                v = n / teiler
+                txt = (f"{v:.2f}" if abs(v) < 10 else f"{v:.1f}").rstrip("0").rstrip(".")
+                return f"{txt.replace('.', ',')} {einheit}"
+        return f"{n:,}".replace(",", ".")
+
     def shop_banner(self, items, *, date = ""):
         """Schoenes Banner fuer den Tages-Shop: je Titel eine Zeile, eingefaerbt in
         der Seltenheits-Farbe (gruen/blau/lila/gold). Erwartet je Item ein Dict mit
@@ -938,8 +963,11 @@ class Render:
             d.text((kx + ks / 2, ky + ks / 2 - 1), str(e.get("n", "?")),
                    font=self._font(34), fill=(14, 16, 24), anchor="mm")
 
-            # Preis-Pill rechts (dunkel, Goldmuenze + Betrag) – zuerst, fuer Titelbreite
-            price = f"{e.get('price', 0)}"
+            # Preis-Pill rechts (dunkel, Goldmuenze + Betrag) – zuerst, fuer Titelbreite.
+            # KOMPAKT und mit Tausenderpunkten: seit der Wirtschafts-Umstellung gibt
+            # es Titel fuer Millionen, und "90000000" war weder lesbar noch passte
+            # die Pille dann noch neben einen langen Titel.
+            price = self._coin_kurz(e.get("price", 0))
             pf = self._font(27)
             pw = d.textlength(price, font=pf)
             pill_w = int(pw + 30 + 28)
@@ -1235,8 +1263,15 @@ class Render:
         "diamant": {"col": (120, 220, 255), "col2": (210, 245, 255), "label": "DIAMANT"},
         "galaxie": {"col": (155, 89, 182), "col2": (87, 148, 242), "label": "GALAXIE"},
         "imperium": {"col": (241, 196, 15), "col2": (231, 76, 60), "label": "IMPERATOR"},
+        # Jenseits der Milliarde (siehe luxus.py ITEMS).
+        "nova": {"col": (255, 245, 200), "col2": (255, 122, 24), "label": "NOVA"},
+        "singularitaet": {"col": (18, 18, 28), "col2": (128, 90, 213),
+                          "label": "SINGULARITÄT"},
+        "multiversum": {"col": (0, 229, 255), "col2": (255, 45, 149),
+                        "label": "MULTIVERSUM"},
     }
-    _FRAME_SPARKLE = ("gold", "diamant", "galaxie", "imperium")
+    _FRAME_SPARKLE = ("gold", "diamant", "galaxie", "imperium",
+                      "nova", "singularitaet", "multiversum")
 
 
     def level_card(self, avatar, *, name, level, into,
@@ -1311,8 +1346,11 @@ class Render:
         h, rem = divmod(int(voice_secs), 3600)
         m = rem // 60
         vtxt = f"{h}h {m}m" if h else f"{m}m"
-        stats = [("COINS", f"{coins:,}".replace(",", ".")),
-                 ("NACHRICHTEN", f"{msgs:,}".replace(",", ".")),
+        # Grosse Betraege KOMPAKT: "3.000.000.000" war breiter als seine Spalte und
+        # lief in die Nachrichten-Zahl hinein (seit der Wirtschafts-Umstellung sind
+        # Milliarden normal). Ab 1 Mio also "3 Mrd" statt aller Stellen.
+        stats = [("COINS", self._coin_kurz(coins)),
+                 ("NACHRICHTEN", self._coin_kurz(msgs)),
                  ("VOICE", vtxt),
                  ("STREAK", f"{streak} Tag(e)")]
         lf2, vf2 = self._font(15), self._font(23)
@@ -1320,7 +1358,11 @@ class Render:
         for i, (label, val) in enumerate(stats):
             sx = x0 + i * seg
             d.text((sx, 232), label, font=lf2, fill=(120, 126, 140))
-            d.text((sx, 254), val, font=vf2, fill=(200, 205, 218))
+            # Notbremse: passt der Wert trotzdem nicht in seine Spalte, kleiner setzen.
+            f = vf2
+            if d.textlength(val, font=f) > seg - 10:
+                f = self._font(18)
+            d.text((sx, 254), val, font=f, fill=(200, 205, 218))
 
         style = self._FRAME_STYLES.get(frame or "")
         if style is None:
@@ -1340,8 +1382,14 @@ class Render:
             lbl = style["label"]
             lw = int(d.textlength(lbl, font=lf3)) + 22
             lx = ax + (AD - lw) // 2
-            d.rounded_rectangle([lx, H - 40, lx + lw, H - 16], radius=12, fill=col)
-            d.text((lx + 11, H - 36), lbl, font=lf3, fill=(18, 16, 10))
+            # Pillen-Farbe: bei sehr dunklen Rahmen (Singularitaet) die Zweitfarbe
+            # nehmen, sonst stand dunkler Text auf schwarzem Grund - unlesbar.
+            pill_col = col if self._helligkeit(col) >= 70 else col2
+            if self._helligkeit(pill_col) < 70:
+                pill_col = (232, 234, 240)
+            txt_col = (18, 16, 10) if self._helligkeit(pill_col) >= 140 else (255, 255, 255)
+            d.rounded_rectangle([lx, H - 40, lx + lw, H - 16], radius=12, fill=pill_col)
+            d.text((lx + 11, H - 36), lbl, font=lf3, fill=txt_col)
         return self._png(img)
 
 
