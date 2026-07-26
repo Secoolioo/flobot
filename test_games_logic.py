@@ -1115,15 +1115,27 @@ def test_lotto_flow():
             assert lotto.TICKET_MIN <= preis <= lotto.TICKET_MAX
             assert lotto.JACKPOT_MIN_M * 1_000_000 <= jp <= lotto.JACKPOT_MAX_M * 1_000_000
 
-        # Kauf: Coins ab, Lose gezaehlt, Einsatz wandert in die Kasse.
+        # Kauf: Coins ab, Lose gezaehlt, Losgeld aufgeteilt.
+        # Der GROSSTEIL waechst den Jackpot (die Spieler fuellen den Topf, aus dem
+        # sie gewinnen), nur der Hausanteil bleibt in der Kasse. Vorher ging alles
+        # in die Kasse - und weil der Besitzer die abbuchen kann, war das Lotto in
+        # der Bilanz gar keine Senke, sondern nur ein Zwischenlager.
+        jp_vor = lt._state()["jackpot"]
         r = asyncio.run(lt.buy(SimpleNamespace(id=1), 3))
-        assert "3" in r and economy.get_coins(1) == 1_000_000 - 3 * 10_000
+        kosten = 3 * 10_000
+        zum_jackpot = int(kosten * lotto.JACKPOT_SHARE)
+        assert "3" in r and economy.get_coins(1) == 1_000_000 - kosten
         assert lt._entries()["1"] == 3
-        assert lt._state()["house"] == 3 * 10_000        # Einsatz -> Flos Kasse
-        # Zu wenig Coins -> Hinweis, keine Lose, Kasse unveraendert.
+        assert lt._state()["house"] == kosten - zum_jackpot
+        assert lt._state()["jackpot"] == jp_vor + zum_jackpot
+        # Kein Coin geht verloren oder entsteht: Losgeld = Jackpot-Zuwachs + Kasse.
+        assert (lt._state()["jackpot"] - jp_vor) + lt._state()["house"] == kosten
+        assert 0.0 < lotto.JACKPOT_SHARE < 1.0
+        # Zu wenig Coins -> Hinweis, keine Lose, Kasse/Jackpot unveraendert.
+        haus_vor, jp2 = lt._state()["house"], lt._state()["jackpot"]
         r = asyncio.run(lt.buy(SimpleNamespace(id=2), 1))
         assert isinstance(r, str) and "2" not in lt._entries()
-        assert lt._state()["house"] == 3 * 10_000
+        assert lt._state()["house"] == haus_vor and lt._state()["jackpot"] == jp2
         # 'max' deckelt nach Guthaben.
         assert lt._resolve_count(SimpleNamespace(id=1), "max") == \
             economy.get_coins(1) // 10_000
@@ -1135,10 +1147,12 @@ def test_lotto_flow():
         lt._win_chance = 1.0
 
         # Ziehung MIT Gewinn (chance 1.0): Spieler kriegt den Jackpot, won=True.
+        # Der Jackpot ist inzwischen um den Losgeld-Anteil gewachsen.
         vorher = economy.get_coins(1)
+        jackpot_jetzt = lt._state()["jackpot"]
         res = lt._draw()
         assert res.won and res.winner_ids == [1]
-        assert economy.get_coins(1) == vorher + 20_000_000
+        assert economy.get_coins(1) == vorher + jackpot_jetzt
         assert lt._state()["history"][-1]["winner_ids"] == [1]
 
         # Ziehung OHNE Gewinn (chance 0): kein Gewinner, kein Crash, won=False.
@@ -3282,6 +3296,61 @@ def test_floaktie_grenzen_gegen_hyperinflation():
     finally:
         restore_eco()
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
+
+
+def test_vermoegenssteuer_als_senke():
+    """Die Wirtschaft braucht eine WIEDERKEHRENDE Senke: alle Einnahmen sind
+    zeitbasiert, alle alten Senken waren einmalig (ein Titel, ein Rahmen, ein
+    Thron) oder prozentual zu freiwilligem Casino-Umsatz. Wer nur farmte und nie
+    spielte, hatte gar keine Senke - der Server lief mit Faktor 1,69x pro Tag in
+    die Inflation. Die Steuer verbrennt taeglich einen Anteil oberhalb des
+    Freibetrags und bringt jedes Einkommen in ein Gleichgewicht."""
+    eco = economy.instance
+    restore = _with_economy({})
+    try:
+        # Kleine Konten zahlen NICHTS - die Steuer trifft nur echtes Vermoegen.
+        for c in (0, 50_000, eco.TAX_FREE - 1, eco.TAX_FREE):
+            assert eco.steuer_fuer(c) == 0, c
+        assert eco.steuer_fuer(eco.TAX_FREE + 1_000_000) == int(1_000_000 * eco.TAX_RATE)
+
+        # Einzug: verbrennt Coins (kein Gegenkonto!) und laeuft pro Tag nur EINMAL.
+        eco._profile(1)["coins"] = 21_000_000
+        eco._profile(2)["coins"] = 500          # unter dem Freibetrag
+        eco._profile(3)["coins"] = -80_000      # Aktien-Schulden: nichts holen
+        vor_summe = sum(p["coins"] for p in eco._users().values())
+        n, weg = asyncio.run(eco.vermoegenssteuer())
+        assert n == 1, n                                  # nur das dicke Konto
+        assert weg == int((21_000_000 - eco.TAX_FREE) * eco.TAX_RATE), weg
+        assert eco._profile(2)["coins"] == 500            # unangetastet
+        assert eco._profile(3)["coins"] == -80_000        # kein Nachtreten
+        nach_summe = sum(p["coins"] for p in eco._users().values())
+        assert nach_summe == vor_summe - weg              # Coins sind WEG
+        # Zweiter Aufruf am selben Tag: kein zweiter Abzug.
+        n2, weg2 = asyncio.run(eco.vermoegenssteuer())
+        assert (n2, weg2) == (0, 0)
+        # Neuer Tag -> wieder faellig.
+        eco._store.data["tax_day"] = "1999-01-01"
+        n3, weg3 = asyncio.run(eco.vermoegenssteuer())
+        assert n3 == 1 and weg3 > 0
+
+        # Gleichgewicht: Einkommen X pro Tag landet bei Freibetrag + X/Satz.
+        # Genau das macht die Steuer selbst-skalierend - sie waechst mit der
+        # Inflation mit, statt als fester Betrag zu verpuffen.
+        for tages_einkommen in (10_000, 20_000_000):
+            eco._profile(9)["coins"] = 0
+            stand = 0
+            for _ in range(2000):
+                eco._profile(9)["coins"] = stand + tages_einkommen
+                eco._store.data["tax_day"] = ""
+                asyncio.run(eco.vermoegenssteuer())
+                neu = eco._profile(9)["coins"]
+                if abs(neu - stand) <= max(1, tages_einkommen // 1000):
+                    break
+                stand = neu
+            erwartet = eco.TAX_FREE + tages_einkommen / eco.TAX_RATE
+            assert abs(stand - erwartet) < erwartet * 0.05, (tages_einkommen, stand, erwartet)
+    finally:
+        restore()
 
 
 def test_economy_reset_umfang():

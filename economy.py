@@ -76,6 +76,24 @@ class Economy:
     DAILY_STREAK_MAX = 7
     LEVELUP_COINS = 250          # x Level
 
+    # --- Vermoegenssteuer: die EINZIGE wiederkehrende Senke -------------------
+    # Kernbefund des Wirtschafts-Audits: jede Einnahme ist zeitbasiert und
+    # risikofrei, jede Senke war einmalig (ein Titel, ein Rahmen, ein Thron) oder
+    # prozentual zu freiwilligem Umsatz (Casino-Hausvorteil). Einmalkaeufe koennen
+    # eine zeitbasierte Quelle prinzipiell NICHT ausgleichen - der Server lief
+    # deshalb mit Faktor 1,69x pro Tag in die Inflation, und wer nur farmte und
+    # nie spielte, hatte ueberhaupt keine Senke.
+    #
+    # Die Steuer laeuft einmal taeglich und verbrennt einen Anteil des Vermoegens
+    # OBERHALB des Freibetrags. Sie skaliert damit automatisch mit: verdient
+    # jemand X Coins am Tag, findet sein Konto sein Gleichgewicht bei
+    # Freibetrag + X/Satz. Bei 2 % und 1 Mio Freibetrag heisst das: 10.000/Tag
+    # (normal aktiv) -> ~1,5 Mio, 20 Mio/Tag (Dauer-Aktienhandel) -> ~1 Mrd,
+    # also genau der Preis des Endziels. Kleine Konten zahlen NICHTS.
+    TAX_FREE = int(os.getenv("ECONOMY_TAX_FREE", "1000000") or "1000000")
+    TAX_RATE = float(os.getenv("ECONOMY_TAX_RATE", "0.02") or "0.02")
+    TAX_MIN = 100                # unter diesem Betrag lohnt die Buchung nicht
+
     # Muenzeinheit
     COIN = "Flo Coins"
 
@@ -512,6 +530,52 @@ class Economy:
         await self._flush()
         return st
 
+    # --- Vermoegenssteuer (taeglich, verbrennt Coins) ------------------------
+    def steuer_fuer(self, coins):
+        """Wie viel dieses Vermoegen heute an Steuer kostet (0 bei kleinen Konten)."""
+        ueber = int(coins) - self.TAX_FREE
+        if ueber <= 0 or self.TAX_RATE <= 0:
+            return 0
+        betrag = int(ueber * self.TAX_RATE)
+        return betrag if betrag >= self.TAX_MIN else 0
+
+    async def vermoegenssteuer(self, force=False):
+        """Zieht einmal pro Tag die Vermoegenssteuer ein - die Coins sind DANACH
+        WEG (kein Gegenkonto, keine Hauskasse). Idempotent: laeuft pro Kalendertag
+        nur einmal, egal wie oft der Loop sie aufruft.
+
+        Rueckgabe: (Anzahl betroffener Konten, verbrannte Coins)."""
+        if not self._enabled or self._store is None:
+            return 0, 0
+        st = self._store.data
+        heute = self._today()
+        if not force and st.get("tax_day") == heute:
+            return 0, 0
+        st["tax_day"] = heute
+        n = 0
+        weg = 0
+        for uid, prof in list(self._users().items()):
+            if not isinstance(prof, dict):
+                continue
+            betrag = self.steuer_fuer(prof.get("coins", 0) or 0)
+            if betrag <= 0:
+                continue
+            # Ueber add_coins buchen: so landet die Steuer im Handelsbuch und
+            # kann nie unter 0 druecken (die Klemmung greift hier zu unseren
+            # Gunsten - ein Konto wird durch die Steuer nie negativ).
+            vorher = int(prof.get("coins", 0) or 0)
+            self.add_coins(uid, -betrag, reason="steuer")
+            wirklich = vorher - int(prof.get("coins", 0) or 0)
+            if wirklich > 0:
+                n += 1
+                weg += wirklich
+        if n:
+            log.info("Vermoegenssteuer: %d Konten, %s Coins verbrannt (Freibetrag %s, %.1f %%).",
+                     n, f"{weg:,}".replace(",", "."),
+                     f"{self.TAX_FREE:,}".replace(",", "."), self.TAX_RATE * 100)
+        await self._flush()
+        return n, weg
+
     def get_shop_items(self):
         return self._shop_state().get("items", [])
 
@@ -599,8 +663,15 @@ class Economy:
         if prof["coins"] < item["price"]:
             fehlt = item["price"] - prof["coins"]
             return f"Zu teuer – dir fehlen noch {fmt(fehlt)} {self.COIN}."
-        prof["coins"] -= item["price"]
-        self._record_trade(member.id, -item["price"], "shop", prof["coins"])
+        # Ueber add_coins buchen statt direkt am Profil zu rechnen: EINE Tuer fuer
+        # jede Geldbewegung (Handelsbuch, Deckel, Klemmung). Danach gegenpruefen,
+        # dass der Preis WIRKLICH abgebucht wurde - sonst gaebe es den Titel
+        # gratis, falls das Guthaben zwischendurch weg ist.
+        vorher = int(prof["coins"])
+        self.add_coins(member.id, -item["price"], reason="shop")
+        if vorher - int(prof["coins"]) != item["price"]:
+            self.add_coins(member.id, vorher - int(prof["coins"]), reason="shop-rueck")
+            return f"Zu teuer – dir fehlen noch {fmt(item['price'] - vorher)} {self.COIN}."
         owned.append({"text": item["text"], "label": item["label"],
                       "rarity": item["rarity"]})
         prof["title"] = item["label"]
@@ -1574,6 +1645,8 @@ remove_title = instance.remove_title
 sync_role = instance.sync_role
 refresh_shop = instance.refresh_shop
 refresh_shop_async = instance.refresh_shop_async
+vermoegenssteuer = instance.vermoegenssteuer
+steuer_fuer = instance.steuer_fuer
 get_shop_items = instance.get_shop_items
 ensure_roles = instance.ensure_roles
 on_message = instance.on_message

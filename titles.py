@@ -47,9 +47,13 @@ class Titles:
             "label": "Normal", "emoji": "🟢", "color": 0x57F287,
             "role": "Flo · Normal", "price": (500, 2000),
             "pool_pct": 62, "shop_weight": 55,
-            "tone": ("Der Typ hat nur einen normalen Titel – also null Sonderbehandlung. "
-                     "Gib ihm die volle ungefilterte Packung, roaste ihn gnadenlos und "
-                     "frech wie jeden anderen Pleitegeier auch."),
+            # Ein GEKAUFTER Titel darf niemals schlechter sein als gar keiner.
+            # Vorher stand hier "roaste ihn gnadenlos" - ohne Titel ist der Ton
+            # dagegen leer (= normal). Wer sich also den Einstiegstitel kaufte,
+            # zahlte Coins dafuer, dass Flo GEMEINER mit ihm wurde.
+            "tone": ("Er hat sich immerhin schon einen Titel gekauft – behandle ihn wie "
+                     "einen von den Stammgaesten. Frech und respektlos wie immer, aber "
+                     "mit einem Hauch Anerkennung, dass er ueberhaupt angefangen hat."),
         },
         "selten": {
             "label": "Selten", "emoji": "🔵", "color": 0x3498DB,

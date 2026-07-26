@@ -992,6 +992,15 @@ class FloBot(discord.Client):
                 self._spawn(self._announce_legendary(legendaere))
         except Exception:
             log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
+        # Im selben Nacht-Takt die Vermoegenssteuer einziehen: die EINZIGE
+        # wiederkehrende Senke der Wirtschaft (siehe economy.TAX_RATE). Getrennter
+        # try-Block, damit ein Shop-Fehler die Steuer nicht verschluckt.
+        try:
+            n, weg = await economy.vermoegenssteuer()
+            if n:
+                log.info("Vermoegenssteuer eingezogen: %d Konten, %d Coins weg.", n, weg)
+        except Exception:
+            log.exception("Vermoegenssteuer fehlgeschlagen - Loop laeuft weiter")
 
     async def _announce_legendary(self, items):
         """Ruft legendaere Shop-Titel oeffentlich aus (nur heute im Angebot!)."""

@@ -61,6 +61,12 @@ GROWTH_MAX_M = int(os.getenv("LOTTO_GROWTH_MAX_M", "5") or "5")
 # gedeckelt auf [TICKET_MIN, TICKET_MAX] - damit Lose nie Wucher werden.
 # Beispiel: 5 Mio -> 2.500, 20 Mio -> 10.000, ab ~100 Mio bei 50.000 gedeckelt.
 PRICE_DIVISOR = int(os.getenv("LOTTO_PRICE_DIVISOR", "2000") or "2000")
+# Wie viel von jedem Losgeld in den JACKPOT wandert (Rest bleibt Hauskasse).
+# Vorher ging 100 % in die Kasse - und weil der Besitzer die per 'lotto abbuchen'
+# als frische Coins abholen kann, war das Lotto in der Wirtschaftsbilanz gar keine
+# Senke, sondern nur ein Zwischenlager. Mit dem Jackpot-Anteil fuellen die Spieler
+# den Topf, aus dem sie gewinnen koennen - das ist Umverteilung statt Neuschoepfung.
+JACKPOT_SHARE = float(os.getenv("LOTTO_JACKPOT_SHARE", "0.7") or "0.7")
 TICKET_MIN = int(os.getenv("LOTTO_TICKET_MIN", "1000") or "1000")
 TICKET_MAX = int(os.getenv("LOTTO_TICKET_MAX", "50000") or "50000")
 # Wie viele Lose man auf einen Schlag maximal kaufen kann.
@@ -350,8 +356,15 @@ class Lotto:
             return (f"Für **{count}** Lose ({self._fmt(kosten)} {economy.COIN}) reicht's "
                     f"nicht. Du könntest dir **{leistbar}** leisten.")
         economy.add_coins(member.id, -kosten, reason="lotto")
-        # Einsatz landet in Flos Kasse (Besitzer kann sie abbuchen).
-        st["house"] = int(st.get("house", 0)) + kosten
+        # Losgeld aufteilen. WICHTIG (Audit-Befund): vorher wanderte ALLES in die
+        # Kasse, und die kann der Besitzer per 'lotto abbuchen' als frische Coins
+        # aufs eigene Konto holen - das Lotto war also gar keine Senke, sondern nur
+        # ein Zwischenlager. Jetzt waechst der Loewenanteil den JACKPOT (der Topf
+        # wird also von den Spielern gefuellt statt aus dem Nichts erzeugt), und
+        # nur der Hausanteil bleibt in der Kasse.
+        zum_jackpot = int(kosten * JACKPOT_SHARE)
+        st["jackpot"] = int(st.get("jackpot", 0)) + zum_jackpot
+        st["house"] = int(st.get("house", 0)) + (kosten - zum_jackpot)
         entries = self._entries()
         entries[str(member.id)] = int(entries.get(str(member.id), 0)) + count
         try:
