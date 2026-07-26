@@ -20,6 +20,7 @@ Alle Coins laufen ueber economy (ein Topf). Dieses Modul haelt Kurs, Depots und
 Kurs-Historie in data/floaktie.json.
 """
 
+import asyncio
 import logging
 import math
 import os
@@ -69,7 +70,7 @@ TRADE_FEE = float(os.getenv("FLOAKTIE_TRADE_FEE", "0.02") or "0.02")
 # einzige Order kann den Kurs so maximal etwa verdoppeln, statt ihn (mit
 # Kredit-Kauf) absurd zu verzerren. Mehr geht ueber mehrere Orders - dank der
 # pfad-unabhaengigen Kurve kostet das genau dasselbe.
-MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
+MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "150") or "150")
 
 # --- Aktivitaets-Modell: der Kurs reagiert JEDE MINUTE auf die Server-Aktivitaet -
 # Bei JEDEM Sample-Takt (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s) wird
@@ -104,12 +105,12 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "750") or "750")
 # 2 Stunden mit 6 Leuten bei -36,0 %. Dazu war das Rauschen (+/-0,12 %/min) bei 4
 # Leuten im Call 12x GROESSER als das Signal (+0,010 %/min): man KONNTE den
 # Anstieg gar nicht sehen. Beides ist hier behoben.
-FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "300") or "300")     # Kurs eines toten Servers
+FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "5000") or "5000")   # Kurs eines toten Servers
 # Wert je Aktivitaetspunkt. Merksatz: Zielkurs ~ 1.000 x Aktivitaetspunkte.
 # (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
 # stand bei hoher Aktivitaet praktisch still. Genau das war der Fehler.)
-AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
+AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "3000") or "3000")
 # Plus je Aktivitaetspunkt und Minute. 0,0012 heisst: 1 Zuhoerer +0,12 %/min,
 # 20 Punkte +2,4 %/min, 40 Punkte +4,8 %/min. Das Tempo bestimmt nur, WIE SCHNELL
 # der Kurs an sein Niveau kommt - wie HOCH er laeuft, legt AKT_WERT/CEIL_FACTOR
@@ -118,7 +119,7 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # Bei 3 Leuten im Call kommt ueber einen Vormittag rund das 25- bis 55-fache
 # heraus - genau die Groessenordnung, in der aus 600k Anteilen 23 Mio wurden.
 TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.006") or "0.006")
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.10") or "0.10")     # max +10 % in einem Takt
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.05") or "0.05")     # max +5 % in einem Takt
 # Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
 # schneller faellt der Kurs (wie eine Aktie, die keiner mehr will). Eine kurze
 # Pause tut fast nichts, stundenlanger Leerlauf laesst den Kurs deutlich sinken.
@@ -148,7 +149,7 @@ MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
 # 3 Punkte tragen bis 3,3 Mio, 20 Punkte bis 20 Mio, 39 Punkte bis 39 Mio.
 # (Vorher stand er bei 2,0 - da war bei 3 Leuten schon ab Kurs 6.600 Schluss und
 # der Kurs stand komplett still, obwohl Leute im Call waren.)
-CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "1000") or "1000")
+CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "8") or "8")
 # Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
 # sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
 ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")
@@ -165,9 +166,33 @@ PULSE_MAX_PER_MIN = float(os.getenv("FLOAKTIE_PULSE_MAX", "0.02") or "0.02")   #
 # Alter Name, nur noch fuer den Startwert der Glaettung (nicht mehr im Drift).
 ACT_BASELINE = 0.0
 
+# --- Harte Grenzen (gegen Hyperinflation) ------------------------------------
+# Die Kurs-Kurve ist NICHT reservegedeckt: steigt der Basiskurs, ist jeder alte
+# Anteil beim Verkauf mehr wert, als beim Kauf hineingeflossen ist - die Differenz
+# entsteht aus dem Nichts. Nachgemessen (alte Werte): 750 Anteile fuer 1,1 Mio
+# gekauft, 5 h aktiver Call, Kurs 79 Mio -> Verkauf 43,6 MILLIARDEN, also Faktor
+# 38.043 aus Luft. Drei Schrauben halten das jetzt in Grenzen, OHNE dem Spiel den
+# Spass zu nehmen (ein guter Vormittag darf weiter ein Vielfaches bringen):
+#
+#   1. Kurs-Deckel: absolut (MAX_PRICE) UND relativ zur Aktivitaet (CEIL_FACTOR 8)
+#   2. Depot-Deckel: niemand haelt mehr als MAX_SHARES_PER_USER Anteile
+#   3. Verkaufs-Steuer: je groesser die Blase, desto mehr wird beim Verkauf
+#      verbrannt (bis SELL_TAX_MAX) - genau dann, wenn am meisten Geld entsteht
+#
+# Dazu die Tagesbremse (Circuit Breaker): innerhalb EINES Kalendertages darf der
+# Basiskurs maximal um Faktor DAY_UP steigen und auf DAY_DOWN fallen.
+MAX_PRICE = int(os.getenv("FLOAKTIE_MAX_PRICE", "50000000") or "50000000")
+MAX_SHARES_PER_USER = int(os.getenv("FLOAKTIE_MAX_USER_SHARES", "150") or "150")
+DAY_UP = float(os.getenv("FLOAKTIE_DAY_UP", "50") or "50")        # max x50 pro Tag
+DAY_DOWN = float(os.getenv("FLOAKTIE_DAY_DOWN", "0.1") or "0.1")  # max -90 % pro Tag
+# Verkaufs-Steuer: TRADE_FEE + SELL_TAX_K * ln(1+Ueberhang), gedeckelt.
+# Am Deckel (Ueberhang 7) sind das rund 33 % - dort entstehen die meisten Coins.
+SELL_TAX_K = float(os.getenv("FLOAKTIE_SELL_TAX_K", "0.15") or "0.15")
+SELL_TAX_MAX = float(os.getenv("FLOAKTIE_SELL_TAX_MAX", "0.35") or "0.35")
+
 # Dividende: Coins pro Voice-Runde je 'DIVIDEND_DIVISOR' Anteile (gedeckelt).
 DIVIDEND_DIVISOR = int(os.getenv("FLOAKTIE_DIVIDEND_DIVISOR", "10") or "10")
-DIVIDEND_MAX = int(os.getenv("FLOAKTIE_DIVIDEND_MAX", "5000") or "5000")
+DIVIDEND_MAX = int(os.getenv("FLOAKTIE_DIVIDEND_MAX", "2000") or "2000")
 
 HISTORY_MAX = 60
 
@@ -189,6 +214,8 @@ class FloAktie:
         # das Bild wird ebenfalls live nachgezogen.
         self._chart_msg = None
         self._chart_days = 1
+        # Handels-Schloesser je Nutzer (gegen Doppelklick-Rennen).
+        self._locks = {}
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -208,6 +235,7 @@ class FloAktie:
             st["price"] = START_PRICE
         # Basiskurs aus altem Stand ableiten (Migration) und Kurs synchronisieren.
         self._base()
+        self._tages_anker()
         self._sync_price()
         if not st.get("history"):
             st["history"] = [{"day": self._today(), "price": int(st["price"])}]
@@ -218,6 +246,54 @@ class FloAktie:
 
     def is_enabled(self):
         return self._enabled
+
+    # --- Notaus ------------------------------------------------------------
+    # Der Schalter im Web-Panel ("Steuerung -> FloCorp-Aktie") legt die Boerse
+    # KOMPLETT still: kein Kauf, kein Verkauf, kein Kurs-Tick, keine Dividende,
+    # keine Aktivitaets-Zaehlung. Jede oeffentliche Tuer fragt hier nach - sonst
+    # laufen alte Panel-Buttons und die Loops munter weiter.
+    def is_off(self):
+        """True, wenn die Aktie per Panel-Schalter abgeschaltet ist."""
+        try:
+            import features
+            return not features.is_on("floaktie")
+        except Exception:  # noqa: BLE001 - ohne features gilt: an
+            return False
+
+    def aus_text(self):
+        return (f"🔒 **Die Aktie ist derzeit deaktiviert.**\n"
+                f"{self._bot_name or 'Flo'} hat die Börse geschlossen – kein Kauf, "
+                f"kein Verkauf, kein Kurs. Deine Anteile bleiben dir erhalten, "
+                f"sie liegen nur eingefroren im Depot.")
+
+    def aus_embed(self):
+        """Sauberes Embed statt Fließtext - das sieht der Nutzer, wenn die Aktie aus ist."""
+        e = discord.Embed(
+            title="🔒 Börse geschlossen",
+            description=("Die **FloCorp-Aktie** ist derzeit deaktiviert.\n"
+                         "Kein Handel, kein Kursverlauf, keine Voice-Dividende."),
+            colour=discord.Colour.from_rgb(90, 96, 106))
+        e.add_field(name="Deine Anteile", value="bleiben erhalten (eingefroren)", inline=True)
+        e.add_field(name="Wann geht's weiter?", value="wenn der Chef sie wieder anschaltet",
+                    inline=True)
+        e.set_footer(text=f"{TICKER} · vom Server-Chef abgeschaltet")
+        return e
+
+    async def handle_aus(self, message):
+        """Ersatz-Handler, solange die Aktie AUS ist: antwortet auf die Aktien-
+        Befehle sauber statt sie an die KI durchfallen zu lassen."""
+        if not self._enabled or message.guild is None:
+            return None
+        try:
+            import ai
+            cmd = ai.strip_lead(message.content or "")
+        except Exception:  # noqa: BLE001
+            cmd = message.content or ""
+        parts = cmd.split()
+        first = parts[0].lower().strip(".,;:!?") if parts else ""
+        if first not in _CMDS and first not in _CHART_CMDS:
+            return None
+        return self.aus_embed()
 
     # --- Kleine Helfer ----------------------------------------------------
     def _fmt(self, n):
@@ -304,7 +380,59 @@ class FloAktie:
             base = float(START_PRICE)
         if base != base or base in (float("inf"), float("-inf")):   # NaN/inf
             base = float(START_PRICE)
-        return max(self._base_floor(), base)
+        return self._clamp_base(base)
+
+    def _clamp_base(self, base):
+        """Zwingt den Basiskurs in die erlaubte Spanne - EINE Stelle fuer alle
+        Deckel, weil jeder Lesezugriff durch _base() laeuft:
+
+        - unten: _base_floor() (angezeigter Kurs nie unter MIN_PRICE)
+        - oben : _base_ceiling() (angezeigter Kurs nie ueber MAX_PRICE)
+        - dazu die Tagesbremse (Circuit Breaker), falls fuer heute verankert
+        """
+        lo, hi = self._base_floor(), self._base_ceiling()
+        tag_lo, tag_hi = self._tages_band()
+        if tag_hi is not None:
+            hi = min(hi, tag_hi)
+        if tag_lo is not None:
+            lo = max(lo, tag_lo)
+        if lo > hi:            # Boden schlaegt Deckel (viele Anteile im Umlauf)
+            lo = hi
+        return max(lo, min(float(base), hi))
+
+    def _base_ceiling(self):
+        """Obergrenze des Basiskurses: so hoch, dass der ANGEZEIGTE Kurs gerade
+        noch MAX_PRICE ergibt. Reine Notbremse gegen Gleitkomma-Regionen."""
+        return max(BASE_FLOOR, float(MAX_PRICE) / (1.0 + self.total_shares() / LIQUIDITY))
+
+    def _tages_band(self):
+        """(untere, obere) Grenze des Basiskurses fuer HEUTE - der Circuit Breaker.
+
+        Verankert wird der Basiskurs beim ersten Takt des Tages (siehe
+        _tages_anker). Liest NUR den gespeicherten Wert - nie _base(), sonst
+        Endlos-Rekursion."""
+        st = self._store.data if self._store is not None else {}
+        if st.get("open_day") != self._today():
+            return None, None
+        try:
+            anker = float(st.get("open_base") or 0.0)
+        except (TypeError, ValueError):
+            return None, None
+        if anker <= 0 or anker != anker:
+            return None, None
+        return anker * max(0.0, min(1.0, DAY_DOWN)), anker * max(1.0, DAY_UP)
+
+    def _tages_anker(self):
+        """Merkt sich zu Tagesbeginn den Basiskurs (Grundlage der Tagesbremse)."""
+        st = self._state()
+        heute = self._today()
+        if st.get("open_day") == heute and st.get("open_base"):
+            return
+        # Erst den alten Anker loeschen: sonst rechnet _base() unten noch mit dem
+        # Band von GESTERN und der neue Anker klebt am alten Tagesdeckel.
+        st["open_base"] = 0
+        st["open_day"] = heute
+        st["open_base"] = float(self._base())
 
     def _base_floor(self):
         """Untergrenze des Basiskurses: genau so tief, dass der ANGEZEIGTE Kurs
@@ -330,7 +458,8 @@ class FloAktie:
     def _sync_price(self):
         """Haelt den angezeigten Kurs (st['price']) mit der Kurve synchron."""
         st = self._state()
-        st["price"] = max(MIN_PRICE, int(round(self._price_at(self.total_shares()))))
+        st["price"] = max(MIN_PRICE, min(MAX_PRICE,
+                          int(round(self._price_at(self.total_shares())))))
         return st["price"]
 
     def _buy_cost(self, shares):
@@ -341,22 +470,42 @@ class FloAktie:
         neu = max(MIN_PRICE, int(round(self._price_at(s + max(0, shares)))))
         return cost, neu
 
+    def _sell_fee(self):
+        """Verkaufs-Gebuehr, GESTAFFELT nach Blase.
+
+        Steht der Kurs nur bei seinem 'fairen' Wert, ist es die normale Gebuehr.
+        Je weiter er darueber steht, desto mehr wird beim Verkauf verbrannt (bis
+        SELL_TAX_MAX). Das ist der wichtigste Geld-Abfluss der Wirtschaft: genau
+        beim Verkauf in eine Blase entstehen die meisten Coins aus dem Nichts."""
+        st = self._state()
+        ziel = self.ziel_base(float(st.get("act_ema", 0.0) or 0.0))
+        ueberhang = max(0.0, self._base() / max(1.0, ziel) - 1.0)
+        return min(SELL_TAX_MAX, TRADE_FEE + SELL_TAX_K * math.log1p(ueberhang))
+
     def _sell_proceeds(self, shares):
-        """Erloes fuer 'shares' Anteile (Integral - Gebuehr) und der Kurs danach."""
+        """Erloes fuer 'shares' Anteile (Integral - Steuer) und der Kurs danach."""
         s = self.total_shares()
         shares = max(0, min(int(shares), s))
         brutto = self._integral(s - shares, s)
-        proceeds = max(0, int(brutto * (1.0 - TRADE_FEE)))
+        proceeds = max(0, int(brutto * (1.0 - self._sell_fee())))
         neu = max(MIN_PRICE, int(round(self._price_at(s - shares))))
         return proceeds, neu
 
-    def _max_affordable(self, coins):
+    def _freies_depot(self, uid):
+        """Wie viele Anteile dieser Nutzer noch dazukaufen DARF (Depot-Deckel)."""
+        return max(0, MAX_SHARES_PER_USER - self.shares_of(uid))
+
+    def _max_affordable(self, coins, deckel=None):
         """Wie viele Anteile man sich mit 'coins' leisten kann (inkl. Gebuehr).
-        Binaersuche auf der Kurve - nie mehr, als das Guthaben wirklich deckt."""
+        Binaersuche auf der Kurve - nie mehr, als das Guthaben wirklich deckt.
+        'deckel' begrenzt zusaetzlich (freier Platz im Depot)."""
         coins = int(coins)
         if coins <= 0:
             return 0
-        lo, hi = 0, MAX_SHARES_PER_TRADE
+        grenze = MAX_SHARES_PER_TRADE if deckel is None else max(0, min(MAX_SHARES_PER_TRADE, int(deckel)))
+        if grenze <= 0:
+            return 0
+        lo, hi = 0, grenze
         while lo < hi:
             mid = (lo + hi + 1) // 2
             if self._buy_cost(mid)[0] <= coins:
@@ -373,19 +522,54 @@ class FloAktie:
                 return self.shares_of(member.id)
         else:
             if token in ("alles", "all", "max", "maximum"):
-                return max(0, self._max_affordable(economy.get_coins(member.id)))
+                return max(0, self._max_affordable(economy.get_coins(member.id),
+                                                   self._freies_depot(member.id)))
         try:
             n = int(token)
         except (TypeError, ValueError):
             return 1
         return max(1, min(n, MAX_SHARES_PER_TRADE))
 
+    def _lock(self, uid):
+        """Ein Schloss je Nutzer. Zwei schnelle Klicks auf 'Kauf MAX' liefen sonst
+        gleichzeitig durch dieselbe Kurs-Rechnung: beide sahen denselben (billigen)
+        Kurs, beide bekamen die Anteile - Geld aus dem Nichts."""
+        uid = int(uid)
+        lock = self._locks.get(uid)
+        if lock is None:
+            lock = asyncio.Lock()
+            # Der Bot laeuft wochenlang: alte, freie Schloesser wegraeumen.
+            if len(self._locks) > 500:
+                for k in [k for k, v in list(self._locks.items()) if not v.locked()][:250]:
+                    self._locks.pop(k, None)
+            self._locks[uid] = lock
+        return lock
+
     async def buy(self, member, count):
+        async with self._lock(member.id):
+            return await self._buy(member, count)
+
+    async def sell(self, member, count):
+        async with self._lock(member.id):
+            return await self._sell(member, count)
+
+    async def _buy(self, member, count):
+        if self.is_off():
+            return self.aus_text()
         count = int(count)
         if count < 1:
             return "Kauf mindestens **1** Anteil. 📈"
         if count > MAX_SHARES_PER_TRADE:
             count = MAX_SHARES_PER_TRADE
+        # Depot-Deckel: begrenzt, wie viel Geld ein einzelner Halter beim Verkauf
+        # in eine Blase ueberhaupt schoepfen kann.
+        frei = self._freies_depot(member.id)
+        if frei <= 0:
+            return (f"🚫 Dein Depot ist voll: **{MAX_SHARES_PER_USER}** Anteile "
+                    f"{TICKER} sind das Maximum pro Person.\n"
+                    f"Verkauf erst welche, dann geht wieder was.")
+        if count > frei:
+            count = frei
         # Kosten IMMER vor der Depot-Aenderung berechnen (Kurve haengt an den
         # ausgegebenen Anteilen).
         cost, _ = self._buy_cost(count)
@@ -407,7 +591,9 @@ class FloAktie:
                 f"{economy.COIN}.\nNeuer Kurs: **{self._fmt(neu)}** {economy.COIN} "
                 f"· dein Depot: **{self.shares_of(member.id)}** Anteile.{warn}")
 
-    async def sell(self, member, count):
+    async def _sell(self, member, count):
+        if self.is_off():
+            return self.aus_text()
         count = int(count)
         habe = self.shares_of(member.id)
         if habe <= 0:
@@ -448,7 +634,7 @@ class FloAktie:
         """Setzt den ANGEZEIGTEN Kurs (verankert den Basiskurs passend neu)."""
         preis = max(MIN_PRICE, min(int(preis), self.ADMIN_MAX_PRICE))
         st = self._state()
-        st["base"] = preis / (1.0 + self.total_shares() / LIQUIDITY)
+        st["base"] = self._clamp_base(preis / (1.0 + self.total_shares() / LIQUIDITY))
         neu = self._sync_price()
         self._record_tick()
         await self._save()
@@ -499,7 +685,7 @@ class FloAktie:
         """Zaehlt eine ECHTE Chat-Nachricht als Aktivitaet (treibt den Kurs hoch).
         bot.py ruft das fuer jede Nachricht der Haupt-Guild auf, die KEIN Befehl an
         Flo ist - nur ein billiger Zaehler, gespeichert wird beim naechsten Takt.""" 
-        if not self._enabled:
+        if not self._enabled or self.is_off():
             return
         st = self._state()
         st["msg_count"] = int(st.get("msg_count", 0)) + 1
@@ -624,9 +810,16 @@ class FloAktie:
             st["act_ema"] = ema
             st["leer_min"] = 0.0
             basis = self.drift_fuer(ema)
-            # Solange jemand da ist, faellt der Kurs NIE - das Rauschen darf einen
-            # Anstieg hoechstens abschwaechen, nicht umdrehen.
-            drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
+            if basis <= 0.0:
+                # Am Deckel angekommen: NICHT totenstill stehenbleiben (genau das
+                # sah aus wie "die Aktie tut nichts, obwohl der Call voll ist"),
+                # sondern atmen. Nach oben klemmt der Deckel sowieso, nach unten
+                # holt der Anstieg den Kurs in der naechsten Minute zurueck.
+                drift = random.uniform(-TICK_NOISE * 5, TICK_NOISE * 5)
+            else:
+                # Solange jemand da ist, faellt der Kurs NIE - das Rauschen darf
+                # einen Anstieg hoechstens abschwaechen, nicht umdrehen.
+                drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
         else:
             # WIRKLICH leer -> Kurs faellt gestaffelt. EMA HART auf 0 (kein
             # Nachhall mehr), damit auch das Panel "0.0 Punkte" mit fallendem Kurs
@@ -640,7 +833,7 @@ class FloAktie:
         alt = self.price()
         # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
         # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
-        st["base"] = max(self._base_floor(), self._base() * (1 + drift))
+        st["base"] = self._clamp_base(self._base() * (1 + drift))
         neu = self._sync_price()
         return alt, neu, drift, activity
 
@@ -663,7 +856,7 @@ class FloAktie:
         if staerke <= 0:
             return 0
         st["pulse_sum"] = summe + staerke
-        st["base"] = max(self._base_floor(), self._base() * (1 + staerke))
+        st["base"] = self._clamp_base(self._base() * (1 + staerke))
         neu = self._sync_price()
         log.info("FloCorp Impuls (%s): +%.2f%% -> Kurs %s.", grund, staerke * 100,
                  self._fmt(neu))
@@ -671,7 +864,7 @@ class FloAktie:
 
     async def note_stream_start(self, member=None):
         """Jemand geht LIVE -> Sofort-Impuls nach oben (und Panel/Chart nachziehen)."""
-        if not self._enabled:
+        if not self._enabled or self.is_off():
             return
         if self._puls(PULSE_STREAM, "Livestream an"):
             await self._save()
@@ -679,7 +872,7 @@ class FloAktie:
 
     async def note_voice_join(self, member=None):
         """Jemand kommt in den Call -> kleiner Sofort-Impuls nach oben."""
-        if not self._enabled:
+        if not self._enabled or self.is_off():
             return
         if self._puls(PULSE_JOIN, "Call-Beitritt"):
             await self._save()
@@ -690,7 +883,7 @@ class FloAktie:
         die aktuelle Aktivitaet (Call-Leute + Streamer + Kameras + Nachrichten seit
         dem letzten Takt) und bewegt den Kurs SOFORT - viel los -> steigt, wenig ->
         faellt."""
-        if not self._enabled or guild is None:
+        if not self._enabled or guild is None or self.is_off():
             return
         try:
             st = self._state()
@@ -698,6 +891,7 @@ class FloAktie:
             total_msgs = int(st.get("msg_count", 0))
             msgs_since = max(0, total_msgs - int(st.get("last_msg_count", total_msgs)))
             st["last_msg_count"] = total_msgs
+            self._tages_anker()      # Circuit Breaker fuer heute verankern
             alt, neu, drift, act = self._activity_tick(people, msgs_since, streams, video)
             self._record_tick()
             # Einmal pro Tag den Schlusskurs fuer den Langzeit-Chart festhalten.
@@ -734,7 +928,7 @@ class FloAktie:
         """Zahlt jedem Aktionaer, der GERADE aktiv im Voice ist, seine Dividende.
         Gleiche Regeln wie die Voice-XP (kein AFK, nicht taub, >=2 im Kanal).
         bot.py ruft das im Voice-Takt auf."""
-        if not self._enabled or guild is None:
+        if not self._enabled or guild is None or self.is_off():
             return
         if not self._holdings():
             return
@@ -895,6 +1089,8 @@ class FloAktie:
         """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck.
         Dieser Chart wird gemerkt -> sein Bild wird ab jetzt live nachgezogen,
         sobald sich der Kurs aendert."""
+        if self.is_off():
+            return self.aus_embed()
         view = KursView(days)
         try:
             file = self._chart_file(days, self._range_label(days))
@@ -931,6 +1127,7 @@ class FloAktie:
             tempo = f"**{pro_min:+.2f} %/min**"
         else:
             tempo = f"**{pro_min * 60:+.2f} %/h**"
+        am_deckel = self._am_deckel()
         if akt <= 0:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
             if leer >= 60:
@@ -940,15 +1137,17 @@ class FloAktie:
             else:
                 hinweis = ("Niemand da – der Kurs sinkt und wird immer schneller, "
                            "je länger es leer bleibt.")
-        elif pro_min <= 0:
-            hinweis = ("Kurs liegt weit über seinem Wert – er hält sich, bis mehr "
-                       "Aktivität nachkommt.")
+        elif am_deckel:
+            hinweis = (f"**Deckel erreicht** ({self._fmt(self._deckel_kurs())}) – so viel "
+                       f"gibt diese Aktivität her. Mehr Leute im Call oder mehr "
+                       f"Livestreams heben den Deckel sofort an.")
         else:
             hinweis = "Je mehr im Call und je mehr Livestreams, desto schneller."
         emb.add_field(
             name="Server-Aktivität",
             value=(f"{akt:.1f} Punkte · {tempo} · "
-                   f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}**\n"
+                   f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}** · "
+                   f"Deckel **{self._fmt(self._deckel_kurs())}**\n"
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
                    f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. {hinweis}_"),
             inline=False)
@@ -958,22 +1157,48 @@ class FloAktie:
                           value=f"<@{top}> ({self._fmt(self.shares_of(top))} Anteile)", inline=False)
         if member is not None:
             meine = self.shares_of(member.id)
+            frei = self._freies_depot(member.id)
+            balken = self._depot_balken(meine)
             emb.add_field(
                 name="Dein Depot",
-                value=(f"{meine} Anteile · Wert **{self._fmt(meine * preis)}** {economy.COIN}\n"
-                       f"Dividende: **{self._fmt(self.dividend_for(member.id))}** {economy.COIN}/Voice-Runde"),
+                value=(f"{balken} **{meine}**/{MAX_SHARES_PER_USER} Anteile\n"
+                       f"Wert **{self._fmt(meine * preis)}** {economy.COIN} · "
+                       f"Dividende **{self._fmt(self.dividend_for(member.id))}** "
+                       f"{economy.COIN}/Voice-Runde\n"
+                       + (f"_Noch {frei} Anteile Platz._" if frei > 0
+                          else "_Depot voll – erst verkaufen._")),
                 inline=False)
         emb.add_field(
-            name="So funktioniert's",
-            value=("Kaufen treibt den Kurs, Verkaufen drückt ihn. Sind viele im Voice, "
-                   "steigt $FLO über Tage - sonst fällt er.\n"
-                   "**Vorteil:** Aktionäre kassieren im Voice eine **Dividende** (mehr "
-                   "Anteile = mehr Coins pro Runde), der größte Aktionär die doppelte.\n"
-                   "**Risiko:** Du kannst auf **Kredit** kaufen und ins **Minus** gehen – "
-                   "fällt der Kurs, sitzt du auf Schulden. Nur Aktien gehen ins Minus!"),
+            name="Regeln, kurz",
+            value=(f"📈 Kaufen treibt den Kurs, Verkaufen drückt ihn. Viel Aktivität "
+                   f"= hoher Kurs, tote Hose = fallender Kurs.\n"
+                   f"💰 **Dividende** im Voice (größter Aktionär: doppelt).\n"
+                   f"🧾 **Verkaufssteuer {self._sell_fee() * 100:.0f} %** – sie steigt, "
+                   f"je weiter der Kurs über seinem Wert steht.\n"
+                   f"🎒 Maximal **{MAX_SHARES_PER_USER}** Anteile pro Person.\n"
+                   f"⚠️ Kauf auf **Kredit** möglich – fällt der Kurs, sitzt du auf Schulden."),
             inline=False)
         emb.set_footer(text=f"{self._bot_name} aktie kauf max · verkauf alles · aktienkurs · top")
         return emb
+
+    def _deckel_kurs(self):
+        """Der ANGEZEIGTE Kurs, an dem die aktuelle Aktivitaet ihren Deckel hat."""
+        akt = float(self._state().get("act_ema", 0.0) or 0.0)
+        deckel = self.ziel_base(akt) * max(1.0, CEIL_FACTOR)
+        deckel *= (1.0 + self.total_shares() / LIQUIDITY)
+        return max(MIN_PRICE, min(MAX_PRICE, int(round(deckel))))
+
+    def _am_deckel(self):
+        """Steht der Kurs (praktisch) am Deckel? Dann steigt er nur noch minimal."""
+        akt = float(self._state().get("act_ema", 0.0) or 0.0)
+        if akt <= 0:
+            return False
+        return self._base() >= self.ziel_base(akt) * max(1.0, CEIL_FACTOR) * 0.995
+
+    def _depot_balken(self, anteile):
+        """Kleiner Fortschrittsbalken fuer die Depot-Auslastung."""
+        voll = max(0, min(10, int(round(10.0 * anteile / max(1, MAX_SHARES_PER_USER)))))
+        return "▰" * voll + "▱" * (10 - voll)
 
     def _depot_embed(self, member):
         preis = self.price()
@@ -1029,6 +1254,8 @@ class FloAktie:
         first = parts[0].lower().strip(".,;:!?") if parts else ""
         if first not in _CMDS and first not in _CHART_CMDS:
             return None
+        if self.is_off():
+            return self.aus_embed()
         if not economy.is_enabled():
             return "💤 Gerade gibt's keine Coins - das Economy-System schläft."
         # 'aktienkurs'/'kurs'/'chart' (oder 'aktie chart') -> Kurs-Chart mit Buttons.
@@ -1193,6 +1420,8 @@ instance = FloAktie()
 setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle
+handle_aus = instance.handle_aus
+is_off = instance.is_off
 note_message = instance.note_message
 note_stream_start = instance.note_stream_start
 note_voice_join = instance.note_voice_join

@@ -849,7 +849,7 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Voice-XP-Loop Fehler - laeuft weiter")
         # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende.
-        if FLOAKTIE_ENABLED:
+        if FLOAKTIE_ENABLED and features.is_on("floaktie"):
             try:
                 await floaktie.pay_voice_dividends(guild)
             except Exception:
@@ -1429,6 +1429,8 @@ class FloBot(discord.Client):
             (GIVEAWAY_ENABLED and _on("giveaway"), giveaway.handle),
             (LOTTO_ENABLED and _on("lotto"), lotto.handle),
             (FLOAKTIE_ENABLED and _on("floaktie"), floaktie.handle),
+            # Aktie AUS: sauberer Hinweis statt Durchfallen an die KI.
+            (FLOAKTIE_ENABLED and not _on("floaktie"), floaktie.handle_aus),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
             (WORDS_ENABLED and _on("words"), words.handle),
             (ECONOMY_ENABLED and _on("economy"), economy.handle),

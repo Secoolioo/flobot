@@ -837,8 +837,22 @@ class WebPanel:
         # sendepause MITSCHICKEN: die Server-Seite zeigte sonst den zuletzt aus
         # der Uebersicht gemerkten Zustand - war der veraltet, war der erste
         # Klick auf den Schalter nur ein Neu-Abgleich und tat gar nichts.
+        # Gleiches gilt fuer den Aktien-Schalter unter 'Steuerung'.
         return web.json_response({"ok": True, "guilds": out,
-                                  "sendepause": self._sendepause_state()})
+                                  "sendepause": self._sendepause_state(),
+                                  "aktie": self._feature_state("floaktie")})
+
+    def _feature_state(self, key):
+        """{loaded, on} eines Features - fuer die dicken Schalter unter 'Steuerung'."""
+        geladen = bool(self._loaded_flags().get(key, False))
+        an = False
+        if geladen:
+            try:
+                import features
+                an = bool(features.is_on(key))
+            except Exception:  # noqa: BLE001
+                an = False
+        return {"loaded": geladen, "on": an}
 
     async def _api_sendepause(self, request):
         self._guard(request)

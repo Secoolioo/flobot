@@ -349,6 +349,7 @@ body{
 .toggle::after{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;transition:.3s var(--ease-2);box-shadow:0 2px 6px rgba(0,0,0,.5)}
 .toggle.on{background:linear-gradient(145deg,var(--gold-2),var(--gold-3))}
 .toggle.on::after{transform:translateX(22px)}
+.toggle.off-lock{opacity:.35;cursor:not-allowed}
 .control-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px}
 .control-row .cl{font-size:14px;font-weight:650}.control-row .cd{font-size:12px;color:var(--mute);margin-top:3px}
 
@@ -1074,6 +1075,7 @@ function viewServers(){ var c=$("#content"); c.innerHTML=skeletonServers();
     renderServers(d,pause); }).catch(function(e){ if(e&&e.auth)return; c.innerHTML=errState("Server konnten nicht geladen werden"); }); }
 
 function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); var guilds=d.guilds||[];
+  var aktie=d.aktie||{loaded:false,on:false};
   var cards=guilds.length?guilds.map(function(g){ var icon=g.icon?'<img src="'+esc(g.icon)+'" alt="">':esc(initials(g.name));
     return '<div class="card srv-card reveal"><div class="srv-top"><div class="srv-ic">'+icon+'</div>'+
       '<div><div class="srv-nm">'+esc(g.name)+'</div><div class="srv-id">ID '+esc(g.id)+'</div></div></div>'+
@@ -1086,7 +1088,16 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
     '<div class="srv-grid">'+cards+'</div>'+
     '<div class="sec-h"><h2>Steuerung</h2><div class="ln"></div></div>'+
     '<div class="card reveal"><div class="control-row"><div><div class="cl">📵 Sendepause</div><div class="cd">Bot-Antworten global pausieren</div></div>'+
-      '<div class="toggle'+(pause?" on":"")+'" id="pauseToggle"></div></div></div>'+
+      '<div class="toggle'+(pause?" on":"")+'" id="pauseToggle"></div></div>'+
+      /* Aktien-Notaus: eigener, dicker Schalter - nicht im Feature-Kleingedruckten
+         vergraben. Aus = kein Kauf, kein Verkauf, kein Kurs-Tick, keine Dividende. */
+      '<div class="control-row" style="margin-top:4px"><div><div class="cl">💰 FloCorp-Aktie'+
+      (aktie.loaded?"":' <span class="tag" style="margin-left:6px">nicht geladen</span>')+'</div>'+
+      '<div class="cd">'+(aktie.loaded
+        ? (aktie.on ? "Handel, Kurs-Ticks und Voice-Dividende laufen"
+                    : "Komplett aus – Flo antwortet „Die Aktie ist derzeit deaktiviert“")
+        : "Modul beim Start nicht geladen – Neustart nötig")+'</div></div>'+
+      '<div class="toggle'+(aktie.on?" on":"")+(aktie.loaded?"":" off-lock")+'" id="aktieToggle"></div></div></div>'+
     '<div class="card composer reveal" style="margin-top:16px"><div class="ph" style="margin-bottom:14px"><div class="pt">📢 Ansage senden</div><div class="pm">Broadcast</div></div>'+
       '<textarea id="annText" placeholder="Deine Nachricht an den Server…"></textarea>'+
       '<div class="crow"><input class="inp" id="annChan" placeholder="Kanal-ID (optional)">'+
@@ -1097,6 +1108,17 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
     api("/api/server/sendepause",{method:"POST",body:{on:next}}).then(function(r){ if(!r.ok)throw r;
       el.classList.toggle("on",!!r.sendepause); if(S.ov&&S.ov.stats)S.ov.stats.sendepause=!!r.sendepause;
       toast("Sendepause "+(r.sendepause?"aktiviert":"deaktiviert"),r.sendepause?"info":"ok"); }).catch(function(e){ if(e&&e.auth)return; toast("Umschalten fehlgeschlagen","err"); }); });
+
+  $("#aktieToggle").addEventListener("click",function(){ var el=this;
+    if(!aktie.loaded){ toast("Aktien-Modul ist nicht geladen – Bot neu starten","err"); return; }
+    var next=!el.classList.contains("on");
+    api("/api/feature",{method:"POST",body:{key:"floaktie",on:next}}).then(function(r){ if(!r.ok)throw r;
+      aktie.on=!!r.on; el.classList.toggle("on",aktie.on);
+      var cd=el.parentNode.querySelector(".cd");
+      if(cd)cd.textContent=aktie.on?"Handel, Kurs-Ticks und Voice-Dividende laufen"
+                                   :"Komplett aus – Flo antwortet „Die Aktie ist derzeit deaktiviert“";
+      toast("FloCorp-Aktie "+(aktie.on?"aktiviert":"deaktiviert"),aktie.on?"ok":"info");
+    }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Umschalten fehlgeschlagen","err"); }); });
 
   $("#annGo").addEventListener("click",function(){ var text=$("#annText").value.trim(); if(!text){toast("Nachricht eingeben","err");return;}
     var chan=$("#annChan").value.trim(); var body={text:text}; if(chan)body.channel_id=chan;

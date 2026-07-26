@@ -1278,7 +1278,11 @@ def test_floaktie_market():
         fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
         a, n, drift, act = fa._activity_tick(15, 0)          # 15 im Call
         assert n > a and drift > 0
-        fa._store.data.update({"price": 5000, "act_ema": floaktie.ACT_BASELINE})
+        # Fallen kann er nur ueber dem Wert eines toten Servers (FAIR_BASE) -
+        # deshalb den BASISkurs klar darueber setzen, nicht nur den Anzeigewert.
+        fa._store.data.update({"base": floaktie.FAIR_BASE * 10,
+                               "act_ema": floaktie.ACT_BASELINE, "leer_min": 0.0})
+        fa._sync_price()          # Anzeigekurs auf die Kurve ziehen (sonst stale)
         a, n, drift, act = fa._activity_tick(0, 0)           # niemand da
         assert drift < 0 and n <= a                          # Tendenz nach unten
         # Auch VIELE NACHRICHTEN treiben den Kurs (msgs / MSG_DIVISOR).
@@ -1660,15 +1664,23 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         assert fa.price() <= vorher * (1 + floaktie.PULSE_MAX_PER_MIN) + 1, fa.price()
 
         # 7b) DER VORMITTAG: auch mit nur 3 Leuten im Call muss sich ein Depot
-        #     ueber ein paar Stunden VERVIELFACHEN - und zwar auf JEDEM Kursniveau.
-        #     (Regression: eine zu harte Daempfung ueber dem "fairen" Kurs hat den
-        #     Kurs bei 3 Leuten ab Kurs 6.600 komplett stillstehen lassen.)
-        for startkurs in (1_000, 6_600, 50_000):
+        #     ueber ein paar Stunden VERVIELFACHEN - vom normalen Niveau aus, also
+        #     dort, wo der Kurs nach einer ruhigen Nacht steht.
+        for startkurs in (1_000, int(floaktie.FAIR_BASE)):
             frisch(startkurs)
             for _ in range(6 * 60):
                 fa._activity_tick(3, 0)
             faktor = fa.price() / startkurs
             assert faktor > 8, (startkurs, fa.price(), faktor)
+        # ... aber NICHT unbegrenzt: steht der Kurs schon am Deckel dieser
+        # Aktivitaet, hoert es auf. Genau das verhindert die Hyperinflation
+        # (vorher: 750 Anteile fuer 1,1 Mio -> Verkauf fuer 43 MILLIARDEN).
+        akt3 = fa.activity_of(3, 0, 0, 0)
+        frisch(int(fa.ziel_base(akt3) * floaktie.CEIL_FACTOR))
+        vorm_deckel = fa.price()
+        for _ in range(6 * 60):
+            fa._activity_tick(3, 0)
+        assert fa.price() <= vorm_deckel * 1.06, (vorm_deckel, fa.price())
         # Und mehr Leute muessen auf demselben Niveau schneller sein.
         frisch(50_000)
         d3 = fa.drift_fuer(fa.activity_of(3, 0, 0, 0))
@@ -1685,9 +1697,11 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         # Solange Leute da sind, geht es NIE runter - und es bleibt auch bei einem
         # hohen Kurs in Bewegung, nur gemaechlicher (logarithmische Daempfung).
         akt4 = fa.activity_of(4, 0, 0, 0)
-        frisch(5000)
+        frisch(int(floaktie.FAIR_BASE))
         schnell = fa.drift_fuer(akt4)
-        frisch(500_000)
+        # Knapp UNTER dem Deckel dieser Aktivitaet - dort muss es noch aufwaerts
+        # gehen, nur gemaechlicher.
+        frisch(int(fa.ziel_base(akt4) * floaktie.CEIL_FACTOR * 0.9))
         langsam = fa.drift_fuer(akt4)
         assert schnell > langsam > 0, (schnell, langsam)
         # Erst die Notbremse ganz oben stoppt ihn (Deckel = Zielkurs x CEIL_FACTOR).
@@ -3010,6 +3024,121 @@ def test_webpanel_eingaben_und_robustheit():
         floaktie.instance._store, floaktie.instance._enabled = alt_fa
         (wp._enabled, wp._user, wp._pass, wp._tokens, wp._client, wp._fails) = alt
         restore_eco()
+
+
+def test_floaktie_grenzen_gegen_hyperinflation():
+    """Die Aktie darf ein Depot ueber einen Vormittag vervielfachen (genau das war
+    der Wunsch), aber sie darf die Wirtschaft nicht zerreissen.
+
+    Gemessener Ausgangsbug: 750 Anteile fuer 1.147.501 gekauft, 5 h aktiver Call,
+    Kurs 79 Mio -> Verkauf fuer 43.655.972.117 Coins. Faktor 38.043 aus dem Nichts,
+    weil die Kurve keine Reserve hat. Vier Bremsen halten das jetzt:
+    Kurs-Deckel (absolut + je Aktivitaet), Depot-Deckel, Verkaufssteuer, Tagesbremse."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    restore_eco = _with_economy({1: 5_000_000, 2: 5_000_000})
+
+    def frisch(preis=None, tag="2026-07-26"):
+        preis = floaktie.FAIR_BASE if preis is None else preis
+        fa._store = _FakeStore({"price": int(preis), "base": float(preis), "day": tag,
+                                "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "holdings": {}, "history": [], "ticks": []})
+        fa._today = lambda: tag
+        fa._tages_anker()
+        fa._sync_price()
+
+    try:
+        # 1) DEPOT-DECKEL: niemand haelt mehr als MAX_SHARES_PER_USER Anteile -
+        #    das begrenzt, wie viel Geld eine Person aus einer Blase schoepfen kann.
+        frisch()
+        deckel = floaktie.MAX_SHARES_PER_USER
+        asyncio.run(fa.buy(SimpleNamespace(id=1), deckel + 500))
+        assert fa.shares_of(1) == deckel, fa.shares_of(1)
+        r = asyncio.run(fa.buy(SimpleNamespace(id=1), 10))
+        assert "Depot ist voll" in r and fa.shares_of(1) == deckel
+        # 'kauf max' respektiert den freien Platz ebenfalls.
+        asyncio.run(fa.sell(SimpleNamespace(id=1), 20))
+        economy.instance._profile(1)["coins"] = 10 ** 12
+        assert fa._resolve_count(SimpleNamespace(id=1), "max") == 20
+
+        # 2) KURS-DECKEL je Aktivitaet: Dauer-Aktivitaet laeuft in ein Niveau,
+        #    nicht in die Unendlichkeit - und der Deckel steigt nur mit mehr Leuten.
+        frisch()
+        for _ in range(12 * 60):
+            fa._activity_tick(3, 0)
+        akt3 = fa.activity_of(3, 0, 0, 0)
+        d3 = fa.ziel_base(akt3) * floaktie.CEIL_FACTOR
+        assert fa.price() <= d3 * 1.06, (fa.price(), d3)
+        assert fa.ziel_base(fa.activity_of(10, 5, 0, 0)) > fa.ziel_base(akt3)
+
+        # 3) ABSOLUTE Notbremse: auch mit absurdem Basiskurs bleibt der ANGEZEIGTE
+        #    Kurs unter MAX_PRICE (vorher lief er in Gleitkomma-Regionen).
+        frisch()
+        fa._store.data["base"] = 10.0 ** 18
+        assert fa.price() <= floaktie.MAX_PRICE, fa.price()
+        assert fa._base() <= floaktie.MAX_PRICE
+
+        # 4) TAGESBREMSE (Circuit Breaker): innerhalb eines Tages maximal x DAY_UP.
+        frisch(1000)
+        anker = fa._state()["open_base"]
+        fa._store.data["base"] = anker * floaktie.DAY_UP * 1000
+        assert fa._base() <= anker * floaktie.DAY_UP * 1.0001, (fa._base(), anker)
+        # ... und nicht tiefer als DAY_DOWN.
+        fa._store.data["base"] = anker * floaktie.DAY_DOWN / 1000
+        assert fa._base() >= anker * floaktie.DAY_DOWN * 0.9999
+        # Neuer Tag -> neuer Anker (die Bremse ist tages-, nicht ewigkeitsbezogen).
+        fa._today = lambda: "2026-07-27"
+        fa._tages_anker()
+        assert fa._state()["open_day"] == "2026-07-27"
+
+        # 5) VERKAUFSSTEUER steigt mit der Blase - der wichtigste Geld-Abfluss.
+        frisch()
+        normal = fa._sell_fee()
+        for _ in range(6 * 60):
+            fa._activity_tick(3, 0)
+        blase = fa._sell_fee()
+        assert normal < blase <= floaktie.SELL_TAX_MAX, (normal, blase)
+        assert abs(normal - floaktie.TRADE_FEE) < 0.01
+
+        # 6) DIE ENTSCHEIDENDE ZAHL: ein guter Vormittag darf sich lohnen
+        #    (Faktor > 5), aber nicht Milliarden aus dem Nichts machen.
+        frisch()
+        kosten, _ = fa._buy_cost(deckel)
+        fa._holdings()["1"] = deckel
+        fa._sync_price()
+        for _ in range(5 * 60):
+            fa._activity_tick(3, 1, 0, 4)      # 3 Leute, einer streamt, etwas Chat
+        erloes, _ = fa._sell_proceeds(deckel)
+        faktor = erloes / max(1, kosten)
+        assert 5 < faktor < 60, (kosten, erloes, faktor)
+        assert erloes < 100_000_000, erloes     # nie Milliarden aus einer Runde
+
+        # 7) NOTAUS: ist die Aktie per Panel aus, geht gar nichts mehr.
+        import features
+        alt_dis = set(features.instance._disabled)
+        try:
+            features.instance._disabled.add("floaktie")
+            assert fa.is_off()
+            frisch()
+            r = asyncio.run(fa.buy(SimpleNamespace(id=2), 5))
+            assert "deaktiviert" in r and fa.shares_of(2) == 0
+            fa._holdings()["2"] = 10
+            r = asyncio.run(fa.sell(SimpleNamespace(id=2), 10))
+            assert "deaktiviert" in r and fa.shares_of(2) == 10
+            # Kein Kurs-Tick und keine Aktivitaets-Zaehlung mehr.
+            vorher = fa.price()
+            guild = SimpleNamespace(voice_channels=[], afk_channel=None)
+            asyncio.run(fa.sample_and_tick(guild))
+            fa.note_message()
+            assert fa.price() == vorher and fa._state()["msg_count"] == 0
+        finally:
+            features.instance._disabled = alt_dis
+    finally:
+        restore_eco()
+        fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
 def test_webpanel_token_deckel():
