@@ -148,8 +148,10 @@ fi
 export FLO_DATA_DIR="$DATA_DIR"
 export FLO_DRY_RUN="$DRY_RUN"
 
-python3 "$SKRIPT_DIR/economy_reset.py"
-RC=$?
+# 'set -e' wuerde bei einem Fehler SOFORT abbrechen - die Meldung unten samt
+# Backup-Pfad kaeme dann nie an. Deshalb den Rueckgabewert ausdruecklich einfangen.
+RC=0
+python3 "$SKRIPT_DIR/economy_reset.py" || RC=$?
 
 echo
 if [[ $RC -ne 0 ]]; then

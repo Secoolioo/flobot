@@ -87,10 +87,15 @@ class Economy:
     # Die Steuer laeuft einmal taeglich und verbrennt einen Anteil des Vermoegens
     # OBERHALB des Freibetrags. Sie skaliert damit automatisch mit: verdient
     # jemand X Coins am Tag, findet sein Konto sein Gleichgewicht bei
-    # Freibetrag + X/Satz. Bei 2 % und 1 Mio Freibetrag heisst das: 10.000/Tag
-    # (normal aktiv) -> ~1,5 Mio, 20 Mio/Tag (Dauer-Aktienhandel) -> ~1 Mrd,
-    # also genau der Preis des Endziels. Kleine Konten zahlen NICHTS.
-    TAX_FREE = int(os.getenv("ECONOMY_TAX_FREE", "1000000") or "1000000")
+    # Freibetrag + X/Satz. Bei 2 % und 5 Mio Freibetrag heisst das: 27.000/Tag
+    # (normal aktiv, ohne Handel) -> ~6,4 Mio, 20 Mio/Tag (Dauer-Aktienhandel)
+    # -> ~1 Mrd, also genau der Preis des Endziels. Kleine Konten zahlen NICHTS.
+    #
+    # Der Freibetrag ist bewusst hoch: mit 1 Mio lag das Gleichgewicht eines
+    # Nicht-Haendlers bei 2,4 Mio - Diamant-Rahmen (6 Mio), Koenigskrone (25 Mio)
+    # und Galaxie (120 Mio) waren damit nicht "langsam", sondern NIE erreichbar.
+    # Jetzt ist die mittlere Stufe drin, die Spitze bleibt den Haendlern.
+    TAX_FREE = int(os.getenv("ECONOMY_TAX_FREE", "5000000") or "5000000")
     TAX_RATE = float(os.getenv("ECONOMY_TAX_RATE", "0.02") or "0.02")
     TAX_MIN = 100                # unter diesem Betrag lohnt die Buchung nicht
 
@@ -540,19 +545,29 @@ class Economy:
         return betrag if betrag >= self.TAX_MIN else 0
 
     def depot_wert(self, uid):
-        """Wert der Aktien-Anteile dieses Nutzers (0, wenn die Aktie aus ist).
+        """Vermoegen dieses Nutzers AUSSERHALB des Kontos: Aktien-Depot und die
+        Einsaetze, die in laufenden Giveaways im Escrow liegen.
 
         Wichtig fuer die Steuer: sonst waere das Depot ein steuerfreier Parkplatz -
         1 Mio auf dem Konto und 20 Mio in Anteilen haetten NICHTS gekostet, und
         man haette kurz vor 2 Uhr umparken koennen. Lazy-Import, weil floaktie
         umgekehrt economy importiert."""
+        wert = 0
         try:
             import floaktie
-            if not floaktie.is_enabled():
-                return 0
-            return max(0, int(floaktie.shares_of(uid)) * int(floaktie.price()))
+            if floaktie.is_enabled():
+                wert += max(0, int(floaktie.shares_of(uid)) * int(floaktie.price()))
         except Exception:  # noqa: BLE001 - ohne Aktie zaehlt nur das Konto
-            return 0
+            pass
+        # Laufende Giveaways halten den Einsatz im Escrow - ohne diese Zeile waere
+        # das ein Tresor: Einsatz kurz vor 2 Uhr einzahlen, danach abbrechen.
+        try:
+            import giveaway
+            if giveaway.is_enabled():
+                wert += max(0, int(giveaway.escrow_von(uid)))
+        except Exception:  # noqa: BLE001
+            pass
+        return wert
 
     async def vermoegenssteuer(self, force=False):
         """Zieht einmal pro Tag die Vermoegenssteuer ein - die Coins sind DANACH

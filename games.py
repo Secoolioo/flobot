@@ -721,7 +721,11 @@ class Games:
         return max(0, GAMES_DAILY_MAX - int(st["won"].get(str(uid), 0) or 0))
 
     def _kappe_buchen(self, uid, netto):
-        """Merkt einen Netto-Gewinn fuer heute (nur positive Betraege zaehlen)."""
+        """Merkt einen Netto-Gewinn fuer heute (nur positive Betraege zaehlen).
+
+        Der Zaehler MUSS auf die Platte: games.json wurde bisher nur vom Zaehl-
+        spiel gespeichert, also ueberlebte die Tageskappe keinen Neustart - nach
+        einem reinen Spieltag existierte die Datei nicht einmal."""
         if netto <= 0 or GAMES_DAILY_MAX <= 0:
             return
         st = self._kappe_state()
@@ -729,6 +733,11 @@ class Games:
             return
         key = str(uid)
         st["won"][key] = int(st["won"].get(key, 0) or 0) + int(netto)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return          # kein Event-Loop (Tests) - dann eben nur im Speicher
+        self._spawn(self._store.save())
 
     def _auszahlen(self, uid, brutto, einsatz=0, spiel=""):
         """EINE Tuer fuer jede Spiel-Auszahlung. Der NETTO-Gewinn

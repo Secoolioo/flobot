@@ -3298,6 +3298,59 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
+def test_floaktie_impuls_respektiert_deckel():
+    """REGRESSION (Gegenpruefung des Umbaus): Der Sofort-Impuls _puls() kannte den
+    Aktivitaets-Deckel NICHT - er lief nur durch _clamp_base (Boden, MAX_PRICE,
+    Tagesbremse). Mit Rein-/Raus-Springen aus dem Call liess sich der Kurs damit am
+    Deckel vorbei bis an die Tagesbremse treiben: gemessen Deckel 112.000, erreicht
+    wurden 250.000 - und weil die Tagesbremse pro KALENDERTAG verankert wird, ging
+    das jede Nacht von vorn (ueber 7 Tage Faktor 1.593 statt 22)."""
+    import time as _t
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today)
+    fa._enabled = True
+    try:
+        def frisch(tag="2026-07-26"):
+            fa._store = _FakeStore({"price": 5000, "base": 5000.0, "day": "x",
+                                    "act_ema": 3.0, "msg_count": 0, "last_msg_count": 0,
+                                    "leer_min": 0.0, "holdings": {}, "history": [],
+                                    "ticks": []})
+            fa._today = lambda: tag
+            fa._tages_anker()
+            fa._sync_price()
+
+        frisch()
+        deckel = fa.akt_deckel_base()
+        assert deckel == fa.ziel_base(3.0) * floaktie.CEIL_FACTOR
+        # Ein einzelner Impuls hebt den Kurs - das soll er auch.
+        vorher = fa.price()
+        assert fa._puls(floaktie.PULSE_STREAM, "test") > vorher
+
+        # Dauer-Spam ueber 7 Tage (inkl. Mitternacht) endet AM DECKEL, nicht drueber.
+        frisch()
+        t0 = _t.time()
+        for tag in range(7):
+            fa._today = lambda t=f"2026-08-{tag + 1:02d}": t
+            fa._tages_anker()
+            for minute in range(7 * 60):
+                fa._store.data["pulse_min"] = t0 - 61 - minute * 60
+                fa._store.data["pulse_sum"] = 0.0
+                for _ in range(20):
+                    fa._puls(floaktie.PULSE_JOIN, "spam")
+        assert fa.price() <= deckel * 1.02, (fa.price(), deckel)
+        assert fa._am_deckel()
+        # Am Deckel gibt der Impuls ausdruecklich 0 zurueck (kein stiller No-Op).
+        assert fa._puls(floaktie.PULSE_STREAM, "test") == 0
+
+        # Steigt die Aktivitaet, steigt der Deckel - und der Impuls zieht wieder.
+        fa._store.data["act_ema"] = 12.0
+        assert fa.akt_deckel_base() > deckel
+        assert fa._puls(floaktie.PULSE_STREAM, "test") > 0
+    finally:
+        fa._store, fa._enabled, fa._today = alt
+
+
 def test_vermoegenssteuer_als_senke():
     """Die Wirtschaft braucht eine WIEDERKEHRENDE Senke: alle Einnahmen sind
     zeitbasiert, alle alten Senken waren einmalig (ein Titel, ein Rahmen, ein
@@ -3338,7 +3391,28 @@ def test_vermoegenssteuer_als_senke():
         n3, weg3 = asyncio.run(eco.vermoegenssteuer())
         assert n3 == 1 and weg3 > 0
 
-        # Das AKTIEN-DEPOT ist kein steuerfreier Parkplatz: 1 Mio auf dem Konto
+        # Auch ein laufendes GIVEAWAY ist kein Tresor: Einsatz kurz vor 2 Uhr
+        # einzahlen, danach abbrechen und alles zurueckbekommen.
+        import giveaway
+        gw = giveaway.instance
+        alt_gw = (gw._store, gw._enabled)
+        gw._enabled = True
+        gw._store = _FakeStore({"active": {"1": {"host": 21, "stake": 40_000_000}},
+                                "next_id": 2, "done": []})
+        try:
+            eco._users().clear()
+            eco._profile(21)["coins"] = eco.TAX_FREE
+            eco._profile(22)["coins"] = eco.TAX_FREE
+            assert eco.depot_wert(21) == 40_000_000 and eco.depot_wert(22) == 0
+            eco._store.data["tax_day"] = ""
+            n, weg = asyncio.run(eco.vermoegenssteuer())
+            assert n == 1 and weg == int(40_000_000 * eco.TAX_RATE), (n, weg)
+            assert eco.get_coins(22) == eco.TAX_FREE
+        finally:
+            gw._store, gw._enabled = alt_gw
+        eco._users().clear()
+
+        # Das AKTIEN-DEPOT ist kein steuerfreier Parkplatz: 5 Mio auf dem Konto
         # plus 36 Mio in Anteilen hat vorher NICHTS gekostet, und man haette kurz
         # vor 2 Uhr umparken koennen.
         fa = _fa_mod.instance
@@ -3464,8 +3538,31 @@ def test_economy_reset_umfang():
     # 5) Nicht-Geld-Dateien stehen NICHT in der Reset-Liste.
     dateien = {name for name, _fn, _b in er.DATEIEN}
     assert not dateien & {"words.json", "moderation.json", "voicegags.json",
-                          "admin.json", "features.json", "games.json"}
+                          "admin.json", "features.json"}
     assert "economy.json" in dateien and "floaktie.json" in dateien
+
+    # 6) games.json: NUR die Spiele-Tageskappe, der Zaehlspiel-Stand bleibt.
+    #    Ohne das startet jeder in den Reset-Tag mit ausgeschoepfter Kappe.
+    assert "games.json" in dateien
+    gd = {"counting": {"kanal1": {"n": 42}}, "daily": {"day": "2026-07-26",
+                                                       "won": {"1": 50_000, "2": 10}}}
+    er.reset_spiele_kappe(gd, [])
+    assert gd["daily"] == {"day": "", "won": {}}
+    assert gd["counting"] == {"kanal1": {"n": 42}}, "Zaehlspiel wurde mitgeloescht!"
+
+    # 7) Der Steuer-Stempel wird mitgeloescht (sonst gilt der Reset-Tag als erledigt).
+    ed = {"users": {}, "tax_day": "2026-07-26"}
+    er.reset_economy(ed, [])
+    assert ed["tax_day"] == ""
+
+    # 8) ZWEI PHASEN: erst alles einlesen und umbauen, DANN schreiben. Ein kaputtes
+    #    JSON in der Mitte darf die Wirtschaft nicht halb zurueckgesetzt lassen.
+    quelle = open("economy_reset.py", encoding="utf-8").read()
+    i_lade = quelle.index("for name, fn, beschreibung in DATEIEN:")
+    i_schreib = quelle.index("for i, (pfad, daten) in enumerate(fertig):")
+    assert i_lade < i_schreib, "Schreibphase muss NACH der Lesephase kommen"
+    # In der Leseschleife darf nicht geschrieben werden.
+    assert "schreiben(" not in quelle[i_lade:i_schreib]
 
 
 def test_embeds_statt_fliesstext():

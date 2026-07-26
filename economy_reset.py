@@ -16,7 +16,8 @@ bleiben pro Profil:
 
 Unbekannte Zusatzfelder bleiben ebenfalls stehen - zurueckgesetzt wird nur, was
 hier ausdruecklich aufgelistet ist. Dateien, die kein Geld enthalten (words,
-moderation, voicegags, admin, features, games), werden nicht angefasst.
+moderation, voicegags, admin, features), werden nicht angefasst; aus games.json
+wird NUR die Spiele-Tageskappe geleert, der Zaehlspiel-Stand bleibt.
 """
 
 import json
@@ -219,6 +220,11 @@ def reset_economy(d, bericht):
             inv_weg += len(vorher_owned) if isinstance(vorher_owned, list) else 0
             titel_weg += 1 if hatte_titel else 0
 
+    # Steuer-Stempel loeschen: sonst haelt der Reset-Tag die Vermoegenssteuer fuer
+    # erledigt (harmlos, aber unsauber - nach dem Reset ist ohnehin niemand ueber
+    # dem Freibetrag).
+    d["tax_day"] = ""
+
     # Tages-Shop neu wuerfeln lassen (Preise/Angebot kommen aus dem Code).
     shop = d.get("shop")
     if not isinstance(shop, dict) or shop.get("date") or shop.get("items"):
@@ -333,6 +339,24 @@ def reset_steal(d, bericht):
     return 0, 0
 
 
+def reset_spiele_kappe(d, bericht):
+    """NUR die Spiele-Tageskappe leeren - der Zaehlspiel-Stand bleibt.
+
+    Ohne das startet jeder in den Reset-Tag mit einer schon ausgeschoepften Kappe
+    (bis zu 50.000 Coins, also mehrere gute Tage) und wundert sich, warum Spiele
+    nichts mehr bringen."""
+    kappe = d.get("daily") or {}
+    betroffen = len(kappe.get("won") or {})
+    d["daily"] = {"day": "", "won": {}}
+    if betroffen:
+        bericht.append(f"Spiele-Tageskappe von "
+                       f"{_mehrzahl(betroffen, 'Nutzer', 'Nutzern')} freigegeben")
+    else:
+        bericht.append("Spiele-Tageskappe war leer")
+    bericht.append(grau("Zählspiel-Stand bleibt (kein Geld)"))
+    return 0, 0
+
+
 def reset_giveaway(d, bericht):
     """Laufende Giveaways beenden (Einsatz liegt im Escrow und verfaellt mit dem Reset)."""
     aktiv = len(d.get("active") or {})
@@ -359,11 +383,12 @@ DATEIEN = (
     ("casino.json",   reset_casino,   "Casino-Statistik"),
     ("steal.json",    reset_steal,    "Raub-Cooldowns"),
     ("giveaway.json", reset_giveaway, "laufende Giveaways"),
+    ("games.json",    reset_spiele_kappe, "Spiele-Tageskappe"),
 )
 
 # Dateien, die absichtlich unberuehrt bleiben (fuer den Bericht).
 UNBERUEHRT = ("words.json", "moderation.json", "voicegags.json",
-              "admin.json", "features.json", "games.json")
+              "admin.json", "features.json")
 
 
 def main():
@@ -379,12 +404,21 @@ def main():
     geaendert = []
     fehlend = []
 
+    # ZWEI PHASEN. Vorher wurde Datei fuer Datei gelesen, umgebaut UND SOFORT
+    # geschrieben - ein kaputtes JSON in der Mitte liess die Wirtschaft halb
+    # zurueckgesetzt zurueck (economy/floaktie/handel auf 0, lotto mit 47 Mio
+    # Jackpot stehen), und dazu meldete das Skript auch noch "nichts geaendert".
+    # Jetzt wird erst ALLES eingelesen und umgebaut; geschrieben wird nur, wenn
+    # jede einzelne Datei fehlerfrei durchgelaufen ist.
+    fertig = []          # (pfad, daten) - wartet auf die Schreibphase
+
     for name, fn, beschreibung in DATEIEN:
         pfad = DATA_DIR / name
         try:
             daten = laden(pfad)
         except Fehler as exc:
             print(rot(f"  ✗ {exc}"))
+            print(gelb("     Es wurde NICHTS geschrieben."))
             return 1
         if daten is None:
             fehlend.append(name)
@@ -395,9 +429,11 @@ def main():
             n_user, coins = fn(daten, bericht)
         except Fehler as exc:
             print(rot(f"  ✗ {exc}"))
+            print(gelb("     Es wurde NICHTS geschrieben."))
             return 1
         except Exception as exc:  # noqa: BLE001 - nie halb resetten
             print(rot(f"  ✗ {name}: unerwarteter Fehler ({exc}) - abgebrochen."))
+            print(gelb("     Es wurde NICHTS geschrieben."))
             return 1
 
         nutzer_gesamt += n_user
@@ -406,15 +442,21 @@ def main():
         print(f"  {fett(name.ljust(15))} {grau(beschreibung)}")
         for zeile in bericht:
             print(f"      {zeile}")
+        fertig.append((pfad, daten))
+        geaendert.append(name)
+        print()
 
-        if not DRY_RUN:
+    # --- Schreibphase: alles oder nichts (soweit das mit Dateien geht) -------
+    if not DRY_RUN:
+        for i, (pfad, daten) in enumerate(fertig):
             try:
                 schreiben(pfad, daten)
             except Fehler as exc:
                 print(rot(f"  ✗ {exc}"))
+                if i:
+                    print(rot(f"     ACHTUNG: {i} Datei(en) waren schon geschrieben."))
+                    print(gelb("     Backup zurueckspielen und erneut versuchen!"))
                 return 1
-        geaendert.append(name)
-        print()
 
     if fehlend:
         print(grau(f"  übersprungen (Datei existiert nicht): {', '.join(fehlend)}"))

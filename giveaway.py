@@ -195,6 +195,27 @@ class Giveaway:
     def _active(self):
         return self._state().setdefault("active", {})
 
+    def escrow_von(self, uid):
+        """Wie viele Coins dieser Nutzer gerade in laufenden Giveaways geparkt hat.
+
+        Die Vermoegenssteuer (economy.depot_wert) rechnet das mit: sonst waere ein
+        Giveaway ein Tresor - Einsatz kurz vor der naechtlichen Steuer einzahlen,
+        danach abbrechen und alles zurueckbekommen."""
+        if not self._enabled:
+            return 0
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            return 0
+        summe = 0
+        for g in self._active().values():
+            try:
+                if int(g.get("host", 0)) == uid and not g.get("settled"):
+                    summe += max(0, int(g.get("stake", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        return summe
+
     # --- Zahlen/Zeit aus Alltagssprache ----------------------------------
     def _norm(self, text):
         """Kleinschreibung, Emoji-Rand weg, Mehrfach-Leerzeichen zusammen."""
@@ -1105,6 +1126,7 @@ instance = Giveaway()
 
 setup = instance.setup
 is_enabled = instance.is_enabled
+escrow_von = instance.escrow_von
 handle = instance.handle
 on_message_passive = instance.on_message_passive
 tick = instance.tick

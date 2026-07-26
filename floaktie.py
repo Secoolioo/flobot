@@ -859,12 +859,24 @@ class FloAktie:
                 return 0.0
             return -self._leerlauf_verfall()
         if base >= ziel * max(1.0, CEIL_FACTOR):
-            return 0.0          # weit ueber Wert: seitwaerts, aber kein Minus
+            return 0.0          # am Deckel: seitwaerts, aber kein Minus
         tempo = min(TICK_CAP, activity * TICK_GAIN)
         ueberhang = max(0.0, base / ziel - 1.0)
         daempfung = 1.0 / (1.0 + math.log1p(ueberhang) / max(0.05, LEVEL_SOFT))
         # Nie ganz auf Null bremsen: solange jemand da ist, geht es nach oben.
         return max(MIN_UP, tempo * daempfung)
+
+    def akt_deckel_base(self):
+        """Hoechster Basiskurs, den die AKTUELLE Aktivitaet hergibt.
+
+        Das ist die eigentliche Bremse der Aktie (CEIL_FACTOR x Zielkurs). Sie
+        muss auf JEDEM Schreibweg gelten - drift_fuer hat sie beachtet, der
+        Sofort-Impuls _puls NICHT: mit Rein-/Raus-Springen aus dem Call liess sich
+        der Kurs an ihr vorbei bis an die Tagesbremse treiben (gemessen: Deckel
+        112.000, erreicht wurden 250.000, ueber Mitternacht Faktor 1.593).
+        Deshalb steht sie jetzt hier an einer Stelle."""
+        akt = float(self._state().get("act_ema", 0.0) or 0.0)
+        return self.ziel_base(akt) * max(1.0, CEIL_FACTOR)
 
     def _leerlauf_verfall(self):
         """Verfall pro Minute bei leerem Server - waechst mit der Leerlauf-Dauer.
@@ -938,8 +950,14 @@ class FloAktie:
         staerke = min(staerke, frei)
         if staerke <= 0:
             return 0
+        # Auch der Sofort-Impuls endet am Aktivitaets-Deckel: sonst ist er ein
+        # Pump-Werkzeug (rein/raus aus dem Call) und haengt die ganze Balance aus.
+        deckel = self.akt_deckel_base()
+        jetzt_base = self._base()
+        if jetzt_base >= deckel:
+            return 0
         st["pulse_sum"] = summe + staerke
-        st["base"] = self._clamp_base(self._base() * (1 + staerke))
+        st["base"] = self._clamp_base(min(deckel, jetzt_base * (1 + staerke)))
         neu = self._sync_price()
         log.info("FloCorp Impuls (%s): +%.2f%% -> Kurs %s.", grund, staerke * 100,
                  self._fmt(neu))
@@ -1266,9 +1284,7 @@ class FloAktie:
 
     def _deckel_kurs(self):
         """Der ANGEZEIGTE Kurs, an dem die aktuelle Aktivitaet ihren Deckel hat."""
-        akt = float(self._state().get("act_ema", 0.0) or 0.0)
-        deckel = self.ziel_base(akt) * max(1.0, CEIL_FACTOR)
-        deckel *= (1.0 + self.total_shares() / LIQUIDITY)
+        deckel = self.akt_deckel_base() * (1.0 + self.total_shares() / LIQUIDITY)
         return max(MIN_PRICE, min(MAX_PRICE, int(round(deckel))))
 
     def _am_deckel(self):
@@ -1276,7 +1292,7 @@ class FloAktie:
         akt = float(self._state().get("act_ema", 0.0) or 0.0)
         if akt <= 0:
             return False
-        return self._base() >= self.ziel_base(akt) * max(1.0, CEIL_FACTOR) * 0.995
+        return self._base() >= self.akt_deckel_base() * 0.995
 
     def _depot_balken(self, anteile):
         """Kleiner Fortschrittsbalken fuer die Depot-Auslastung."""
@@ -1519,6 +1535,7 @@ activity_of = instance.activity_of
 drift_fuer = instance.drift_fuer
 ziel_base = instance.ziel_base
 ziel_kurs = instance.ziel_kurs
+akt_deckel_base = instance.akt_deckel_base
 sample_and_tick = instance.sample_and_tick
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
