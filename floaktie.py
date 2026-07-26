@@ -189,6 +189,17 @@ DAY_DOWN = float(os.getenv("FLOAKTIE_DAY_DOWN", "0.1") or "0.1")  # max -90 % pr
 # Am Deckel (Ueberhang 7) sind das rund 33 % - dort entstehen die meisten Coins.
 SELL_TAX_K = float(os.getenv("FLOAKTIE_SELL_TAX_K", "0.15") or "0.15")
 SELL_TAX_MAX = float(os.getenv("FLOAKTIE_SELL_TAX_MAX", "0.35") or "0.35")
+# KREDITLINIE: Aktien darf man weiter auf Pump kaufen (das ist der Reiz), aber
+# nur mit EIGENEM Geld als Sicherheit - wie echte Margin, nicht wie Gratisgeld.
+# Erlaubt ist also: Guthaben + min(KREDIT_LINIE, Guthaben).
+#
+# Warum die Sicherheit noetig ist (nachgewiesener Exploit): frueher gab es gar
+# keinen Guthaben-Check. Ein Konto mit 0 Coins konnte 150 Anteile auf Kredit
+# nehmen - und weil JEDER Kauf den Kurs hebt, reichten vier solche Wegwerf-Konten,
+# damit das Hauptkonto oben teuer verkauft (gemessen: 300.000 -> 429.227, also
+# +129.227 aus dem Nichts, plus 1,17 Mio uneinbringliche Schuld auf leeren Konten).
+# Mit Sicherheit kauft ein leeres Konto GAR NICHTS mehr - der Hebel ist weg.
+KREDIT_LINIE = int(os.getenv("FLOAKTIE_KREDIT", "250000") or "250000")
 
 # Dividende: Coins pro Voice-Runde je 'DIVIDEND_DIVISOR' Anteile (gedeckelt).
 DIVIDEND_DIVISOR = int(os.getenv("FLOAKTIE_DIVIDEND_DIVISOR", "10") or "10")
@@ -495,6 +506,17 @@ class FloAktie:
         """Wie viele Anteile dieser Nutzer noch dazukaufen DARF (Depot-Deckel)."""
         return max(0, MAX_SHARES_PER_USER - self.shares_of(uid))
 
+    def _kaufrahmen(self, stand):
+        """Wie viele Coins dieser Kontostand fuer einen Kauf hergibt.
+
+        Guthaben + Sicherheit, wobei die Sicherheit das eigene Guthaben nicht
+        uebersteigt (echte Margin). Ein leeres oder negatives Konto bekommt 0 -
+        genau das schliesst den Zweitkonten-Pump."""
+        stand = int(stand)
+        if stand <= 0:
+            return 0
+        return stand + min(KREDIT_LINIE, stand)
+
     def _max_affordable(self, coins, deckel=None):
         """Wie viele Anteile man sich mit 'coins' leisten kann (inkl. Gebuehr).
         Binaersuche auf der Kurve - nie mehr, als das Guthaben wirklich deckt.
@@ -573,9 +595,27 @@ class FloAktie:
         # Kosten IMMER vor der Depot-Aenderung berechnen (Kurve haengt an den
         # ausgegebenen Anteilen).
         cost, _ = self._buy_cost(count)
-        # Aktien auf KREDIT: kein Guthaben-Check - man darf beliebig tief ins Minus
-        # (allow_negative). Wie mit Hebel an einer echten Boerse: faellt der Kurs,
-        # sitzt du auf den Schulden. Nur die Aktie holt dich da wieder raus.
+        # Aktien auf KREDIT: erlaubt (das ist der Reiz), aber nur bis zur
+        # Kreditlinie. Ohne die konnte ein Konto mit 0 Coins 150 Anteile auf Pump
+        # nehmen und sie abends fuer Millionen verkaufen - Geld aus dem Nichts,
+        # ganz ohne Einsatz.
+        stand_vor = economy.get_coins(member.id)
+        rahmen = self._kaufrahmen(stand_vor)
+        if cost > rahmen:
+            moeglich = self._max_affordable(rahmen, frei)
+            if moeglich < 1:
+                if stand_vor <= 0:
+                    return (f"🏦 **Ohne eigenes Geld gibt's keinen Kredit.**\n"
+                            f"Du stehst bei **{self._fmt(stand_vor)}** {economy.COIN}. "
+                            f"Aktien auf Pump gehen nur mit eigener Sicherheit – "
+                            f"verdien erst was oder verkauf Anteile.")
+                return (f"🏦 **Kreditlinie ausgeschöpft.**\n"
+                        f"Guthaben **{self._fmt(stand_vor)}** {economy.COIN} → du kannst "
+                        f"für maximal **{self._fmt(rahmen)}** kaufen "
+                        f"(Guthaben + Sicherheit, max. {self._fmt(KREDIT_LINIE)}).\n"
+                        f"Selbst ein Anteil ist gerade zu teuer.")
+            count = moeglich
+            cost, _ = self._buy_cost(count)
         economy.add_coins(member.id, -cost, reason="floaktie", allow_negative=True)
         self._holdings()[str(member.id)] = self.shares_of(member.id) + count
         neu = self._sync_price()       # Kauf hebt den Kurs (Kurve neu auswerten)

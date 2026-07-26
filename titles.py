@@ -29,10 +29,23 @@ class Titles:
     # pool_pct: Anteil ALLER Titel in dieser Stufe (mehr normal als legendary).
     # shop_weight: Gewicht bei der taeglichen Shop-Auswahl (gleiche Tendenz).
     # tone: wie Flo mit Traegern dieser Stufe spricht (ai.py liest das).
+    # PREISE: abgeleitet aus dem gemessenen Tageseinkommen (economy.py: rund
+    # 8.000-10.000 Coins an einem normal aktiven Tag - reden, im Call sitzen,
+    # Tagesbonus, Level-Ups). Daraus die Leiter:
+    #
+    #   Normal      500 -  2.000   -> am ERSTEN Tag drin (Einstieg)
+    #   Selten    3.000 -  9.000   -> Tag 1-2
+    #   Mythisch 18.000 - 45.000   -> erste Woche
+    #   Legendär 90.000 -220.000   -> Woche 2-4
+    #   Exklusiv 450.000-900.000   -> nur beim Haendler, Monat 1-2 (oder EIN
+    #                                 richtig guter Aktien-Vormittag)
+    #
+    # Vorher lagen alle Stufen zwischen 150 und 15.000: der komplette Titel-Shop
+    # war nach zwei Tagen abgeraeumt und danach bedeutungslos.
     RARITY = {
         "normal": {
             "label": "Normal", "emoji": "🟢", "color": 0x57F287,
-            "role": "Flo · Normal", "price": (150, 600),
+            "role": "Flo · Normal", "price": (500, 2000),
             "pool_pct": 62, "shop_weight": 55,
             "tone": ("Der Typ hat nur einen normalen Titel – also null Sonderbehandlung. "
                      "Gib ihm die volle ungefilterte Packung, roaste ihn gnadenlos und "
@@ -40,7 +53,7 @@ class Titles:
         },
         "selten": {
             "label": "Selten", "emoji": "🔵", "color": 0x3498DB,
-            "role": "Flo · Selten", "price": (700, 1800),
+            "role": "Flo · Selten", "price": (3000, 9000),
             "pool_pct": 26, "shop_weight": 30,
             "tone": ("Er traegt einen seltenen Titel – fahr die Aggression einen Tick "
                      "runter. Roaste ruhig noch, aber mit Augenzwinkern statt voller "
@@ -48,7 +61,7 @@ class Titles:
         },
         "mythisch": {
             "label": "Mythisch", "emoji": "🟣", "color": 0x9B59B6,
-            "role": "Flo · Mythisch", "price": (2200, 5000),
+            "role": "Flo · Mythisch", "price": (18000, 45000),
             "pool_pct": 9, "shop_weight": 12,
             "tone": ("Er traegt einen MYTHISCHEN Titel – jetzt wird's deutlich "
                      "freundlicher. Behandle ihn wie einen guten Kumpel: noch frech und "
@@ -57,7 +70,7 @@ class Titles:
         },
         "legendary": {
             "label": "Legendär", "emoji": "🟡", "color": 0xF1C40F,
-            "role": "Flo · Legendär", "price": (6000, 15000),
+            "role": "Flo · Legendär", "price": (90000, 220000),
             "pool_pct": 3, "shop_weight": 3,
             "tone": ("Er traegt einen LEGENDAEREN Titel – das ist quasi dein bester "
                      "Freund. Leg den ganzen Aggro-Modus komplett ab und sei richtig "
@@ -70,7 +83,7 @@ class Titles:
         # Stufe nie -> taucht NIEMALS im normalen Tages-Shop auf.
         "exklusiv": {
             "label": "Exklusiv", "emoji": "🔱", "color": 0xFF2D55,
-            "role": "Flo · Exklusiv", "price": (75000, 150000),
+            "role": "Flo · Exklusiv", "price": (450000, 900000),
             "pool_pct": 0, "shop_weight": 0,
             "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – das absolute Maximum, "
                      "seltener und krasser als alles im Shop. Behandle ihn wie eine "

@@ -43,11 +43,17 @@ DEFAULT_SUCCESS_CHANCE = 0.45    # ~45% Chance, dass der Coup gelingt
 MIN_TARGET = 100                 # unter so vielen Coins ist "eh nix zu holen"
 LOOT_MIN_PCT = 0.10              # Beute: mind. 10% ...
 LOOT_MAX_PCT = 0.30             # ... bis max. 30% des Opfer-Kontostands
-LOOT_CAP = 5000                  # aber nie mehr als so viel auf einen Schlag
+# Beute-Deckel: WICHTIG relativ zum Einkommen, nicht absolut. Vorher stand hier
+# eine feste Zahl (5.000), waehrend die Strafe prozentual vom eigenen Konto
+# abgezogen wurde. Wer sein Konto klein hielt (alles in Aktien), riskierte also
+# fast nichts und griff trotzdem den vollen Deckel ab - im Verhaeltnis 18:1.
+# Jetzt gilt zusaetzlich: nie mehr Beute, als der Raeuber selbst besitzt
+# (siehe _do_success) - kein Raub ohne eigenes Risiko.
+LOOT_CAP = 100_000               # harte Obergrenze pro Coup
 PENALTY_MIN_PCT = 0.05           # Strafe: 5% ...
 PENALTY_MAX_PCT = 0.15           # ... bis 15% des eigenen Kontostands ...
-PENALTY_FLAT_MIN = 50            # ... mindestens aber flat 50 ...
-PENALTY_FLAT_MAX = 200           # ... bis flat 200 Coins.
+PENALTY_FLAT_MIN = 500           # ... mindestens aber flat 500 ...
+PENALTY_FLAT_MAX = 2_000         # ... bis flat 2.000 Coins.
 
 # --- Freche deutsche Flavor-Texte (random.choice) ----------------------------
 _SUCCESS_LINES = [
@@ -240,6 +246,15 @@ class Steal:
         anteil = random.uniform(LOOT_MIN_PCT, LOOT_MAX_PCT)
         beute = int(ziel_coins * anteil)
         beute = min(beute, LOOT_CAP, ziel_coins)  # nie mehr als Deckel/Kontostand
+        # Kein Raub ohne eigenes Risiko: mehr als das EIGENE Vermoegen kann man
+        # nicht abgreifen. Sonst war der Coup fuer ein leeres Konto ein Freilos
+        # (Strafe prozentual = fast nichts, Beute absolut = voller Deckel).
+        eigen = 0
+        try:
+            eigen = max(0, economy.get_coins(autor.id))
+        except Exception:  # noqa: BLE001
+            log.exception("Konnte eigenen Kontostand nicht lesen")
+        beute = min(beute, max(PENALTY_FLAT_MAX, eigen))
         if beute < 1:
             beute = 1
         try:

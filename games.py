@@ -20,6 +20,8 @@ import os
 import random
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -64,6 +66,19 @@ SKILL_COOLDOWN = float(os.getenv("GAMES_SKILL_COOLDOWN", "45") or "45")
 # Auszahlung beim Muenzwurf-Sieg (Anteil des Einsatzes). 0,95 = 5 % Hausvorteil -
 # mit 1,0 war Muenzwurf ein risikoloses Dauerspiel mit RTP 100 %.
 COINFLIP_PAYOUT = float(os.getenv("GAMES_COINFLIP_PAYOUT", "0.95") or "0.95")
+# Rateversuche beim Anagramm. Vorher UNBEGRENZT innerhalb der 30 Sekunden - damit
+# war die x3-Auszahlung praktisch garantiert (Audit: netto +10.000 pro Runde,
+# rund 19 Mio am Tag moeglich).
+ANA_MAX_TRIES = int(os.getenv("GAMES_ANA_TRIES", "3") or "3")
+
+# --- TAGESKAPPE fuer Spiel-Gewinne ------------------------------------------
+# Der Audit-Befund war eindeutig: es gab im ganzen Bot keine einzige Tageskappe.
+# Jedes Spiel mit positivem Erwartungswert war damit ein Wasserhahn, der nur von
+# Cooldowns gebremst wurde. Jetzt sammelt jeder Nutzer pro Kalendertag hoechstens
+# GAMES_DAILY_MAX Coins an NETTO-Gewinn aus Spielen - danach spielt man zum Spass
+# (oder verliert weiter, das geht immer). Der Zaehler liegt in data/games.json,
+# ueberlebt also auch einen Neustart (der alte RAM-Cooldown tat das nicht).
+GAMES_DAILY_MAX = int(os.getenv("GAMES_DAILY_MAX", "50000") or "50000")
 
 
 # --- Schere-Stein-Papier -------------------------------------------------
@@ -358,7 +373,7 @@ class _ReaktionView(discord.ui.View):
             mult, note = 0.0, "🐌 zu langsam."
         payout = int(self.bet * mult)
         if payout:
-            economy.add_coins(self.uid, payout)
+            payout = instance._auszahlen(self.uid, payout, self.bet, "reaktion")
         await economy.flush()
         await _record(self.uid, "reaktion", self.bet, payout)
         net = payout - self.bet
@@ -419,13 +434,18 @@ class _QDuelChallenge(discord.ui.View):
             await interaction.response.defer()
             return
         cid = interaction.channel_id
-        if cid in instance._qduel and instance._qduel[cid]["expires"] > time.monotonic():
+        laeuft = (cid in instance._qduel
+                  and instance._qduel[cid]["expires"] > time.monotonic())
+        # Platz OHNE await reservieren - sonst starten zwei Duelle gleichzeitig und
+        # eines verschluckt beide Einsaetze (siehe _slot_belegen).
+        if laeuft or not instance._slot_belegen("qduel", cid):
             await interaction.response.send_message(
                 "Hier läuft schon ein Quiz-Duell.", ephemeral=True)
             return
         if (economy.get_coins(self.a.id) < self.bet
                 or economy.get_coins(self.b.id) < self.bet):
             self.done = True
+            instance._slot_frei("qduel", cid)
             await interaction.response.edit_message(
                 embed=discord.Embed(description="Einer von euch ist zu pleite. 😅",
                                     color=discord.Color.greyple()), view=None)
@@ -447,6 +467,7 @@ class _QDuelChallenge(discord.ui.View):
             economy.add_coins(self.a.id, vor_a - economy.get_coins(self.a.id))
             economy.add_coins(self.b.id, vor_b - economy.get_coins(self.b.id))
             await economy.flush()
+            instance._slot_frei("qduel", cid)
             await interaction.response.edit_message(
                 embed=discord.Embed(description="Einer von euch ist zu pleite. 😅",
                                     color=discord.Color.greyple()), view=None)
@@ -465,6 +486,7 @@ class _QDuelChallenge(discord.ui.View):
             economy.add_coins(self.a.id, self.bet)
             economy.add_coins(self.b.id, self.bet)
             await economy.flush()
+            instance._slot_frei("qduel", cid)
             try:
                 await self.message.edit(
                     embed=discord.Embed(
@@ -487,6 +509,7 @@ class _QDuelChallenge(discord.ui.View):
         instance._qduel[cid] = {"players": {self.a.id, self.b.id}, "answer": antwort,
                                 "bet": self.bet, "msg": self.message,
                                 "expires": time.monotonic() + QDUEL_TIMEOUT, "token": tok}
+        instance._slot_frei("qduel", cid)   # jetzt steht die Runde im dict
         self.stop()
         _spawn(_qduel_timeout(interaction.channel, tok))
         try:
@@ -649,6 +672,84 @@ class Games:
         self._ana = {}        # channel_id -> laufende Anagramm-Runde
         self._qduel = {}      # channel_id -> laufendes Quiz-Duell
         self._skill_cd = {}   # user_id -> letzte Skill-Spiel-Runde (Anti-Farm)
+        # Kanal-Plaetze, auf denen GERADE eine Runde startet (siehe _slot_belegen).
+        self._starting = set()
+
+    # --- Kanal-Platz reservieren (gegen verschluckte Einsaetze) --------------
+    # Das Muster war ueberall gleich und ueberall falsch: "laeuft hier schon eine
+    # Runde?" pruefen, dann awaiten (Einsatz abbuchen, KI-Frage holen, Nachricht
+    # senden) und ERST DANN die Runde in das dict schreiben. Zwei Leute im selben
+    # Kanal innerhalb dieses Fensters -> beide Einsaetze abgebucht, nur eine Runde
+    # registriert, die verdraengte Runde ist unrettbar (der Watchdog steigt am
+    # Token aus). Gemessen: 10.000 Coins beim Quiz-Duell, 5.000 bei Mathe/Anagramm
+    # ersatzlos vernichtet. Der Platz wird deshalb SYNCHRON reserviert.
+    def _slot_belegen(self, art, cid):
+        """Belegt den Kanal-Platz ohne jedes await. False = da startet schon eine."""
+        key = (art, int(cid))
+        if key in self._starting:
+            return False
+        self._starting.add(key)
+        return True
+
+    def _slot_frei(self, art, cid):
+        self._starting.discard((art, int(cid)))
+
+    # --- Tageskappe fuer Spiel-Gewinne -------------------------------------
+    _tz = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
+
+    def _heute(self):
+        return datetime.now(self._tz).strftime("%Y-%m-%d")
+
+    def _kappe_state(self):
+        """{'day': 'YYYY-MM-DD', 'won': {uid: netto}} in data/games.json."""
+        if self._store is None:
+            return None
+        st = self._store.data.setdefault("daily", {"day": "", "won": {}})
+        heute = self._heute()
+        if st.get("day") != heute:
+            st["day"] = heute
+            st["won"] = {}
+        return st
+
+    def _kappe_rest(self, uid):
+        """Wie viel NETTO-Gewinn dieser Nutzer heute noch bekommen kann."""
+        if GAMES_DAILY_MAX <= 0:
+            return 10 ** 18
+        st = self._kappe_state()
+        if st is None:
+            return GAMES_DAILY_MAX
+        return max(0, GAMES_DAILY_MAX - int(st["won"].get(str(uid), 0) or 0))
+
+    def _kappe_buchen(self, uid, netto):
+        """Merkt einen Netto-Gewinn fuer heute (nur positive Betraege zaehlen)."""
+        if netto <= 0 or GAMES_DAILY_MAX <= 0:
+            return
+        st = self._kappe_state()
+        if st is None:
+            return
+        key = str(uid)
+        st["won"][key] = int(st["won"].get(key, 0) or 0) + int(netto)
+
+    def _auszahlen(self, uid, brutto, einsatz=0, spiel=""):
+        """EINE Tuer fuer jede Spiel-Auszahlung. Der NETTO-Gewinn
+        (brutto - einsatz) wird auf die Tageskappe gekuerzt; der Einsatz selbst
+        kommt immer zurueck. Rueckgabe: was wirklich ausgezahlt wurde."""
+        brutto = max(0, int(brutto))
+        einsatz = max(0, int(einsatz))
+        if brutto <= 0:
+            return 0
+        netto = brutto - einsatz
+        if netto > 0:
+            rest = self._kappe_rest(uid)
+            if netto > rest:
+                netto = rest
+                log.info("Spiel-Gewinn gedeckelt (%s): Tageskappe fuer %s erreicht.",
+                         spiel or "?", uid)
+            self._kappe_buchen(uid, netto)
+        gezahlt = einsatz + max(0, netto)
+        if gezahlt > 0:
+            economy.add_coins(uid, gezahlt, reason=spiel or "spiele")
+        return gezahlt
 
     def _skill_frei(self, uid):
         """Ist die Anti-Farm-Sperre fuer diesen Nutzer gerade offen?"""
@@ -791,7 +892,7 @@ class Games:
             # liessen sich damit hunderte Coins abgreifen.
             if economy.is_enabled() and self._skill_frei(message.author.id):
                 self._skill_cd[message.author.id] = time.monotonic()
-                economy.add_coins(message.author.id, 10)
+                self._auszahlen(message.author.id, 10, 0, "ssp")
                 await economy.flush()
                 return f"{ub} vs {bb} — **Du gewinnst!** 🎉 (+10 Flo Coins)"
             return f"{ub} vs {bb} — **Du gewinnst!** 🎉"
@@ -1051,8 +1152,8 @@ class Games:
         if economy.is_enabled():
             if self._skill_frei(message.author.id):
                 self._skill_cd[message.author.id] = time.monotonic()
-                economy.add_coins(message.author.id, QUIZ_REWARD)
-                reward = f" (+{QUIZ_REWARD} Flo Coins)"
+                gezahlt = self._auszahlen(message.author.id, QUIZ_REWARD, 0, "quiz")
+                reward = f" (+{gezahlt} Flo Coins)" if gezahlt else " (Tageskappe erreicht)"
             await economy.add_xp(message.author, 30)
             await economy.flush()
         try:
@@ -1129,8 +1230,9 @@ class Games:
             if economy.is_enabled():
                 if self._skill_frei(message.author.id):
                     self._skill_cd[message.author.id] = time.monotonic()
-                    economy.add_coins(message.author.id, reward)
-                    extra = f" (+{reward} Flo Coins)"
+                    gezahlt = self._auszahlen(message.author.id, reward, 0, "zahlenraten")
+                    extra = (f" (+{gezahlt} Flo Coins)" if gezahlt
+                             else " (Tageskappe erreicht)")
                 await economy.flush()
             try:
                 await message.reply(
@@ -1309,7 +1411,7 @@ class Games:
         self._event.pop(cid, None)  # erster Treffer gewinnt -> Runde sofort schliessen
         belohnung = ""
         if economy.is_enabled():
-            economy.add_coins(message.author.id, runde["reward"])
+            self._auszahlen(message.author.id, runde["reward"], 0, "event")
             await economy.add_xp(message.author, 20)
             await economy.flush()
             belohnung = f" und schnappt sich **+{runde['reward']} Flo Coins** 💰"
@@ -1378,33 +1480,44 @@ class Games:
 
     async def _start_mathe(self, message, args):
         cid = message.channel.id
-        if cid in self._mathe and self._mathe[cid]["expires"] > time.monotonic():
+        laeuft = cid in self._mathe and self._mathe[cid]["expires"] > time.monotonic()
+        # Platz SYNCHRON belegen (vor dem ersten await), sonst starten zwei Runden
+        # gleichzeitig und die verdraengte frisst ihren Einsatz.
+        if laeuft or not self._slot_belegen("mathe", cid):
             return "Hier rechnet schon jemand. 🧮"
-        uid = message.author.id
-        bet, err = self._take_bet(uid, args)
-        if err:
-            return err
-        if not bet:
-            return f"Kopfrechnen: richtig in {MATHE_TIMEOUT}s = **×2**. {self._bet_hint('mathe')}"
-        aufgabe, loesung = self._mathe_aufgabe()
-        await economy.flush()
-        tok = self._new_token(cid)
-        emb = discord.Embed(title="🧮 Mathe-Blitz",
-                            description=f"## `{aufgabe} = ?`",
-                            color=discord.Color.blurple())
-        emb.set_footer(text=f"{message.author.display_name} · {MATHE_TIMEOUT}s · "
-                            f"richtig = {numfmt.fmt(bet * 2)} Flo Coins")
+        belegt = True
         try:
-            msg = await message.reply(embed=emb, mention_author=False)
-        except discord.HTTPException:
-            economy.add_coins(uid, bet)       # nichts gesendet -> Einsatz zurueck
+            uid = message.author.id
+            bet, err = self._take_bet(uid, args)
+            if err:
+                return err
+            if not bet:
+                return (f"Kopfrechnen: richtig in {MATHE_TIMEOUT}s = **×2**. "
+                        f"{self._bet_hint('mathe')}")
+            aufgabe, loesung = self._mathe_aufgabe()
             await economy.flush()
+            tok = self._new_token(cid)
+            emb = discord.Embed(title="🧮 Mathe-Blitz",
+                                description=f"## `{aufgabe} = ?`",
+                                color=discord.Color.blurple())
+            emb.set_footer(text=f"{message.author.display_name} · {MATHE_TIMEOUT}s · "
+                                f"richtig = {numfmt.fmt(bet * 2)} Flo Coins")
+            try:
+                msg = await message.reply(embed=emb, mention_author=False)
+            except discord.HTTPException:
+                economy.add_coins(uid, bet)   # nichts gesendet -> Einsatz zurueck
+                await economy.flush()
+                return HANDLED
+            self._mathe[cid] = {"uid": uid, "loesung": loesung, "bet": bet, "msg": msg,
+                                "expires": time.monotonic() + MATHE_TIMEOUT, "token": tok}
+            self._slot_frei("mathe", cid)     # Runde steht im dict
+            belegt = False
+            self._protect(msg)
+            self._spawn(self._mathe_timeout(message.channel, tok))
             return HANDLED
-        self._mathe[cid] = {"uid": uid, "loesung": loesung, "bet": bet, "msg": msg,
-                            "expires": time.monotonic() + MATHE_TIMEOUT, "token": tok}
-        self._protect(msg)
-        self._spawn(self._mathe_timeout(message.channel, tok))
-        return HANDLED
+        finally:
+            if belegt:
+                self._slot_frei("mathe", cid)
 
     async def _mathe_timeout(self, channel, token):
         await asyncio.sleep(MATHE_TIMEOUT)
@@ -1431,8 +1544,8 @@ class Games:
         self._new_token(message.channel.id)
         self._release(runde.get("msg"))
         if int(text) == runde["loesung"]:
-            payout = runde["bet"] * 2
-            economy.add_coins(runde["uid"], payout)
+            payout = self._auszahlen(runde["uid"], runde["bet"] * 2,
+                                     runde["bet"], "mathe")
             await economy.flush()
             await self._record(runde["uid"], "mathe", runde["bet"], payout)
             await self._say(message, f"✅ **{runde['loesung']}** – stark! "
@@ -1447,14 +1560,24 @@ class Games:
     # --- Anagramm --------------------------------------------------------------
     async def _start_anagramm(self, message, args):
         cid = message.channel.id
-        if cid in self._ana and self._ana[cid]["expires"] > time.monotonic():
+        laeuft = cid in self._ana and self._ana[cid]["expires"] > time.monotonic()
+        # Platz SYNCHRON belegen - siehe _slot_belegen (sonst verschluckt die
+        # verdraengte Runde ihren Einsatz).
+        if laeuft or not self._slot_belegen("anagramm", cid):
             return "Hier wird schon entwirrt. 🔀"
+        try:
+            return await self._start_anagramm_inner(message, args, cid)
+        finally:
+            self._slot_frei("anagramm", cid)
+
+    async def _start_anagramm_inner(self, message, args, cid):
         uid = message.author.id
         bet, err = self._take_bet(uid, args)
         if err:
             return err
         if not bet:
-            return f"Wort entwirren: richtig in {ANA_TIMEOUT}s = **×3**. {self._bet_hint('anagramm')}"
+            return (f"Wort entwirren: richtig in {ANA_TIMEOUT}s = **×3**, "
+                    f"{ANA_MAX_TRIES} Versuche. {self._bet_hint('anagramm')}")
         # Kandidatenliste einmalig cachen: die Wortliste kann ~300k Eintraege haben
         # (System-Wortliste), ein O(n)-Filter bei JEDEM 'anagramm'-Start blockiert
         # sonst unnoetig den Event-Loop. Ergebnis ist konstant.
@@ -1476,6 +1599,7 @@ class Games:
                             description=f"## `{salat}`\nWelches Wort ist das?",
                             color=discord.Color.blurple())
         emb.set_footer(text=f"{message.author.display_name} · {ANA_TIMEOUT}s · "
+                            f"{ANA_MAX_TRIES} Versuche · "
                             f"richtig = {numfmt.fmt(bet * 3)} Flo Coins")
         try:
             msg = await message.reply(embed=emb, mention_author=False)
@@ -1484,6 +1608,7 @@ class Games:
             await economy.flush()
             return HANDLED
         self._ana[cid] = {"uid": uid, "wort": wort, "bet": bet, "msg": msg,
+                          "tries": 0,
                           "expires": time.monotonic() + ANA_TIMEOUT, "token": tok}
         self._protect(msg)
         self._spawn(self._ana_timeout(message.channel, tok))
@@ -1511,16 +1636,28 @@ class Games:
         if not text or len(text.split()) != 1:
             return False
         if self._fold(text) != self._fold(runde["wort"]):
+            # Begrenzte Versuche: unbegrenztes Weiterraten machte die x3-Auszahlung
+            # praktisch zur Garantie (der Einsatz war nie wirklich in Gefahr).
+            runde["tries"] = int(runde.get("tries", 0)) + 1
+            offen = ANA_MAX_TRIES - runde["tries"]
+            if offen <= 0:
+                self._ana.pop(message.channel.id, None)
+                self._new_token(message.channel.id)
+                self._release(runde.get("msg"))
+                await self._record(runde["uid"], "anagramm", runde["bet"], 0)
+                await self._say(message, f"❌ Aus. Es war **{runde['wort']}**. "
+                                         f"-{numfmt.fmt(runde['bet'])} Flo Coins.")
+                return True
             try:
                 await message.add_reaction("❌")
             except discord.HTTPException:
                 pass
-            return False                       # weiter raten lassen
+            return False                       # noch Versuche offen
         self._ana.pop(message.channel.id, None)
         self._new_token(message.channel.id)
         self._release(runde.get("msg"))
-        payout = runde["bet"] * 3
-        economy.add_coins(runde["uid"], payout)
+        payout = self._auszahlen(runde["uid"], runde["bet"] * 3,
+                                 runde["bet"], "anagramm")
         await economy.flush()
         await self._record(runde["uid"], "anagramm", runde["bet"], payout)
         await self._say(message, f"✅ **{runde['wort']}**! "

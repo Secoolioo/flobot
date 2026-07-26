@@ -50,10 +50,31 @@ class Economy:
 
     # XP-Vergabe
     XP_PER_MSG = (15, 25)        # zufaellig in diesem Bereich pro Nachricht
-    COINS_PER_MSG = (1, 3)       # nebenbei ein paar Coins
     MSG_COOLDOWN = 45            # Sekunden Sperre pro Nutzer (Anti-Spam)
     XP_PER_VOICE_TICK = 10       # XP pro Voice-Runde (Bot-Loop ruft tick_voice auf)
     VOICE_TICK_SECONDS = 60      # nur Info fuer die Ansage; Takt steuert bot.py
+
+    # --- Einkommen (die Grundlage ALLER Shop-Preise) --------------------------
+    # Vorher waren die beiden Welten fuenf Groessenordnungen auseinander: reden und
+    # im Call sitzen brachte ~200 Coins am Tag, ein guter Aktien-Vormittag 20
+    # Millionen. Damit war jeder Shop-Preis entweder Wucher (fuer Normale) oder
+    # Kleingeld (fuer Haendler). Jetzt gibt es eine ehrliche Grundlinie:
+    #
+    #   Reden      ~100 Nachrichten/Tag  ->  ~1.000 Coins   (Cooldown 45 s bremst)
+    #   Voice      3 Stunden/Tag         ->  ~5.400 Coins   (nur mit >=2 im Kanal)
+    #   Tagesbonus 1x/Tag                ->  2.500-4.000 Coins (mit Streak)
+    #   Level-Ups  gelegentlich          ->  Level x 250
+    #   ------------------------------------------------------------------------
+    #   Zusammen: rund 8.000-10.000 Coins an einem normal aktiven Tag.
+    #
+    # ALLE Shop-Preise (Titel, Luxus, Thron, Haendler, Lotto) sind daraus
+    # abgeleitet - siehe titles.py RARITY und luxus.py ITEMS.
+    COINS_PER_MSG = (8, 16)      # pro Nachricht (mit 45 s Cooldown)
+    COINS_PER_VOICE_TICK = 30    # pro Voice-Minute (nur wenn >= 2 im Kanal, nicht taub)
+    DAILY_BASE = 2_500           # Tagesbonus-Grundbetrag
+    DAILY_STREAK_STEP = 250      # je Streak-Tag mehr (bis STREAK_MAX Tage)
+    DAILY_STREAK_MAX = 7
+    LEVELUP_COINS = 250          # x Level
 
     # Muenzeinheit
     COIN = "Flo Coins"
@@ -271,7 +292,7 @@ class Economy:
         prof["xp"] += amount
         after = self._level_only(prof["xp"])
         if after > before:
-            reward = after * 25
+            reward = after * self.LEVELUP_COINS
             # Ebenfalls ueber add_coins - siehe _daily.
             self.add_coins(member.id, reward, reason="levelup")
             return after
@@ -687,6 +708,11 @@ class Economy:
                     continue  # wer taub ist, hoert eh nichts -> kein XP
                 prof = self._profile(m.id)
                 prof["voice_secs"] = prof.get("voice_secs", 0) + self.VOICE_TICK_SECONDS
+                # Im Call sitzen bringt jetzt auch COINS, nicht nur XP. Das ist die
+                # Haupt-Aktivitaet des Servers - vorher war sie die einzige, die
+                # nichts einbrachte, und alle Shop-Preise fuehlten sich falsch an.
+                if self.COINS_PER_VOICE_TICK > 0:
+                    self.add_coins(m.id, self.COINS_PER_VOICE_TICK, reason="voice")
                 new_level = await self.add_xp(m, self.XP_PER_VOICE_TICK)
                 changed = True
                 if new_level is not None:
@@ -1127,8 +1153,8 @@ class Economy:
             last_ord = -999
         prof["streak"] = prof.get("streak", 0) + 1 if last_ord == yesterday else 1
         prof["last_daily"] = today
-        bonus = min(prof["streak"], 7) * 20
-        total = 100 + bonus
+        bonus = min(prof["streak"], self.DAILY_STREAK_MAX) * self.DAILY_STREAK_STEP
+        total = self.DAILY_BASE + bonus
         # ueber add_coins buchen (nicht direkt aufs Profil): nur so laufen der
         # 'insgesamt verdient'-Zaehler UND die automatische Schulden-Tilgung mit.
         # Vorher versprach die Kreide-Tafel "20 % jeder Einnahme", der Tagesbonus

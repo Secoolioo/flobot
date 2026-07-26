@@ -58,48 +58,50 @@ PRESENT_HOURS = float(os.getenv("MERCHANT_PRESENT_HOURS", "1") or "1")
 # --- Der exklusive Titel-Katalog des Haendlers ------------------------------
 # BEWUSST krasser als der normale Flo-Shop: KEIN 'normal'/'selten'-Kram, nur
 # mythisch, legendaer und die brandneue Stufe EXKLUSIV (🔱) - die es im Shop
-# NIEMALS gibt. price = fairer Sonderpreis. Jeder Titel hat eine feste Seltenheit
+# NIEMALS gibt. price = fairer Sonderpreis: JEDER Titel hier ist billiger als
+# dieselbe Stufe im Tages-Shop (titles.py RARITY) - dafuer ist er nur eine
+# Stunde am Tag zu haben. Preise wie ueberall aus dem Tageseinkommen abgeleitet. Jeder Titel hat eine feste Seltenheit
 # (economy schreibt sie beim Kauf ins Inventar -> passende Farb-Rolle).
 _KATALOG = [
     # --- EXKLUSIV (🔱) - gibt's NUR hier, hoeher als Legendaer ---
     {"id": "haendler:weltenherrscher", "text": "Weltenherrscher",
-     "label": "🔱 Weltenherrscher", "rarity": "exklusiv", "price": 120000},
+     "label": "🔱 Weltenherrscher", "rarity": "exklusiv", "price": 620000},
     {"id": "haendler:gottkaiser", "text": "Gottkaiser",
-     "label": "👑 Gottkaiser", "rarity": "exklusiv", "price": 110000},
+     "label": "👑 Gottkaiser", "rarity": "exklusiv", "price": 560000},
     {"id": "haendler:der_eine", "text": "Der Auserwählte",
-     "label": "✴️ Der Auserwählte", "rarity": "exklusiv", "price": 95000},
+     "label": "✴️ Der Auserwählte", "rarity": "exklusiv", "price": 430000},
     {"id": "haendler:sternengott", "text": "Sternengott",
-     "label": "🌌 Sternengott", "rarity": "exklusiv", "price": 100000},
+     "label": "🌌 Sternengott", "rarity": "exklusiv", "price": 480000},
     {"id": "haendler:ewiger", "text": "Der Ewige",
-     "label": "♾️ Der Ewige", "rarity": "exklusiv", "price": 130000},
+     "label": "♾️ Der Ewige", "rarity": "exklusiv", "price": 700000},
     {"id": "haendler:drachenkoenig", "text": "Drachenkönig",
-     "label": "🐲 Drachenkönig", "rarity": "exklusiv", "price": 105000},
+     "label": "🐲 Drachenkönig", "rarity": "exklusiv", "price": 520000},
     # --- Legendär (🟡 gold) - die Kronjuwelen ---
     {"id": "haendler:drachenlord", "text": "Drachenlord",
-     "label": "🐉 Drachenlord", "rarity": "legendary", "price": 45000},
+     "label": "🐉 Drachenlord", "rarity": "legendary", "price": 150000},
     {"id": "haendler:schattenkaiser", "text": "Schattenkaiser",
-     "label": "🌑 Schattenkaiser", "rarity": "legendary", "price": 42000},
+     "label": "🌑 Schattenkaiser", "rarity": "legendary", "price": 135000},
     {"id": "haendler:weltenbrenner", "text": "Weltenbrenner",
-     "label": "🔥 Weltenbrenner", "rarity": "legendary", "price": 48000},
+     "label": "🔥 Weltenbrenner", "rarity": "legendary", "price": 165000},
     {"id": "haendler:goetterbote", "text": "Götterbote",
-     "label": "🪽 Götterbote", "rarity": "legendary", "price": 40000},
+     "label": "🪽 Götterbote", "rarity": "legendary", "price": 120000},
     {"id": "haendler:unsterblich", "text": "Der Unsterbliche",
-     "label": "💀 Der Unsterbliche", "rarity": "legendary", "price": 50000},
+     "label": "💀 Der Unsterbliche", "rarity": "legendary", "price": 175000},
     {"id": "haendler:sturmbaendiger", "text": "Sturmbändiger",
-     "label": "⚡ Sturmbändiger", "rarity": "legendary", "price": 38000},
+     "label": "⚡ Sturmbändiger", "rarity": "legendary", "price": 105000},
     # --- Mythisch (🟣 lila) - der guenstigere Einstieg ---
     {"id": "haendler:sternenjaeger", "text": "Sternenjäger",
-     "label": "🌠 Sternenjäger", "rarity": "mythisch", "price": 15000},
+     "label": "🌠 Sternenjäger", "rarity": "mythisch", "price": 30000},
     {"id": "haendler:nebelwandler", "text": "Nebelwandler",
-     "label": "🌫️ Nebelwandler", "rarity": "mythisch", "price": 12000},
+     "label": "🌫️ Nebelwandler", "rarity": "mythisch", "price": 21000},
     {"id": "haendler:klingentaenzer", "text": "Klingentänzer",
-     "label": "🗡️ Klingentänzer", "rarity": "mythisch", "price": 13500},
+     "label": "🗡️ Klingentänzer", "rarity": "mythisch", "price": 25000},
     {"id": "haendler:runenmeister", "text": "Runenmeister",
-     "label": "🔮 Runenmeister", "rarity": "mythisch", "price": 14000},
+     "label": "🔮 Runenmeister", "rarity": "mythisch", "price": 27000},
     {"id": "haendler:frostfuerst", "text": "Frostfürst",
-     "label": "❄️ Frostfürst", "rarity": "mythisch", "price": 11000},
+     "label": "❄️ Frostfürst", "rarity": "mythisch", "price": 18000},
     {"id": "haendler:phoenix", "text": "Phönix",
-     "label": "🦅 Phönix", "rarity": "mythisch", "price": 16000},
+     "label": "🦅 Phönix", "rarity": "mythisch", "price": 33000},
 ]
 _KATALOG_BY_ID = {e["id"]: e for e in _KATALOG}
 

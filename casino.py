@@ -68,15 +68,25 @@ _RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 _SUITS = ["♠", "♥", "♦", "♣"]
 
 # Keno-Auszahlungstabelle: (getippt, getroffen) -> Faktor
+#
+# NEU BERECHNET. Die alte Tabelle war grob unbalanciert: der Rueckfluss (RTP) lag
+# je nach Anzahl getippter Zahlen zwischen 0,29 und 0,90 - 7 Zahlen zu tippen war
+# eine reine Falle (71 % Verlust pro Einsatz), 2 Zahlen dagegen fast fair. Jetzt
+# hat JEDE Tippanzahl denselben Rueckfluss von rund 94 % (also ~6 % Hausvorteil,
+# wie bei den anderen Spielen), und der hoechste Faktor ist auf x2.000 begrenzt -
+# vorher x1.000 auf 8/8, aber mit voellig anderer Wahrscheinlichkeit dahinter.
+# Nachgerechnet mit der echten Ziehung (10 aus 40):
+#   1 Zahl 93,8 % · 2 94,2 % · 3 95,3 % · 4 95,6 %
+#   5 Zahlen 94,1 % · 6 95,5 % · 7 95,6 % · 8 93,0 %
 _KENO_TABLE = {
-    (1, 1): 3,
-    (2, 1): 1, (2, 2): 9,
-    (3, 2): 2, (3, 3): 16,
-    (4, 2): 1, (4, 3): 5, (4, 4): 40,
-    (5, 3): 2, (5, 4): 15, (5, 5): 100,
-    (6, 3): 1, (6, 4): 5, (6, 5): 40, (6, 6): 200,
-    (7, 4): 3, (7, 5): 20, (7, 6): 100, (7, 7): 500,
-    (8, 4): 2, (8, 5): 10, (8, 6): 50, (8, 7): 200, (8, 8): 1000,
+    (1, 1): 3.75,
+    (2, 1): 1.25, (2, 2): 8,
+    (3, 2): 4.75, (3, 3): 25,
+    (4, 2): 2.5, (4, 3): 6, (4, 4): 80,
+    (5, 3): 8, (5, 4): 20, (5, 5): 300,
+    (6, 3): 4.75, (6, 4): 8, (6, 5): 60, (6, 6): 800,
+    (7, 4): 16, (7, 5): 25, (7, 6): 200, (7, 7): 1500,
+    (8, 4): 8, (8, 5): 15, (8, 6): 90, (8, 7): 500, (8, 8): 2000,
 }
 
 # Roulette: rote Zahlen + Even-Money-Wetten
@@ -624,7 +634,10 @@ class Casino:
         file = discord.File(buf, filename=fn)
         emb = discord.Embed(
             title="🎱 Keno",
-            description=f"**{len(hits)}** von **{len(picks)}** getroffen  →  Faktor **×{numfmt.fmt(mult)}**",
+            # numfmt.fmt rundet auf ganze Zahlen - bei den kleinen Faktoren (x3,75)
+            # stand da sonst "x4", also mehr, als wirklich ausgezahlt wurde.
+            description=(f"**{len(hits)}** von **{len(picks)}** getroffen  →  Faktor "
+                         f"**×{f'{mult:g}'.replace('.', ',') if mult < 10 else numfmt.fmt(mult)}**"),
             color=color)
         emb.set_author(name="🎰 Flo Casino")
         emb.add_field(name=res_name, value=res_val, inline=True)

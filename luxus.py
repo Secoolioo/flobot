@@ -33,30 +33,43 @@ log = logging.getLogger("dcbot.luxus")
 # Sentinel: luxus hat selbst geantwortet -> bot.py schweigt.
 HANDLED = object()
 
-THRONE_START = 50_000
+THRONE_START = 100_000
 THRONE_FACTOR = 1.75          # jede Eroberung: Preis x1.75
 IMPERATOR_ROLE = "🏰 Imperator"
 
 # Katalog: fest, bewusst KEIN Zufall - das sind Lebensziele. 'rang' ordnet
 # die Rahmen (der beste besessene wird angezeigt).
+#
+# PREISE: aus dem gemessenen Tageseinkommen abgeleitet (economy.py: ~8-10k an
+# einem normal aktiven Tag; ein guter Aktien-Vormittag bis ~20 Mio). Jede Stufe
+# kostet ungefaehr das Fuenffache der vorherigen - so bleibt bis zum Imperium
+# etwas zu tun, ohne dass die erste Stufe unerreichbar wird:
+#
+#   Bronze     50.000   ~1 Woche normal spielen
+#   Silber    250.000   ~1 Monat  (oder 1 guter Aktien-Tag)
+#   Gold      1,2 Mio   mehrere gute Aktien-Tage
+#   Diamant     6 Mio
+#   Krone      25 Mio
+#   Galaxie   120 Mio
+#   Imperium    1 Mrd   das Endziel - Wochen, egal wie gut man handelt
 ITEMS = [
     {"n": 1, "key": "bronze", "name": "Bronze-Rahmen", "emoji": "🥉",
-     "preis": 15_000, "art": "rahmen", "rang": 1, "farbe": 0xCD7F32,
+     "preis": 50_000, "art": "rahmen", "rang": 1, "farbe": 0xCD7F32,
      "desc": "Deine Level-Karte in edlem Bronze."},
     {"n": 2, "key": "silber", "name": "Silber-Rahmen", "emoji": "🥈",
-     "preis": 75_000, "art": "rahmen", "rang": 2, "farbe": 0xC0C7CE,
+     "preis": 250_000, "art": "rahmen", "rang": 2, "farbe": 0xC0C7CE,
      "desc": "Silber-Look fuer die Level-Karte."},
     {"n": 3, "key": "gold", "name": "Gold-Rahmen", "emoji": "🥇",
-     "preis": 400_000, "art": "rahmen", "rang": 3, "farbe": 0xF1C40F,
+     "preis": 1_200_000, "art": "rahmen", "rang": 3, "farbe": 0xF1C40F,
      "desc": "Gold + Funkeln auf der Level-Karte."},
     {"n": 4, "key": "diamant", "name": "Diamant-Rahmen", "emoji": "💎",
-     "preis": 2_500_000, "art": "rahmen", "rang": 4, "farbe": 0x78DCFF,
+     "preis": 6_000_000, "art": "rahmen", "rang": 4, "farbe": 0x78DCFF,
      "desc": "Eisblauer Diamant-Doppelrahmen."},
     {"n": 5, "key": "krone", "name": "Königskrone", "emoji": "👑",
-     "preis": 20_000_000, "art": "krone", "rang": 0, "farbe": 0xF1C40F,
+     "preis": 25_000_000, "art": "krone", "rang": 0, "farbe": 0xF1C40F,
      "desc": "Krone neben deinem Namen im Leaderboard."},
     {"n": 6, "key": "galaxie", "name": "Galaxie-Rahmen", "emoji": "🌌",
-     "preis": 150_000_000, "art": "rahmen", "rang": 5, "farbe": 0x9B59B6,
+     "preis": 120_000_000, "art": "rahmen", "rang": 5, "farbe": 0x9B59B6,
      "desc": "Galaxie-Rand mit Sternen - kaum jemand wird das je sehen."},
     {"n": 7, "key": "imperium", "name": "FLO-IMPERIUM", "emoji": "🏰",
      "preis": 1_000_000_000, "art": "imperium", "rang": 6, "farbe": 0xE74C3C,

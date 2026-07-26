@@ -111,9 +111,24 @@ def test_roulette_auszahlung():
 
 # --- Keno-Tabelle -----------------------------------------------------------------
 def test_keno_tabelle():
-    assert casino._KENO_TABLE[(1, 1)] == 3
-    assert casino._KENO_TABLE[(8, 8)] == 1000
+    """Jede Tippanzahl muss denselben Rueckfluss haben. Vorher lag der RTP je nach
+    Anzahl zwischen 0,29 (7 Zahlen - reine Falle) und 0,90 (2 Zahlen)."""
+    from math import comb
     assert (3, 1) not in casino._KENO_TABLE   # zu wenig Treffer -> nichts
+
+    def p(k, hit):                            # Ziehung: 10 aus 40
+        return comb(k, hit) * comb(40 - k, 10 - hit) / comb(40, 10)
+
+    for k in range(1, 9):
+        stufen = sorted(h for (kk, h) in casino._KENO_TABLE if kk == k)
+        assert stufen, k
+        # Faktoren muessen mit den Treffern STEIGEN (sonst ist die Tabelle kaputt).
+        werte = [casino._KENO_TABLE[(k, h)] for h in stufen]
+        assert werte == sorted(werte) and len(set(werte)) == len(werte), (k, werte)
+        assert stufen[-1] == k                # Volltreffer zahlt immer
+        rtp = sum(p(k, h) * casino._KENO_TABLE[(k, h)] for h in stufen)
+        assert 0.90 <= rtp <= 0.97, (k, round(rtp, 4))   # Hausvorteil ~6 %
+        assert max(werte) <= 2000, (k, max(werte))        # kein Tail-Risk-Monster
 
 
 # --- Wort-Zaehler ------------------------------------------------------------------
@@ -736,13 +751,23 @@ def test_cmdnorm_admin_sicherheit():
 
 # --- Luxus-Shop ------------------------------------------------------------------
 def test_luxus_katalog():
+    """Preisleiter: erreichbarer Einstieg, spuerbare Stufen, 1 Mrd als Endziel.
+    Die Preise sind aus dem Tageseinkommen abgeleitet (economy.py) - ein normal
+    aktiver Tag bringt rund 8-10k, ein guter Aktien-Vormittag bis ~20 Mio."""
     preise = [i["preis"] for i in luxus.ITEMS]
     assert preise == sorted(preise), "Katalog muss nach Preis aufsteigen"
-    assert preise[0] == 15_000                      # Einstieg erreichbar
+    assert len(set(preise)) == len(preise), "keine zwei gleich teuren Stufen"
+    # Einstieg: ein paar Tage normal spielen, nicht ein Monat.
+    assert 20_000 <= preise[0] <= 80_000, preise[0]
     assert preise[-1] == 1_000_000_000              # das 1-Mrd-Endziel
+    # Jede Stufe muss sich deutlich anfuehlen (mind. x3), aber keine Mauer sein.
+    for a, b in zip(preise, preise[1:]):
+        assert 3.0 <= b / a <= 10.0, (a, b, round(b / a, 2))
     assert len({i["key"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
     assert len({i["n"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
     assert luxus.THRONE_FACTOR > 1.0                # Thron wird immer teurer
+    # Der Thron ist ein Zwischenziel, kein Einstieg.
+    assert luxus.THRONE_START >= preise[0]
 
 
 def test_luxus_fmt_coins():
@@ -1267,11 +1292,18 @@ def test_floaktie_market():
         asyncio.run(fa.sell(SimpleNamespace(id=3), 100))
         assert economy.get_coins(3) < start and fa.shares_of(3) == 0
 
-        # Aktien auf KREDIT: zu wenig Coins -> trotzdem Kauf, Konto geht INS MINUS.
+        # Aktien auf KREDIT (Hebel): mit eigenem Geld als Sicherheit darf man ins
+        # MINUS gehen - aber nur bis Guthaben + Sicherheit. Ein Konto mit 10 Coins
+        # kauft deshalb nur, was diese 20 Coins hergeben (also nichts).
         economy.instance._profile(4)["coins"] = 10
         r = asyncio.run(fa.buy(SimpleNamespace(id=4), 100))
-        assert isinstance(r, str) and fa.shares_of(4) == 100
-        assert economy.get_coins(4) < 0 and "MINUS" in r
+        assert isinstance(r, str) and fa.shares_of(4) == 0, r
+        assert economy.get_coins(4) == 10 and "Kredit" in r
+        # Mit echtem Guthaben greift der Hebel: Kauf ueber dem Guthaben -> Minus.
+        economy.instance._profile(5)["coins"] = 60_000
+        r = asyncio.run(fa.buy(SimpleNamespace(id=5), 100))
+        assert isinstance(r, str) and fa.shares_of(5) > 0, r
+        assert economy.get_coins(5) < 0 and "MINUS" in r
 
         # Aktivitaets-Takt: viel los -> Kurs STEIGT, wenig -> faellt (Rauschen aus).
         floaktie.TICK_NOISE = 0.0
@@ -1923,6 +1955,80 @@ def test_exploit_fixes_games_und_steal():
     assert economy.parse_amount("-5") is None
 
 
+def test_exploit_kurspump_und_verschluckte_einsaetze():
+    """REGRESSION für die drei im zweiten Audit BEWIESENEN Löcher:
+
+    1) Aktien-Kauf auf Kredit ohne eigenes Geld: Wegwerf-Konten (Guthaben 0)
+       konnten Anteile kaufen und damit den Kurs hochtreiben, das Hauptkonto
+       verkaufte oben. Gemessen: 300.000 -> 429.227, also +129.227 aus dem Nichts,
+       plus 1,17 Mio uneinbringliche Schuld auf leeren Konten.
+    2) Quiz-Duell: 'läuft hier schon eins?' wurde vor der (langsamen) KI-Frage
+       geprüft, die Runde aber erst danach registriert -> zwei Duelle gleichzeitig,
+       10.000 Coins ersatzlos vernichtet.
+    3) Mathe/Anagramm: derselbe Fehler, Fenster = ein Discord-Roundtrip."""
+    import floaktie
+    import games
+
+    # --- 1) Kein Kredit ohne Sicherheit ---------------------------------
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    restore = _with_economy({1: 300_000, 201: 0, 202: 0, 203: -50_000})
+    fa._enabled = True
+    fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x",
+                            "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
+                            "leer_min": 0.0, "holdings": {}, "history": [], "ticks": []})
+    fa._sync_price()
+    try:
+        # Leeres bzw. negatives Konto: kauft GAR NICHTS und bewegt den Kurs nicht.
+        for uid in (201, 202, 203):
+            kurs_vor = fa.price()
+            r = asyncio.run(fa.buy(SimpleNamespace(id=uid), 150))
+            assert isinstance(r, str) and "Sicherheit" in r, (uid, r)
+            assert fa.shares_of(uid) == 0 and fa.price() == kurs_vor, uid
+            assert economy.get_coins(uid) >= min(0, -50_000)   # keine neue Schuld
+        # Mit eigenem Geld geht es - inklusive Hebel, aber nur bis zur Sicherheit.
+        rahmen = fa._kaufrahmen(economy.get_coins(1))
+        # Guthaben + Sicherheit, Sicherheit gedeckelt durch die Kreditlinie.
+        assert rahmen == 300_000 + min(floaktie.KREDIT_LINIE, 300_000), rahmen
+        assert fa._kaufrahmen(0) == 0 and fa._kaufrahmen(-9_999) == 0
+        assert fa._kaufrahmen(1_000) == 2_000        # kleines Konto: doppelt
+        r = asyncio.run(fa.buy(SimpleNamespace(id=1), 150))
+        assert fa.shares_of(1) == 150, r
+        # Round-Trip bleibt ein Verlust (kein risikoloser Gewinn).
+        vorher = economy.get_coins(1)
+        asyncio.run(fa.sell(SimpleNamespace(id=1), 150))
+        assert economy.get_coins(1) > vorher          # Erlös kommt an ...
+        assert economy.get_coins(1) < 300_000, economy.get_coins(1)   # ... aber netto Minus
+    finally:
+        fa._store, fa._enabled = alt
+        restore()
+
+    # --- 2+3) Kanal-Platz wird SYNCHRON belegt --------------------------
+    g = games.instance
+    alt_start = set(g._starting)
+    try:
+        g._starting = set()
+        assert g._slot_belegen("mathe", 42) is True
+        assert g._slot_belegen("mathe", 42) is False      # zweiter Start prallt ab
+        assert g._slot_belegen("anagramm", 42) is True    # anderes Spiel, egal
+        assert g._slot_belegen("mathe", 43) is True       # anderer Kanal, egal
+        g._slot_frei("mathe", 42)
+        assert g._slot_belegen("mathe", 42) is True
+    finally:
+        g._starting = alt_start
+    # Und die Reservierung muss VOR dem ersten await stehen - sonst nutzt sie nichts.
+    quelle = open("games.py", encoding="utf-8").read()
+    for art, marke in (("qduel", '_slot_belegen("qduel"'),
+                       ("mathe", '_slot_belegen("mathe"'),
+                       ("anagramm", '_slot_belegen("anagramm"')):
+        i = quelle.index(marke)
+        # zwischen Kanal-Prüfung und Reservierung darf kein 'await' liegen
+        vor = quelle[max(0, i - 300):i]
+        assert "await" not in vor.split("laeuft")[-1], art
+        # und jeder Pfad gibt den Platz wieder frei
+        assert f'_slot_frei("{art}"' in quelle, art
+
+
 def test_floaktie_chart_serie():
     """REGRESSION (Dashboard-Chart war falsch): Die Kurs-Reihe muss aus den FEINEN
     Intraday-Ticks kommen (nicht nur aus den Tages-Schlusskursen) und IMMER auf dem
@@ -2209,11 +2315,24 @@ def test_audit_geld_und_rechte():
     g._skill_cd[42] = time.monotonic()
     assert g._skill_frei(42) is False and g._skill_rest(42) > 0
     quelle = open("games.py", encoding="utf-8").read()
-    # Die drei Belohnungen haengen jetzt alle an der Anti-Farm-Sperre.
-    for stelle in ("QUIZ_REWARD)", "economy.add_coins(message.author.id, reward)",
-                   "economy.add_coins(message.author.id, 10)"):
+    # Die drei Belohnungen haengen jetzt alle an der Anti-Farm-Sperre - und
+    # laufen zusaetzlich durch die TAGESKAPPE (_auszahlen).
+    for stelle in ('QUIZ_REWARD, 0, "quiz"', 'reward, 0, "zahlenraten"',
+                   '10, 0, "ssp"'):
         i = quelle.index(stelle)
         assert "_skill_frei" in quelle[max(0, i - 400):i], stelle
+        assert "_auszahlen" in quelle[max(0, i - 120):i], stelle
+    # Jede Auszahlung mit positivem Erwartungswert MUSS durch _auszahlen laufen,
+    # sonst ist sie wieder ein Wasserhahn ohne Tageskappe.
+    for stelle in ('"reaktion")', '"mathe")', '"anagramm")', '"event")'):
+        assert stelle in quelle, stelle
+    g._store = _FakeStore({"counting": {}})
+    assert g._kappe_rest(4711) == games.GAMES_DAILY_MAX
+    g._kappe_buchen(4711, games.GAMES_DAILY_MAX - 100)
+    assert g._kappe_rest(4711) == 100
+    g._kappe_buchen(4711, 999_999)
+    assert g._kappe_rest(4711) == 0
+    g._store = None
 
     # 4) Moderation: der Auto-Timeout nach Verwarnungen muss dieselbe Rangordnung
     #    achten wie ein direkter Timeout (sonst knebelt ein Junior-Mod einen Senior).
