@@ -1601,6 +1601,19 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             fa._activity_tick(10, 20, streams=10)
         assert fa.price() > 2500, fa.price()          # nach 1 h fast verdreifacht
 
+        # 4b) REGRESSION (EMA-Rest): steht nach viel Aktivitaet noch ein winziger
+        #     EMA-Rest im Zustand, DARF der Kurs im Leerlauf trotzdem nicht
+        #     "steigen". Vorher gab drift_fuer(0.03) den Mindest-Anstieg (+0,48%/h)
+        #     zurueck, obwohl niemand mehr da war - genau der gemeldete Bug.
+        fa._store = _FakeStore({"price": 33_586, "base": 33_586.0, "day": "x",
+                               "act_ema": 0.03, "msg_count": 0, "last_msg_count": 0,
+                               "holdings": {}, "history": [], "ticks": [],
+                               "leer_min": 0.0})
+        fa._sync_price()
+        _a, _n, d, akt = fa._activity_tick(0, 0)            # niemand da
+        assert d < 0, (d, akt)                              # muss FALLEN
+        assert fa._state()["act_ema"] == 0.0               # EMA-Rest ist weg
+
         # 5) Toter Server: sinkt GESTAFFELT - kurze Pause tut kaum was, langer
         #    Leerlauf laesst den Kurs deutlich einbrechen (das war der Wunsch:
         #    "die muss doch sinken wenn nix los ist").

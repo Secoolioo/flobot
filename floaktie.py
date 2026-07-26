@@ -605,38 +605,38 @@ class FloAktie:
         return max(IDLE_DECAY, IDLE_RATE * anteil)
 
     def _activity_tick(self, people, msgs_since, streams=0, video=0):
-        """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet)."""
+        """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet).
+
+        Die Richtung (steigt/faellt) entscheidet die ECHTE, aktuelle Aktivitaet -
+        NICHT das geglaettete EMA. Das war der Bug: das EMA klingt nur langsam ab
+        und wird von jeder alten Nachricht nachbefeuert, erreichte also fast nie
+        exakt 0. Solange es minimal ueber 0 stand, gab drift_fuer den
+        Mindest-Anstieg (MIN_UP, +0,48 %/h) zurueck - der Kurs "stieg" also, obwohl
+        seit Stunden niemand da war."""
         st = self._state()
-        activity = self.activity_of(people, streams, video, msgs_since)
-        # Asymmetrisch geglaettet: mehr Aktivitaet wird fast sofort uebernommen,
-        # weniger nur langsam - so sieht man den Anstieg, und eine kurze Pause
-        # wuergt den Kurs nicht ab.
-        alt_ema = float(st.get("act_ema", 0.0) or 0.0)
-        alpha = ACT_ALPHA_UP if activity >= alt_ema else ACT_ALPHA_DOWN
-        ema = alpha * activity + (1 - alpha) * alt_ema
-        st["act_ema"] = ema
-        # Leerlauf-Zaehler: zaehlt zusammenhaengende Minuten OHNE echte Aktivitaet
-        # (roher Messwert, nicht das geglaettete EMA) - er treibt den Verfall.
         roh_aktiv = self.activity_of(people, streams, video, msgs_since)
+        alt_ema = float(st.get("act_ema", 0.0) or 0.0)
         if roh_aktiv > 0:
+            # Jemand ist da -> Kurs steigt. Tempo geglaettet, damit ein kurzer
+            # Ausreisser nicht sofort voll durchschlaegt.
+            alpha = ACT_ALPHA_UP if roh_aktiv >= alt_ema else ACT_ALPHA_DOWN
+            ema = alpha * roh_aktiv + (1 - alpha) * alt_ema
+            st["act_ema"] = ema
             st["leer_min"] = 0.0
-        else:
-            st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + 1.0
-        basis = self.drift_fuer(ema)
-        if basis > 0:
-            # Solange jemand da ist, faellt der Kurs NIE - das Boersen-Rauschen
-            # darf einen Anstieg hoechstens abschwaechen, nicht umdrehen.
+            basis = self.drift_fuer(ema)
+            # Solange jemand da ist, faellt der Kurs NIE - das Rauschen darf einen
+            # Anstieg hoechstens abschwaechen, nicht umdrehen.
             drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
-        elif basis < 0:
-            # Beim SINKEN kein Rauschen: der Verfall soll klar sichtbar sein und
-            # nicht von Zufalls-Aufwaertstupfern ueberdeckt werden (vorher stieg
-            # der Kurs in ~30 % der Leerlauf-Minuten sogar).
-            drift = basis
         else:
-            # Steht der Kurs weit ueber seinem Wert, geht es SEITWAERTS - hier
-            # bewusst OHNE Rauschen: mit Rauschen plus der Klemme oben waere das
-            # ein reiner Aufwaerts-Zufallslauf (gemessen +14 %/Tag aus nichts).
-            drift = 0.0
+            # WIRKLICH leer -> Kurs faellt gestaffelt. EMA HART auf 0 (kein
+            # Nachhall mehr), damit auch das Panel "0.0 Punkte" mit fallendem Kurs
+            # zeigt und nicht den Mindest-Anstieg.
+            ema = 0.0
+            st["act_ema"] = 0.0
+            st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + 1.0
+            # Beim SINKEN kein Rauschen - der Verfall soll klar sichtbar sein.
+            drift = self.drift_fuer(0.0)
+        activity = roh_aktiv
         alt = self.price()
         # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
         # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
