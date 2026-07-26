@@ -3489,6 +3489,75 @@ def test_bilder_grosse_zahlen():
         assert d.textlength(r._coin_kurz(v), font=f) < 170, v
 
 
+def test_seltenheiten_ueberall_bekannt():
+    """Eine neue Seltenheitsstufe muss AN JEDER Stelle mitspielen. Die Kartierung
+    hat vier Stellen gefunden, an denen sie stillschweigend gefehlt hat:
+    die Shop-Ansage (nur 'legendary'), der Kauf-Text (feste Zweier-Liste), das
+    Web-Panel (kannte drei Stufen nicht) und das Leaderboard (Titel farblos)."""
+    import leaderboard_img
+    import titles
+
+    # 1) Shop-Ansage: JEDE Stufe ab 'legendary' wird ausgerufen, nicht nur eine.
+    bot_quelle = open("bot.py", encoding="utf-8").read()
+    i = bot_quelle.index("highlights = [i for i in st.get(\"items\", [])")
+    block = bot_quelle[i - 300:i + 300]
+    assert 'rarity") == "legendary"' not in block, "Ansage haengt wieder an einer Stufe"
+    assert "titles.RANK" in block
+
+    # 2) Kauf-Text: 'Flo redet entspannt' gilt ab Mythisch AUFWAERTS.
+    eco_quelle = open("economy.py", encoding="utf-8").read()
+    j = eco_quelle.index("ab jetzt redet Flo richtig entspannt")
+    assert 'in ("mythisch", "legendary")' not in eco_quelle[j:j + 300]
+    assert "titles.RANK" in eco_quelle[j:j + 300]
+
+    # 3) Web-Panel kennt ALLE Stufen - Liste und CSS-Klassen.
+    panel = open("webpanel.html", encoding="utf-8").read()
+    for r in titles.RARITY_ORDER:
+        assert f'["{r}",' in panel, f"Panel-Liste ohne {r}"
+        assert f".chip.rar-{r}{{" in panel, f"Panel-CSS ohne {r}"
+
+    # 4) Leaderboard: Titel in der Farbe seiner Stufe.
+    lb = leaderboard_img.instance
+    for r in titles.RARITY_ORDER:
+        wert = titles.RARITY[r]["color"]
+        assert lb._rarity_color(r) == ((wert >> 16) & 255, (wert >> 8) & 255, wert & 255)
+    assert lb._rarity_color("") is None
+    assert lb._rarity_color("gibtsnicht") is None      # nie ein Absturz
+    # ... und Milliarden werden richtig gekuerzt (vorher "3000M").
+    assert lb._fmt_num(3_000_000_000) == "3 Mrd"
+    assert lb._fmt_num(2_500_000_000) == "2,5 Mrd"
+    assert lb._fmt_num(2_500_000) == "2.5M"
+    assert lb._fmt_num(1234) == "1.2k"
+    assert lb._fmt_num(0) == "0"
+
+    # 5) Luxus-Farben duerfen sich nicht mit den Titel-Stufen doppeln (zwei Dinge
+    #    in derselben Farbe sind im Discord nicht unterscheidbar). Der Gold-Rahmen
+    #    darf golden sein wie 'legendary' - das ist eine andere Oberflaeche.
+    titel_farben = {titles.RARITY[r]["color"]: r for r in titles.RARITY_ORDER}
+    doppelt = [(i["key"], titel_farben[i["farbe"]]) for i in luxus.ITEMS
+               if i["farbe"] in titel_farben]
+    assert [k for k, _ in doppelt] == ["gold"], doppelt
+    assert len({i["farbe"] for i in luxus.ITEMS}) == len(luxus.ITEMS)
+
+    # 6) Der Notnagel in _grenzen(): faellt die pool_pct-Summe unter 100, bekommt
+    #    die HAEUFIGSTE Stufe den Rest - nicht die seltenste (die waere sonst
+    #    ploetzlich sechsmal so haeufig).
+    t = titles.instance
+    alt_pct = titles.RARITY["normal"]["pool_pct"]
+    alt_cache = t.__dict__.get("_grenz_cache")
+    try:
+        titles.RARITY["normal"]["pool_pct"] = alt_pct - 5      # Summe 95
+        t.__dict__["_grenz_cache"] = None
+        grenzen = dict((r, g) for g, r in t._grenzen())
+        assert grenzen["relikt"] == 100
+        # 'relikt' behaelt seine Breite von 1 Punkt.
+        vorletzte = max(g for g, r in t._grenzen() if r != "relikt")
+        assert grenzen["relikt"] - vorletzte == 1, t._grenzen()
+    finally:
+        titles.RARITY["normal"]["pool_pct"] = alt_pct
+        t.__dict__["_grenz_cache"] = alt_cache
+
+
 def test_seltenheits_rollen_werden_gepflegt():
     """Flo baut die Rollen selbst: fehlende anlegen, geaenderte Farben nachziehen,
     alte Namen umbenennen. Ohne das haengen nach einer Farb-Aenderung Rollen in der

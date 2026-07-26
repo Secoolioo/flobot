@@ -73,7 +73,10 @@ _X_NAME = 142         # Name beginnt rechts vom Avatar
 _NAME_W = 256
 _X_MSG = 410          # Balken-Start Nachrichten
 _BAR_W = 188          # Balken-Breite (beide Gauges gleich)
-_X_VOICE = 712        # Balken-Start Voice
+_X_VOICE = 700        # Balken-Start Voice
+# Der Voice-Balken ist etwas kuerzer als der Nachrichten-Balken: rechts daneben
+# steht die Zeit, und "327h 46m" lief vorher bis an den Bildrand.
+_VOICE_BAR_W = 150
 
 
 class LeaderboardImg:
@@ -111,12 +114,31 @@ class LeaderboardImg:
         """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🗿 Sigma' -> 'Sigma')."""
         return re.sub(r"^\W+", "", title or "").strip()
 
+    def _rarity_color(self, rarity):
+        """RGB der Seltenheitsstufe (oder None). Lazy-Import, damit das Bild-Modul
+        ohne titles.py weiter funktioniert."""
+        if not rarity:
+            return None
+        try:
+            import titles
+            wert = int(titles.RARITY[rarity]["color"])
+        except Exception:  # noqa: BLE001 - unbekannte Stufe -> normale Farbe
+            return None
+        return ((wert >> 16) & 255, (wert >> 8) & 255, wert & 255)
+
     def _fmt_num(self, n):
-        """1234 -> '1.2k', 2500000 -> '2.5M' (kompakt fuer enge Spalten)."""
+        """1234 -> '1.2k', 2.5 Mio -> '2.5M', 3 Mrd -> '3 Mrd' (enge Spalten).
+
+        Milliarden fehlten: aus 3.000.000.000 wurde '3000M', was weder stimmt noch
+        lesbar ist - seit der Wirtschafts-Umstellung sind Milliarden normal."""
         n = int(n)
-        if n >= 1_000_000:
+        if abs(n) >= 1_000_000_000:
+            v = n / 1_000_000_000
+            txt = (f"{v:.1f}" if abs(v) < 100 else f"{v:.0f}").replace(".0", "")
+            return f"{txt.replace('.', ',')} Mrd"
+        if abs(n) >= 1_000_000:
             return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
-        if n >= 1000:
+        if abs(n) >= 1000:
             return f"{n / 1000:.1f}k".replace(".0k", "k")
         return str(n)
 
@@ -344,10 +366,18 @@ class LeaderboardImg:
                                  _GOLD if r.get("throne") else _SILVER)
             meta = f"Lvl {r.get('level', 0)}  ·  {self._fmt_num(r.get('coins', 0))} Coins"
             clean = self._clean_title(r.get("title", ""))
+            # Der Titel wird in der FARBE SEINER STUFE gezeichnet (vorher grau wie
+            # alles andere - ein goettlicher 90-Mio-Titel sah aus wie ein 500er).
+            rar_col = self._rarity_color(r.get("title_rarity", ""))
+            basis = self._truncate(d, meta + ("  ·  " if clean else ""),
+                                   f_meta, _NAME_W + 8)
+            d.text((_X_NAME, cy + 4), basis, font=f_meta, fill=_FG_DIM)
             if clean:
-                meta += f"  ·  {clean}"
-            meta = self._truncate(d, meta, f_meta, _NAME_W + 8)
-            d.text((_X_NAME, cy + 4), meta, font=f_meta, fill=_FG_DIM)
+                bx = _X_NAME + d.textlength(basis, font=f_meta)
+                platz = max(0, (_X_NAME + _NAME_W + 8) - bx)
+                clean = self._truncate(d, clean, f_meta, platz)
+                d.text((bx, cy + 4), clean, font=f_meta,
+                       fill=rar_col or _FG_DIM)
 
             # --- Gauge: Nachrichten (Spaltenkopf labelt sie oben) ---
             self._gauge(d, _X_MSG, cy - 8, _BAR_W, 16,
@@ -356,10 +386,10 @@ class LeaderboardImg:
                    self._fmt_num(r.get("msgs", 0)), font=f_val, fill=_FG)
 
             # --- Gauge: Voice-Zeit ---
-            self._gauge(d, _X_VOICE, cy - 8, _BAR_W, 16,
+            self._gauge(d, _X_VOICE, cy - 8, _VOICE_BAR_W, 16,
                         r.get("voice_secs", 0) / max_voice, _GREEN)
-            d.text((_X_VOICE + _BAR_W + 12, cy - 11),
-                   self._fmt_voice(r.get("voice_secs", 0)), font=f_val, fill=_FG)
+            d.text((_W - _PAD, cy - 11), self._fmt_voice(r.get("voice_secs", 0)),
+                   font=f_val, fill=_FG, anchor="ra")
 
         self._draw_footer(d, n, height)
 

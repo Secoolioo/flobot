@@ -806,8 +806,11 @@ class Economy:
         prof["title_rarity"] = item["rarity"]
         await self._sync_role(member)
         await self._flush()
+        # Ab Mythisch AUFWAERTS (also auch Relikt/Exklusiv/Göttlich) wird Flo
+        # merklich freundlicher - vorher stand hier eine feste Zweier-Liste, in der
+        # jede neue Spitzen-Stufe gefehlt haette.
         chill = ("ab jetzt redet Flo richtig entspannt mit dir 😌"
-                 if item["rarity"] in ("mythisch", "legendary")
+                 if titles.RANK.get(item["rarity"], -1) >= titles.RANK.get("mythisch", 99)
                  else "Flo spricht dich ab jetzt damit an")
         return (f"🎉 Gekauft! Du trägst jetzt **{item['label']}** "
                 f"({meta['emoji']} {meta['label']}) und hast die Rolle "
@@ -1191,6 +1194,10 @@ class Economy:
                 "voice_secs": prof.get("voice_secs", 0),
                 "msgs": prof.get("msgs", 0),
                 "title": prof.get("title") or "",
+                # Stufe mitgeben, damit das Leaderboard den Titel in SEINER Farbe
+                # zeichnen kann - vorher stand er farblos in der grauen Meta-Zeile,
+                # und man sah einem 90-Mio-Titel nichts an.
+                "title_rarity": prof.get("title_rarity") or "",
             })
         return out
 

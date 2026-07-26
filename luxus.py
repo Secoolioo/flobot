@@ -42,6 +42,10 @@ IMPERATOR_ROLE = "🏰 Imperator"
 # Katalog: fest, bewusst KEIN Zufall - das sind Lebensziele. 'rang' ordnet
 # die Rahmen (der beste besessene wird angezeigt).
 #
+# FARBEN muessen sich von den Titel-Stufen (titles.py RARITY) unterscheiden:
+# zwei verschiedene Dinge in derselben Farbe sind im Discord nicht auseinander-
+# zuhalten. Nova war exakt die Relikt-Farbe, Multiversum exakt die Goettlich-Farbe.
+#
 # PREISE: aus dem gemessenen Tageseinkommen abgeleitet (economy.py: ~8-10k an
 # einem normal aktiven Tag; ein guter Aktien-Vormittag bis ~20 Mio). Jede Stufe
 # kostet ungefaehr das Fuenffache der vorherigen - so bleibt bis zum Imperium
@@ -53,7 +57,10 @@ IMPERATOR_ROLE = "🏰 Imperator"
 #   Diamant     6 Mio
 #   Krone      25 Mio
 #   Galaxie   120 Mio
-#   Imperium    1 Mrd   das Endziel - Wochen, egal wie gut man handelt
+#   Imperium    1 Mrd   war bis heute das Endziel
+#   Nova      1,6 Mrd   ab hier: Monate konsequenter Aktienhandel
+#   Singul.   2,2 Mrd
+#   Multivers.  3 Mrd   das Ende der Leiter (Steuer-Gleichgewicht ~3,4 Mrd)
 ITEMS = [
     {"n": 1, "key": "bronze", "name": "Bronze-Rahmen", "emoji": "🥉",
      "preis": 50_000, "art": "rahmen", "rang": 1, "farbe": 0xCD7F32,
@@ -68,7 +75,7 @@ ITEMS = [
      "preis": 6_000_000, "art": "rahmen", "rang": 4, "farbe": 0x78DCFF,
      "desc": "Eisblauer Diamant-Doppelrahmen."},
     {"n": 5, "key": "krone", "name": "Königskrone", "emoji": "👑",
-     "preis": 25_000_000, "art": "krone", "rang": 0, "farbe": 0xF1C40F,
+     "preis": 25_000_000, "art": "krone", "rang": 0, "farbe": 0xE0A21A,
      "desc": "Krone neben deinem Namen im Leaderboard."},
     {"n": 6, "key": "galaxie", "name": "Galaxie-Rahmen", "emoji": "🌌",
      "preis": 120_000_000, "art": "rahmen", "rang": 5, "farbe": 0x9B59B6,
@@ -83,7 +90,7 @@ ITEMS = [
     # konsequentem Handel (die Vermoegenssteuer laesst das Gleichgewicht bei
     # rund 3,4 Mrd liegen - siehe economy.TAX_SOFT).
     {"n": 8, "key": "nova", "name": "NOVA-AURA", "emoji": "☄️",
-     "preis": 1_600_000_000, "art": "rahmen", "rang": 7, "farbe": 0xFF7A18,
+     "preis": 1_600_000_000, "art": "rahmen", "rang": 7, "farbe": 0xFFE9A3,
      "desc": "Weissglühender Rand mit Nova-Schweif. Ab hier reden Leute "
              "ueber dich, wenn du nicht im Call bist."},
     {"n": 9, "key": "singularitaet", "name": "SINGULARITÄT", "emoji": "🕳️",
@@ -91,7 +98,7 @@ ITEMS = [
      "desc": "Deine Karte hat kein Licht mehr, das entkommt. Schwarzer "
              "Rand mit Akkretions-Ring."},
     {"n": 10, "key": "multiversum", "name": "FLO-MULTIVERSUM", "emoji": "🌠",
-     "preis": 3_000_000_000, "art": "multiversum", "rang": 9, "farbe": 0x00E5FF,
+     "preis": 3_000_000_000, "art": "multiversum", "rang": 9, "farbe": 0xB4FF39,
      "desc": "Das Ende der Leiter. ALLES darunter inklusive, dazu ein "
              "prismatischer Rahmen, den es genau einmal geben kann."},
 ]

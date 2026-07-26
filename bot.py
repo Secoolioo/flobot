@@ -42,6 +42,7 @@ import merchant
 import moderation
 import music
 import numfmt
+import titles
 import render
 import schedule_logic
 import steal
@@ -986,10 +987,14 @@ class FloBot(discord.Client):
             st = await economy.refresh_shop_async(force=True)
             log.info("Flo Shop (2 Uhr) aktualisiert: %d Titel fuer %s.",
                      len(st.get("items", [])), st.get("date", "?"))
-            legendaere = [i for i in st.get("items", [])
-                          if i.get("rarity") == "legendary"]
-            if legendaere:
-                self._spawn(self._announce_legendary(legendaere))
+            # Ausgerufen wird JEDE Spitzen-Stufe, nicht nur 'legendary'. Sonst
+            # bleibt genau das Seltenste still: ein RELIKT taucht im Schnitt nur
+            # alle 13 Tage ueberhaupt im Shop auf und niemand erfaehrt davon.
+            grenze = titles.RANK.get("legendary", 99)
+            highlights = [i for i in st.get("items", [])
+                          if titles.RANK.get(i.get("rarity", ""), -1) >= grenze]
+            if highlights:
+                self._spawn(self._announce_legendary(highlights))
         except Exception:
             log.exception("Shop-Refresh (2 Uhr) fehlgeschlagen - Loop laeuft weiter")
         # Im selben Nacht-Takt die Vermoegenssteuer einziehen: die EINZIGE
@@ -1012,13 +1017,21 @@ class FloBot(discord.Client):
             channel = guild.system_channel
         if channel is None:
             return
-        zeilen = "\n".join(f"**{i.get('label', i.get('text', '?'))}** – "
-                           f"{numfmt.fmt(i.get('price', 0))} {economy.COIN} (Nr. {i.get('n', '?')})"
-                           for i in items)
+        zeilen = []
+        for i in items:
+            meta = titles.RARITY.get(i.get("rarity", ""), {})
+            zeilen.append(f"{meta.get('emoji', '•')} **{i.get('label', i.get('text', '?'))}** "
+                          f"· {meta.get('label', '?')} · "
+                          f"{numfmt.fmt(i.get('price', 0))} {economy.COIN} "
+                          f"(Nr. {i.get('n', '?')})")
+        # Titel und Farbe richten sich nach der HOECHSTEN Stufe im Angebot.
+        beste = max(items, key=lambda i: titles.RANK.get(i.get("rarity", ""), -1))
+        top = titles.RARITY.get(beste.get("rarity", ""), {})
+        stufe = str(top.get("label", "Seltener"))
         emb = discord.Embed(
-            title="🟡 LEGENDÄRER Titel im Shop!",
-            description=f"{zeilen}\n\nNur **heute** – `{ai.bot_name()} shop` 🏃",
-            color=discord.Color.gold())
+            title=f"{top.get('emoji', '🟡')} {stufe.upper()} im Shop!",
+            description="\n".join(zeilen) + f"\n\nNur **heute** – `{ai.bot_name()} shop` 🏃",
+            color=discord.Color(int(top.get("color", 0xF1C40F))))
         try:
             await channel.send(embed=emb)
         except discord.HTTPException:

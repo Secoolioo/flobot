@@ -276,10 +276,16 @@ body{
   background:linear-gradient(145deg,rgba(16,185,129,.18),rgba(16,185,129,.05));color:var(--emerald-2);border:1px solid rgba(16,185,129,.22)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;max-width:200px}
 .chip{font-size:10.5px;padding:3px 9px;border-radius:7px;font-weight:600;border:1px solid var(--border);background:var(--surface-2);color:var(--dim);white-space:nowrap}
-.chip.rar-selten{color:#7CA6FF;border-color:rgba(124,166,255,.3);background:rgba(124,166,255,.08)}
-.chip.rar-mythisch{color:#C77DFF;border-color:rgba(199,125,255,.3);background:rgba(199,125,255,.08)}
-.chip.rar-legendary{color:var(--gold-2);border-color:rgba(212,175,55,.35);background:rgba(212,175,55,.1)}
-.chip.rar-exklusiv{color:var(--emerald-2);border-color:rgba(16,185,129,.35);background:rgba(16,185,129,.1)}
+/* Seltenheitsstufen - Farben MUESSEN zu titles.py RARITY passen, sonst zeigt das
+   Panel eine andere Stufe als Discord (exklusiv war hier gruen, dort rot). */
+.chip.rar-normal{color:#57F287;border-color:rgba(87,242,135,.30);background:rgba(87,242,135,.08)}
+.chip.rar-selten{color:#3498DB;border-color:rgba(52,152,219,.32);background:rgba(52,152,219,.09)}
+.chip.rar-episch{color:#9B8CFF;border-color:rgba(124,92,255,.34);background:rgba(124,92,255,.10)}
+.chip.rar-mythisch{color:#E24BF0;border-color:rgba(192,38,211,.34);background:rgba(192,38,211,.10)}
+.chip.rar-legendary{color:#F1C40F;border-color:rgba(241,196,15,.35);background:rgba(241,196,15,.10)}
+.chip.rar-relikt{color:#FF9A45;border-color:rgba(255,122,24,.36);background:rgba(255,122,24,.11)}
+.chip.rar-exklusiv{color:#FF5C86;border-color:rgba(255,45,85,.36);background:rgba(255,45,85,.11)}
+.chip.rar-goettlich{color:#00E5FF;border-color:rgba(0,229,255,.38);background:rgba(0,229,255,.12)}
 
 .pager{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-top:1px solid var(--border)}
 .pager .info{font-size:12.5px;color:var(--mute)}
@@ -986,7 +992,8 @@ function renderUsersTable(d){ var card=$("#uTableCard"); var us=d.users||[];
   observeReveals(card); }
 
 /* ============ USER MODAL ============ */
-var RAR=[["normal","Normal"],["selten","Selten"],["mythisch","Mythisch"],["legendary","Legendär"],["exklusiv","Exklusiv"]];
+/* Reihenfolge und Labels wie titles.py RARITY_ORDER (acht Stufen). */
+var RAR=[["normal","Gewöhnlich"],["selten","Selten"],["episch","Episch"],["mythisch","Mythisch"],["legendary","Legendär"],["relikt","Relikt"],["exklusiv","Exklusiv"],["goettlich","Göttlich"]];
 function openUser(id){ var ov=ce("div","overlay"); ov.id="userModal";
   ov.innerHTML='<div class="modal"><div class="celebrate" id="celeb"></div><div class="m-body" style="text-align:center;padding:60px"><div class="sk" style="width:60px;height:60px;border-radius:16px;margin:0 auto 16px"></div><div class="sk sk-line" style="width:160px;margin:0 auto"></div></div></div>';
   document.body.appendChild(ov); requestAnimationFrame(function(){ov.classList.add("show");});

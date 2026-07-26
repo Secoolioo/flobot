@@ -263,8 +263,13 @@ class Titles:
                 grenzen.append((summe, r))
             if not grenzen:                       # Notnagel: nie ohne Stufe dastehen
                 grenzen = [(100, self.RARITY_ORDER[0])]
-            elif grenzen[-1][0] < 100:            # Rest der haeufigsten Stufe geben
-                grenzen[-1] = (100, grenzen[-1][1])
+            elif grenzen[-1][0] < 100:
+                # Rest an die HAEUFIGSTE Stufe (die erste), nicht an die seltenste.
+                # Vorher bekam ihn die letzte: ein Tippfehler in pool_pct (Summe 95
+                # statt 100) haette 'relikt' von 1 % auf 6 % gehoben, also die
+                # seltenste Stufe sechsmal zu haeufig gemacht.
+                fehlt = 100 - grenzen[-1][0]
+                grenzen = [(g + fehlt, r) for g, r in grenzen]
             self.__dict__["_grenz_cache"] = grenzen
         return self.__dict__["_grenz_cache"]
 
