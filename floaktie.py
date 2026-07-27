@@ -68,7 +68,7 @@ LIQUIDITY = int(os.getenv("FLOAKTIE_LIQUIDITY", "750") or "750")
 TRADE_FEE = float(os.getenv("FLOAKTIE_TRADE_FEE", "0.02") or "0.02")
 # Groesste EINZEL-Order. Bewusst in der Groessenordnung der Liquiditaet: eine
 # einzige Order kann den Kurs so maximal etwa verdoppeln, statt ihn (mit
-# Kredit-Kauf) absurd zu verzerren. Mehr geht ueber mehrere Orders - dank der
+# viele Anteile auf einmal) absurd zu verzerren. Mehr geht ueber mehrere Orders - dank der
 # pfad-unabhaengigen Kurve kostet das genau dasselbe.
 MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "150") or "150")
 
@@ -189,17 +189,12 @@ DAY_DOWN = float(os.getenv("FLOAKTIE_DAY_DOWN", "0.1") or "0.1")  # max -90 % pr
 # Am Deckel (Ueberhang 7) sind das rund 33 % - dort entstehen die meisten Coins.
 SELL_TAX_K = float(os.getenv("FLOAKTIE_SELL_TAX_K", "0.15") or "0.15")
 SELL_TAX_MAX = float(os.getenv("FLOAKTIE_SELL_TAX_MAX", "0.35") or "0.35")
-# KREDITLINIE: Aktien darf man weiter auf Pump kaufen (das ist der Reiz), aber
-# nur mit EIGENEM Geld als Sicherheit - wie echte Margin, nicht wie Gratisgeld.
-# Erlaubt ist also: Guthaben + min(KREDIT_LINIE, Guthaben).
-#
-# Warum die Sicherheit noetig ist (nachgewiesener Exploit): frueher gab es gar
-# keinen Guthaben-Check. Ein Konto mit 0 Coins konnte 150 Anteile auf Kredit
-# nehmen - und weil JEDER Kauf den Kurs hebt, reichten vier solche Wegwerf-Konten,
-# damit das Hauptkonto oben teuer verkauft (gemessen: 300.000 -> 429.227, also
-# +129.227 aus dem Nichts, plus 1,17 Mio uneinbringliche Schuld auf leeren Konten).
-# Mit Sicherheit kauft ein leeres Konto GAR NICHTS mehr - der Hebel ist weg.
-KREDIT_LINIE = int(os.getenv("FLOAKTIE_KREDIT", "250000") or "250000")
+# KEIN KREDIT. Man kann Anteile nur von eigenem Guthaben kaufen - das Konto geht
+# durch die Aktie NIE ins Minus. Frueher ging das (erst unbegrenzt, dann bis zu
+# einer Kreditlinie mit Sicherheit), und beides hat sich als schlechte Idee
+# erwiesen: ein leeres Konto konnte den Kurs pumpen, Schulden wurden nie
+# eingezogen, und ein Konto im Minus ist gegen normale Ausgaben ohnehin immun -
+# es blockiert also nur den Spieler, ohne irgendetwas zu bewirken.
 
 # Dividende: Coins pro Voice-Runde je 'DIVIDEND_DIVISOR' Anteile (gedeckelt).
 DIVIDEND_DIVISOR = int(os.getenv("FLOAKTIE_DIVIDEND_DIVISOR", "10") or "10")
@@ -507,15 +502,10 @@ class FloAktie:
         return max(0, MAX_SHARES_PER_USER - self.shares_of(uid))
 
     def _kaufrahmen(self, stand):
-        """Wie viele Coins dieser Kontostand fuer einen Kauf hergibt.
-
-        Guthaben + Sicherheit, wobei die Sicherheit das eigene Guthaben nicht
-        uebersteigt (echte Margin). Ein leeres oder negatives Konto bekommt 0 -
-        genau das schliesst den Zweitkonten-Pump."""
-        stand = int(stand)
-        if stand <= 0:
-            return 0
-        return stand + min(KREDIT_LINIE, stand)
+        """Wie viele Coins dieser Kontostand fuer einen Kauf hergibt: GENAU das
+        Guthaben. Kein Kredit, kein Hebel - das Konto geht durch die Aktie nie
+        ins Minus."""
+        return max(0, int(stand))
 
     def _max_affordable(self, coins, deckel=None):
         """Wie viele Anteile man sich mit 'coins' leisten kann (inkl. Gebuehr).
@@ -596,28 +586,29 @@ class FloAktie:
         # ausgegebenen Anteilen).
         alt_kurs = self.price()
         cost, _ = self._buy_cost(count)
-        # Aktien auf KREDIT: erlaubt (das ist der Reiz), aber nur bis zur
-        # Kreditlinie. Ohne die konnte ein Konto mit 0 Coins 150 Anteile auf Pump
-        # nehmen und sie abends fuer Millionen verkaufen - Geld aus dem Nichts,
-        # ganz ohne Einsatz.
+        # NUR von eigenem Guthaben - kein Kredit, kein Minus. Passt der Wunsch
+        # nicht, wird auf das heruntergerechnet, was das Konto wirklich hergibt.
         stand_vor = economy.get_coins(member.id)
         rahmen = self._kaufrahmen(stand_vor)
         if cost > rahmen:
             moeglich = self._max_affordable(rahmen, frei)
             if moeglich < 1:
-                if stand_vor <= 0:
-                    return (f"🏦 **Ohne eigenes Geld gibt's keinen Kredit.**\n"
-                            f"Du stehst bei **{self._fmt(stand_vor)}** {economy.COIN}. "
-                            f"Aktien auf Pump gehen nur mit eigener Sicherheit – "
-                            f"verdien erst was oder verkauf Anteile.")
-                return (f"🏦 **Kreditlinie ausgeschöpft.**\n"
-                        f"Guthaben **{self._fmt(stand_vor)}** {economy.COIN} → du kannst "
-                        f"für maximal **{self._fmt(rahmen)}** kaufen "
-                        f"(Guthaben + Sicherheit, max. {self._fmt(KREDIT_LINIE)}).\n"
-                        f"Selbst ein Anteil ist gerade zu teuer.")
+                ein_stueck = self._buy_cost(1)[0]
+                return (f"💸 **Dafür reicht dein Guthaben nicht.**\n"
+                        f"Du hast **{self._fmt(max(0, stand_vor))}** {economy.COIN}, "
+                        f"ein einzelner Anteil kostet gerade "
+                        f"**{self._fmt(ein_stueck)}**.\n"
+                        f"_Auf Pump gibt es hier nichts – erst verdienen._")
             count = moeglich
             cost, _ = self._buy_cost(count)
-        economy.add_coins(member.id, -cost, reason="floaktie", allow_negative=True)
+        # Gegenpruefen, dass wirklich abgebucht wurde: add_coins klemmt bei 0, und
+        # ohne diese Kontrolle gaebe es die Anteile geschenkt.
+        economy.add_coins(member.id, -cost, reason="floaktie")
+        if stand_vor - economy.get_coins(member.id) != cost:
+            economy.add_coins(member.id, stand_vor - economy.get_coins(member.id),
+                              reason="floaktie-rueck")
+            return ("💸 Die Abbuchung ist nicht durchgegangen – dein Guthaben hat sich "
+                    "gerade geändert. Versuch's nochmal.")
         self._holdings()[str(member.id)] = self.shares_of(member.id) + count
         neu = self._sync_price()       # Kauf hebt den Kurs (Kurve neu auswerten)
         self._record_tick()
@@ -661,8 +652,6 @@ class FloAktie:
         pfeil = "📈" if kauf else "📉"
         farbe = (discord.Colour.from_rgb(87, 242, 135) if kauf
                  else discord.Colour.from_rgb(235, 69, 158))
-        if stand < 0:
-            farbe = discord.Colour.from_rgb(237, 66, 69)
         meine = self.shares_of(member.id)
         e = discord.Embed(
             title=f"{pfeil} {'Gekauft' if kauf else 'Verkauft'} · {TICKER}",
@@ -676,22 +665,13 @@ class FloAktie:
         e.add_field(name="Dein Depot",
                     value=f"**{meine}**/{MAX_SHARES_PER_USER}\n{self._depot_balken(meine)}",
                     inline=True)
-        e.add_field(name="Kontostand",
-                    value=(f"**{self._fmt(stand)}**" if stand >= 0
-                           else f"⚠️ **{self._fmt(stand)}**"),
-                    inline=True)
+        e.add_field(name="Kontostand", value=f"**{self._fmt(stand)}**", inline=True)
         if steuer:
             e.add_field(name="Verkaufssteuer",
                         value=(f"{steuer * 100:.0f} % einbehalten\n"
                                f"_steigt, je höher die Blase_"),
                         inline=False)
-        if stand < 0:
-            e.add_field(
-                name="Du stehst im MINUS",
-                value=("Der Kauf lief auf **Kredit**. Nur steigende Kurse oder ein "
-                       "Verkauf holen dich da raus – Ausgeben kannst du erst wieder "
-                       "ab null."),
-                inline=False)
+
         if kauf and meine >= MAX_SHARES_PER_USER:
             e.set_footer(text=f"Depot voll ({MAX_SHARES_PER_USER} Anteile) · "
                               f"{self._bot_name} aktie verkauf alles")
@@ -1276,8 +1256,9 @@ class FloAktie:
                    f"💰 **Dividende** im Voice (größter Aktionär: doppelt).\n"
                    f"🧾 **Verkaufssteuer {self._sell_fee() * 100:.0f} %** – sie steigt, "
                    f"je weiter der Kurs über seinem Wert steht.\n"
-                   f"🎒 Maximal **{MAX_SHARES_PER_USER}** Anteile pro Person.\n"
-                   f"⚠️ Kauf auf **Kredit** möglich – fällt der Kurs, sitzt du auf Schulden."),
+                   f"🎒 **Anteil-Limit: {MAX_SHARES_PER_USER} pro Person** – mehr geht nicht.\n"
+                   f"💸 Gekauft wird nur von **eigenem Guthaben** – kein Kredit, "
+                   f"kein Minus."),
             inline=False)
         emb.set_footer(text=f"{self._bot_name} aktie kauf max · verkauf alles · aktienkurs · top")
         return emb
@@ -1446,8 +1427,8 @@ class FloAktieView(discord.ui.View):
                 if n < 1:
                     await interaction.response.send_message(
                         "Dein Guthaben reicht gerade für keinen ganzen Anteil. 😬 "
-                        "(Mit Guthaben als Sicherheit geht auch `aktie kauf <anzahl>` "
-                        "auf Kredit – Achtung, Minus!)",
+                        "Auf Pump gibt es hier nichts – erst verdienen oder Anteile "
+                        "verkaufen.",
                         ephemeral=True)
                     return
                 antwort = await instance.buy(interaction.user, n)

@@ -1385,18 +1385,18 @@ def test_floaktie_market():
         asyncio.run(fa.sell(SimpleNamespace(id=3), 100))
         assert economy.get_coins(3) < start and fa.shares_of(3) == 0
 
-        # Aktien auf KREDIT (Hebel): mit eigenem Geld als Sicherheit darf man ins
-        # MINUS gehen - aber nur bis Guthaben + Sicherheit. Ein Konto mit 10 Coins
-        # kauft deshalb nur, was diese 20 Coins hergeben (also nichts).
+        # KEIN KREDIT MEHR: ein Konto mit 10 Coins kauft nichts und bleibt bei 10.
         economy.instance._profile(4)["coins"] = 10
         r = asyncio.run(fa.buy(SimpleNamespace(id=4), 100))
         assert isinstance(r, str) and fa.shares_of(4) == 0, r
-        assert economy.get_coins(4) == 10 and "Kredit" in r
-        # Mit echtem Guthaben greift der Hebel: Kauf ueber dem Guthaben -> Minus.
+        assert economy.get_coins(4) == 10 and "Guthaben nicht" in r
+        # Wer mehr will, als das Guthaben hergibt, bekommt so viel wie moeglich -
+        # und landet NIE im Minus.
         economy.instance._profile(5)["coins"] = 60_000
         r = asyncio.run(fa.buy(SimpleNamespace(id=5), 100))
         assert fa.shares_of(5) > 0, r
-        assert economy.get_coins(5) < 0 and "MINUS" in _embed_text(r)
+        assert 0 <= economy.get_coins(5) < 60_000, economy.get_coins(5)
+        assert "MINUS" not in _embed_text(r)
 
         # Aktivitaets-Takt: viel los -> Kurs STEIGT, wenig -> faellt (Rauschen aus).
         floaktie.TICK_NOISE = 0.0
@@ -2081,17 +2081,16 @@ def test_exploit_kurspump_und_verschluckte_einsaetze():
         for uid in (201, 202, 203):
             kurs_vor = fa.price()
             r = asyncio.run(fa.buy(SimpleNamespace(id=uid), 150))
-            assert isinstance(r, str) and "Sicherheit" in r, (uid, r)
+            assert isinstance(r, str) and "Guthaben nicht" in r, (uid, r)
             assert fa.shares_of(uid) == 0 and fa.price() == kurs_vor, uid
             assert economy.get_coins(uid) >= min(0, -50_000)   # keine neue Schuld
-        # Mit eigenem Geld geht es - inklusive Hebel, aber nur bis zur Sicherheit.
-        rahmen = fa._kaufrahmen(economy.get_coins(1))
-        # Guthaben + Sicherheit, Sicherheit gedeckelt durch die Kreditlinie.
-        assert rahmen == 300_000 + min(floaktie.KREDIT_LINIE, 300_000), rahmen
+        # KEIN KREDIT: der Kaufrahmen ist GENAU das Guthaben, nie mehr.
+        assert fa._kaufrahmen(economy.get_coins(1)) == 300_000
         assert fa._kaufrahmen(0) == 0 and fa._kaufrahmen(-9_999) == 0
-        assert fa._kaufrahmen(1_000) == 2_000        # kleines Konto: doppelt
+        assert fa._kaufrahmen(1_000) == 1_000
         r = asyncio.run(fa.buy(SimpleNamespace(id=1), 150))
-        assert fa.shares_of(1) == 150, r
+        assert fa.shares_of(1) > 0, r
+        assert economy.get_coins(1) >= 0, "Kauf hat das Konto ins Minus gedrueckt"
         # Round-Trip bleibt ein Verlust (kein risikoloser Gewinn).
         vorher = economy.get_coins(1)
         asyncio.run(fa.sell(SimpleNamespace(id=1), 150))
@@ -3356,6 +3355,72 @@ def test_floaktie_grenzen_gegen_hyperinflation():
     finally:
         restore_eco()
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
+
+
+def test_floaktie_kein_minus_und_anteil_limit():
+    """Zwei harte Zusagen an den Besitzer:
+    1) Die Aktie drueckt ein Konto NIE ins Minus - es gibt keinen Kredit mehr.
+    2) Es gibt ein Anteil-Limit pro Person, und es greift auf JEDEM Weg
+       (Text-Befehl, 'kauf max', Panel-Button)."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    restore = _with_economy({1: 5_000_000, 2: 500, 3: 0, 4: -20_000})
+    fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x", "act_ema": 0.0,
+                            "msg_count": 0, "last_msg_count": 0, "leer_min": 0.0,
+                            "holdings": {}, "history": [], "ticks": []})
+    fa._sync_price()
+    try:
+        limit = floaktie.MAX_SHARES_PER_USER
+        assert limit > 0
+
+        # --- 1) NIE ins Minus, egal wie man es versucht -------------------
+        # a) viel mehr wollen, als man hat
+        r = asyncio.run(fa.buy(SimpleNamespace(id=2), limit))
+        assert economy.get_coins(2) >= 0, economy.get_coins(2)
+        # b) blankes Konto
+        r = asyncio.run(fa.buy(SimpleNamespace(id=3), 5))
+        assert fa.shares_of(3) == 0 and economy.get_coins(3) == 0
+        assert isinstance(r, str) and "Guthaben nicht" in r
+        # c) Konto, das (aus alten Zeiten) noch im Minus steht: nichts wird schlimmer
+        vorher4 = economy.get_coins(4)
+        r = asyncio.run(fa.buy(SimpleNamespace(id=4), 5))
+        assert fa.shares_of(4) == 0 and economy.get_coins(4) == vorher4
+        # d) hundert Kaeufe hintereinander mit kleinem Konto
+        economy.instance._profile(5)["coins"] = 30_000
+        for _ in range(100):
+            asyncio.run(fa.buy(SimpleNamespace(id=5), 3))
+            assert economy.get_coins(5) >= 0, economy.get_coins(5)
+        # Kein Aufrufer nutzt noch den Minus-Schalter von add_coins.
+        quelle = open("floaktie.py", encoding="utf-8").read()
+        assert "allow_negative" not in quelle
+        assert "KREDIT_LINIE" not in quelle
+
+        # --- 2) Anteil-Limit auf jedem Weg --------------------------------
+        economy.instance._profile(1)["coins"] = 10 ** 12
+        asyncio.run(fa.buy(SimpleNamespace(id=1), limit * 10))     # Text-Befehl
+        assert fa.shares_of(1) == limit, fa.shares_of(1)
+        r = asyncio.run(fa.buy(SimpleNamespace(id=1), 1))          # noch einer
+        assert "Depot ist voll" in r and fa.shares_of(1) == limit
+        # 'kauf max' respektiert den freien Platz
+        asyncio.run(fa.sell(SimpleNamespace(id=1), 40))
+        assert fa._resolve_count(SimpleNamespace(id=1), "max") == 40
+        assert fa._freies_depot(SimpleNamespace(id=1).id if False else 1) == 40
+        # Auch in vielen kleinen Schritten kommt niemand darueber.
+        for _ in range(200):
+            asyncio.run(fa.buy(SimpleNamespace(id=1), 5))
+            assert fa.shares_of(1) <= limit, fa.shares_of(1)
+        assert fa.shares_of(1) == limit
+        # Das Limit steht sichtbar im Panel und in der Kauf-Bestaetigung.
+        panel = _embed_text(fa._panel_embed(SimpleNamespace(id=1)))
+        assert "Anteil-Limit" in panel and str(limit) in panel
+        # Das Panel verspricht keinen Kredit mehr, sondern sagt das Gegenteil.
+        assert "eigenem Guthaben" in panel
+        assert "auf Kredit" not in panel and "MINUS" not in panel
+    finally:
+        fa._store, fa._enabled = alt
+        restore()
 
 
 def test_floaktie_impuls_respektiert_deckel():

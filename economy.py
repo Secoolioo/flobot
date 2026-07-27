@@ -336,14 +336,12 @@ class Economy:
     def add_coins(self, user_id, amount, reason = "", allow_negative = False):
         """Aendert den Kontostand und gibt den neuen Stand zurueck.
 
-        Normalfall: das Konto geht NIE unter 0 (Casino, Shop & Co. enden bei 0).
-        AUSNAHME 'allow_negative=True' (nur die Aktie/floaktie nutzt das): dann darf
-        der Stand beliebig tief ins MINUS gehen - man kauft Anteile 'auf Kredit',
-        wie mit Hebel an einer echten Boerse. Faellt der Kurs, bleibt man auf den
-        Schulden sitzen; nur die Aktie (Verkauf/Kurs-Anstieg) holt einen da wieder
-        raus. Ein Konto, das (nur ueber Aktien) schon im Minus ist, laesst sich per
-        normaler Ausgabe nicht weiter druecken (kein Geld -> No-Op), waehrend jede
-        Gutschrift die Schulden ganz normal abbaut.
+        Das Konto geht NIE unter 0 - auch die Aktie kauft nur von echtem Guthaben.
+        (Frueher durfte floaktie mit 'allow_negative=True' ins Minus buchen; das ist
+        raus: ein Konto im Minus war gegen normale Ausgaben ohnehin immun, die
+        Schulden wurden nie eingezogen, und ein leeres Konto konnte damit den Kurs
+        pumpen.) Der Schalter existiert noch fuer Notfaelle, wird aber von keinem
+        Feature mehr benutzt.
 
         Jede Bewegung landet im Handelsbuch (handel.py); 'reason' benennt die Quelle
         (ohne reason wird das aufrufende Modul ermittelt: casino, spiele, luxus, ...)."""
