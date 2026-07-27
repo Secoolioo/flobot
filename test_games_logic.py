@@ -3357,6 +3357,62 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
+def test_floaktie_panel_zeigt_echten_deckel():
+    """Das Panel muss den WIRKLICH bindenden Deckel zeigen, nicht nur den der
+    Aktivitaet. Aus dem Betrieb gemeldet: Panel sagte 'Deckel 888.674', die
+    Tagesbremse stoppte den Kurs aber schon bei 52.453 - wer das nicht weiss,
+    wartet stundenlang auf einen Anstieg, der heute nicht mehr kommen kann."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-07-27"
+    restore = _with_economy({2: 1000})
+    try:
+        S = 147
+        base = 3421 / (1 + S / floaktie.LIQUIDITY)
+        anker = base / 3.261                     # Tag startete deutlich tiefer
+        fa._store = _FakeStore({"price": 3421, "base": base, "day": "x",
+                                "act_ema": 29.3, "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "open_day": "2026-07-27",
+                                "open_base": anker,
+                                "holdings": {"1": 137, "2": 8, "3": 2},
+                                "history": [], "ticks": []})
+        fa._sync_price()
+
+        # Der Aktivitaets-Deckel liegt hoch, die Tagesbremse VIEL tiefer.
+        akt_deckel = fa.akt_deckel_base()
+        _lo, tag_hi = fa._tages_band()
+        assert tag_hi is not None and tag_hi < akt_deckel
+        assert fa._deckel_base() == tag_hi          # der kleinere gewinnt
+        assert fa._deckel_grund() == "tag"
+
+        # Der Kurs bleibt wirklich dort stehen - auch nach Stunden Vollgas.
+        for _ in range(12 * 60):
+            fa._activity_tick(10, 25, streams=5, video=1)
+        gedeckelt = fa.price()
+        assert gedeckelt <= fa._deckel_kurs() * 1.001, (gedeckelt, fa._deckel_kurs())
+        assert gedeckelt < akt_deckel               # der Aktivitaets-Deckel war Fiktion
+
+        # Und das Panel sagt es: Tagesdeckel, samt Ausblick auf morgen.
+        panel = _embed_text(fa._panel_embed(SimpleNamespace(id=2)))
+        assert "Tagesdeckel erreicht" in panel, panel
+        assert "Mitternacht" in panel
+        assert "(Anschlag)" in panel                # Tempo laeuft am Limit
+
+        # Neuer Tag -> neuer Anker, jetzt bindet die Aktivitaet.
+        fa._today = lambda: "2026-07-28"
+        fa._tages_anker()
+        assert fa._deckel_grund() in ("aktivitaet", "tag")
+        for _ in range(24 * 60):
+            fa._activity_tick(10, 25, streams=5, video=1)
+        assert fa.price() > gedeckelt               # es geht weiter
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
+        restore()
+
+
 def test_floaktie_kein_minus_und_anteil_limit():
     """Zwei harte Zusagen an den Besitzer:
     1) Die Aktie drueckt ein Konto NIE ins Minus - es gibt keinen Kredit mehr.

@@ -1206,6 +1206,10 @@ class FloAktie:
         # Lesbarer machen: kleine Werte pro STUNDE, grosse pro Minute.
         if abs(pro_min) >= 0.1:
             tempo = f"**{pro_min:+.2f} %/min**"
+            # Am Anschlag: sonst wundert man sich, warum mehr Leute nichts mehr
+            # bringen. Mehr Aktivitaet hebt dann den DECKEL, nicht das Tempo.
+            if pro_min >= TICK_CAP * 100 - 0.001:
+                tempo += " _(Anschlag)_"
         else:
             tempo = f"**{pro_min * 60:+.2f} %/h**"
         am_deckel = self._am_deckel()
@@ -1219,9 +1223,21 @@ class FloAktie:
                 hinweis = ("Niemand da – der Kurs sinkt und wird immer schneller, "
                            "je länger es leer bleibt.")
         elif am_deckel:
-            hinweis = (f"**Deckel erreicht** ({self._fmt(self._deckel_kurs())}) – so viel "
-                       f"gibt diese Aktivität her. Mehr Leute im Call oder mehr "
-                       f"Livestreams heben den Deckel sofort an.")
+            grund = self._deckel_grund()
+            if grund == "tag":
+                hinweis = (f"**Tagesdeckel erreicht** ({self._fmt(self._deckel_kurs())}). "
+                           f"Pro Tag darf der Kurs höchstens das {DAY_UP:g}-fache seines "
+                           f"Morgenstands machen – ab Mitternacht geht es weiter, "
+                           f"die Aktivität würde bis "
+                           f"{self._fmt(int(self.akt_deckel_base() * (1 + self.total_shares() / LIQUIDITY)))} "
+                           f"tragen.")
+            elif grund == "max":
+                hinweis = (f"**Höchstkurs erreicht** ({self._fmt(MAX_PRICE)} pro Anteil). "
+                           f"Höher geht es grundsätzlich nicht.")
+            else:
+                hinweis = (f"**Deckel erreicht** ({self._fmt(self._deckel_kurs())}) – so viel "
+                           f"gibt diese Aktivität her. Mehr Leute im Call oder mehr "
+                           f"Livestreams heben den Deckel sofort an.")
         else:
             hinweis = "Je mehr im Call und je mehr Livestreams, desto schneller."
         emb.add_field(
@@ -1263,17 +1279,43 @@ class FloAktie:
         emb.set_footer(text=f"{self._bot_name} aktie kauf max · verkauf alles · aktienkurs · top")
         return emb
 
+    def _deckel_base(self):
+        """Der WIRKLICH bindende Basiskurs-Deckel: der kleinste von dreien.
+
+        Das Panel zeigte bisher nur den Aktivitaets-Deckel - an einem Tag, der
+        weit unten angefangen hat, stoppt aber die TAGESBREMSE viel frueher.
+        Beispiel aus dem Betrieb: Aktivitaets-Deckel 888.674, tatsaechlich war bei
+        52.453 Schluss. Wer das nicht weiss, wartet stundenlang auf einen Anstieg,
+        der heute gar nicht mehr kommen kann."""
+        deckel = self.akt_deckel_base()
+        _lo, tag_hi = self._tages_band()
+        if tag_hi is not None:
+            deckel = min(deckel, tag_hi)
+        return min(deckel, self._base_ceiling())
+
     def _deckel_kurs(self):
-        """Der ANGEZEIGTE Kurs, an dem die aktuelle Aktivitaet ihren Deckel hat."""
-        deckel = self.akt_deckel_base() * (1.0 + self.total_shares() / LIQUIDITY)
+        """Der ANGEZEIGTE Kurs, an dem heute Schluss ist."""
+        deckel = self._deckel_base() * (1.0 + self.total_shares() / LIQUIDITY)
         return max(MIN_PRICE, min(MAX_PRICE, int(round(deckel))))
+
+    def _deckel_grund(self):
+        """Warum ist bei diesem Kurs Schluss? ('aktivitaet' | 'tag' | 'max')"""
+        akt = self.akt_deckel_base()
+        _lo, tag_hi = self._tages_band()
+        absolut = self._base_ceiling()
+        kleinste = self._deckel_base()
+        if tag_hi is not None and kleinste >= tag_hi - 0.5:
+            return "tag"
+        if kleinste >= absolut - 0.5:
+            return "max"
+        return "aktivitaet" if kleinste <= akt + 0.5 else "aktivitaet"
 
     def _am_deckel(self):
         """Steht der Kurs (praktisch) am Deckel? Dann steigt er nur noch minimal."""
         akt = float(self._state().get("act_ema", 0.0) or 0.0)
         if akt <= 0:
             return False
-        return self._base() >= self.akt_deckel_base() * 0.995
+        return self._base() >= self._deckel_base() * 0.995
 
     def _depot_balken(self, anteile):
         """Kleiner Fortschrittsbalken fuer die Depot-Auslastung."""
