@@ -1781,7 +1781,9 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             fa._activity_tick(10, 40, streams=10)
         akt = fa.activity_of(10, 10, 0, 40)
         deckel = fa.ziel_base(akt) * floaktie.CEIL_FACTOR
-        assert fa.price() <= deckel * 1.02, (fa.price(), deckel)
+        # Toleranz = ein voller Takt: die Pruefung im Drift laeuft VOR dem Schritt,
+        # der letzte Schritt darf also einmal um bis zu TICK_CAP ueberschiessen.
+        assert fa.price() <= deckel * (1 + floaktie.TICK_CAP) * 1.01, (fa.price(), deckel)
         assert fa.price() < vier_tage * 1.05, (vier_tage, fa.price())
 
         # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
@@ -3355,6 +3357,76 @@ def test_floaktie_grenzen_gegen_hyperinflation():
     finally:
         restore_eco()
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
+
+
+def test_floaktie_faellt_auf_jedem_niveau():
+    """REGRESSION (aus dem Betrieb: "die Aktie sinkt nie"): Der Boden FAIR_BASE lag
+    bei 5.000, waehrend der Kurs nach einem Reset bei 1.000 startet und im Betrieb
+    oft darunter stand - unterhalb des Bodens passiert im Leerlauf GAR NICHTS.
+    Der Kurs war also in einer Einbahnstrasse, bis er sich versechsfacht hatte."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-07-27"
+    try:
+        def frisch(kurs, S=147):
+            b = kurs / (1 + S / floaktie.LIQUIDITY)
+            fa._store = _FakeStore({"price": int(kurs), "base": b, "day": "x",
+                                    "act_ema": 0.0, "msg_count": 0,
+                                    "last_msg_count": 0, "leer_min": 0.0,
+                                    "open_day": "2026-07-27", "open_base": b,
+                                    "holdings": {"1": S}, "history": [], "ticks": []})
+            fa._sync_price()
+
+        # Der Startkurs darf NICHT unter dem Boden liegen, sonst kann eine frisch
+        # zurueckgesetzte Aktie anfangs gar nicht fallen.
+        assert floaktie.START_PRICE >= floaktie.FAIR_BASE
+
+        # Von JEDEM Niveau aus faellt der Kurs im Leerlauf spuerbar.
+        for start in (1_200, 3_421, 6_000, 20_000, 52_453):
+            frisch(start)
+            for _ in range(4 * 60):
+                fa._activity_tick(0, 0)
+            assert fa.price() < start * 0.85, (start, fa.price())
+            # ... und zwar in JEDER Minute, nie nach oben.
+            for _ in range(60):
+                _a, _n, drift, _akt = fa._activity_tick(0, 0)
+                assert drift <= 0, drift
+
+        # Innerhalb EINES Tages bremst der Circuit Breaker bei -90 %.
+        frisch(20_000)
+        for _ in range(1440):
+            fa._activity_tick(0, 0)
+        assert abs(fa.price() - 20_000 * floaktie.DAY_DOWN) < 20_000 * 0.02, fa.price()
+
+        # Ueber mehrere Tage geht es weiter runter - aber nicht ins Bodenlose.
+        for tag in range(28, 32):
+            fa._today = lambda t=f"2026-07-{tag:02d}": t
+            fa._tages_anker()
+            for _ in range(1440):
+                fa._activity_tick(0, 0)
+        boden = floaktie.FAIR_BASE * (1 + 147 / floaktie.LIQUIDITY)
+        assert fa.price() >= floaktie.MIN_PRICE
+        assert abs(fa.price() - boden) < boden * 0.05, (fa.price(), boden)
+        # Am Boden sagt das Panel ausdruecklich, dass es nicht tiefer geht.
+        restore = _with_economy({2: 0})
+        try:
+            panel = _embed_text(fa._panel_embed(SimpleNamespace(id=2)))
+            assert "Bodensatz erreicht" in panel, panel
+        finally:
+            restore()
+
+        # Und nach oben geht es weiterhin: vom Boden aus vervielfacht sich der
+        # Kurs mit ein paar Leuten im Call.
+        frisch(int(floaktie.START_PRICE), S=0)
+        vorher = fa.price()
+        for _ in range(2 * 60):
+            fa._activity_tick(3, 4, streams=1)
+        assert fa.price() > vorher * 8, (vorher, fa.price())
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
 def test_floaktie_panel_zeigt_echten_deckel():

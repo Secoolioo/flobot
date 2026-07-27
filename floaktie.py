@@ -56,7 +56,10 @@ HISTORY_TICKS_MAX = 20000   # ~14 Tage Minuten-Takte (vorher 50 h -> 7/30/Gesamt
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 
 # --- Balance (per .env justierbar) -------------------------------------------
-START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "1000") or "1000")   # Coins/Anteil
+# Startkurs = FAIR_BASE: eine frisch zurueckgesetzte Aktie steht damit GENAU auf
+# dem Wert eines toten Servers und kann sofort in beide Richtungen - vorher lag
+# der Start unter dem Boden und der Kurs konnte anfangs gar nicht fallen.
+START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "800") or "800")   # Coins/Anteil
 MIN_PRICE = int(os.getenv("FLOAKTIE_MIN_PRICE", "50") or "50")
 # Absolute Untergrenze fuer den BASISkurs (nicht fuer den angezeigten Kurs!).
 # Nur da, damit die Kurve nie auf 0 kollabiert - siehe _base().
@@ -105,7 +108,12 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "150") or "150")
 # 2 Stunden mit 6 Leuten bei -36,0 %. Dazu war das Rauschen (+/-0,12 %/min) bei 4
 # Leuten im Call 12x GROESSER als das Signal (+0,010 %/min): man KONNTE den
 # Anstieg gar nicht sehen. Beides ist hier behoben.
-FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "5000") or "5000")   # Kurs eines toten Servers
+# Kurs eines TOTEN Servers - und damit der Boden, unter den der Kurs im Leerlauf
+# nicht mehr faellt. Der Wert muss NIEDRIG sein: er lag bei 5.000, waehrend der
+# Kurs nach einem Reset bei 1.000 startet und im Betrieb oft darunter stand. Damit
+# war der Kurs in einer Einbahnstrasse - im Leerlauf passierte GAR NICHTS, bis er
+# sich erst versechsfacht hatte. Genau das kam im Betrieb an: "die Aktie sinkt nie".
+FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "800") or "800")
 # Wert je Aktivitaetspunkt. Merksatz: Zielkurs ~ 1.000 x Aktivitaetspunkte.
 # (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
@@ -1215,9 +1223,18 @@ class FloAktie:
         am_deckel = self._am_deckel()
         if akt <= 0:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
-            if leer >= 60:
+            boden = int(round(FAIR_BASE * (1.0 + self.total_shares() / LIQUIDITY)))
+            if self.drift_fuer(0) >= 0:
+                # Am Boden angekommen: tiefer geht es nicht, sonst waere die Aktie
+                # irgendwann wertlos. Das ausdruecklich SAGEN - sonst sieht es aus,
+                # als wuerde der Kurs im Leerlauf einfach nicht sinken.
+                hinweis = (f"**Bodensatz erreicht** ({self._fmt(max(MIN_PRICE, boden))}) – "
+                           f"so viel ist die Aktie auch auf einem toten Server noch "
+                           f"wert. Tiefer geht es nicht, ab hier hilft nur Aktivität.")
+            elif leer >= 60:
                 hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt jetzt "
-                           f"({self.drift_fuer(0) * 60 * 100:+.0f} %/h). "
+                           f"({self.drift_fuer(0) * 60 * 100:+.0f} %/h) bis auf "
+                           f"**{self._fmt(max(MIN_PRICE, boden))}**. "
                            f"Je länger nichts los ist, desto schneller.")
             else:
                 hinweis = ("Niemand da – der Kurs sinkt und wird immer schneller, "
