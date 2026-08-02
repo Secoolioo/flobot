@@ -209,7 +209,10 @@ LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
 # Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Streamer + Kameras
 # + Nachrichten) misst und den Kurs bewegt. 60 s -> der Kurs steigt/faellt fast in
 # Echtzeit sichtbar.
-STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "60"))
+# Kurs-Takt: alle 20 s statt jede Minute - der Kurs wirkt dadurch deutlich
+# lebendiger. Die Kurs-Konstanten sind PRO MINUTE gedacht, floaktie rechnet
+# den Takt selbst herunter (dt), das Tagesverhalten bleibt also gleich.
+STOCK_SAMPLE_SECONDS = float(os.getenv("FLOAKTIE_SAMPLE_SECONDS", "20"))
 # Takt, in dem Giveaways auf Ablauf geprueft werden (Ziehung). 15 s -> die Ziehung
 # passiert praktisch punktgenau zur angekuendigten Zeit.
 GIVEAWAY_TICK_SECONDS = float(os.getenv("GIVEAWAY_TICK_SECONDS", "15"))
@@ -983,7 +986,13 @@ class FloBot(discord.Client):
             return
         self._floaktie_guild_warned = False
         try:
-            await floaktie.sample_and_tick(guild)
+            await floaktie.sample_and_tick(guild, dt=STOCK_SAMPLE_SECONDS)
+            # Flo schaut sich den Markt an und passt die Bewegung an. Kuemmert sich
+            # selbst um den Abstand (KI_ALLE_SEK) - hier nur anstossen.
+            try:
+                await floaktie.ki_tick(guild)
+            except Exception:
+                log.exception("KI-Markt-Analyse fehlgeschlagen - Loop laeuft weiter")
         except Exception:
             log.exception("FloCorp-Markt-Loop Fehler - laeuft weiter")
 

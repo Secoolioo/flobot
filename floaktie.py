@@ -25,6 +25,7 @@ import logging
 import math
 import os
 import random
+import re
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -125,13 +126,13 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # 20 Punkte +2,4 %/min, 40 Punkte +4,8 %/min. Das Tempo bestimmt nur, WIE SCHNELL
 # der Kurs an sein Niveau kommt - wie HOCH er laeuft, legt AKT_WERT/CEIL_FACTOR
 # fest. Deshalb darf es ruhig steil sein.
-# 0,003 heisst: 1 Zuhoerer +0,3 %/min, 3 Leute +0,9 %/min, ab 10 Punkten am
+# 0,0028 heisst: 1 Zuhoerer +0,28 %/min, 3 Leute +0,84 %/min, ab 10 Punkten am
 # Anschlag. Bewusst GEDROSSELT: mit 0,006 und AKT_WERT 3000 kam ein Abend mit
 # 10 Leuten und 5 Streams auf 93 MILLIONEN Erloes fuer ein volles Depot - das war
 # selbst dem Besitzer "zu krass". Jetzt sind es rund 9,6 Mio an so einem Abend
 # und 1,3 Mio an einem normalen (3 Leute, ein Stream).
-TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.003") or "0.003")
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.03") or "0.03")     # max +3 % in einem Takt
+TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0028") or "0.0028")
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.0275") or "0.0275") # max +2,75 %/min
 # Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
 # schneller faellt der Kurs (wie eine Aktie, die keiner mehr will).
 #   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
@@ -172,7 +173,24 @@ MSG_WEIGHT = float(os.getenv("FLOAKTIE_MSG_WEIGHT", "0.5") or "0.5")       # ein
 MSG_MAX_ACT = float(os.getenv("FLOAKTIE_MSG_MAX_ACT", "12") or "12")       # Chat allein kann nicht beliebig pumpen
 STREAM_BONUS = float(os.getenv("FLOAKTIE_STREAM_BONUS", "2.5") or "2.5")   # ein Live-Streamer zaehlt so viel EXTRA
 VIDEO_BONUS = float(os.getenv("FLOAKTIE_VIDEO_BONUS", "1.5") or "1.5")     # eine Kamera zaehlt so viel extra
-TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0002") or "0.0002") # nur noch ein Hauch Boersen-Rauschen
+TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0002") or "0.0002") # Rauschen am Deckel
+# --- Lebendiger Kursverlauf --------------------------------------------------
+# VOL_SPREAD: so stark schwankt die Minutenbewegung um ihren Trend. 0,8 heisst,
+# eine Minute bringt zwischen 20 % und 180 % des rechnerischen Anstiegs. Ohne das
+# war der Chart eine gerade Linie - eine Aktie sieht anders aus.
+VOL_SPREAD = float(os.getenv("FLOAKTIE_VOL_SPREAD", "0.8") or "0.8")
+# Momentum: ein Teil der letzten Bewegung wirkt nach. Damit halten Trends an und
+# Wendepunkte sind sichtbar, statt dass jeder Takt bei null anfaengt.
+MOM_WEIGHT = float(os.getenv("FLOAKTIE_MOM_WEIGHT", "0.25") or "0.25")
+MOM_DECAY = float(os.getenv("FLOAKTIE_MOM_DECAY", "0.7") or "0.7")
+# --- Flo als Analyst ---------------------------------------------------------
+# Die KI schaut sich regelmaessig den Markt an und verstaerkt oder daempft die
+# Bewegung um bis zu KI_MAX. Bewusst gedeckelt: die KI darf Wuerze geben, aber
+# niemals die Balance aushebeln. Faellt sie aus, ist der Faktor 0 und alles laeuft
+# wie vorher.
+KI_MAX = float(os.getenv("FLOAKTIE_KI_MAX", "0.4") or "0.4")          # +/- 40 %
+KI_ALLE_SEK = float(os.getenv("FLOAKTIE_KI_INTERVAL", "600") or "600")  # alle 10 min
+KI_MAX_ALTER = float(os.getenv("FLOAKTIE_KI_TTL", "2400") or "2400")   # nach 40 min ungueltig
 # Sofort-Impulse fuer Ereignisse (unabhaengig vom Niveau, pro Minute gedeckelt).
 PULSE_STREAM = float(os.getenv("FLOAKTIE_PULSE_STREAM", "0.004") or "0.004")   # Livestream geht an: +0,4 %
 PULSE_JOIN = float(os.getenv("FLOAKTIE_PULSE_JOIN", "0.0015") or "0.0015")     # jemand kommt in den Call: +0,15 %
@@ -917,6 +935,141 @@ class FloAktie:
         akt = float(self._state().get("act_ema", 0.0) or 0.0)
         return self.ziel_base(akt) * max(1.0, CEIL_FACTOR)
 
+    # --- Flo als Analyst: die KI bewertet den Markt --------------------------
+    def _ki_faktor(self):
+        """Wie stark die KI die aktuelle Bewegung verstaerkt/daempft (-KI_MAX..+KI_MAX).
+
+        Reine Lesefunktion - die Einschaetzung wird im Hintergrund erneuert
+        (ki_tick). Ist sie zu alt oder gar nicht da, ist sie 0 und der Kurs
+        verhaelt sich wie ohne KI."""
+        st = self._store.data if self._store is not None else {}
+        try:
+            alter = time.time() - float(st.get("ki_zeit", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if alter > KI_MAX_ALTER:
+            return 0.0
+        try:
+            faktor = float(st.get("ki_faktor", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        if faktor != faktor:                       # NaN
+            return 0.0
+        return max(-KI_MAX, min(KI_MAX, faktor))
+
+    def ki_text(self):
+        """Der letzte Analysten-Kommentar (oder '')."""
+        st = self._store.data if self._store is not None else {}
+        try:
+            if time.time() - float(st.get("ki_zeit", 0) or 0) > KI_MAX_ALTER:
+                return ""
+        except (TypeError, ValueError):
+            return ""
+        return str(st.get("ki_text", "") or "")[:180]
+
+    def _ki_lage(self, people, streams, video, msgs):
+        """Kurzer Marktbericht als Text - das bekommt die KI zu sehen."""
+        st = self._state()
+        akt = float(st.get("act_ema", 0.0) or 0.0)
+        kurs = self.price()
+        ziel = self.ziel_kurs(akt)
+        deckel = self._deckel_kurs()
+        stand = "unter" if kurs < ziel else "ueber"
+        return (f"Kurs {kurs} Coins. Zielkurs {ziel} (Kurs steht {stand} seinem Wert). "
+                f"Deckel {deckel}. Aenderung 1 Tag {self._change_pct(1):+.1f}%, "
+                f"7 Tage {self._change_pct(7):+.1f}%. "
+                f"Gerade im Call: {people} Leute, {streams} Livestreams, {video} Kameras, "
+                f"{msgs} Chat-Nachrichten im letzten Takt. "
+                f"Aktivitaet {akt:.1f} Punkte. "
+                f"Ausgegebene Anteile: {self.total_shares()}, "
+                f"Aktionaere: {self.holders_count()}.")
+
+    _KI_SYSTEM = (
+        "Du bist der Chef-Analyst der Discord-Boerse 'FloCorp'. Du bekommst einen "
+        "kurzen Marktbericht und entscheidest, ob die aktuelle Kursbewegung "
+        "VERSTAERKT oder GEDAEMPFT wird.\n"
+        "Antworte in GENAU EINER Zeile in diesem Format:\n"
+        "ZAHL|Kommentar\n"
+        "ZAHL ist eine ganze Zahl von -40 bis +40 (Prozent, um die die Bewegung "
+        "angepasst wird). Positiv = Rally, negativ = Bremse/Korrektur.\n"
+        "Kommentar ist EIN kurzer, frecher Boersen-Satz auf Deutsch, hoechstens "
+        "90 Zeichen, ohne Anfuehrungszeichen.\n"
+        "Regeln fuer die Zahl:\n"
+        "- viele Leute im Call, viele Streams, reger Chat -> eher positiv\n"
+        "- Kurs steht schon weit UEBER seinem Zielkurs -> eher negativ (Korrektur)\n"
+        "- Kurs steht weit UNTER seinem Wert und es ist was los -> deutlich positiv\n"
+        "- leerer Server -> negativ\n"
+        "- sei nicht immer gleich: mal 0, mal deutlich, das macht den Markt lebendig.\n"
+        "Beispiel: -15|Zu heiss gelaufen, die Anleger nehmen Gewinne mit."
+    )
+
+    async def ki_tick(self, guild):
+        """Holt eine frische Einschaetzung von der KI. Ruft bot.py seltener auf als
+        den Kurs-Takt (KI_ALLE_SEK) - eine Boerse braucht keinen Analysten pro
+        Minute, und jeder Aufruf kostet.
+
+        Komplett fehlertolerant: geht etwas schief, bleibt die alte Einschaetzung
+        stehen und laeuft nach KI_MAX_ALTER von selbst aus."""
+        if not self._enabled or self.is_off() or self._store is None:
+            return None
+        st = self._state()
+        jetzt = time.time()
+        try:
+            letzte = float(st.get("ki_zeit", 0) or 0)
+        except (TypeError, ValueError):
+            letzte = 0.0
+        if jetzt - letzte < KI_ALLE_SEK:
+            return None
+        try:
+            import ai
+            if not ai.is_enabled():
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        people, streams, video = self._measure(guild)
+        msgs = max(0, int(st.get("msg_count", 0)) - int(st.get("last_msg_count", 0)))
+        try:
+            antwort = await ai.generate(self._ki_lage(people, streams, video, msgs),
+                                        system=self._KI_SYSTEM, temperature=0.9,
+                                        max_tokens=80)
+        except Exception:  # noqa: BLE001 - die Boerse laeuft auch ohne Analyst
+            log.exception("KI-Einschaetzung fehlgeschlagen")
+            return None
+        faktor, text = self._ki_parse(antwort)
+        if faktor is None:
+            return None
+        st["ki_faktor"] = faktor
+        st["ki_text"] = text
+        st["ki_zeit"] = jetzt
+        log.info("FloCorp Analyst: %+.0f %% - %s", faktor * 100, text or "(ohne Kommentar)")
+        await self._save()
+        return faktor, text
+
+    @staticmethod
+    def _ki_parse(antwort):
+        """'-15|Zu heiss gelaufen' -> (-0.15, 'Zu heiss gelaufen').
+
+        Sehr nachsichtig: die KI haelt sich nicht immer ans Format. Findet sich
+        keine brauchbare Zahl, wird gar nichts uebernommen (None)."""
+        zeilen = str(antwort or "").strip().splitlines()
+        if not zeilen:
+            return None, ""          # leer oder nur Leerzeichen (war ein IndexError)
+        roh = zeilen[0].strip()
+        text = ""
+        zahl_teil = roh
+        if "|" in roh:
+            zahl_teil, text = roh.split("|", 1)
+        m = re.search(r"[-+]?\d{1,3}", zahl_teil)
+        if m is None:
+            return None, ""
+        try:
+            prozent = int(m.group(0))
+        except ValueError:
+            return None, ""
+        prozent = max(-100, min(100, prozent))
+        text = re.sub(r"\s+", " ", text).strip().strip('"').strip("'")[:120]
+        return max(-KI_MAX, min(KI_MAX, prozent / 100.0)), text
+
     def _leerlauf_verfall(self):
         """Verfall pro Minute bei leerem Server - waechst mit der Leerlauf-Dauer.
         Erste Minute schon spuerbar (IDLE_DECAY), nach IDLE_RAMP_MIN voll (IDLE_RATE)."""
@@ -924,49 +1077,64 @@ class FloAktie:
         anteil = min(1.0, leer / max(1.0, IDLE_RAMP_MIN))
         return max(IDLE_DECAY, IDLE_RATE * anteil)
 
-    def _activity_tick(self, people, msgs_since, streams=0, video=0):
-        """EIN Aktivitaets-Takt (pro Minute). Rueckgabe: (alt, neu, drift, aktivitaet).
+    def _activity_tick(self, people, msgs_since, streams=0, video=0, dt=60.0):
+        """EIN Aktivitaets-Takt. Rueckgabe: (alt, neu, drift, aktivitaet).
+
+        'dt' ist die Laenge des Takts in Sekunden. Alle Konstanten sind PRO MINUTE
+        gedacht - laeuft der Loop schneller (fuer ein lebendigeres Bild), wird hier
+        entsprechend heruntergerechnet. Das Tagesverhalten bleibt damit gleich,
+        egal ob alle 60 oder alle 20 Sekunden getaktet wird.
 
         Die Richtung (steigt/faellt) entscheidet die ECHTE, aktuelle Aktivitaet -
-        NICHT das geglaettete EMA. Das war der Bug: das EMA klingt nur langsam ab
-        und wird von jeder alten Nachricht nachbefeuert, erreichte also fast nie
-        exakt 0. Solange es minimal ueber 0 stand, gab drift_fuer den
-        Mindest-Anstieg (MIN_UP, +0,48 %/h) zurueck - der Kurs "stieg" also, obwohl
-        seit Stunden niemand da war."""
+        NICHT das geglaettete EMA. Das war ein Bug: das EMA klingt nur langsam ab
+        und erreichte fast nie exakt 0; solange es minimal ueber 0 stand, kam der
+        Mindest-Anstieg heraus und der Kurs "stieg", obwohl niemand da war."""
         st = self._state()
+        skala = max(0.05, min(4.0, float(dt) / 60.0))
         roh_aktiv = self.activity_of(people, streams, video, msgs_since)
         alt_ema = float(st.get("act_ema", 0.0) or 0.0)
+        # Momentum wird als Rate PRO MINUTE gefuehrt - dadurch ist das Ergebnis
+        # unabhaengig davon, ob der Loop alle 20 oder alle 60 Sekunden taktet.
+        mom = float(st.get("mom", 0.0) or 0.0)
+        if mom != mom:                                   # NaN
+            mom = 0.0
+        zerfall = MOM_DECAY ** skala
+
         if roh_aktiv > 0:
-            # Jemand ist da -> Kurs steigt. Tempo geglaettet, damit ein kurzer
-            # Ausreisser nicht sofort voll durchschlaegt.
             alpha = ACT_ALPHA_UP if roh_aktiv >= alt_ema else ACT_ALPHA_DOWN
             ema = alpha * roh_aktiv + (1 - alpha) * alt_ema
             st["act_ema"] = ema
             st["leer_min"] = 0.0
-            basis = self.drift_fuer(ema)
+            # Alles zuerst PRO MINUTE rechnen, ganz am Ende auf den Takt skalieren.
+            basis = self.drift_fuer(ema) * (1.0 + self._ki_faktor())
+            # Das Momentum steuert im Mittel MOM_WEIGHT x basis bei. Ohne diese
+            # Korrektur waere die Aktie allein durch das lebendigere Verhalten
+            # wieder deutlich schneller - die Balance soll aber bleiben.
+            basis /= (1.0 + MOM_WEIGHT)
             if basis <= 0.0:
-                # Am Deckel angekommen: NICHT totenstill stehenbleiben (genau das
-                # sah aus wie "die Aktie tut nichts, obwohl der Call voll ist"),
-                # sondern atmen. Nach oben klemmt der Deckel sowieso, nach unten
-                # holt der Anstieg den Kurs in der naechsten Minute zurueck.
-                drift = random.uniform(-TICK_NOISE * 5, TICK_NOISE * 5)
+                # Am Deckel: nicht totenstill stehen, sondern atmen.
+                pro_min = random.uniform(-TICK_NOISE * 5, TICK_NOISE * 5)
             else:
-                # Solange jemand da ist, faellt der Kurs NIE - das Rauschen darf
-                # einen Anstieg hoechstens abschwaechen, nicht umdrehen.
-                drift = max(0.0, basis + random.uniform(-TICK_NOISE, TICK_NOISE))
+                # LEBENDIG: die Bewegung schwankt kraeftig um ihren Trend, dazu
+                # das nachwirkende Momentum. Vorher war der Chart eine gerade
+                # Linie. Nach unten drehen kann es trotzdem nicht - solange jemand
+                # da ist, faellt der Kurs nicht (Zusage an den Besitzer).
+                schwung = random.uniform(1.0 - VOL_SPREAD, 1.0 + VOL_SPREAD)
+                pro_min = max(0.0, basis * schwung + MOM_WEIGHT * mom)
         else:
-            # WIRKLICH leer -> Kurs faellt gestaffelt. EMA HART auf 0 (kein
-            # Nachhall mehr), damit auch das Panel "0.0 Punkte" mit fallendem Kurs
-            # zeigt und nicht den Mindest-Anstieg.
             ema = 0.0
             st["act_ema"] = 0.0
-            st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + 1.0
-            # Beim SINKEN kein Rauschen - der Verfall soll klar sichtbar sein.
-            drift = self.drift_fuer(0.0)
+            st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + skala
+            # Beim SINKEN kein Aufhellen durch Zufall - der Verfall soll klar
+            # sichtbar sein. Ein laufender Absturz zieht ueber das Momentum nach.
+            pro_min = self.drift_fuer(0.0) * (1.0 + self._ki_faktor())
+            pro_min /= (1.0 + MOM_WEIGHT)
+            pro_min = min(0.0, pro_min + MOM_WEIGHT * min(0.0, mom))
+
+        drift = pro_min * skala
+        st["mom"] = zerfall * mom + (1.0 - zerfall) * pro_min
         activity = roh_aktiv
         alt = self.price()
-        # Die Aktivitaet bewegt den BASISKURS - der angezeigte Kurs ergibt sich
-        # daraus plus den ausgegebenen Anteilen (Kurve bleibt konsistent).
         st["base"] = self._clamp_base(self._base() * (1 + drift))
         neu = self._sync_price()
         return alt, neu, drift, activity
@@ -1018,7 +1186,7 @@ class FloAktie:
             await self._save()
             await self._refresh_live()
 
-    async def sample_and_tick(self, guild):
+    async def sample_and_tick(self, guild, dt=60.0):
         """Loop-Einstieg (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s): misst
         die aktuelle Aktivitaet (Call-Leute + Streamer + Kameras + Nachrichten seit
         dem letzten Takt) und bewegt den Kurs SOFORT - viel los -> steigt, wenig ->
@@ -1032,7 +1200,8 @@ class FloAktie:
             msgs_since = max(0, total_msgs - int(st.get("last_msg_count", total_msgs)))
             st["last_msg_count"] = total_msgs
             self._tages_anker()      # Circuit Breaker fuer heute verankern
-            alt, neu, drift, act = self._activity_tick(people, msgs_since, streams, video)
+            alt, neu, drift, act = self._activity_tick(people, msgs_since, streams,
+                                                       video, dt=dt)
             self._record_tick()
             # Einmal pro Tag den Schlusskurs fuer den Langzeit-Chart festhalten.
             today = self._today()
@@ -1316,6 +1485,14 @@ class FloAktie:
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
                    f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. {hinweis}_"),
             inline=False)
+        kommentar = self.ki_text()
+        if kommentar:
+            faktor = self._ki_faktor()
+            pfeil_ki = "📈" if faktor > 0.02 else ("📉" if faktor < -0.02 else "➖")
+            emb.add_field(
+                name=f"🧠 Flos Markt-Analyse {pfeil_ki} {faktor * 100:+.0f} %",
+                value=f"_{kommentar}_",
+                inline=False)
         top = self.top_holder()
         if top:
             emb.add_field(name="👑 Größter Aktionär",
@@ -1645,6 +1822,8 @@ ziel_base = instance.ziel_base
 ziel_kurs = instance.ziel_kurs
 akt_deckel_base = instance.akt_deckel_base
 sample_and_tick = instance.sample_and_tick
+ki_tick = instance.ki_tick
+ki_text = instance.ki_text
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
 reset_kurs = instance.reset_kurs

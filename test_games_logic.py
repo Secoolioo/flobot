@@ -3402,6 +3402,116 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
+def test_floaktie_lebendig_und_ki():
+    """Die Aktie soll sich wie ein echter Markt verhalten statt stur einer Formel
+    zu folgen: schwankende Minutenbewegung, nachwirkendes Momentum, und Flo als
+    Analyst, der die Bewegung verstaerkt oder daempft. Dabei darf sich das
+    TAGESVERHALTEN nicht aendern, egal wie schnell der Loop taktet."""
+    import random
+    import statistics
+    import time as _t
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today)
+    fa._enabled = True
+    fa._today = lambda: "2026-08-01"
+
+    def frisch():
+        fa._store = _FakeStore({"price": floaktie.START_PRICE,
+                                "base": float(floaktie.START_PRICE), "day": "d",
+                                "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "mom": 0.0, "holdings": {},
+                                "history": [], "ticks": []})
+        fa._tages_anker()
+        fa._sync_price()
+
+    try:
+        # 1) LEBENDIG: die Minutenbewegung schwankt spuerbar um ihren Trend.
+        #    Vorher war das Rauschen so klein, dass der Chart eine gerade Linie war.
+        random.seed(11)
+        frisch()
+        for _ in range(540):                      # 3 h vorlaufen (Kurs weg von 10)
+            fa._activity_tick(3, 4, streams=1, dt=20.0)
+        schritte = []
+        for _ in range(180):
+            _a, _n, drift, _akt = fa._activity_tick(3, 4, streams=1, dt=20.0)
+            schritte.append(drift)
+        assert min(schritte) >= 0.0, "mit Leuten im Call darf kein Takt fallen"
+        assert max(schritte) > min(schritte) * 2, (min(schritte), max(schritte))
+        assert statistics.pstdev(schritte) > 0.0005, statistics.pstdev(schritte)
+
+        # 2) MOMENTUM wirkt nach und wird als Rate pro Minute gefuehrt.
+        frisch()
+        for _ in range(60):
+            fa._activity_tick(5, 4, streams=2, dt=20.0)
+        assert fa._store.data["mom"] > 0
+        # Im Leerlauf dreht es ins Minus.
+        for _ in range(90):
+            fa._activity_tick(0, 0, dt=20.0)
+        assert fa._store.data["mom"] < 0
+
+        # 3) TAKTUNABHAENGIG: 60 s und 20 s kommen am Ende auf dasselbe Niveau.
+        werte = {}
+        for dt in (60.0, 20.0):
+            ergebnisse = []
+            for lauf in range(12):
+                random.seed(700 + lauf)
+                frisch()
+                for _ in range(int(3 * 3600 / dt)):
+                    fa._activity_tick(3, 4, streams=1, dt=dt)
+                ergebnisse.append(fa.price())
+            werte[dt] = statistics.median(ergebnisse)
+        a, b = werte[60.0], werte[20.0]
+        assert abs(a - b) < max(a, b) * 0.25, werte
+
+        # 4) KI-ANALYST: verstaerkt und daempft - und ist gedeckelt.
+        for faktor, richtung in ((floaktie.KI_MAX, "rauf"), (-floaktie.KI_MAX, "runter")):
+            random.seed(42)
+            frisch()
+            fa._store.data.update({"ki_faktor": faktor, "ki_text": "Test",
+                                   "ki_zeit": _t.time()})
+            for _ in range(180):
+                fa._activity_tick(3, 4, streams=1, dt=20.0)
+            werte[richtung] = fa.price()
+        assert werte["rauf"] > werte["runter"] * 1.3, werte
+        # Ueber den Deckel hinaus geht die KI nie.
+        fa._store.data["ki_faktor"] = 99.0
+        assert fa._ki_faktor() == floaktie.KI_MAX
+        fa._store.data["ki_faktor"] = -99.0
+        assert fa._ki_faktor() == -floaktie.KI_MAX
+        # Alte Einschaetzung laeuft aus (Analyst faellt aus -> Markt laeuft normal).
+        fa._store.data.update({"ki_faktor": 0.4, "ki_zeit": _t.time() - 99999})
+        assert fa._ki_faktor() == 0.0 and fa.ki_text() == ""
+        # Kaputte Werte kippen nichts um.
+        fa._store.data.update({"ki_faktor": "quatsch", "ki_zeit": _t.time()})
+        assert fa._ki_faktor() == 0.0
+
+        # 5) Der Parser ist nachsichtig, aber niemals gefaehrlich.
+        p = fa._ki_parse
+        assert p("-15|Zu heiss gelaufen")[0] == -0.15
+        assert p("+25 | Rally!") == (0.25, "Rally!")
+        assert p("0|Seitwaerts")[0] == 0.0
+        assert p("999|Uebertrieben")[0] == floaktie.KI_MAX      # gedeckelt
+        assert p("-999|Panik")[0] == -floaktie.KI_MAX
+        for muell in (None, "", "keine Zahl hier", "   "):
+            assert p(muell)[0] is None, muell
+        assert len(p("5|" + "x" * 500)[1]) <= 120                # Kommentar gekuerzt
+
+        # 6) Der Kommentar taucht im Panel auf.
+        restore = _with_economy({3: 0})
+        try:
+            frisch()
+            fa._store.data.update({"ki_faktor": 0.2, "ki_text": "Die Bullen rennen.",
+                                   "ki_zeit": _t.time()})
+            panel = _embed_text(fa._panel_embed(SimpleNamespace(id=3)))
+            assert "Markt-Analyse" in panel and "Die Bullen rennen." in panel
+            assert "+20 %" in panel
+        finally:
+            restore()
+    finally:
+        fa._store, fa._enabled, fa._today = alt
+
+
 def test_floaktie_bots_zaehlen_nie():
     """Der Bot (und jeder andere) darf die Aktie NICHT beeinflussen. Gemeldet aus
     dem Betrieb: der Kurs sank nie. Ursache: gezaehlt wurde ueber voice_states, und
