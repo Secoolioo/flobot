@@ -120,16 +120,18 @@ FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "10") or "10")
 # (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
 # stand bei hoher Aktivitaet praktisch still. Genau das war der Fehler.)
-AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "3000") or "3000")
+AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # Plus je Aktivitaetspunkt und Minute. 0,0012 heisst: 1 Zuhoerer +0,12 %/min,
 # 20 Punkte +2,4 %/min, 40 Punkte +4,8 %/min. Das Tempo bestimmt nur, WIE SCHNELL
 # der Kurs an sein Niveau kommt - wie HOCH er laeuft, legt AKT_WERT/CEIL_FACTOR
 # fest. Deshalb darf es ruhig steil sein.
-# 0,006 heisst: 1 Zuhoerer +0,6 %/min, 3 Leute +1,8 %/min, 17 Punkte am Deckel.
-# Bei 3 Leuten im Call kommt ueber einen Vormittag rund das 25- bis 55-fache
-# heraus - genau die Groessenordnung, in der aus 600k Anteilen 23 Mio wurden.
-TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.006") or "0.006")
-TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.05") or "0.05")     # max +5 % in einem Takt
+# 0,003 heisst: 1 Zuhoerer +0,3 %/min, 3 Leute +0,9 %/min, ab 10 Punkten am
+# Anschlag. Bewusst GEDROSSELT: mit 0,006 und AKT_WERT 3000 kam ein Abend mit
+# 10 Leuten und 5 Streams auf 93 MILLIONEN Erloes fuer ein volles Depot - das war
+# selbst dem Besitzer "zu krass". Jetzt sind es rund 9,6 Mio an so einem Abend
+# und 1,3 Mio an einem normalen (3 Leute, ein Stream).
+TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.003") or "0.003")
+TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.03") or "0.03")     # max +3 % in einem Takt
 # Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
 # schneller faellt der Kurs (wie eine Aktie, die keiner mehr will).
 #   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
@@ -161,7 +163,7 @@ MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
 # 3 Punkte tragen bis 3,3 Mio, 20 Punkte bis 20 Mio, 39 Punkte bis 39 Mio.
 # (Vorher stand er bei 2,0 - da war bei 3 Leuten schon ab Kurs 6.600 Schluss und
 # der Kurs stand komplett still, obwohl Leute im Call waren.)
-CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "8") or "8")
+CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "6") or "6")
 # Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
 # sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
 ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")

@@ -1529,6 +1529,10 @@ def test_floaktie_market():
         fa._store.data["act_ema"] = 0.0
         fa._sync_price()
         n0, c0 = len(edits), len(chart_edits)
+        # Genug Nachrichten fuer einen sichtbaren Kurssprung (der Chat-Anteil ist
+        # bei MSG_MAX_ACT gedeckelt, der Sprung muss den gerundeten Kurs bewegen).
+        fa._store.data["base"] = float(floaktie.FAIR_BASE) * 50
+        fa._sync_price()
         fa._store.data["msg_count"] = 999
         fa._store.data["last_msg_count"] = 0
         asyncio.run(fa.sample_and_tick(SimpleNamespace(voice_channels=[], afk_channel=None)))
@@ -3620,7 +3624,19 @@ def test_floaktie_panel_zeigt_echten_deckel():
         panel = _embed_text(fa._panel_embed(SimpleNamespace(id=2)))
         assert "Tagesdeckel erreicht" in panel, panel
         assert "Mitternacht" in panel
-        assert "(Anschlag)" in panel                # Tempo laeuft am Limit
+
+        # Solange noch Luft nach oben ist, markiert das Panel das Tempo-Limit -
+        # sonst wundert man sich, warum mehr Leute nichts mehr beschleunigen.
+        fa._store.data["base"] = fa._deckel_base() / 100.0
+        fa._sync_price()
+        luft = _embed_text(fa._panel_embed(SimpleNamespace(id=2)))
+        assert "(Anschlag)" in luft, luft
+        assert "Tagesdeckel erreicht" not in luft
+
+        # Fuer den naechsten Teil wieder auf den gedeckelten Stand zurueck.
+        fa._store.data["base"] = fa._deckel_base()
+        fa._sync_price()
+        gedeckelt = fa.price()
 
         # Neuer Tag -> neuer Anker, jetzt bindet die Aktivitaet.
         fa._today = lambda: "2026-07-28"
