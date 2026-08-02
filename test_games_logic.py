@@ -1410,18 +1410,25 @@ def test_floaktie_market():
         fa._sync_price()          # Anzeigekurs auf die Kurve ziehen (sonst stale)
         a, n, drift, act = fa._activity_tick(0, 0)           # niemand da
         assert drift < 0 and n <= a                          # Tendenz nach unten
+        # Immer BASIS setzen und synchronisieren - sonst ist der gespeicherte
+        # Anzeigekurs veraltet und 'vorher/nachher' vergleicht Aepfel mit Birnen.
+        def stelle(kurs=1000):
+            fa._store.data.update({"base": float(kurs),
+                                   "act_ema": floaktie.ACT_BASELINE, "leer_min": 0.0})
+            fa._sync_price()
+
         # Auch VIELE NACHRICHTEN treiben den Kurs (msgs / MSG_DIVISOR).
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        stelle()
         a, n, drift, act = fa._activity_tick(0, 200)         # reger Chat
         assert n > a and drift > 0 and act > floaktie.ACT_BASELINE
         # Live-Streamer zaehlen EXTRA: gleiche Personen, aber Streams -> mehr Aktivitaet.
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        stelle()
         _, _, _, act_plain = fa._activity_tick(12, 0)
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        stelle()
         _, _, _, act_stream = fa._activity_tick(12, 0, streams=6, video=3)
         assert act_stream > act_plain                        # Streamer/Kameras zaehlen mit
         # Ueber eine Stunde (60 Min-Takte) aktiver Call -> Kurs klar hoch.
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE})
+        stelle()
         for _ in range(60):
             fa._activity_tick(12, 30, streams=6)
         assert fa.price() > 1030                             # klar gestiegen (Boersenwert mit)
@@ -1515,6 +1522,12 @@ def test_floaktie_market():
         asyncio.run(fa.buy(SimpleNamespace(id=1), 1))
         assert len(edits) >= 2 and len(chart_edits) >= 2         # Trade zieht beide nach
         # Aktivitaets-Takt mit Kursaenderung zieht Panel UND Chart nach.
+        # Basiskurs bewusst tief setzen, damit der Takt garantiert etwas bewegt
+        # (steht er schon am Deckel, ist die Drift 0 - und dann gibt es zu Recht
+        # kein Update).
+        fa._store.data["base"] = float(floaktie.FAIR_BASE)
+        fa._store.data["act_ema"] = 0.0
+        fa._sync_price()
         n0, c0 = len(edits), len(chart_edits)
         fa._store.data["msg_count"] = 999
         fa._store.data["last_msg_count"] = 0
@@ -1748,17 +1761,22 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         assert d < 0, (d, akt)                              # muss FALLEN
         assert fa._state()["act_ema"] == 0.0               # EMA-Rest ist weg
 
-        # 5) Toter Server: sinkt GESTAFFELT - kurze Pause tut kaum was, langer
-        #    Leerlauf laesst den Kurs deutlich einbrechen (das war der Wunsch:
-        #    "die muss doch sinken wenn nix los ist").
+        # 5) Toter Server: sinkt GESTAFFELT und inzwischen HART - eine kurze Pause
+        #    tut wenig, ab ein paar Minuten Leerlauf faellt der Kurs deutlich.
+        #    (Ausdruecklicher Wunsch: "die soll mehr sinken sobald keiner mehr im
+        #    Call ist" - vorher waren es -0,25 %/min mit 25 Minuten Anlauf.)
         frisch(200_000)
-        for _ in range(5):
+        for _ in range(3):
             fa._activity_tick(0, 0)
-        assert (1 - fa.price() / 200_000) < 0.01           # 5 min Pause: fast nichts
-        for _ in range(115):
+        assert (1 - fa.price() / 200_000) < 0.05           # erste Minuten: sanft
+        for _ in range(57):
+            fa._activity_tick(0, 0)
+        nach_1h = 1 - fa.price() / 200_000
+        assert 0.35 < nach_1h < 0.75, nach_1h              # nach 1 h klar im Minus
+        for _ in range(60):
             fa._activity_tick(0, 0)
         nach_2h = 1 - fa.price() / 200_000
-        assert 0.15 < nach_2h < 0.40, nach_2h              # nach 2 h klar sichtbar
+        assert nach_2h > 0.70, nach_2h                     # nach 2 h eingebrochen
         # Beim SINKEN gibt es kein Rauschen - jede Leerlauf-Minute geht wirklich
         # runter (vorher stieg der Kurs in ~30 % der Minuten durch Zufall).
         frisch(200_000)
@@ -1788,7 +1806,10 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
 
         # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
         #    aber pro Minute gedeckelt (kein Pump durch Rein-/Rausspringen).
+        #    Der Impuls braucht Luft nach oben - bei Aktivitaet 0 ist der Deckel
+        #    winzig und er tut (richtigerweise) gar nichts.
         frisch()
+        fa._store.data["act_ema"] = 8.0
         vorher = fa.price()
         assert fa._puls(floaktie.PULSE_STREAM, "test") > vorher
         for _ in range(30):
@@ -1842,7 +1863,10 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         # Nur ohne jede Aktivitaet faellt er.
         assert fa.drift_fuer(0) < 0
 
-        # 9) Messung ohne Member-Cache: voice_states statt members.
+        # 9) Messung ohne Member-Cache: voice_states als Notfall-Quelle. Wer sich
+        #    NICHT aufloesen laesst, zaehlt NICHT - lieber eine Minute zu wenig
+        #    Aktivitaet als ein Bot, der den Kurs dauerhaft oben haelt.
+        #    (Details in test_floaktie_bots_zaehlen_nie.)
         class _VS:
             def __init__(self, stream=False, video=False):
                 self.self_stream, self.self_video = stream, video
@@ -1852,12 +1876,19 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
             voice_states = {11: _VS(True), 12: _VS(), 13: _VS(video=True)}
             members = []                      # Cache leer!
 
+        leute = {11: SimpleNamespace(id=11, bot=False),
+                 12: SimpleNamespace(id=12, bot=False),
+                 13: SimpleNamespace(id=13, bot=False)}
         guild = SimpleNamespace(voice_channels=[_VC()], afk_channel=None,
                                me=SimpleNamespace(id=99),
-                               get_member=lambda _uid: None)
+                               get_member=lambda uid: leute.get(uid))
         assert fa._measure(guild) == (3, 1, 1)
+        # Gar kein Cache -> gar keine Aktivitaet (statt drei erfundenen Menschen).
+        guild.get_member = lambda _uid: None
+        assert fa._measure(guild) == (0, 0, 0)
         # Flo selbst und andere Bots zaehlen nicht mit.
         _VC.voice_states = {99: _VS(), 11: _VS()}
+        guild.get_member = lambda uid: leute.get(uid)
         assert fa._measure(guild)[0] == 1
     finally:
         fa._store, fa._enabled, floaktie.TICK_NOISE = alt
@@ -3313,10 +3344,13 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         assert fa._state()["open_day"] == "2026-07-27"
 
         # 5) VERKAUFSSTEUER steigt mit der Blase - der wichtigste Geld-Abfluss.
+        #    Vom Bodensatz (10) aus braucht der Kurs eine Weile, bis er ueberhaupt
+        #    UEBER seinem Zielkurs steht - erst dann ist es eine Blase.
         frisch()
         normal = fa._sell_fee()
-        for _ in range(6 * 60):
+        for _ in range(14 * 60):
             fa._activity_tick(3, 0)
+        assert fa._base() > fa.ziel_base(fa._state()["act_ema"]), "keine Blase entstanden"
         blase = fa._sell_fee()
         assert normal < blase <= floaktie.SELL_TAX_MAX, (normal, blase)
         assert abs(normal - floaktie.TRADE_FEE) < 0.01
@@ -3331,8 +3365,13 @@ def test_floaktie_grenzen_gegen_hyperinflation():
             fa._activity_tick(3, 1, 0, 4)      # 3 Leute, einer streamt, etwas Chat
         erloes, _ = fa._sell_proceeds(deckel)
         faktor = erloes / max(1, kosten)
-        assert 5 < faktor < 60, (kosten, erloes, faktor)
+        # Der FAKTOR ist absichtlich gross: der Kurs startet am Bodensatz, wer
+        # frueh kauft, verdient kraeftig. Begrenzt wird nicht der Faktor, sondern
+        # der ABSOLUTE Erloes - nur der bestimmt, wie viele Coins entstehen.
+        assert faktor > 5, (kosten, erloes, faktor)
         assert erloes < 100_000_000, erloes     # nie Milliarden aus einer Runde
+        # Gegenprobe: mehr als Depot-Deckel x Kurs-Deckel geht NIE.
+        assert erloes <= floaktie.MAX_SHARES_PER_USER * floaktie.MAX_PRICE
 
         # 7) NOTAUS: ist die Aktie per Panel aus, geht gar nichts mehr.
         import features
@@ -3357,6 +3396,112 @@ def test_floaktie_grenzen_gegen_hyperinflation():
     finally:
         restore_eco()
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
+
+
+def test_floaktie_bots_zaehlen_nie():
+    """Der Bot (und jeder andere) darf die Aktie NICHT beeinflussen. Gemeldet aus
+    dem Betrieb: der Kurs sank nie. Ursache: gezaehlt wurde ueber voice_states, und
+    ob ein Eintrag ein Bot ist, stand nur im Member-Cache - lieferte der nichts,
+    zaehlte der Musik-Bot als MENSCH und hielt die Aktivitaet dauerhaft ueber 0."""
+    import floaktie
+    fa = floaktie.instance
+
+    def member(uid, *, bot=False, stream=False, video=False):
+        vs = SimpleNamespace(self_stream=stream, self_video=video)
+        return SimpleNamespace(id=uid, bot=bot, voice=vs), vs
+
+    m_mensch, vs_mensch = member(1, stream=True)
+    m_bot, vs_bot = member(2, bot=True)
+    m_flo, vs_flo = member(99)
+
+    class Chan:
+        def __init__(self, members, states):
+            self.id = 5
+            self.members = members
+            self.voice_states = states
+
+    class Guild:
+        def __init__(self, chan, cache):
+            self.voice_channels = [chan]
+            self.afk_channel = None
+            self.me = SimpleNamespace(id=99)
+            self._cache = cache
+
+        def get_member(self, uid):
+            return self._cache.get(uid)
+
+    # 1) Normalfall: Member-Objekte da -> Bot und Flo zaehlen nicht.
+    chan = Chan([m_mensch, m_bot, m_flo], {1: vs_mensch, 2: vs_bot, 99: vs_flo})
+    g = Guild(chan, {1: m_mensch, 2: m_bot, 99: m_flo})
+    assert fa._measure(g) == (1, 1, 0), fa._measure(g)
+
+    # 2) NUR Bots im Call -> Aktivitaet 0 (vorher: der Bot hielt sie ueber 0).
+    chan = Chan([m_bot, m_flo], {2: vs_bot, 99: vs_flo})
+    g = Guild(chan, {2: m_bot, 99: m_flo})
+    assert fa._measure(g) == (0, 0, 0), fa._measure(g)
+    assert fa.activity_of(*fa._measure(g)) == 0.0
+
+    # 3) Member-Cache LEER, nur voice_states: unbekannte Eintraege zaehlen NICHT.
+    #    Genau hier lag der Fehler - unbekannt hiess frueher "Mensch".
+    chan = Chan([], {1: vs_mensch, 2: vs_bot, 99: vs_flo})
+    g = Guild(chan, {})                      # get_member liefert nichts
+    assert fa._measure(g) == (0, 0, 0), fa._measure(g)
+    # ... sobald der Cache den Menschen kennt, zaehlt er wieder.
+    g = Guild(chan, {1: m_mensch})
+    assert fa._measure(g) == (1, 1, 0), fa._measure(g)
+
+    # 4) AFK-Kanal zaehlt nie.
+    chan = Chan([m_mensch], {1: vs_mensch})
+    g = Guild(chan, {1: m_mensch})
+    g.afk_channel = SimpleNamespace(id=5)
+    assert fa._measure(g) == (0, 0, 0)
+
+
+def test_floaktie_reset_befehl():
+    """'flo aktie reset' setzt den Kurs auf den Start zurueck - nur fuer den Chef."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today)
+    fa._enabled = True
+    fa._today = lambda: "2026-07-27"
+    restore = _with_economy({floaktie.OWNER_ID: 1000, 7: 1000})
+    fa._store = _FakeStore({"price": 500_000, "base": 400_000.0, "day": "x",
+                            "act_ema": 9.9, "msg_count": 40, "last_msg_count": 10,
+                            "leer_min": 3.0, "open_day": "2026-07-27",
+                            "open_base": 12_345.0, "holdings": {"1": 150, "2": 30},
+                            "history": [{"day": "x", "price": 1}], "ticks": [1, 2, 3]})
+    fa._sync_price()
+    try:
+        def msg(uid, text):
+            return SimpleNamespace(content=text, guild=SimpleNamespace(id=1),
+                                   author=SimpleNamespace(id=uid, display_name="T"))
+
+        # Fremde duerfen nicht - der Kurs bleibt, wo er war.
+        vorher = fa.price()
+        assert vorher > 100_000, vorher
+        r = asyncio.run(fa.handle(msg(7, "aktie reset")))
+        assert isinstance(r, str) and "nur der Chef" in r
+        assert fa.price() == vorher
+
+        # Der Chef schon - Depots bleiben erhalten.
+        r = asyncio.run(fa.handle(msg(floaktie.OWNER_ID, "aktie reset")))
+        assert "zurückgesetzt" in _embed_text(r)
+        st = fa._store.data
+        erwartet = max(floaktie.MIN_PRICE,
+                       round(floaktie.START_PRICE * (1 + 180 / floaktie.LIQUIDITY)))
+        assert fa.price() == erwartet, (fa.price(), erwartet)
+        assert fa.price() < vorher / 100                   # wirklich ganz unten
+        assert st["holdings"] == {"1": 150, "2": 30}       # Anteile bleiben
+        assert st["history"] == [] and st["act_ema"] == 0.0 and st["leer_min"] == 0.0
+        assert st["open_day"] == "2026-07-27"              # Tagesbremse neu verankert
+
+        # 'reset alles' loescht zusaetzlich die Depots.
+        r = asyncio.run(fa.handle(msg(floaktie.OWNER_ID, "aktie reset alles")))
+        assert fa._store.data["holdings"] == {}
+        assert "2 geleert" in _embed_text(r)
+    finally:
+        fa._store, fa._enabled, fa._today = alt
+        restore()
 
 
 def test_floaktie_faellt_auf_jedem_niveau():
@@ -3436,10 +3581,14 @@ def test_floaktie_panel_zeigt_echten_deckel():
     wartet stundenlang auf einen Anstieg, der heute nicht mehr kommen kann."""
     import floaktie
     fa = floaktie.instance
-    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE, floaktie.DAY_UP)
     fa._enabled = True
     floaktie.TICK_NOISE = 0.0
     fa._today = lambda: "2026-07-27"
+    # Die Tagesbremse nach oben ist im Betrieb bewusst weit offen (der Aktivitaets-
+    # Deckel ist die echte Grenze). Fuer diesen Test wird sie eng gestellt, damit
+    # der Fall "Tagesbremse bindet frueher" ueberhaupt eintritt.
+    floaktie.DAY_UP = 50.0
     restore = _with_economy({2: 1000})
     try:
         S = 147
@@ -3481,7 +3630,8 @@ def test_floaktie_panel_zeigt_echten_deckel():
             fa._activity_tick(10, 25, streams=5, video=1)
         assert fa.price() > gedeckelt               # es geht weiter
     finally:
-        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
+        (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE,
+         floaktie.DAY_UP) = alt
         restore()
 
 

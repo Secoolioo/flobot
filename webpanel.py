@@ -18,6 +18,7 @@ haengen - gedacht ist es fuers lokale Netz / hinter der Firewall.
 Abschaltbar mit WEBPANEL_ENABLED=0. Host/Port: WEBPANEL_HOST / WEBPANEL_PORT.
 """
 
+import asyncio
 import logging
 import os
 import secrets
@@ -105,6 +106,7 @@ class WebPanel:
             web.get("/api/avatar/{uid}", self._api_avatar),
             web.get("/api/features", self._api_features),
             web.post("/api/feature", self._api_feature),
+            web.post("/api/update", self._api_update),
         ])
         return app
 
@@ -841,6 +843,75 @@ class WebPanel:
         return web.json_response({"ok": True, "guilds": out,
                                   "sendepause": self._sendepause_state(),
                                   "aktie": self._feature_state("floaktie")})
+
+    async def _api_update(self, request):
+        """'git pull' im Bot-Verzeichnis und danach Neustart - der Knopf unter
+        'Steuerung'. Spart den Weg ins Terminal.
+
+        Bewusst eng gehalten: es laeuft NUR 'git pull --ff-only' (kein Merge, kein
+        Rebase, keine beliebigen Befehle), im Verzeichnis des Bots, mit Zeitlimit.
+        Neu gestartet wird nur, wenn der Pull sauber durchlief UND sich wirklich
+        etwas geaendert hat - sonst waere der Knopf ein Neustart-Knopf mit
+        Zusatzschritt."""
+        self._guard(request)
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        neustart = self._flag(data.get("restart"), True)
+        verzeichnis = str(Path(__file__).resolve().parent)
+
+        async def lauf(*args, timeout=120):
+            proc = await asyncio.create_subprocess_exec(
+                *args, cwd=verzeichnis,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+            try:
+                aus, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+                return 124, "Zeitüberschreitung"
+            return proc.returncode, (aus or b"").decode("utf-8", "replace").strip()
+
+        try:
+            rc_vor, vorher = await lauf("git", "rev-parse", "HEAD")
+            rc, ausgabe = await lauf("git", "pull", "--ff-only")
+            rc_nach, nachher = await lauf("git", "rev-parse", "HEAD")
+        except FileNotFoundError:
+            return web.json_response({"ok": False, "error": "git nicht gefunden"},
+                                     status=500)
+        except Exception:  # noqa: BLE001
+            log.exception("Update ueber das Panel fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "Update fehlgeschlagen"},
+                                     status=500)
+
+        geaendert = (rc_vor == 0 and rc_nach == 0 and vorher != nachher)
+        if rc != 0:
+            log.warning("Panel-Update: git pull fehlgeschlagen (%s)", ausgabe[:400])
+            return web.json_response({"ok": False, "error": "git pull fehlgeschlagen",
+                                      "log": ausgabe[-1500:]}, status=400)
+        log.info("Panel-Update: git pull ok (%s)", "neue Commits" if geaendert
+                 else "schon aktuell")
+        antwort = {"ok": True, "changed": geaendert, "log": ausgabe[-1500:],
+                   "commit": nachher[:8] if rc_nach == 0 else ""}
+        if neustart and geaendert:
+            antwort["restarting"] = True
+            # Erst die Antwort rausgeben, DANN neu starten - sonst sieht das Panel
+            # nur einen Verbindungsabbruch und weiss nicht, ob es geklappt hat.
+            client = self._client
+            if client is not None and hasattr(client, "restart_soon"):
+                try:
+                    client._spawn(client.restart_soon(2.0))
+                except Exception:  # noqa: BLE001
+                    log.exception("Neustart nach Panel-Update fehlgeschlagen")
+                    antwort["restarting"] = False
+                    antwort["hinweis"] = "Neustart fehlgeschlagen – bitte von Hand."
+            else:
+                antwort["restarting"] = False
+                antwort["hinweis"] = "Neustart nicht möglich – bitte von Hand."
+        return web.json_response(antwort)
 
     def _feature_state(self, key):
         """{loaded, on} eines Features - fuer die dicken Schalter unter 'Steuerung'."""

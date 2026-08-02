@@ -54,13 +54,15 @@ _RANGES = (("1 Tag", 1), ("7 Tage", 7), ("30 Tage", 30), ("Gesamt", 100000))
 HISTORY_TICKS_MAX = 20000   # ~14 Tage Minuten-Takte (vorher 50 h -> 7/30/Gesamt sahen gleich aus)
 
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
+# Nur der Besitzer darf die Aktie zuruecksetzen.
+OWNER_ID = int(os.getenv("OWNER_ID", "1040135855710404659") or "0")
 
 # --- Balance (per .env justierbar) -------------------------------------------
 # Startkurs = FAIR_BASE: eine frisch zurueckgesetzte Aktie steht damit GENAU auf
 # dem Wert eines toten Servers und kann sofort in beide Richtungen - vorher lag
 # der Start unter dem Boden und der Kurs konnte anfangs gar nicht fallen.
-START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "800") or "800")   # Coins/Anteil
-MIN_PRICE = int(os.getenv("FLOAKTIE_MIN_PRICE", "50") or "50")
+START_PRICE = int(os.getenv("FLOAKTIE_START_PRICE", "10") or "10")   # Coins/Anteil
+MIN_PRICE = int(os.getenv("FLOAKTIE_MIN_PRICE", "5") or "5")
 # Absolute Untergrenze fuer den BASISkurs (nicht fuer den angezeigten Kurs!).
 # Nur da, damit die Kurve nie auf 0 kollabiert - siehe _base().
 BASE_FLOOR = 0.01
@@ -113,7 +115,7 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "150") or "150")
 # Kurs nach einem Reset bei 1.000 startet und im Betrieb oft darunter stand. Damit
 # war der Kurs in einer Einbahnstrasse - im Leerlauf passierte GAR NICHTS, bis er
 # sich erst versechsfacht hatte. Genau das kam im Betrieb an: "die Aktie sinkt nie".
-FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "800") or "800")
+FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "10") or "10")
 # Wert je Aktivitaetspunkt. Merksatz: Zielkurs ~ 1.000 x Aktivitaetspunkte.
 # (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
@@ -129,15 +131,17 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "3000") or "3000")
 TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.006") or "0.006")
 TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.05") or "0.05")     # max +5 % in einem Takt
 # Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
-# schneller faellt der Kurs (wie eine Aktie, die keiner mehr will). Eine kurze
-# Pause tut fast nichts, stundenlanger Leerlauf laesst den Kurs deutlich sinken.
+# schneller faellt der Kurs (wie eine Aktie, die keiner mehr will).
 #   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
-# IDLE_RATE 0,0025 = bis zu -0,25 %/min = -15 %/h bei vollem Leerlauf.
-IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.0025") or "0.0025")
+# IDLE_RATE 0,012 = bis zu -1,2 %/min = -51 %/h bei vollem Leerlauf, und die
+# Rampe ist nach 8 Minuten voll da. Vorher waren es -0,25 %/min mit 25 Minuten
+# Anlauf - das kam im Betrieb als "die Aktie sinkt ja gar nicht" an. Ist der Call
+# leer, soll man ZUSEHEN koennen, wie der Kurs faellt.
+IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.012") or "0.012")
 # Nach so vielen zusammenhaengenden Leerlauf-Minuten ist der Verfall voll da.
-IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "25") or "25")
+IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "8") or "8")
 # Alt (nur noch als Startwert der Rampe, damit auch die erste Minute schon sinkt).
-IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.0003") or "0.0003")
+IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.002") or "0.002")
 # Wie stark es ueber dem Zielkurs gemaechlicher wird. Die Daempfung ist
 # LOGARITHMISCH und damit sehr langatmig: beim Doppelten des Zielkurses noch 78 %
 # Tempo, beim 15-fachen 48 %, beim 150-fachen 33 %. So steigt der Kurs auch dann
@@ -191,8 +195,14 @@ ACT_BASELINE = 0.0
 # Basiskurs maximal um Faktor DAY_UP steigen und auf DAY_DOWN fallen.
 MAX_PRICE = int(os.getenv("FLOAKTIE_MAX_PRICE", "50000000") or "50000000")
 MAX_SHARES_PER_USER = int(os.getenv("FLOAKTIE_MAX_USER_SHARES", "150") or "150")
-DAY_UP = float(os.getenv("FLOAKTIE_DAY_UP", "50") or "50")        # max x50 pro Tag
-DAY_DOWN = float(os.getenv("FLOAKTIE_DAY_DOWN", "0.1") or "0.1")  # max -90 % pro Tag
+# Tagesbremse nach OBEN: nur noch eine Gleitkomma-Notbremse, KEINE Spielgrenze.
+# Die echte Grenze ist der Aktivitaets-Deckel (CEIL_FACTOR x Zielkurs) - und der
+# ist absolut, nicht relativ zum aktuellen Kurs. Ueber Tage aufschaukeln kann sich
+# deshalb nichts, auch ohne Tagesbremse. Sie stand auf x50: weil der Kurs nachts
+# bis auf den Bodensatz faellt, startete damit JEDER Tag bei 10 und kam nie ueber
+# 500 - der Kurs sass in einem Band von 10 bis 500 fest.
+DAY_UP = float(os.getenv("FLOAKTIE_DAY_UP", "100000") or "100000")
+DAY_DOWN = float(os.getenv("FLOAKTIE_DAY_DOWN", "0.01") or "0.01")  # max -99 % pro Tag
 # Verkaufs-Steuer: TRADE_FEE + SELL_TAX_K * ln(1+Ueberhang), gedeckelt.
 # Am Deckel (Ueberhang 7) sind das rund 33 % - dort entstehen die meisten Coins.
 SELL_TAX_K = float(os.getenv("FLOAKTIE_SELL_TAX_K", "0.15") or "0.15")
@@ -687,6 +697,35 @@ class FloAktie:
             e.set_footer(text=f"{self._bot_name} aktie · aktienkurs · depot · top")
         return e
 
+    async def reset_kurs(self, *, depots_leeren=False):
+        """Setzt die Aktie auf den Startkurs zurueck (Verlauf weg, Tagesbremse neu).
+
+        depots_leeren=True loescht zusaetzlich alle Anteile. Ohne das behalten die
+        Aktionaere ihre Anteile - die sind danach eben billig.
+        Rueckgabe: (alter Kurs, neuer Kurs, geloeschte Depots)."""
+        st = self._state()
+        alt_kurs = self.price()
+        depots = len(self._holdings()) if depots_leeren else 0
+        if depots_leeren:
+            st["holdings"] = {}
+        st["base"] = float(START_PRICE)
+        st["act_ema"] = 0.0
+        st["leer_min"] = 0.0
+        st["pulse_min"] = 0
+        st["pulse_sum"] = 0.0
+        st["history"] = []
+        st["ticks"] = []
+        st["open_day"] = ""
+        st["open_base"] = 0
+        self._tages_anker()
+        neu = self._sync_price()
+        self._record_tick()
+        await self._save_all()
+        await self._refresh_live()
+        log.warning("FloCorp zurueckgesetzt: Kurs %s -> %s (Depots geleert: %s)",
+                    self._fmt(alt_kurs), self._fmt(neu), depots_leeren)
+        return alt_kurs, neu, depots
+
     async def _save_all(self):
         try:
             await self._save()
@@ -764,12 +803,18 @@ class FloAktie:
     def _measure(self, guild):
         """Misst die Voice-Aktivitaet: (Leute, Live-Streamer, Kameras).
 
-        Liest bewusst channel.voice_states und nicht channel.members: die
-        voice_states stehen unabhaengig vom Member-Cache zur Verfuegung
-        (discord.py nennt sie ausdruecklich den Ersatz fuer .members, "when the
-        member cache is unavailable"). Damit zaehlt der Takt auch dann richtig,
-        wenn der Cache nach einem Neustart noch leer ist. Fehlt die Property
-        (aeltere discord.py), faellt es auf .members zurueck."""
+        BOTS ZAEHLEN NIE - weder Flo selbst noch fremde. Genau da lag ein Fehler:
+        gezaehlt wurde ueber channel.voice_states, und ob ein Eintrag ein Bot ist,
+        stand nur im Member-Cache. Lieferte guild.get_member(uid) nichts (nach
+        einem Neustart, oder weil der Cache den Bot nicht kennt), wurde er als
+        MENSCH mitgezaehlt - der Musik-Bot allein hielt so die Aktivitaet dauerhaft
+        ueber 0, und der Kurs konnte nie fallen.
+
+        Deshalb jetzt: ZUERST channel.members (echte Member-Objekte, '.bot' ist dort
+        verlaesslich). Nur wenn diese Liste leer ist, obwohl voice_states etwas
+        zeigen (Cache wirklich nicht da), wird ueber voice_states gezaehlt - und
+        dabei jeder nicht aufloesbare Eintrag SICHERHEITSHALBER als Bot behandelt
+        statt als Mensch."""
         people = streams = video = 0
         if guild is None:
             return 0, 0, 0
@@ -778,34 +823,38 @@ class FloAktie:
         for vc in (getattr(guild, "voice_channels", None) or []):
             if afk_id is not None and getattr(vc, "id", None) == afk_id:
                 continue
-            states = getattr(vc, "voice_states", None)
-            if states:
-                for uid, vs in list(states.items()):
-                    if uid == eigene_id:
-                        continue                      # Flo selbst zaehlt nicht
-                    m = None
-                    try:
-                        m = guild.get_member(uid)
-                    except Exception:  # noqa: BLE001
-                        m = None
-                    if m is not None and getattr(m, "bot", False):
-                        continue                      # andere Bots auch nicht
+            members = [m for m in (getattr(vc, "members", None) or [])
+                       if getattr(m, "id", None) != eigene_id]
+            if members:
+                for m in members:
+                    if getattr(m, "bot", False):
+                        continue                      # Bots zaehlen nicht
                     people += 1
-                    if getattr(vs, "self_stream", False):
-                        streams += 1
-                    if getattr(vs, "self_video", False):
-                        video += 1
+                    vs = getattr(m, "voice", None)
+                    if vs is not None:
+                        if getattr(vs, "self_stream", False):
+                            streams += 1
+                        if getattr(vs, "self_video", False):
+                            video += 1
                 continue
-            for m in (getattr(vc, "members", None) or []):
-                if getattr(m, "bot", False):
+            # Notfall: keine Member-Objekte da, aber voice_states schon.
+            for uid, vs in list((getattr(vc, "voice_states", None) or {}).items()):
+                if uid == eigene_id:
+                    continue
+                m = None
+                try:
+                    m = guild.get_member(uid)
+                except Exception:  # noqa: BLE001
+                    m = None
+                if m is None or getattr(m, "bot", False):
+                    # Unbekannt -> NICHT mitzaehlen. Lieber eine Minute zu wenig
+                    # Aktivitaet als ein Bot, der den Kurs dauerhaft oben haelt.
                     continue
                 people += 1
-                vs = getattr(m, "voice", None)
-                if vs is not None:
-                    if getattr(vs, "self_stream", False):
-                        streams += 1
-                    if getattr(vs, "self_video", False):
-                        video += 1
+                if getattr(vs, "self_stream", False):
+                    streams += 1
+                if getattr(vs, "self_video", False):
+                    video += 1
         return people, streams, video
 
     def activity_of(self, people, streams=0, video=0, msgs=0):
@@ -1408,6 +1457,23 @@ class FloAktie:
             return await self.buy(message.author, self._resolve_count(message.author, arg or "1"))
         if sub in ("verkauf", "verkaufen", "sell", "verkaufe", "short", "dump"):
             return await self.sell(message.author, self._resolve_count(message.author, arg or "1", selling=True))
+        if sub in ("reset", "zuruecksetzen", "zurücksetzen", "neustart"):
+            if int(getattr(message.author, "id", 0)) != OWNER_ID:
+                return "🔒 Die Aktie zurücksetzen darf nur der Chef."
+            alles = arg in ("alles", "all", "hart", "komplett", "depots")
+            alt_k, neu_k, depots = await self.reset_kurs(depots_leeren=alles)
+            e = discord.Embed(
+                title="♻️ FloCorp zurückgesetzt",
+                description=(f"Kurs **{self._fmt(alt_k)}** → **{self._fmt(neu_k)}** "
+                             f"{economy.COIN}\nVerlauf gelöscht, Tagesbremse neu "
+                             f"verankert."),
+                colour=discord.Colour.from_rgb(87, 242, 135))
+            e.add_field(name="Depots",
+                        value=(f"{depots} geleert" if alles
+                               else "bleiben erhalten (jetzt eben billig)"),
+                        inline=True)
+            e.set_footer(text=f"{self._bot_name} aktie reset alles · löscht auch die Depots")
+            return e
         if sub in ("top", "leaderboard", "rangliste", "aktionäre", "aktionaere"):
             return self._top_embed()
         if sub in ("depot", "portfolio", "anteile", "meins"):
@@ -1579,6 +1645,7 @@ akt_deckel_base = instance.akt_deckel_base
 sample_and_tick = instance.sample_and_tick
 pay_voice_dividends = instance.pay_voice_dividends
 price = instance.price
+reset_kurs = instance.reset_kurs
 series = instance.series
 admin_shares = instance.admin_shares
 admin_set_price = instance.admin_set_price

@@ -651,6 +651,15 @@ class FloBot(discord.Client):
             return
         await self._reply_chunks(message, payload)
 
+    async def restart_soon(self, verzoegerung=2.0):
+        """Neustart mit kurzer Verzoegerung - fuer Aufrufer ausserhalb (Web-Panel),
+        damit deren HTTP-Antwort noch rausgeht, bevor der Prozess weg ist."""
+        try:
+            await asyncio.sleep(max(0.0, float(verzoegerung)))
+        except Exception:  # noqa: BLE001
+            pass
+        await self._restart_bot()
+
     async def _restart_bot(self):
         """Startet den GANZEN Prozess neu (re-exec) - funktioniert lokal und unter
         systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
