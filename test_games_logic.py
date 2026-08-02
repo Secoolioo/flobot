@@ -1572,6 +1572,10 @@ def test_webpanel_api():
                                  get_guild=lambda _x: None, get_channel=lambda _x: None)
     app = wp._build_app()
 
+    # Dieser Test prueft den Login-Weg - dafuer muss die Login-Pflicht an sein
+    # (im Betrieb ist sie standardmaessig aus, siehe test_webpanel_ohne_login).
+    wp._auth = True
+
     async def run_it():
         async with TestClient(TestServer(app)) as cli:
             # Auth-Gate: ohne Token/Cookie 401 (vor dem Login pruefen).
@@ -4398,6 +4402,52 @@ def test_embeds_statt_fliesstext():
     finally:
         fa._store, fa._enabled = alt
         restore()
+
+
+def test_webpanel_ohne_login():
+    """Das Panel laeuft standardmaessig OHNE Login (so gewuenscht) - aber der
+    Riegel muss sich mit WEBPANEL_AUTH=1 wieder einschalten lassen, und die
+    Oberflaeche muss vorher wissen, was Sache ist (/api/config)."""
+    import webpanel
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def lauf(auth):
+        wp = webpanel.WebPanel()
+        wp._enabled = True
+        wp._user, wp._pass, wp._auth = "u", "p", auth
+        async with TestClient(TestServer(wp._build_app())) as c:
+            cfg = await (await c.get("/api/config")).json()
+            codes = {}
+            for pfad, meth in (("/api/overview", "get"), ("/api/features", "get"),
+                               ("/api/user/coins", "post"), ("/api/update", "post")):
+                r = await getattr(c, meth)(pfad, json={})
+                codes[pfad] = r.status
+            return cfg, codes
+
+    # Ohne Login-Pflicht: /api/config sagt das, und nichts gibt mehr 401.
+    cfg, codes = asyncio.run(lauf(False))
+    assert cfg["ok"] is True and cfg["auth"] is False
+    assert all(v != 401 for v in codes.values()), codes
+    assert codes["/api/overview"] == 200
+
+    # Mit WEBPANEL_AUTH=1 ist alles wieder dicht.
+    cfg, codes = asyncio.run(lauf(True))
+    assert cfg["auth"] is True
+    assert all(v == 401 for v in codes.values()), codes
+
+    # Der Standard ist AUS - und /api/config ist selbst nie geschuetzt, sonst
+    # koennte die Oberflaeche gar nicht erst herausfinden, ob sie einen Login
+    # anzeigen muss.
+    quelle = open("webpanel.py", encoding="utf-8").read()
+    assert 'os.getenv("WEBPANEL_AUTH", "0")' in quelle
+    i = quelle.index("async def _api_config")
+    assert "_guard" not in quelle[i:i + 400]
+    # Und es wird laut gewarnt, wenn ohne Login gestartet wird.
+    assert "OHNE LOGIN" in quelle
+
+    # Die Oberflaeche fragt /api/config, bevor sie den Anmeldebildschirm zeigt.
+    html = open("webpanel.html", encoding="utf-8").read()
+    assert "/api/config" in html and "S.authNoetig" in html
 
 
 def test_webpanel_token_deckel():

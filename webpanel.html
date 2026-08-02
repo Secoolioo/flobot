@@ -576,7 +576,7 @@ function doLogin(){ var u=$("#lu").value.trim(), p=$("#lp").value; var err=$("#l
   }).catch(function(){ btn.disabled=false; btn.textContent="Einloggen"; fail("Verbindung fehlgeschlagen"); });
   function fail(m){ err.textContent=m; var c=$("#loginCard"); c.classList.remove("shake"); void c.offsetWidth; c.classList.add("shake"); } }
 
-function doLogout(silent){ S.token=null; try{localStorage.removeItem(LS);}catch(e){} if(S.refresh){clearInterval(S.refresh);S.refresh=null;}
+function doLogout(silent){ if(S.authNoetig===false){ return; } S.token=null; try{localStorage.removeItem(LS);}catch(e){} if(S.refresh){clearInterval(S.refresh);S.refresh=null;}
   $("#app").classList.remove("show"); $("#login").style.display="grid"; $("#lp").value="";
   if(!silent) toast("Abgemeldet","info"); else $("#loginErr").textContent="Sitzung abgelaufen – bitte erneut anmelden."; }
 
@@ -1273,15 +1273,31 @@ function tick(){ var d=new Date(); var t=d.toLocaleTimeString("de-DE"); var dt=d
 setInterval(tick,1000); tick();
 
 /* ============ BOOT ============ */
-function boot(){ try{ S.token=localStorage.getItem(LS); }catch(e){ S.token=null; }
-  if(!S.token){ $("#login").style.display="grid"; return; }
+function starteApp(){
   $("#login").style.display="none";
   api("/api/overview").then(function(d){ if(!d.ok)throw d; S.bot=d.bot_name||"Flo"; S.prevOv=null; S.ov=d;
     $("#login").style.display="none"; $("#app").classList.add("show"); $("#brandName").textContent=S.bot; buildNav();
     S.view="overview"; renderOverviewFromBoot(d);
   }).catch(function(e){ if(e&&e.auth)return; // token invalid handled by doLogout
-    if(!S.token){ $("#login").style.display="grid"; } else { // network error but keep token, show login gracefully
-      $("#login").style.display="grid"; } }); }
+    $("#login").style.display="grid"; }); }
+
+function boot(){
+  /* Zuerst fragen, ob ueberhaupt ein Login verlangt wird (WEBPANEL_AUTH).
+     Ist er aus, geht es ohne Anmeldebildschirm direkt ins Panel. */
+  fetch("/api/config").then(function(r){ return r.json(); }).then(function(c){
+    S.authNoetig = !(c && c.ok) || !!c.auth;
+    if(c && c.bot_name) S.bot=c.bot_name;
+    if(!S.authNoetig){ var lo=$("#logoutBtn"); if(lo) lo.style.display="none"; starteApp(); return; }
+    try{ S.token=localStorage.getItem(LS); }catch(e){ S.token=null; }
+    if(!S.token){ $("#login").style.display="grid"; return; }
+    starteApp();
+  }).catch(function(){
+    /* Kein /api/config (alte Version)? Dann wie frueher mit Login. */
+    S.authNoetig=true;
+    try{ S.token=localStorage.getItem(LS); }catch(e){ S.token=null; }
+    if(!S.token){ $("#login").style.display="grid"; return; }
+    starteApp();
+  }); }
 function renderOverviewFromBoot(d){ $("#pageTitle").textContent=TITLES.overview[0]; $("#pageCrumb").textContent=S.bot+" · "+TITLES.overview[1];
   renderOverview(d,false); S.refresh=setInterval(function(){ if(S.view!=="overview"){clearInterval(S.refresh);S.refresh=null;return;} api("/api/overview").then(function(d2){ if(d2&&d2.ok){ S.prevOv=S.ov; S.ov=d2; renderOverview(d2,true); } }).catch(function(){}); },6000); }
 

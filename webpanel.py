@@ -5,17 +5,24 @@ auf den Live-Daten (economy, floaktie, lotto, merchant, admin, discord-Client) -
 Aenderungen sind sofort wirksam und werden ganz normal gespeichert.
 
 Features (JSON-API + schicke Single-Page-Oberflaeche webpanel.html):
-- Login (Standard Secoolio/Secoolio, per .env aenderbar)
 - Uebersicht/Statistiken: Nutzer, Coins, Server, Aktie, Lotto, Level-Verteilung
 - Nutzer verwalten: suchen, Profil ansehen, Flo Coins geben/nehmen/setzen,
   XP anpassen, Titel geben/nehmen
-- Server verwalten: Guilds ansehen, Sendepause schalten, Ansage posten
+- Server verwalten: Guilds ansehen, Sendepause schalten, Ansage posten,
+  Features schalten, per Knopf aktualisieren (git pull) und neu starten
 
-Sicherheit: Das Panel ist NUR mit Login erreichbar. Trotzdem: Zugangsdaten in der
-.env setzen (WEBPANEL_USER/WEBPANEL_PASS) und den Port nicht offen ins Internet
-haengen - gedacht ist es fuers lokale Netz / hinter der Firewall.
+SICHERHEIT - bitte lesen:
+Das Panel laeuft standardmaessig OHNE LOGIN (WEBPANEL_AUTH=0, so gewuenscht). Wer
+die Adresse erreicht, kann damit alles: Coins vergeben, Ansagen im Namen des Bots
+posten, den Kurs setzen, den Bot aktualisieren und neu starten. Betreibe es
+deshalb NUR im eigenen Netz bzw. hinter der Firewall und haenge den Port nicht
+offen ins Internet.
 
-Abschaltbar mit WEBPANEL_ENABLED=0. Host/Port: WEBPANEL_HOST / WEBPANEL_PORT.
+    WEBPANEL_AUTH=1      Login wieder verlangen (WEBPANEL_USER/WEBPANEL_PASS)
+    WEBPANEL_HOST=127.0.0.1   nur lokal erreichbar
+    WEBPANEL_ENABLED=0   Panel ganz aus
+
+Host/Port: WEBPANEL_HOST / WEBPANEL_PORT (Standard 0.0.0.0:9123).
 """
 
 import asyncio
@@ -57,6 +64,7 @@ class WebPanel:
         self._bot_name = "Flo"
         self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
         self._fails = {}       # ip -> (Fehlversuche, gesperrt_bis) gegen Raten
+        self._auth = False     # Login verlangen? (WEBPANEL_AUTH, Standard aus)
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -77,8 +85,18 @@ class WebPanel:
             self._port = 9123
         self._user = os.getenv("WEBPANEL_USER", "Secoolio") or "Secoolio"
         self._pass = os.getenv("WEBPANEL_PASS", "Secoolio") or "Secoolio"
+        # Login standardmaessig AUS (so gewuenscht). Mit WEBPANEL_AUTH=1 wieder an.
+        self._auth = os.getenv("WEBPANEL_AUTH", "0").strip().lower() in (
+            "1", "true", "yes", "on")
         self._enabled = True
         log.info("Web-Panel bereit (startet in on_ready auf %s:%d).", self._host, self._port)
+        if not self._auth:
+            log.warning("Web-Panel laeuft OHNE LOGIN (WEBPANEL_AUTH=0). Jeder, der "
+                        "http://%s:%d erreicht, kann Coins vergeben, Ansagen posten "
+                        "und den Bot per Knopf aktualisieren/neu starten. Nur im "
+                        "eigenen Netz betreiben - nicht offen ins Internet haengen. "
+                        "Wieder anschalten: WEBPANEL_AUTH=1 in der .env.",
+                        self._host, self._port)
         return True
 
     def is_enabled(self):
@@ -90,6 +108,7 @@ class WebPanel:
         app.add_routes([
             web.get("/", self._index),
             web.get("/panel", self._index),
+            web.get("/api/config", self._api_config),
             web.post("/api/login", self._api_login),
             web.get("/api/overview", self._api_overview),
             web.get("/api/users", self._api_users),
@@ -121,8 +140,9 @@ class WebPanel:
         site = web.TCPSite(self._runner, self._host, self._port)
         try:
             await site.start()
-            log.info("🌐 Web-Panel laeuft auf http://%s:%d (Login: %s)",
-                     self._host, self._port, self._user)
+            log.info("🌐 Web-Panel laeuft auf http://%s:%d (%s)",
+                     self._host, self._port,
+                     f"Login: {self._user}" if self._auth else "ohne Login")
         except Exception as exc:  # noqa: BLE001 - Port belegt/Adresse kaputt/...
             # Vorher nur OSError: bei einem kaputten Port (z. B. WEBPANEL_PORT=999999)
             # flog ein OverflowError durch und _runner blieb gesetzt - danach war
@@ -203,6 +223,9 @@ class WebPanel:
             log.info("Web-Panel: Fehl-Login von %s (%d).", ip, n)
 
     def _valid(self, request):
+        # Ohne Login-Pflicht ist jede Anfrage in Ordnung (WEBPANEL_AUTH=0).
+        if not self._auth:
+            return True
         # Token aus 'Authorization: Bearer ...' ODER Cookie.
         tok = ""
         auth = request.headers.get("Authorization", "")
@@ -231,6 +254,12 @@ class WebPanel:
             except OSError:
                 self._html_cache = ("<h1>Flo Panel</h1><p>webpanel.html fehlt.</p>")
         return web.Response(text=self._html_cache, content_type="text/html")
+
+    async def _api_config(self, request):
+        """Was die Oberflaeche VOR dem Login wissen muss. Bewusst ohne Waechter -
+        hier steht nichts Geheimes drin, nur ob ueberhaupt ein Login noetig ist."""
+        return web.json_response({"ok": True, "auth": bool(self._auth),
+                                  "bot_name": self._bot_name})
 
     async def _api_login(self, request):
         try:
