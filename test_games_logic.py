@@ -3575,6 +3575,109 @@ def test_floaktie_bots_zaehlen_nie():
     assert fa._measure(g) == (0, 0, 0)
 
 
+def test_floaktie_leerlauf_faellt_ab_der_ersten_minute():
+    """Gemeldet: "es sinkt nur so 1 % pro Stunde". Verlangt: gute 20 % pro Stunde,
+    ab der ERSTEN leeren Minute - und der Anstieg im Call bleibt unveraendert.
+
+    Geprueft wird deshalb dreierlei:
+      1. schon bei leer_min = 0 sind es >= 20 %/h,
+      2. eine volle leere Stunde kostet deutlich mehr als 20 %,
+      3. der Anstieg bei Aktivitaet ist NICHT mit gedrosselt worden."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-08-05"
+    try:
+        def frisch(kurs, S=147):
+            b = kurs / (1 + S / floaktie.LIQUIDITY)
+            fa._store = _FakeStore({"price": int(kurs), "base": b, "day": "x",
+                                    "act_ema": 0.0, "msg_count": 0,
+                                    "last_msg_count": 0, "leer_min": 0.0,
+                                    "open_day": "2026-08-05", "open_base": b,
+                                    "holdings": {"1": S}, "history": [], "ticks": []})
+            fa._sync_price()
+
+        # 1) Sofort-Rate: auch in der allerersten leeren Minute >= 20 %/h.
+        frisch(5_000)
+        pro_min = fa._leerlauf_verfall()
+        pro_std = 1.0 - (1.0 - pro_min) ** 60
+        assert pro_std >= 0.20, (pro_min, pro_std)
+
+        # ... und mit laenger werdendem Leerlauf wird es NUR schneller.
+        vorher = 0.0
+        for leer in (0, 2, 4, 6, 30):
+            fa._state()["leer_min"] = float(leer)
+            jetzt = fa._leerlauf_verfall()
+            assert jetzt >= vorher, (leer, jetzt, vorher)
+            vorher = jetzt
+
+        # 2) Eine volle leere Stunde: deutlich mehr als die geforderten 20 %.
+        for start in (1_000, 5_000, 40_000):
+            frisch(start)
+            for _ in range(60):
+                fa._activity_tick(0, 0)
+            verlust = 1.0 - fa.price() / start
+            assert verlust >= 0.20, (start, fa.price(), verlust)
+
+        # 3) Der ANSTIEG im Call bleibt: 6 Leute + 2 Streams heben den Kurs.
+        frisch(1_000)
+        for _ in range(60):
+            fa._activity_tick(6, 4, streams=2)
+        assert fa.price() > 1_000, fa.price()
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
+
+
+def test_floaktie_panel_zeigt_wer_gezaehlt_wird():
+    """Damit man SIEHT, woher die Aktivitaet kommt (und dass kein Bot dabei ist),
+    nennt das Panel die gezaehlten Menschen beim Namen."""
+    import floaktie
+    fa = floaktie.instance
+
+    def member(uid, name, *, bot=False, stream=False):
+        vs = SimpleNamespace(self_stream=stream, self_video=False)
+        return SimpleNamespace(id=uid, bot=bot, voice=vs, display_name=name,
+                               name=name), vs
+
+    m_flo, vs_flo = member(99, "Flo", bot=True)
+    m_musik, vs_musik = member(2, "Musik-Bot", bot=True)
+    m_anna, vs_anna = member(1, "Anna", stream=True)
+
+    class Chan:
+        def __init__(self, members, states):
+            self.id = 5
+            self.members = members
+            self.voice_states = states
+
+    class Guild:
+        def __init__(self, members, states):
+            self.voice_channels = [Chan(members, states)]
+            self.afk_channel = None
+            self.me = SimpleNamespace(id=99)
+
+        def get_member(self, uid):
+            return None
+
+    # Nur Bots im Call -> die Zeile sagt das ausdruecklich, kein Bot-Name drin.
+    fa._measure(Guild([m_flo, m_musik], {99: vs_flo, 2: vs_musik}))
+    fa._zuletzt_mess = (0, 0, 0, 0)
+    zeile = fa._mess_zeile()
+    assert "Niemand im Call" in zeile, zeile
+    assert "Musik-Bot" not in zeile and "Flo" not in zeile, zeile
+
+    # Mit einem Menschen: sein Name steht da, der Bot weiterhin nicht.
+    leute, streams, video = fa._measure(Guild([m_flo, m_musik, m_anna],
+                                              {99: vs_flo, 2: vs_musik, 1: vs_anna}))
+    assert (leute, streams, video) == (1, 1, 0), (leute, streams, video)
+    fa._zuletzt_mess = (leute, streams, video, 12)
+    zeile = fa._mess_zeile()
+    assert "Anna" in zeile, zeile
+    assert "Musik-Bot" not in zeile, zeile
+    assert "Livestream" in zeile and "12" in zeile, zeile
+
+
 def test_floaktie_reset_befehl():
     """'flo aktie reset' setzt den Kurs auf den Start zurueck - nur fuer den Chef."""
     import floaktie

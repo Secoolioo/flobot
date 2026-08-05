@@ -136,15 +136,17 @@ TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.0275") or "0.0275") # max +2,
 # Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
 # schneller faellt der Kurs (wie eine Aktie, die keiner mehr will).
 #   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
-# IDLE_RATE 0,012 = bis zu -1,2 %/min = -51 %/h bei vollem Leerlauf, und die
-# Rampe ist nach 8 Minuten voll da. Vorher waren es -0,25 %/min mit 25 Minuten
-# Anlauf - das kam im Betrieb als "die Aktie sinkt ja gar nicht" an. Ist der Call
-# leer, soll man ZUSEHEN koennen, wie der Kurs faellt.
-IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.012") or "0.012")
+# Ist der Call leer, soll man ZUSEHEN koennen, wie der Kurs faellt:
+#   ab der ERSTEN Minute  -0,4 %/min  = -21 %/h   (IDLE_DECAY)
+#   ab der 5. Minute      -1,5 %/min  = -60 %/h   (IDLE_RATE, volle Rampe)
+# Der sanfte Anlauf ist bewusst weg - vorher startete es bei -0,2 %/min (-11 %/h)
+# und brauchte 8 Minuten bis zur vollen Wirkung. Das fuehlte sich an, als
+# passiere in der ersten Viertelstunde gar nichts.
+IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.015") or "0.015")
 # Nach so vielen zusammenhaengenden Leerlauf-Minuten ist der Verfall voll da.
-IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "8") or "8")
+IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "5") or "5")
 # Alt (nur noch als Startwert der Rampe, damit auch die erste Minute schon sinkt).
-IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.002") or "0.002")
+IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.004") or "0.004")
 # Wie stark es ueber dem Zielkurs gemaechlicher wird. Die Daempfung ist
 # LOGARITHMISCH und damit sehr langatmig: beim Doppelten des Zielkurses noch 78 %
 # Tempo, beim 15-fachen 48 %, beim 150-fachen 33 %. So steigt der Kurs auch dann
@@ -260,6 +262,14 @@ class FloAktie:
         self._chart_days = 1
         # Handels-Schloesser je Nutzer (gegen Doppelklick-Rennen).
         self._locks = {}
+        # Eigene Bot-ID. guild.me ist nicht immer im Cache - ohne diesen Merker
+        # koennte Flo sich selbst als Zuhoerer zaehlen und den Kurs oben halten.
+        self._self_id = 0
+        # Namen der zuletzt gezaehlten Menschen (nur Anzeige/Diagnose).
+        self._zuletzt_gezaehlt = []
+        # Die Rohwerte des letzten Takts (Leute, Streams, Kameras, Nachrichten) -
+        # damit das Panel zeigen kann, WORAUS die Aktivitaet besteht.
+        self._zuletzt_mess = (0, 0, 0, 0)
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -839,7 +849,10 @@ class FloAktie:
         if guild is None:
             return 0, 0, 0
         afk_id = getattr(getattr(guild, "afk_channel", None), "id", None)
-        eigene_id = getattr(getattr(guild, "me", None), "id", 0)
+        eigene_id = getattr(getattr(guild, "me", None), "id", 0) or self._self_id
+        if eigene_id and not self._self_id:
+            self._self_id = eigene_id
+        gezaehlt = []
         for vc in (getattr(guild, "voice_channels", None) or []):
             if afk_id is not None and getattr(vc, "id", None) == afk_id:
                 continue
@@ -850,6 +863,8 @@ class FloAktie:
                     if getattr(m, "bot", False):
                         continue                      # Bots zaehlen nicht
                     people += 1
+                    gezaehlt.append(getattr(m, "display_name", None)
+                                    or getattr(m, "name", None) or str(getattr(m, "id", "?")))
                     vs = getattr(m, "voice", None)
                     if vs is not None:
                         if getattr(vs, "self_stream", False):
@@ -871,10 +886,15 @@ class FloAktie:
                     # Aktivitaet als ein Bot, der den Kurs dauerhaft oben haelt.
                     continue
                 people += 1
+                gezaehlt.append(getattr(m, "display_name", None)
+                                or getattr(m, "name", None) or str(uid))
                 if getattr(vs, "self_stream", False):
                     streams += 1
                 if getattr(vs, "self_video", False):
                     video += 1
+        # Wer genau gezaehlt wurde, merken - das Panel zeigt es an, damit man
+        # SIEHT, woher die Aktivitaet kommt (und dass eben KEIN Bot dabei ist).
+        self._zuletzt_gezaehlt = gezaehlt
         return people, streams, video
 
     def activity_of(self, people, streams=0, video=0, msgs=0):
@@ -1199,6 +1219,7 @@ class FloAktie:
             total_msgs = int(st.get("msg_count", 0))
             msgs_since = max(0, total_msgs - int(st.get("last_msg_count", total_msgs)))
             st["last_msg_count"] = total_msgs
+            self._zuletzt_mess = (people, streams, video, msgs_since)
             self._tages_anker()      # Circuit Breaker fuer heute verankern
             alt, neu, drift, act = self._activity_tick(people, msgs_since, streams,
                                                        video, dt=dt)
@@ -1439,7 +1460,7 @@ class FloAktie:
             if pro_min >= TICK_CAP * 100 - 0.001:
                 tempo += " _(Anschlag)_"
         else:
-            tempo = f"**{pro_min * 60:+.2f} %/h**"
+            tempo = f"**{self._pro_stunde(self.drift_fuer(akt)):+.2f} %/h**"
         am_deckel = self._am_deckel()
         if akt <= 0:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
@@ -1453,7 +1474,7 @@ class FloAktie:
                            f"wert. Tiefer geht es nicht, ab hier hilft nur Aktivität.")
             elif leer >= 60:
                 hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt jetzt "
-                           f"({self.drift_fuer(0) * 60 * 100:+.0f} %/h) bis auf "
+                           f"({self._pro_stunde(self.drift_fuer(0)):+.0f} %/h) bis auf "
                            f"**{self._fmt(max(MIN_PRICE, boden))}**. "
                            f"Je länger nichts los ist, desto schneller.")
             else:
@@ -1482,6 +1503,7 @@ class FloAktie:
             value=(f"{akt:.1f} Punkte · {tempo} · "
                    f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}** · "
                    f"Deckel **{self._fmt(self._deckel_kurs())}**\n"
+                   f"{self._mess_zeile()}\n"
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
                    f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. {hinweis}_"),
             inline=False)
@@ -1523,6 +1545,37 @@ class FloAktie:
             inline=False)
         emb.set_footer(text=f"{self._bot_name} aktie kauf max · verkauf alles · aktienkurs · top")
         return emb
+
+    @staticmethod
+    def _pro_stunde(pro_min):
+        """Rechnet eine Minuten-Rate ehrlich auf eine Stunde hoch - also mit
+        Zinseszins, nicht mal 60. Bei -1,5 %/min waren das frueher '-90 %/h';
+        tatsaechlich bleiben nach einer Stunde 40 % uebrig, es sind -60 %/h."""
+        return (((1.0 + pro_min) ** 60) - 1.0) * 100.0
+
+    def _mess_zeile(self):
+        """Zeigt SCHWARZ AUF WEISS, wer den Kurs gerade traegt.
+
+        Ohne diese Zeile ist nicht nachvollziehbar, warum die Aktivitaet nicht
+        auf 0 geht, wenn 'gefuehlt' niemand mehr im Call ist - genau das war der
+        Verdacht beim Bot im Call. Bots stehen hier NIE drin, weil sie gar nicht
+        erst mitgezaehlt werden."""
+        people, streams, video, msgs = self._zuletzt_mess
+        if people <= 0:
+            return ("👥 **Niemand im Call** – Bots zählen nicht mit."
+                    + (f" (nur Chat: {msgs} Nachrichten)" if msgs > 0 else ""))
+        namen = list(self._zuletzt_gezaehlt)[:6]
+        rest = max(0, people - len(namen))
+        liste = ", ".join(namen) + (f" +{rest} weitere" if rest else "")
+        extra = []
+        if streams > 0:
+            extra.append(f"🔴 {streams} Livestream" + ("s" if streams != 1 else ""))
+        if video > 0:
+            extra.append(f"📷 {video} Kamera" + ("s" if video != 1 else ""))
+        if msgs > 0:
+            extra.append(f"💬 {msgs} Nachrichten")
+        schwanz = (" · " + " · ".join(extra)) if extra else ""
+        return f"👥 **{people} im Call:** {liste}{schwanz}"
 
     def _deckel_base(self):
         """Der WIRKLICH bindende Basiskurs-Deckel: der kleinste von dreien.
