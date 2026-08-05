@@ -668,6 +668,9 @@ class Games:
         self._bg = set()
         # in setup() befuellt (System-Liste oder Fallback)
         self._event_words = []
+        # Anagramm-Kandidaten (6-9 Buchstaben), beim ersten Spiel einmalig
+        # aus _event_words gefiltert - die Wortliste hat bis zu ~300k Eintraege.
+        self._anagramm_pool = None
         self._mathe = {}      # channel_id -> laufende Mathe-Runde
         self._ana = {}        # channel_id -> laufende Anagramm-Runde
         self._qduel = {}      # channel_id -> laufendes Quiz-Duell
@@ -1590,7 +1593,7 @@ class Games:
         # Kandidatenliste einmalig cachen: die Wortliste kann ~300k Eintraege haben
         # (System-Wortliste), ein O(n)-Filter bei JEDEM 'anagramm'-Start blockiert
         # sonst unnoetig den Event-Loop. Ergebnis ist konstant.
-        kandidaten = getattr(self, "_anagramm_pool", None)
+        kandidaten = self._anagramm_pool
         if kandidaten is None:
             kandidaten = [w for w in (self._event_words or _EVENT_FALLBACK_WORDS)
                           if 6 <= len(w) <= 9] or list(_EVENT_FALLBACK_WORDS)
