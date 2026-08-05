@@ -765,7 +765,22 @@ function statusRow(st){ var row=ce("div","status-row");
   html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="'+(pause?"#D4AF37":"#10B981")+'" stroke-width="2" stroke-linecap="round"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',"","Sendepause",'<span data-status="pause">'+(pause?"Aktiv":"Inaktiv")+'</span>');
   if(st.merchant_present!=null) html+=chip('🛒',"","Händler",'<span data-status="merchant">'+(st.merchant_present?"Anwesend":"Abwesend")+'</span>');
   if(st.floaktie_holders!=null) html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="#7CA6FF" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>',"","$FLO-Halter",'<span data-status="holders">'+fmt(st.floaktie_holders)+'</span>');
-  row.innerHTML=html; return row; }
+  /* Zeigt SCHWARZ AUF WEISS, ob gerade jemand gezaehlt wird - und wie schnell
+     der Kurs deshalb steigt oder faellt. Bots stehen hier nie drin. */
+  if(st.floaktie_activity!=null) html+=chip('<svg viewBox="0 0 24 24" fill="none" stroke="#D4AF37" stroke-width="2" stroke-linecap="round"><polyline points="3 17 9 11 13 15 21 7"/></svg>',"","$FLO-Aktivität",'<span data-status="fakt" data-status-title="fakt" title="'+esc(werText(st))+'">'+aktText(st)+'</span>');
+  row.innerHTML=html; return row;
+}
+/* "12,4 Pkt · +38 %/h" bzw. "leer · -60 %/h" - kompakt genug fuer einen Chip. */
+function aktText(st){
+  var a=(st.floaktie_activity!=null)?st.floaktie_activity:0;
+  var t=(st.floaktie_trend!=null)?st.floaktie_trend:0;
+  var vz=(t>=0?"+":"")+t.toFixed(0)+" %/h";
+  return (a>0?(String(a).replace(".",",")+" Pkt"):"leer")+" · "+vz;
+}
+/* Die Namen der gezaehlten Menschen - als Tooltip, damit der Chip schmal bleibt. */
+function werText(st){
+  return String(st.floaktie_who||"").replace(/\*\*/g,"").replace(/_/g,"");
+}
 /* Alle Chips live nachziehen - nicht nur Online/Sendepause. */
 function updateStatus(st){
   function set(name,txt){ var el=document.querySelector('[data-status="'+name+'"]'); if(el)el.textContent=txt; }
@@ -773,6 +788,11 @@ function updateStatus(st){
   set("pause",st.sendepause?"Aktiv":"Inaktiv");
   if(st.merchant_present!=null) set("merchant",st.merchant_present?"Anwesend":"Abwesend");
   if(st.floaktie_holders!=null) set("holders",fmt(st.floaktie_holders));
+  if(st.floaktie_activity!=null){
+    set("fakt",aktText(st));
+    var el=document.querySelector('[data-status-title="fakt"]');
+    if(el) el.title=werText(st);
+  }
 }
 
 /* AREA CHART */

@@ -4507,6 +4507,54 @@ def test_embeds_statt_fliesstext():
         restore()
 
 
+def test_webpanel_zeigt_aktien_aktivitaet():
+    """Das Terminal muss LIVE zeigen, ob gerade jemand gezaehlt wird - sonst ist
+    "die Aktie sinkt nicht" nicht nachpruefbar. Aktivitaet, Tempo pro Stunde und
+    die Namen (ohne Bots) gehoeren in die Uebersicht."""
+    import asyncio as _asyncio
+    import floaktie
+    import webpanel
+    from aiohttp.test_utils import TestClient, TestServer
+
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt)
+    fa._enabled = True
+    fa._store = _FakeStore({"price": 500, "base": 500.0, "day": "x",
+                            "act_ema": 12.5, "msg_count": 0, "last_msg_count": 0,
+                            "leer_min": 0.0, "holdings": {"1": 5},
+                            "history": [], "ticks": []})
+    fa._sync_price()
+    fa._zuletzt_mess = (3, 1, 0, 7)
+    fa._zuletzt_gezaehlt = ["Anna", "Ben", "Cem"]
+
+    async def lauf():
+        wp = webpanel.WebPanel()
+        wp._enabled = True
+        wp._auth = 0
+        async with TestClient(TestServer(wp._build_app())) as c:
+            return await (await c.get("/api/overview")).json()
+
+    try:
+        d = _asyncio.run(lauf())
+        st = d["stats"]
+        assert st["floaktie_activity"] == 12.5, st.get("floaktie_activity")
+        # Bei Aktivitaet steigt der Kurs - das Tempo muss positiv sein.
+        assert st["floaktie_trend"] > 0, st.get("floaktie_trend")
+        wer = st["floaktie_who"]
+        assert "Anna" in wer and "3 im Call" in wer, wer
+
+        # Leerer Call: Tempo negativ, und zwar mindestens die geforderten 20 %/h.
+        fa._state()["act_ema"] = 0.0
+        fa._zuletzt_mess = (0, 0, 0, 0)
+        fa._zuletzt_gezaehlt = []
+        st = _asyncio.run(lauf())["stats"]
+        assert st["floaktie_activity"] == 0.0, st.get("floaktie_activity")
+        assert st["floaktie_trend"] <= -20.0, st.get("floaktie_trend")
+        assert "Niemand im Call" in st["floaktie_who"], st.get("floaktie_who")
+    finally:
+        fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
+
+
 def test_webpanel_ohne_login():
     """Das Panel laeuft standardmaessig OHNE Login (so gewuenscht) - aber der
     Riegel muss sich mit WEBPANEL_AUTH=1 wieder einschalten lassen, und die

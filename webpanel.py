@@ -531,6 +531,17 @@ class WebPanel:
                 stats["floaktie_change"] = chg if chg is not None else 0.0
                 stats["floaktie_marketcap"] = (self._safe(floaktie.instance.total_shares, 0) or 0) * preis
                 floaktie_history = list(punkte or [])
+                # Woher kommt die Aktivitaet gerade? Genau das war im Betrieb
+                # nicht sichtbar - "sinkt nicht" hiess in Wahrheit "irgendwer
+                # (oder ein Bot) wird noch gezaehlt". Jetzt steht es im Panel.
+                akt = self._safe(lambda: float(
+                    floaktie.instance._state().get("act_ema", 0.0) or 0.0), 0.0) or 0.0
+                stats["floaktie_activity"] = round(akt, 1)
+                stats["floaktie_trend"] = round(self._safe(
+                    lambda: floaktie.instance._pro_stunde(
+                        floaktie.instance.drift_fuer(akt)), 0.0) or 0.0, 1)
+                stats["floaktie_who"] = self._safe(
+                    lambda: floaktie.instance._mess_zeile(), "") or ""
         except Exception:  # noqa: BLE001
             pass
         # Lotto.
