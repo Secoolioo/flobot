@@ -91,12 +91,11 @@ class WebPanel:
         self._enabled = True
         log.info("Web-Panel bereit (startet in on_ready auf %s:%d).", self._host, self._port)
         if not self._auth:
-            log.warning("Web-Panel laeuft OHNE LOGIN (WEBPANEL_AUTH=0). Jeder, der "
-                        "http://%s:%d erreicht, kann Coins vergeben, Ansagen posten "
-                        "und den Bot per Knopf aktualisieren/neu starten. Nur im "
-                        "eigenen Netz betreiben - nicht offen ins Internet haengen. "
-                        "Wieder anschalten: WEBPANEL_AUTH=1 in der .env.",
-                        self._host, self._port)
+            # Bewusst nur INFO und einzeilig: der Betrieb im eigenen Netz ohne
+            # Login ist so gewollt. Eine WARNUNG bei jedem Neustart waere blosses
+            # Genoergel - der Hinweis, wie man ihn zurueckholt, reicht.
+            log.info("Web-Panel ohne Login (WEBPANEL_AUTH=0, so eingestellt) - "
+                     "zurueckholen mit WEBPANEL_AUTH=1 in der .env.")
         return True
 
     def is_enabled(self):
