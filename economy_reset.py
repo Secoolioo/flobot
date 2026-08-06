@@ -160,6 +160,16 @@ def schreiben(pfad, daten):
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, pfad)
+        # Die Sicherung von store.py enthaelt jetzt noch den Stand VOR dem Reset.
+        # Bliebe sie liegen, wuerde der Bot bei einem spaeteren Defekt genau die
+        # alten Coins zurueckholen - der Reset waere rueckgaengig gemacht. Das
+        # Backup des .sh-Skripts ist der richtige Ort dafuer, nicht diese Datei.
+        bak = pfad.with_name(pfad.name + ".bak")
+        if bak.exists():
+            try:
+                bak.unlink()
+            except OSError:
+                pass
     except OSError as exc:
         try:
             tmp.unlink()

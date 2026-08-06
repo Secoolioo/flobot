@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 log = logging.getLogger("dcbot.store")
@@ -28,23 +29,63 @@ class JsonStore:
 
     def __init__(self, name, default = None):
         self.path = DATA_DIR / name
+        # Letzter GUTER Stand. Wird bei jedem Speichern mitgezogen und ist die
+        # Rettung, wenn die Hauptdatei unlesbar wird.
+        self._bak = self.path.with_name(self.path.name + ".bak")
         self._lock = asyncio.Lock()
         self.data = dict(default or {})
         self._load()
 
     def _load(self):
-        try:
-            with self.path.open("r", encoding="utf-8") as fh:
-                loaded = json.load(fh)
-        except FileNotFoundError:
-            return  # erster Start - Datei gibt's noch nicht
-        except (json.JSONDecodeError, OSError) as exc:
-            log.warning("Konnte %s nicht laden (%s) - starte leer.", self.path, exc)
-            return
+        """Laedt den Stand. Bei kaputter Datei: NICHTS still wegwerfen.
+
+        Vorher hiess "kaputt" schlicht: leer starten - und der erste save()
+        wenige Sekunden spaeter hat die kaputte, aber vielleicht noch rettbare
+        Datei mit einer leeren ueberschrieben. Bei economy.json waeren das alle
+        Coins, Level und Voice-Stunden gewesen, endgueltig und unbemerkt.
+        Jetzt wird die kaputte Datei beiseitegelegt und die letzte gute
+        Sicherung (.bak) genommen."""
+        loaded = self._lies(self.path)
+        if loaded is None and self.path.exists():
+            # Datei ist da, aber unlesbar -> beiseitelegen, damit sie der
+            # naechste save() NICHT ueberschreibt.
+            self._beiseite()
+            loaded = None
+        if loaded is None:
+            loaded = self._lies(self._bak)
+            if loaded is not None:
+                log.warning("%s: Sicherung .bak eingespielt (%d Eintraege).",
+                            self.path.name, len(loaded))
         if isinstance(loaded, dict):
             self.data.update(loaded)
-        else:
-            log.warning("Inhalt von %s ist kein Objekt - ignoriere.", self.path)
+
+    def _lies(self, pfad):
+        """Liest EINE Datei. Rueckgabe: dict, oder None wenn nicht nutzbar."""
+        try:
+            with pfad.open("r", encoding="utf-8") as fh:
+                inhalt = json.load(fh)
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            log.error("%s ist nicht lesbar (%s).", pfad, exc)
+            return None
+        if not isinstance(inhalt, dict):
+            log.error("%s enthaelt kein Objekt - ignoriert.", pfad)
+            return None
+        return inhalt
+
+    def _beiseite(self):
+        """Legt eine kaputte Datei mit Zeitstempel zur Seite, statt sie zu verlieren."""
+        ziel = self.path.with_name(
+            f"{self.path.name}.kaputt-{time.strftime('%Y%m%d-%H%M%S')}")
+        try:
+            os.replace(self.path, ziel)
+            log.error("%s war kaputt und liegt jetzt unter %s - der Bot startet "
+                      "mit der Sicherung bzw. leer weiter. NICHTS wurde geloescht.",
+                      self.path.name, ziel.name)
+        except OSError as exc:
+            log.error("%s ist kaputt und liess sich nicht beiseitelegen: %s",
+                      self.path, exc)
 
     async def save(self):
         """Schreibt den aktuellen Stand atomar auf die Platte.
@@ -69,6 +110,14 @@ class JsonStore:
                 f.write(payload)
                 f.flush()
                 os.fsync(f.fileno())
+            # Den bisherigen Stand als .bak behalten, BEVOR er ueberschrieben
+            # wird. Kostet nur ein Rename (Metadaten), rettet aber genau den
+            # Fall, in dem die Hauptdatei nach einem Stromausfall unlesbar ist.
+            if self.path.exists():
+                try:
+                    os.replace(self.path, self._bak)
+                except OSError:
+                    pass                       # Sicherung ist nice-to-have
             os.replace(tmp, self.path)  # atomar
         except OSError as exc:
             log.error("Konnte %s nicht speichern: %s", self.path, exc)

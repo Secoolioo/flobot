@@ -136,6 +136,10 @@ _NEIN = ("nein", "n", "ne", "nee", "nö", "noe", "nope", "no", "nah", "niemals",
          "vergiss es", "vergiss", "lass es", "lassen wir", "lieber nicht",
          "doch nicht", "nicht senden", "quatsch", "falsch", "❌", "✖️", "🚫",
          "👎", "exit", "quit", "raus", "egal")
+# Verneinungen. Steht eines dieser Woerter im Satz, ist es KEINE Zustimmung -
+# egal welches Ja-Wort sonst noch drinsteht ("sicher nicht", "nicht starten").
+_NEGATION = ("nicht", "nich", "net", "kein", "keine", "keinen", "keinem", "keiner",
+             "nie", "niemals", "nix", "nichts", "ohne")
 _ABBRUCH = ("abbrechen", "abbruch", "abbrich", "stop", "stopp", "cancel", "canceln",
             "exit", "quit", "vergiss es", "vergiss das", "lass es", "lassen wir",
             "nevermind", "nvm", "raus", "ende", "beenden", "schluss", "❌")
@@ -359,8 +363,19 @@ class Giveaway:
         return False
 
     def is_yes(self, text):
+        """Zustimmung? Eine VERNEINUNG im Satz zaehlt nie als Ja.
+
+        Vorher reichte irgendein Ja-Wort irgendwo im Satz - und weil "sicher"
+        auf der Ja-Liste steht, galt "sicher nicht" als Zustimmung. Dasselbe bei
+        "nicht bestaetigen" und "warte, nicht starten". Das Giveaway startete und
+        der Einsatz war weg, obwohl der Nutzer ausdruecklich abgelehnt hat.
+        Ein exaktes "ja"/"ok" geht weiterhin sofort durch."""
         s = self._norm(text)
-        return s in _JA or self._hat(text, _JA)
+        if s in _JA:
+            return True
+        if self._hat(text, _NEGATION):
+            return False
+        return self._hat(text, _JA)
 
     def is_no(self, text):
         s = self._norm(text)

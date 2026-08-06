@@ -2930,6 +2930,84 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
+def test_store_verliert_nie_daten():
+    """Eine kaputte Datei darf NIEMALS stillschweigend ueberschrieben werden.
+
+    Vorher hiess "kaputt" schlicht: leer starten. Der erste save() wenige
+    Sekunden spaeter hat die kaputte, aber noch rettbare Datei durch eine leere
+    ersetzt - bei economy.json waeren das alle Coins, Level und Voice-Stunden
+    gewesen, endgueltig und unbemerkt."""
+    import pathlib
+    import shutil
+    import tempfile
+    import store
+
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="flo_store_"))
+    alt_dir = store.DATA_DIR
+    store.DATA_DIR = tmp
+    try:
+        s = store.JsonStore("economy.json", default={"users": {}})
+        s.data["users"] = {str(i): {"coins": 10 ** 7} for i in range(50)}
+        for _ in range(3):                      # laufender Betrieb
+            asyncio.run(s.save())
+        assert (tmp / "economy.json.bak").exists(), "keine Sicherung angelegt"
+
+        # Stromausfall: Datei abgeschnitten.
+        roh = (tmp / "economy.json").read_text(encoding="utf-8")
+        (tmp / "economy.json").write_text(roh[:len(roh) // 2], encoding="utf-8")
+
+        s2 = store.JsonStore("economy.json", default={"users": {}})
+        # 1) Automatisch aus der Sicherung geholt.
+        assert len(s2.data.get("users", {})) == 50, len(s2.data.get("users", {}))
+        # 2) Der kaputte Stand liegt zusaetzlich daneben, nichts ist geloescht.
+        kaputt = [p for p in tmp.iterdir() if ".kaputt-" in p.name]
+        assert kaputt, sorted(p.name for p in tmp.iterdir())
+        # 3) Und Speichern wirft ihn nicht weg.
+        asyncio.run(s2.save())
+        assert kaputt[0].exists()
+        assert len(store.JsonStore("economy.json",
+                                   default={"users": {}}).data["users"]) == 50
+
+        # 4) Ganz ohne Datei bleibt es beim leeren Start (kein Krach).
+        leer = store.JsonStore("gibtsnicht.json", default={"a": 1})
+        assert leer.data == {"a": 1}
+
+        # 5) Ein JSON-Inhalt, der KEIN Objekt ist, wird ignoriert statt uebernommen.
+        (tmp / "liste.json").write_text("[1,2,3]", encoding="utf-8")
+        assert store.JsonStore("liste.json", default={"a": 1}).data == {"a": 1}
+    finally:
+        store.DATA_DIR = alt_dir
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_giveaway_verneinung_startet_nie():
+    """Eine Verneinung darf NIE als Zustimmung durchgehen - hier haengt Geld dran.
+
+    Vorher reichte irgendein Ja-Wort irgendwo im Satz. Weil "sicher" auf der
+    Ja-Liste steht, galt "sicher nicht" als Zustimmung: das Giveaway startete und
+    der Einsatz war abgebucht, obwohl der Nutzer ausdruecklich abgelehnt hat.
+    Dasselbe bei "nicht bestaetigen" und "warte, nicht starten"."""
+    import giveaway
+    g = giveaway.instance
+    absagen = ("nein", "ne", "nö", "nein danke", "lieber nicht", "abbrechen",
+               "auf keinen fall", "nicht bestätigen", "doch nicht senden",
+               "warte, nicht starten", "ne doch nicht", "besser nicht machen",
+               "sicher nicht", "auf gar keinen fall", "nee lass", "keinesfalls",
+               "nein, ich will das nicht starten", "stop, nicht abschicken",
+               "lass mal nicht", "nie im leben")
+    for t in absagen:
+        # Entweder klar als Nein erkannt oder zumindest NICHT als Ja - dann
+        # fragt Flo nach, und es passiert nichts mit dem Geld.
+        assert not (not g.is_no(t) and g.is_yes(t)), t
+
+    zusagen = ("ja", "j", "ok", "okay", "passt", "los", "start", "klar", "sicher",
+               "jawohl", "👍", "auf jeden fall", "los gehts", "machs",
+               "bestätigen", "perfekt", "yes", "jo")
+    for t in zusagen:
+        assert g.is_yes(t), t
+        assert not g.is_no(t), t
+
+
 def test_giveaway_geldweg_und_ziehung():
     """Der Einsatz wird beim Start abgebucht (Escrow), geht am Ende an genau EINEN
     Gewinner - und bei 0 Teilnehmern/Abbruch komplett zurueck. Coins entstehen nie
