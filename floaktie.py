@@ -1383,12 +1383,17 @@ class FloAktie:
         chg = ((pts[-1] - pts[0]) / pts[0] * 100.0) if pts and pts[0] else 0.0
         return pts, round(chg, 2)
 
-    def _chart_file(self, days, label):
-        """Rendert den Kursverlauf als PNG (discord.File) fuer den Zeitraum."""
+    async def _chart_file(self, days, label):
+        """Rendert den Kursverlauf als PNG (discord.File) fuer den Zeitraum.
+
+        Das Zeichnen laeuft im Thread: der Chart braucht ~52 ms, und in dieser
+        Zeit stand der Event-Loop komplett still - inklusive Musik-Wiedergabe und
+        Kurs-Takt. Jedes andere Bild im Projekt wird laengst so gebaut."""
         import render
         series = self._series(days)
         chg = ((series[-1] - series[0]) / series[0] * 100) if series[0] else 0.0
-        buf = render.floaktie_chart(series, TICKER, f"{NAME} · {label}", chg)
+        buf = await asyncio.to_thread(render.floaktie_chart, series, TICKER,
+                                      f"{NAME} · {label}", chg)
         return discord.File(buf, filename="floaktie_kurs.png")
 
     def _range_label(self, days):
@@ -1425,7 +1430,8 @@ class FloAktie:
         if msg is None:
             return
         try:
-            file = self._chart_file(self._chart_days, self._range_label(self._chart_days))
+            file = await self._chart_file(self._chart_days,
+                                          self._range_label(self._chart_days))
             await msg.edit(attachments=[file])
         except discord.NotFound:
             self._chart_msg = None      # Chart geloescht -> vergessen
@@ -1442,7 +1448,7 @@ class FloAktie:
             return self.aus_embed()
         view = KursView(days)
         try:
-            file = self._chart_file(days, self._range_label(days))
+            file = await self._chart_file(days, self._range_label(days))
             view.message = await message.reply(
                 file=file, view=view, mention_author=False)
             self._protect(view.message)
@@ -1859,7 +1865,7 @@ class KursView(discord.ui.View):
             instance._chart_msg = self.message
         instance._chart_days = days
         try:
-            file = instance._chart_file(days, instance._range_label(days))
+            file = await instance._chart_file(days, instance._range_label(days))
             await interaction.response.edit_message(attachments=[file], view=self)
         except Exception:  # noqa: BLE001
             log.exception("Kurs-Chart-Update fehlgeschlagen")

@@ -1502,7 +1502,7 @@ def test_floaktie_market():
 
         # Kurs-Chart: Serie hat >=2 Punkte, _chart_file rendert ein PNG.
         assert len(fa._series(7)) >= 2
-        f = fa._chart_file(7, "7 Tage")
+        f = asyncio.run(fa._chart_file(7, "7 Tage"))   # rendert im Thread
         assert isinstance(f, discord.File)
 
         # aktienkurs / aktie chart -> Chart senden (HANDLED) via Fake-reply.
@@ -3620,6 +3620,69 @@ def test_floaktie_bots_zaehlen_nie():
     g = Guild(chan, {1: m_mensch})
     g.afk_channel = SimpleNamespace(id=5)
     assert fa._measure(g) == (0, 0, 0)
+
+
+def test_bilder_blockieren_den_bot_nicht():
+    """Kein Bild darf auf dem Event-Loop gezeichnet werden.
+
+    PIL rechnet synchron: die Profilkarte braucht ~28 ms, der Kurs-Chart ~52 ms.
+    Solange das auf dem Loop laeuft, steht der GANZE Bot - Musik, Aktien-Takt,
+    jede andere Antwort. Drei Aufrufe hatten die Auslagerung nicht (Profilkarte,
+    Bestenliste, Kurs-Chart), waehrend alle uebrigen sie laengst hatten."""
+    import ast
+    import pathlib
+
+    verdaechtig = []
+    for p in sorted(pathlib.Path(".").glob("*.py")):
+        if p.name.startswith("test_") or p.name in ("render.py", "leaderboard_img.py"):
+            continue
+        quelle = p.read_text(encoding="utf-8")
+        baum = ast.parse(quelle)
+        # Alle Funktionen merken, die als Argument in einen Thread gereicht
+        # werden (words._build_top zeichnet z. B. selbst, wird aber ausgelagert).
+        im_thread = set()
+        for n in ast.walk(baum):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+                continue
+            if n.func.attr not in ("to_thread", "run_in_executor"):
+                continue
+            for arg in n.args:
+                if isinstance(arg, ast.Attribute):
+                    im_thread.add(arg.attr)
+                elif isinstance(arg, ast.Name):
+                    im_thread.add(arg.id)
+
+        def ausgelagert(knoten):
+            """Steht der Aufruf selbst in einem to_thread/run_in_executor?"""
+            for eltern in ast.walk(baum):
+                if not (isinstance(eltern, ast.Call)
+                        and isinstance(eltern.func, ast.Attribute)
+                        and eltern.func.attr in ("to_thread", "run_in_executor")):
+                    continue
+                for kind in ast.walk(eltern):
+                    if kind is knoten:
+                        return True
+            return False
+
+        for fn in ast.walk(baum):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if fn.name in im_thread:
+                continue                      # wird als Ganzes ausgelagert
+            for n in ast.walk(fn):
+                if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+                    continue
+                if not (isinstance(n.func.value, ast.Name)
+                        and n.func.value.id in ("render", "leaderboard_img")):
+                    continue
+                if n.func.attr in ("is_available", "is_enabled", "setup"):
+                    continue                  # keine Zeichenarbeit
+                if ausgelagert(n):
+                    continue
+                verdaechtig.append(f"{p.name}:{n.lineno} {n.func.value.id}.{n.func.attr}")
+
+    assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
+                             + ", ".join(verdaechtig))
 
 
 def test_floaktie_kurs_ist_nie_veraltet():

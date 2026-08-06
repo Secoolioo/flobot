@@ -1012,7 +1012,12 @@ class Economy:
         except Exception:  # noqa: BLE001 - Rahmen ist nur Deko
             pass
         try:
-            buf = render.level_card(
+            # In einen Thread: die Profilkarte ist das meistgenutzte Bild im Bot
+            # und braucht ~28 ms. Auf dem Event-Loop stand in dieser Zeit ALLES
+            # still - Musik, Aktien-Takt, jede andere Antwort. Alle uebrigen
+            # Renderings im Projekt laufen laengst so.
+            buf = await asyncio.to_thread(
+                render.level_card,
                 avatar,
                 name=getattr(member, "display_name", "") or "Spieler",
                 level=level, into=into, step=step, place=place, total=total,
@@ -1261,7 +1266,8 @@ class Economy:
                     pass
                 await self._attach_avatars(rows, guild)
                 stand = datetime.now(self._tz).strftime("Stand: %d.%m.%Y %H:%M")
-                png = leaderboard_img.render_png(rows, subtitle=stand)
+                png = await asyncio.to_thread(leaderboard_img.render_png,
+                                              rows, subtitle=stand)
                 if png:
                     return discord.File(io.BytesIO(png), filename="leaderboard.png")
             except Exception:  # noqa: BLE001 - Bild ist nice-to-have, niemals fatal
