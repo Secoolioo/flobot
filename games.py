@@ -759,8 +759,14 @@ class Games:
                          spiel or "?", uid)
             self._kappe_buchen(uid, netto)
         gezahlt = einsatz + max(0, netto)
-        if gezahlt > 0:
-            economy.add_coins(uid, gezahlt, reason=spiel or "spiele")
+        # Getrennt buchen: der EINSATZ kommt nur zurueck (keine Einnahme, also
+        # keine Schulden-Tilgung darauf), der GEWINN ist eine echte Einnahme.
+        # Vorher lief beides als "spiele" durch - wer Schulden hatte, bekam bei
+        # "Einsatz zurueck" nur 80 % wieder, obwohl er gar nichts gewonnen hat.
+        if einsatz > 0:
+            economy.add_coins(uid, einsatz, reason="spiele-rueck")
+        if netto > 0:
+            economy.add_coins(uid, netto, reason=spiel or "spiele")
         return gezahlt
 
     def _skill_frei(self, uid):

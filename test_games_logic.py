@@ -2973,6 +2973,78 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
+def test_einsatz_rueckgabe_ist_keine_einnahme():
+    """Wer Schulden hat, bekommt seinen EINSATZ voll zurueck - getilgt wird nur
+    vom echten Gewinn.
+
+    Vorher hat _auszahlen alles als "spiele" gebucht. Die Schulden-Tilgung nimmt
+    20 % jeder Einnahme - "Einsatz zurueck" gab damit nur 80 % wieder, obwohl
+    ueberhaupt nichts gewonnen wurde. Die Tabu-Liste kannte "shop-rueck" und
+    "floaktie-rueck", aber die Spiele hatten keinen eigenen Grund."""
+    import economy
+    import games
+    import schulden
+
+    alt = (economy.instance._store, economy.instance._enabled,
+           schulden.instance._store, schulden.instance._enabled,
+           games.instance._store, games.instance._enabled)
+    try:
+        def aufsetzen():
+            economy.instance._enabled = True
+            economy.instance._store = _FakeStore({"users": {
+                str(i): {"coins": 5000, "xp": 0, "owned": [], "name": f"U{i}",
+                         "title": "", "title_rarity": "", "voice_secs": 0,
+                         "msgs": 0, "streak": 0, "last_daily": ""}
+                for i in (1, 2)}})
+            schulden.instance._enabled = True
+            # net < 0 aus Sicht von a=1: Spieler 1 schuldet Spieler 2.
+            schulden.instance._store = _FakeStore(
+                {"pairs": {"1:2": {"net": -100_000}}, "stats": {}})
+            schulden.instance._tilgung_laeuft = False
+            games.instance._enabled = True
+            games.instance._store = _FakeStore(
+                {"counting": {}, "daily": {"day": "", "won": {}}})
+
+        aufsetzen()
+        assert schulden.instance.posten(1)[1] == [(2, 100_000)]
+
+        # 1) Unentschieden: Einsatz komplett zurueck, nichts getilgt.
+        aufsetzen()
+        vor, vor_g = economy.get_coins(1), economy.get_coins(2)
+        games.instance._auszahlen(1, 1000, einsatz=1000, spiel="slot")
+        assert economy.get_coins(1) - vor == 1000, economy.get_coins(1) - vor
+        assert economy.get_coins(2) == vor_g
+
+        # 2) Echter Gewinn: Einsatz voll, vom Gewinn 20 % an den Glaeubiger.
+        aufsetzen()
+        vor, vor_g = economy.get_coins(1), economy.get_coins(2)
+        games.instance._auszahlen(1, 3000, einsatz=1000, spiel="slot")
+        assert economy.get_coins(1) - vor == 2600, economy.get_coins(1) - vor
+        assert economy.get_coins(2) - vor_g == 400
+
+        # 3) Gewinn ohne Einsatz wird ganz normal getilgt.
+        aufsetzen()
+        vor, vor_g = economy.get_coins(1), economy.get_coins(2)
+        games.instance._auszahlen(1, 2000, einsatz=0, spiel="quiz")
+        assert economy.get_coins(1) - vor == 1600
+        assert economy.get_coins(2) - vor_g == 400
+
+        # 4) Die Regel gilt allgemein: jeder Grund auf "-rueck"/"-rueckgabe"
+        #    ist tabu, nicht nur die namentlich gelisteten.
+        for grund in ("spiele-rueck", "casino-rueckgabe", "shop-rueck",
+                      "floaktie-rueck"):
+            aufsetzen()
+            betrag, _g = schulden.instance.tilgen_von_einnahme(1, 5000, grund)
+            assert betrag == 0, (grund, betrag)
+        aufsetzen()
+        betrag, _g = schulden.instance.tilgen_von_einnahme(1, 5000, "slot")
+        assert betrag > 0, betrag
+    finally:
+        (economy.instance._store, economy.instance._enabled,
+         schulden.instance._store, schulden.instance._enabled,
+         games.instance._store, games.instance._enabled) = alt
+
+
 def test_sonderziffern_sprengen_nichts():
     """str.isdigit() ist die falsche Pruefung vor int() - und hat Geld gekostet.
 

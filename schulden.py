@@ -233,7 +233,13 @@ class Schulden:
             return 0, 0
         if TILGUNG_PCT <= 0:
             return 0, 0
-        if str(reason or "").lower() in TILGUNG_TABU:
+        grund = str(reason or "").lower()
+        # Jede RUECKBUCHUNG ist tabu, nicht nur die namentlich gelisteten. Vorher
+        # standen "shop-rueck" und "floaktie-rueck" einzeln in der Liste, aber die
+        # Spiele haben ihre Einsatz-Rueckgabe schlicht als "spiele" gebucht - wer
+        # Schulden hatte, bekam bei "Einsatz zurueck" nur 80 % wieder. Zurueck ist
+        # keine Einnahme, egal aus welchem Modul.
+        if grund in TILGUNG_TABU or grund.endswith(("-rueck", "-rueckgabe")):
             return 0, 0
         try:
             einnahme = int(einnahme)

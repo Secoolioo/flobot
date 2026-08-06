@@ -258,6 +258,30 @@ class Casino:
         economy.add_coins(uid, -bet)
         return bet, None
 
+    async def _starten(self, message, uid, bet, view, emb, file=None):
+        """Schickt eine Runde raus - und gibt den Einsatz ZURUECK, wenn das nicht klappt.
+
+        Der Einsatz wird vorher eingezogen (_take). Liess sich die Spielnachricht
+        danach nicht senden (fehlende Rechte, geloeschter Kanal, Rate-Limit),
+        stand der Spieler ohne Runde UND ohne Geld da: die View haengt an keiner
+        Nachricht, also kann auch kein Timeout und kein Klick sie je aufloesen.
+        Bei HiLo, Tower und D.O.N. war das still - man hat nur gemerkt, dass die
+        Coins fehlen."""
+        msg = await self._send(message, embed=emb, file=file, view=view)
+        if msg is not None:
+            view.message = msg
+            return msg
+        if bet > 0:
+            economy.add_coins(uid, bet, reason="casino-rueckgabe")
+            await economy.flush()
+            log.warning("Casino: Runde konnte nicht gestartet werden - %s Coins "
+                        "an %s zurueckgezahlt.", bet, uid)
+        try:
+            view.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
     def _bal_footer(self, uid):
         return f"Kontostand: {numfmt.fmt(economy.get_coins(uid))} {economy.COIN}"
 
@@ -1133,9 +1157,7 @@ class Casino:
             await self._send(message, embed=self._err(err))
             return HANDLED
         view, emb, file = await self._hilo_start(uid, bet)
-        msg = await self._send(message, embed=emb, file=file, view=view)
-        if msg:
-            view.message = msg
+        await self._starten(message, uid, bet, view, emb, file)
         return HANDLED
 
     # --- Tower (Turm hochklettern) ---------------------------------------------
@@ -1153,9 +1175,7 @@ class Casino:
             await self._send(message, embed=self._err(err))
             return HANDLED
         view, emb, _file = await self._tower_start(uid, bet)
-        msg = await self._send(message, embed=emb, view=view)
-        if msg:
-            view.message = msg
+        await self._starten(message, uid, bet, view, emb)
         return HANDLED
 
     # --- D.O.N. (Doppelt oder nichts) ------------------------------------------
@@ -1170,9 +1190,7 @@ class Casino:
             await self._send(message, embed=self._err(err))
             return HANDLED
         view, emb, _file = await self._don_start(uid, bet)
-        msg = await self._send(message, embed=emb, view=view)
-        if msg:
-            view.message = msg
+        await self._starten(message, uid, bet, view, emb)
         return HANDLED
 
     async def _replay(self, uid, kind, params
