@@ -4530,6 +4530,50 @@ def test_luxus_jenseits_der_milliarde():
         lx._store, lx._enabled = alt
 
 
+def test_bilder_text_bleibt_im_rahmen():
+    """Drei Bild-Fehler, die jeder Nutzer sieht - alle nachgemessen.
+
+    1. Unterstriche verschwanden aus JEDEM Namen. Die Glyph-Pruefung malte das
+       Zeichen auf eine 48x48-Flaeche; der Unterstrich einer 40-px-Schrift landet
+       bei y=51..55 und fiel damit ganz heraus - er galt als "kein Glyph".
+       "Maximilian_Schneider99" wurde zu "MaximilianSchneider99".
+    2. Ein zu langes ERSTES Wort (eine URL) wurde nie hart getrennt: 1.146 px
+       breit in einem 500-px-Feld. Dieselbe URL als zweites Wort ging korrekt.
+    3. Zitate ab rund 400 Zeichen kippten auf EINE Zeile von 12.338 px."""
+    from PIL import Image, ImageDraw
+    import render
+    r = render.instance
+
+    # 1) Unterstriche und Unterlaengen bleiben erhalten.
+    for name in ("Maximilian_Schneider99", "a_b_c", "__test__", "gyp_qj",
+                 "Ben-Ove", "user.name", "Käpt'n Blaubär"):
+        assert r._clean_text(name) == name, (name, r._clean_text(name))
+    # ... Emoji fliegen weiterhin raus (die Schrift hat sie nicht).
+    assert r._clean_text("🎮Gamer🎮") == "Gamer"
+
+    # 2) Umbruch: nichts laeuft aus dem Feld, egal an welcher Stelle.
+    d = ImageDraw.Draw(Image.new("RGB", (1000, 200)))
+    url = "https://example.com/ein/wirklich/sehr/langer/pfad/der/nicht/passt/12345"
+    for maxw in (500, 120, 40):
+        f = r._font(28)
+        for text in (url, "Schau: " + url, "A" * 200, "kurz", "", "   "):
+            zeilen = r._wrap(d, text, f, maxw)
+            assert zeilen, text
+            for z in zeilen:
+                # Ein einzelnes Zeichen darf breiter sein als das Feld - mehr nicht.
+                assert d.textlength(z, font=f) <= maxw or len(z) <= 1, (text, maxw, z)
+
+    # 3) Das Zitat-Bild bleibt bei jeder Laenge brauchbar.
+    for n in (10, 200, 400, 1000, 4000):
+        buf = r.quote_card(None, "Wort " * max(1, n // 5), "Anna")
+        assert buf is not None and len(buf.getvalue()) > 3000, n
+
+    # 4) Der Glyph-Test wird gemerkt (sonst malt jede Karte dieselben Zeichen neu).
+    r._glyph_q.clear()
+    r._clean_text("Testtext")
+    assert r._glyph_q, "Glyph-Pruefung wird nicht zwischengespeichert"
+
+
 def test_bilder_grosse_zahlen():
     """REGRESSION (Design): Seit der Wirtschafts-Umstellung sind Millionen und
     Milliarden normal. '3.000.000.000' war breiter als seine Spalte und lief in die

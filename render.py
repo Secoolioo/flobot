@@ -48,6 +48,8 @@ class Render:
                 continue
         self._font_cache = {}
         self._notdef_q = {}
+        # Gemerkte Glyph-Pruefungen je Schrift: {schrift_id: {zeichen: bool}}.
+        self._glyph_q = {}
 
 
     def _font(self, size):
@@ -999,24 +1001,44 @@ class Render:
     _RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS
 
 
+    # Pruefflaeche fuer den Glyph-Test. 48x48 bei (6,6) war ZU KLEIN: der
+    # Unterstrich einer 40-px-Schrift landet bei y=51..55 und fiel damit ganz aus
+    # dem Bild - er galt als "kein Glyph" und wurde aus JEDEM Namen entfernt
+    # ("Maximilian_Schneider99" -> "MaximilianSchneider99"). Auch "g" und "y"
+    # wurden bei y=48 angeschnitten. Jetzt mit Luft nach unten.
+    _PROBE_PX = 96
+    _PROBE_XY = (8, 8)
+
     def _renderable_char(self, font, ch):
-        """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer)."""
+        """True, wenn die Schrift fuer ch ein echtes Glyph hat (kein Tofu/leer).
+
+        Das Ergebnis wird gemerkt: ohne Cache wurde fuer JEDE Karte jedes Zeichen
+        jedes Namens und jeder Beschriftung neu auf eine Extra-Flaeche gemalt -
+        dutzende PIL-Zeichnungen pro Bild fuer immer dieselbe Antwort."""
         if ord(ch) >= 0x1F000:               # Emoji-/Symbol-Zusatzebenen
             return False
         fid = id(font)
+        merker = self._glyph_q.get(fid)
+        if merker is None:
+            merker = self._glyph_q[fid] = {}
+        elif ch in merker:
+            return merker[ch]
         nd = self._notdef_q.get(fid)
         if nd is None:
-            im = Image.new("L", (48, 48), 0)
-            ImageDraw.Draw(im).text((6, 6), "￿", font=font, fill=255)
+            im = Image.new("L", (self._PROBE_PX, self._PROBE_PX), 0)
+            ImageDraw.Draw(im).text(self._PROBE_XY, "￿", font=font, fill=255)
             nd = im.tobytes()
             self._notdef_q[fid] = nd
-        im = Image.new("L", (48, 48), 0)
+        im = Image.new("L", (self._PROBE_PX, self._PROBE_PX), 0)
         try:
-            ImageDraw.Draw(im).text((6, 6), ch, font=font, fill=255)
+            ImageDraw.Draw(im).text(self._PROBE_XY, ch, font=font, fill=255)
         except Exception:
+            merker[ch] = False
             return False
         b = im.tobytes()
-        return bool(b) and b != nd and any(b)
+        ok = bool(b) and b != nd and any(b)
+        merker[ch] = ok
+        return ok
 
 
     def _clean_text(self, s):
@@ -1041,7 +1063,11 @@ class Render:
         lines = []
         for word in text.split():
             if not lines or d.textlength(lines[-1] + " " + word, font=font) > max_w:
-                if d.textlength(word, font=font) <= max_w or not lines:
+                # Das "or not lines" hat frueher hier gestanden und dafuer gesorgt,
+                # dass ausgerechnet das ERSTE Wort nie hart getrennt wurde: eine
+                # URL am Textanfang wurde 1.146 px breit in ein 500-px-Feld
+                # gemalt. Als zweites Wort wurde dieselbe URL korrekt umbrochen.
+                if d.textlength(word, font=font) <= max_w:
                     lines.append(word)
                 else:
                     cur = ""
@@ -1085,13 +1111,24 @@ class Render:
         # Zitat: groesste Schrift, die in Breite UND Hoehe passt.
         quote = self._clean_text(text) or "..."
         quote = f"„{quote}“"        # „..."
-        chosen, lines = 50, [quote]
+        # Der Rueckfall MUSS umgebrochen sein. Vorher stand hier [quote] - also
+        # das ganze Zitat als EINE Zeile. Passte keine Groesse (ab rund 400
+        # Zeichen), wurde daraus eine 12.338 px breite Zeile in einem 500 px
+        # breiten Feld: das Bild war komplett unbrauchbar.
+        chosen = 24
+        lines = self._wrap(d, quote, self._font(chosen), tw)
         for size in range(54, 23, -2):
             f = self._font(size)
             ls = self._wrap(d, quote, f, tw)
             if (size + 12) * len(ls) <= H - 210:
                 chosen, lines = size, ls
                 break
+        # Selbst in der kleinsten Schrift zu lang -> hinten abschneiden, statt
+        # ueber den Bildrand hinauszuschreiben.
+        max_zeilen = max(1, (H - 210) // (chosen + 12))
+        if len(lines) > max_zeilen:
+            lines = lines[:max_zeilen]
+            lines[-1] = lines[-1][:max(1, len(lines[-1]) - 1)] + "…"
         f = self._font(chosen)
         line_h = chosen + 12
         block_h = line_h * len(lines)
