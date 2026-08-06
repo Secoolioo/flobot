@@ -71,6 +71,14 @@ class Economy:
     # abgeleitet - siehe titles.py RARITY und luxus.py ITEMS.
     COINS_PER_MSG = (8, 16)      # pro Nachricht (mit 45 s Cooldown)
     COINS_PER_VOICE_TICK = 30    # pro Voice-Minute (nur wenn >= 2 im Kanal, nicht taub)
+    # Tagesdeckel fuer VOICE-COINS. Ohne ihn brachte blosses Herumsitzen 43.200
+    # Coins am Tag (1.440 Minuten x 30) - das 17-fache des Daily-Bonus, fuers
+    # Nichtstun. Zwei Leute konnten einfach ueber Nacht im Kanal parken.
+    # 14.400 entspricht ACHT Stunden Call am Stueck: ein normaler, auch langer
+    # Abend bleibt voll bezahlt, das Dauerparken nicht.
+    # WICHTIG: gedeckelt werden nur die COINS. Voice-Stunden und XP laufen
+    # unveraendert weiter - die Statistik soll die echte Zeit zeigen.
+    VOICE_COINS_DAILY_MAX = 14_400
     DAILY_BASE = 2_500           # Tagesbonus-Grundbetrag
     DAILY_STREAK_STEP = 250      # je Streak-Tag mehr (bis STREAK_MAX Tage)
     DAILY_STREAK_MAX = 7
@@ -916,13 +924,43 @@ class Economy:
                 # Haupt-Aktivitaet des Servers - vorher war sie die einzige, die
                 # nichts einbrachte, und alle Shop-Preise fuehlten sich falsch an.
                 if self.COINS_PER_VOICE_TICK > 0:
-                    self.add_coins(m.id, self.COINS_PER_VOICE_TICK, reason="voice")
+                    zahlbar = self._voice_kappe_rest(m.id)
+                    if zahlbar > 0:
+                        betrag = min(self.COINS_PER_VOICE_TICK, zahlbar)
+                        self.add_coins(m.id, betrag, reason="voice")
+                        self._voice_kappe_buchen(m.id, betrag)
                 new_level = await self.add_xp(m, self.XP_PER_VOICE_TICK)
                 changed = True
                 if new_level is not None:
                     await self._announce_levelup(guild, m, new_level, guild.system_channel)
         if changed:
             await self._flush()
+
+    # --- Tagesdeckel fuer Voice-Coins ---------------------------------------
+    def _voice_kappe(self):
+        """Der heutige Zaehler {uid: schon_gezahlt}. Wechselt der Tag, faengt er
+        von vorne an - gespeichert wird er zusammen mit allem anderen."""
+        st = self._store.data if self._store is not None else {}
+        stand = st.get("voice_kappe")
+        heute = self._today()
+        if not isinstance(stand, dict) or stand.get("day") != heute:
+            stand = {"day": heute, "coins": {}}
+            st["voice_kappe"] = stand
+        return stand
+
+    def _voice_kappe_rest(self, uid):
+        """Wie viele Voice-Coins dieser Nutzer heute noch bekommen kann."""
+        if self.VOICE_COINS_DAILY_MAX <= 0:
+            return self.COINS_PER_VOICE_TICK      # Deckel aus
+        schon = int(self._voice_kappe()["coins"].get(str(uid), 0) or 0)
+        return max(0, self.VOICE_COINS_DAILY_MAX - schon)
+
+    def _voice_kappe_buchen(self, uid, betrag):
+        """Haelt fest, was heute schon ueber Voice ausgezahlt wurde."""
+        if self.VOICE_COINS_DAILY_MAX <= 0 or betrag <= 0:
+            return
+        coins = self._voice_kappe()["coins"]
+        coins[str(uid)] = int(coins.get(str(uid), 0) or 0) + int(betrag)
 
     # --- Befehls-Erkennung ---------------------------------------------------
     def _clean_lead(self, text):

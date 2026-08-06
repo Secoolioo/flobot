@@ -235,6 +235,10 @@ def reset_economy(d, bericht):
     # dem Freibetrag).
     d["tax_day"] = ""
 
+    # Tagesdeckel fuer Voice-Coins zuruecksetzen: sonst startet man nach dem
+    # Reset mit einem schon halb aufgebrauchten Guthaben in den Tag.
+    d.pop("voice_kappe", None)
+
     # Tages-Shop neu wuerfeln lassen (Preise/Angebot kommen aus dem Code).
     shop = d.get("shop")
     if not isinstance(shop, dict) or shop.get("date") or shop.get("items"):

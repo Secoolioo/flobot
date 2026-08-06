@@ -574,7 +574,16 @@ class _SSPDuel(discord.ui.View):
             return
         uid = interaction.user.id
         if not self.paid:
-            # Erst-Klick des Gegners gilt als Annahme -> beide zahlen ein.
+            # Erst-Klick des GEGNERS gilt als Annahme -> beide zahlen ein.
+            # Bis hierhin wurde nur der Kommentar geprueft, nicht der Klickende:
+            # klickte der Herausforderer selbst zuerst, wurde dem Gegner der
+            # Einsatz abgebucht, ohne dass er je zugestimmt hat. (Bis zum Timeout
+            # kam das Geld zwar zurueck, aber bis dahin war es weg.)
+            if uid != self.b.id:
+                await interaction.response.send_message(
+                    f"Warte auf {self.b.mention} – erst wenn dein Gegner "
+                    f"annimmt, wird eingesetzt. ⏳", ephemeral=True)
+                return
             if (economy.get_coins(self.a.id) < self.bet
                     or economy.get_coins(self.b.id) < self.bet):
                 self.done = True

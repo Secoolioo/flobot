@@ -2973,6 +2973,69 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
+def test_voice_coins_haben_einen_tagesdeckel():
+    """Herumsitzen im Call brachte 43.200 Coins am Tag - das 17-fache des
+    Daily-Bonus, fuers Nichtstun. Zwei Leute konnten ueber Nacht parken.
+
+    Gedeckelt werden nur die COINS. Voice-Stunden und XP muessen unveraendert
+    weiterlaufen, die Statistik soll die echte Zeit zeigen."""
+    import economy
+    e = economy.instance
+    alt = (e._store, e._enabled, e.XP_PER_VOICE_TICK, e._today)
+    try:
+        e._enabled = True
+        e._store = _FakeStore({"users": {}})
+        e.XP_PER_VOICE_TICK = 0          # Level-Up-Praemien ausblenden
+        tag = ["2026-08-06"]
+        e._today = lambda: tag[0]
+
+        def mitglied(uid):
+            return SimpleNamespace(id=uid, bot=False, display_name=f"U{uid}",
+                                   voice=SimpleNamespace(self_deaf=False, deaf=False))
+
+        class Guild(SimpleNamespace):
+            def get_channel(self, _cid):
+                return None
+
+        guild = Guild(voice_channels=[SimpleNamespace(
+            id=1, members=[mitglied(1), mitglied(2)])],
+            afk_channel=None, system_channel=None)
+
+        def minuten(n):
+            for _ in range(n):
+                asyncio.run(e.tick_voice(guild))
+
+        minuten(60)                                    # 1 h
+        p = e._users()["1"]
+        assert p["coins"] == 60 * e.COINS_PER_VOICE_TICK, p["coins"]
+
+        minuten(420)                                   # zusammen 8 h
+        assert e._users()["1"]["coins"] == e.VOICE_COINS_DAILY_MAX
+
+        minuten(960)                                   # zusammen 24 h
+        p = e._users()["1"]
+        assert p["coins"] == e.VOICE_COINS_DAILY_MAX, p["coins"]
+        # Stunden laufen trotzdem weiter - genau das soll erhalten bleiben.
+        assert p["voice_secs"] == 1440 * e.VOICE_TICK_SECONDS, p["voice_secs"]
+
+        # Neuer Tag -> neues Guthaben.
+        tag[0] = "2026-08-07"
+        minuten(60)
+        assert e._users()["1"]["coins"] == (e.VOICE_COINS_DAILY_MAX
+                                            + 60 * e.COINS_PER_VOICE_TICK)
+
+        # Deckel abschaltbar (0 = aus).
+        e._store = _FakeStore({"users": {}})
+        e.VOICE_COINS_DAILY_MAX, merk = 0, e.VOICE_COINS_DAILY_MAX
+        try:
+            minuten(600)
+            assert e._users()["1"]["coins"] == 600 * e.COINS_PER_VOICE_TICK
+        finally:
+            e.VOICE_COINS_DAILY_MAX = merk
+    finally:
+        e._store, e._enabled, e.XP_PER_VOICE_TICK, e._today = alt
+
+
 def test_einsatz_rueckgabe_ist_keine_einnahme():
     """Wer Schulden hat, bekommt seinen EINSATZ voll zurueck - getilgt wird nur
     vom echten Gewinn.
