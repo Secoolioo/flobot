@@ -1880,16 +1880,35 @@ class FloAktieView(discord.ui.View):
         self.add_item(_InfoButton("Top", "🏆", "top"))
 
     async def _trade(self, interaction, action, count):
+        # ZUERST bestaetigen, DANN handeln. Discord gibt einer Interaktion nur
+        # 3 Sekunden; buy()/sell() speichern aber, ziehen das Panel nach und
+        # rendern den Chart neu. Wurde das langsamer, starb die Interaktion mit
+        # "Interaktion fehlgeschlagen" - obwohl der Kauf laengst gebucht war.
+        # Wer das sah, hat verstaendlicherweise nochmal geklickt und ein zweites
+        # Mal gekauft. Mit defer() ist die Antwort sofort reserviert.
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            log.exception("FloCorp-Trade (Button): defer fehlgeschlagen")
+            return
+
+        async def melden(inhalt):
+            try:
+                if isinstance(inhalt, discord.Embed):
+                    await interaction.followup.send(embed=inhalt, ephemeral=True)
+                else:
+                    await interaction.followup.send(str(inhalt), ephemeral=True)
+            except discord.HTTPException:
+                log.exception("FloCorp-Trade (Button): Antwort fehlgeschlagen")
+
         antwort = None
         try:
             if action == "buy":
                 n = instance._resolve_count(interaction.user, str(count))
                 if n < 1:
-                    await interaction.response.send_message(
-                        "Dein Guthaben reicht gerade für keinen ganzen Anteil. 😬 "
-                        "Auf Pump gibt es hier nichts – erst verdienen oder Anteile "
-                        "verkaufen.",
-                        ephemeral=True)
+                    await melden("Dein Guthaben reicht gerade für keinen ganzen "
+                                 "Anteil. 😬 Auf Pump gibt es hier nichts – erst "
+                                 "verdienen oder Anteile verkaufen.")
                     return
                 antwort = await instance.buy(interaction.user, n)
             else:
@@ -1900,10 +1919,7 @@ class FloAktieView(discord.ui.View):
             antwort = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
         # buy()/sell() antworten mit einem Embed (Bestaetigung) oder mit Text
         # (Fehlerfall) - beides muss hier durchgehen.
-        if isinstance(antwort, discord.Embed):
-            await interaction.response.send_message(embed=antwort, ephemeral=True)
-        else:
-            await interaction.response.send_message(str(antwort), ephemeral=True)
+        await melden(antwort)
         # Das Panel-Embed selbst wird von buy()/sell() ueber _refresh_last_panel()
         # aktualisiert (das zuletzt gepostete Panel bleibt so immer live).
 

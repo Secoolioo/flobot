@@ -1028,8 +1028,12 @@ class Games:
             # Ohne Einsatz: reiner Spass-Dreh, es fliessen keine Coins.
             emb.set_footer(text="Ohne Einsatz – nur zum Spaß (keine Coins). "
                                 "Mit Einsatz: `slot 100`")
+        # Ohne Einsatz KEINEN Gewinnbetrag ins Bild malen. Die Fusszeile sagt
+        # zwar "keine Coins", das Bild zeigte aber trotzdem "+50" bzw.
+        # Jackpot-Konfetti mit Betrag - Text und Bild widersprachen sich.
         buf, ext = await self._anim(render.slot_machine_anim, render.slot_machine,
-                                    keys, win=win, jackpot=jackpot)
+                                    keys, win=(win if use_coins else 0),
+                                    jackpot=jackpot)
         fn = f"slot_{uid}_{random.randint(1000, 9999)}.{ext}"
         return emb, buf, fn
 
@@ -1575,8 +1579,18 @@ class Games:
                                      runde["bet"], "mathe")
             await economy.flush()
             await self._record(runde["uid"], "mathe", runde["bet"], payout)
-            await self._say(message, f"✅ **{runde['loesung']}** – stark! "
-                                     f"**+{numfmt.fmt(runde['bet'])}** Flo Coins. 🧠")
+            # Den TATSAECHLICH ausgezahlten Gewinn melden, nicht den Einsatz:
+            # die Tageskappe kann den Gewinn kuerzen oder ganz streichen. Vorher
+            # stand hier stur "+{bet}", auch wenn nur der Einsatz zurueckkam.
+            # (Das Anagramm-Spiel macht es eine Funktion weiter unten richtig.)
+            netto = max(0, payout - runde["bet"])
+            if netto > 0:
+                await self._say(message, f"✅ **{runde['loesung']}** – stark! "
+                                         f"**+{numfmt.fmt(netto)}** Flo Coins. 🧠")
+            else:
+                await self._say(message, f"✅ **{runde['loesung']}** – stark! "
+                                         f"Dein Tages-Gewinnlimit ist allerdings "
+                                         f"erreicht, es gibt nur den Einsatz zurück. 🧠")
         else:
             await economy.flush()
             await self._record(runde["uid"], "mathe", runde["bet"], 0)

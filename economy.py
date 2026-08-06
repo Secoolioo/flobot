@@ -19,7 +19,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import discord
@@ -531,16 +531,31 @@ class Economy:
         assert self._store is not None
         return self._store.data.setdefault("shop", {"date": "", "items": []})
 
+    # Der Shop-Tag beginnt um 2 Uhr, nicht um Mitternacht - genau dann laeuft
+    # der Neu-Wuerfel-Takt in bot.py, und genau das steht auch im Shop-Embed
+    # ("Jeden Tag um 2 Uhr acht frische Titel").
+    SHOP_TAGESWECHSEL_STD = 2
+
+    def _shop_tag(self):
+        """Der Tag, fuer den die aktuelle Auswahl gilt (Grenze 2 Uhr).
+
+        Mit dem KALENDERTAG wurde zweimal pro Nacht gewuerfelt: um 00:00 durch
+        den Datumswechsel und um 02:00 nochmal durch den Loop. Wer zwischen 0 und
+        2 Uhr in den Shop schaute, sah eine Auswahl, die zwei Stunden spaeter
+        schon wieder eine andere war."""
+        return (datetime.now(self._tz)
+                - timedelta(hours=self.SHOP_TAGESWECHSEL_STD)).strftime("%Y-%m-%d")
+
     def refresh_shop(self, force = False):
         """Wuerfelt die Tagesauswahl neu, falls noetig (neuer Tag, leer oder force).
         Speichert NICHT selbst – Aufrufer ruft danach flush()."""
         st = self._shop_state()
-        if not force and st.get("date") == self._today() and st.get("items"):
+        if not force and st.get("date") == self._shop_tag() and st.get("items"):
             return st
         items = titles.random_titles(self.SHOP_SIZE)
         for i, e in enumerate(items, 1):
             e["n"] = i
-        st["date"] = self._today()
+        st["date"] = self._shop_tag()
         st["items"] = items
         log.info("Flo Shop neu gewuerfelt (%d Titel, %s).", len(items), st["date"])
         return st

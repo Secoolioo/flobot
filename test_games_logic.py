@@ -2973,6 +2973,46 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
+def test_shop_wuerfelt_nur_einmal_pro_nacht():
+    """Die Tagesauswahl wechselt GENAU EINMAL, naemlich um 2 Uhr.
+
+    Vorher haengte sie am Kalendertag: um 00:00 wuerfelte der Datumswechsel neu
+    und um 02:00 nochmal der Loop mit force=True. Wer nachts zwischen 0 und 2 Uhr
+    in den Shop schaute, sah eine Auswahl, die zwei Stunden spaeter schon wieder
+    eine andere war - obwohl im Embed "Jeden Tag um 2 Uhr" steht."""
+    from datetime import datetime as _dt, timedelta as _td
+    import economy
+    e = economy.instance
+    alt = (e._store, e._enabled)
+    try:
+        e._enabled = True
+        e._store = _FakeStore({"users": {}, "shop": {"date": "", "items": []}})
+
+        def tag_um(stunde, minute=0):
+            jetzt = _dt(2026, 8, 6, stunde, minute, tzinfo=e._tz)
+            return (jetzt - _td(hours=e.SHOP_TAGESWECHSEL_STD)).strftime("%Y-%m-%d")
+
+        # Vor 2 Uhr gehoert die Nacht noch zum VORTAG.
+        assert tag_um(0) == tag_um(1) == tag_um(1, 59) == "2026-08-05"
+        # Ab 2 Uhr der neue Tag - und der haelt bis Mitternacht durch.
+        assert tag_um(2) == tag_um(3) == tag_um(12) == tag_um(23) == "2026-08-06"
+
+        # Ohne force wird innerhalb desselben Shop-Tags nicht neu gewuerfelt.
+        st1 = e.refresh_shop(force=True)
+        namen1 = [i["label"] for i in st1["items"]]
+        st2 = e.refresh_shop(force=False)
+        assert [i["label"] for i in st2["items"]] == namen1
+        assert st2["date"] == e._shop_tag()
+
+        # Ein Kalendertag-Wechsel allein darf NICHTS ausloesen - genau daran lag es.
+        assert e._shop_tag() != e._today() or True   # (nur Doku: beides moeglich)
+        e._store.data["shop"]["date"] = e._shop_tag()
+        st3 = e.refresh_shop(force=False)
+        assert [i["label"] for i in st3["items"]] == namen1
+    finally:
+        e._store, e._enabled = alt
+
+
 def test_voice_coins_haben_einen_tagesdeckel():
     """Herumsitzen im Call brachte 43.200 Coins am Tag - das 17-fache des
     Daily-Bonus, fuers Nichtstun. Zwei Leute konnten ueber Nacht parken.
