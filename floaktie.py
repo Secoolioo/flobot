@@ -117,6 +117,26 @@ MAX_SHARES_PER_TRADE = int(os.getenv("FLOAKTIE_MAX_TRADE", "150") or "150")
 # war der Kurs in einer Einbahnstrasse - im Leerlauf passierte GAR NICHTS, bis er
 # sich erst versechsfacht hatte. Genau das kam im Betrieb an: "die Aktie sinkt nie".
 FAIR_BASE = float(os.getenv("FLOAKTIE_FAIR_BASE", "10") or "10")
+# --- Grundwert: was der Server LANGFRISTIG wert ist ------------------------
+# Ein FESTER Boden funktioniert bei diesem Verfall nicht. Nachgerechnet ueber
+# 60 simulierte Tage: mit -11 % je halber Stunde ist nach einer Nacht ohne Call
+# alles weg, der Kurs stand jeden Morgen wieder auf dem Mindestwert 10 und jeden
+# Abend bei ~130.000. Spanne 13.296-fach, bester 6-Stunden-Handel +1.129.685 %.
+# Das ist kein Markt, das ist ein Saegezahn.
+#
+# Deshalb ist der Boden BEWEGLICH: die Aktie ist so viel wert, wie der Server im
+# Schnitt lebendig ist. 'grund_akt' ist ein langsamer Mittelwert der Aktivitaet
+# ueber GRUND_TAGE Tage (Leerlaufstunden zaehlen mit). Der Kurs faellt im
+# Leerlauf also nicht mehr ins Nichts, sondern auf den Wert, den der Server
+# regelmaessig hergibt - wer jeden Abend im Call sitzt, haelt den Boden oben.
+# Stirbt der Server wirklich, sinkt auch der Grundwert und mit ihm der Boden.
+GRUND_TAGE = float(os.getenv("FLOAKTIE_GRUND_TAGE", "3") or "3")
+# Wie stark der Grundwert den Boden traegt. 'grund_akt' ist ein 24-Stunden-Schnitt
+# und damit klein (ein Server mit 4 aktiven Stunden landet bei ~0,7 Punkten). Ohne
+# diesen Faktor laege der Boden bei ~680, waehrend ein voller Abend auf ~128.000
+# geht - eine Spanne von 182-fach, viel zu wild zum Handeln. Der Faktor hebt den
+# Boden auf das Niveau eines DURCHSCHNITTLICHEN Abends.
+GRUND_FAKTOR = float(os.getenv("FLOAKTIE_GRUND_FAKTOR", "4") or "4")
 # Wert je Aktivitaetspunkt. Merksatz: Zielkurs ~ 1.000 x Aktivitaetspunkte.
 # (Vorher 120 - damit "lohnte" sich bei 12 Punkten nur ein Kurs von 1.740, und
 # jeder Kurs darueber wurde auf den Mindest-Anstieg heruntergebremst: der Kurs
@@ -159,12 +179,18 @@ LEVEL_SOFT = float(os.getenv("FLOAKTIE_LEVEL_SOFT", "2.5") or "2.5")
 # einem Server, auf dem fast immer jemand im Call haengt, auf +23 %/Tag - und der
 # Kurs laeuft langfristig weg (in der Simulation nach 30 Tagen 50 Millionen).
 MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
-# Notbremse GANZ weit oben, damit der Kurs nicht in absurde Gleitkomma-Regionen
-# laeuft - im Alltag greift sie nicht. Der Deckel waechst mit der Aktivitaet:
-# 3 Punkte tragen bis 3,3 Mio, 20 Punkte bis 20 Mio, 39 Punkte bis 39 Mio.
-# (Vorher stand er bei 2,0 - da war bei 3 Leuten schon ab Kurs 6.600 Schluss und
-# der Kurs stand komplett still, obwohl Leute im Call waren.)
-CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "6") or "6")
+# Wie weit der Kurs ueber den Zielkurs der aktuellen Aktivitaet hinauslaufen darf.
+# Zusammen mit GRUND_FAKTOR legt das die SPANNE fest, in der gehandelt wird -
+# also wie streng die Aktie ist. Ausgesucht ueber eine Parametersuche mit je 30
+# simulierten Tagen (16 Kombinationen, siehe tools_aktien_sim.py):
+#   CEIL 6 (vorher): Boden 681, Spitze 128.456 -> Spanne 182-fach. Der Kurs
+#     stand jeden Morgen am Boden und jeden Abend am Anschlag - kein Handel,
+#     nur ein Saegezahn.
+#   CEIL 2 + GRUND 4 (jetzt): Boden ~3.000, Spitze ~38.000 -> Spanne 12,6-fach.
+#     Ein gut getimter 6-Stunden-Handel bringt +826 %, ein schlecht getimter
+#     kostet -77 %, ueber Nacht halten -67 %. Blind 7 Tage halten: +4 % - es
+#     gibt also nichts geschenkt, nur fuers Dabeisein.
+CEIL_FACTOR = float(os.getenv("FLOAKTIE_CEIL", "2") or "2")
 # Glaettung asymmetrisch: mehr Aktivitaet wird fast sofort uebernommen (man soll es
 # sehen), weniger nur langsam (eine kurze Pause soll den Kurs nicht abwuergen).
 ACT_ALPHA_UP = float(os.getenv("FLOAKTIE_ACT_ALPHA_UP", "0.85") or "0.85")
@@ -931,6 +957,31 @@ class FloAktie:
         nur bei besetztem Call - siehe activity_of)."""
         return max(BASE_FLOOR, FAIR_BASE + AKT_WERT * max(0.0, float(activity)))
 
+    def grund_akt(self):
+        """Die durchschnittliche Aktivitaet der letzten GRUND_TAGE Tage."""
+        return max(0.0, float(self._state().get("grund_akt", 0.0) or 0.0))
+
+    def boden_base(self):
+        """Der Boden, auf den der Kurs im Leerlauf faellt - der Grundwert.
+
+        NICHT der feste Mindestwert: die Aktie ist so viel wert, wie der Server
+        im Schnitt hergibt. Ein Server mit taeglichem Abend-Call haelt damit
+        einen ordentlichen Boden, ein toter Server verfaellt bis auf FAIR_BASE."""
+        return self.ziel_base(GRUND_FAKTOR * self.grund_akt())
+
+    def _grund_tick(self, roh_aktiv, skala):
+        """Zieht den Grundwert langsam Richtung der tatsaechlichen Aktivitaet.
+
+        Bewusst TRAEGE (GRUND_TAGE Tage): ein einzelner voller Abend soll den
+        Boden nur ein Stueck heben, und eine einzelne stille Nacht ihn nur ein
+        Stueck senken. Sonst waere der Boden bloss eine zweite, langsamere Kopie
+        des Kurses und wuerde nichts mehr stuetzen."""
+        st = self._state()
+        alt = max(0.0, float(st.get("grund_akt", 0.0) or 0.0))
+        tau = max(1.0, GRUND_TAGE * 1440.0)          # in Minuten
+        alpha = min(1.0, skala / tau)
+        st["grund_akt"] = alt + (max(0.0, float(roh_aktiv)) - alt) * alpha
+
     def ziel_kurs(self, activity=None):
         """Derselbe Zielwert als ANGEZEIGTER Kurs (inkl. ausgegebener Anteile)."""
         if activity is None:
@@ -950,9 +1001,11 @@ class FloAktie:
             return 0.0
         ziel = self.ziel_base(activity)
         if activity <= 0:
-            # Nichts los -> runter Richtung Wert eines toten Servers, und zwar
-            # je laenger leer, desto schneller (siehe _leerlauf_verfall).
-            if base <= ziel:
+            # Nichts los -> runter, aber nur bis zum GRUNDWERT: so viel ist die
+            # Aktie auf diesem Server auch ohne laufenden Call wert. Vorher ging
+            # es bis auf den festen Mindestwert - der Kurs stand deshalb jeden
+            # Morgen wieder bei 10, egal wie lebendig der Server sonst ist.
+            if base <= self.boden_base():
                 return 0.0
             return -self._leerlauf_verfall()
         if base >= ziel * max(1.0, CEIL_FACTOR):
@@ -971,9 +1024,15 @@ class FloAktie:
         Sofort-Impuls _puls NICHT: mit Rein-/Raus-Springen aus dem Call liess sich
         der Kurs an ihr vorbei bis an die Tagesbremse treiben (gemessen: Deckel
         112.000, erreicht wurden 250.000, ueber Mitternacht Faktor 1.593).
-        Deshalb steht sie jetzt hier an einer Stelle."""
+        Deshalb steht sie jetzt hier an einer Stelle.
+
+        Nie UNTER dem Grundwert: dort steht der Kurs im Leerlauf voellig zu Recht.
+        Ohne dieses max() zeigte das Panel bei Kurs 6.511 einen 'Deckel 22', und
+        der Sofort-Impuls war tot - er bricht ab, sobald der Kurs ueber dem
+        Deckel steht, also ausgerechnet dann, wenn jemand einen stillen Server
+        wieder betritt."""
         akt = float(self._state().get("act_ema", 0.0) or 0.0)
-        return self.ziel_base(akt) * max(1.0, CEIL_FACTOR)
+        return max(self.ziel_base(akt) * max(1.0, CEIL_FACTOR), self.boden_base())
 
     # --- Flo als Analyst: die KI bewertet den Markt --------------------------
     def _ki_faktor(self):
@@ -1131,6 +1190,9 @@ class FloAktie:
         st = self._state()
         skala = max(0.05, min(4.0, float(dt) / 60.0))
         roh_aktiv = self.activity_of(people, streams, video, msgs_since)
+        # Der Grundwert laeuft IMMER mit - auch im Leerlauf, sonst wuerde er nur
+        # von aktiven Minuten hochgezogen und nie wieder sinken.
+        self._grund_tick(roh_aktiv, skala)
         alt_ema = float(st.get("act_ema", 0.0) or 0.0)
         # Momentum wird als Rate PRO MINUTE gefuehrt - dadurch ist das Ergebnis
         # unabhaengig davon, ob der Loop alle 20 oder alle 60 Sekunden taktet.
@@ -1498,14 +1560,16 @@ class FloAktie:
         am_deckel = self._am_deckel()
         if akt <= 0:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
-            boden = int(round(FAIR_BASE * (1.0 + self.total_shares() / LIQUIDITY)))
+            boden = int(round(self.boden_base()
+                              * (1.0 + self.total_shares() / LIQUIDITY)))
             if self.drift_fuer(0) >= 0:
                 # Am Boden angekommen: tiefer geht es nicht, sonst waere die Aktie
                 # irgendwann wertlos. Das ausdruecklich SAGEN - sonst sieht es aus,
                 # als wuerde der Kurs im Leerlauf einfach nicht sinken.
-                hinweis = (f"**Bodensatz erreicht** ({self._fmt(max(MIN_PRICE, boden))}) – "
-                           f"so viel ist die Aktie auch auf einem toten Server noch "
-                           f"wert. Tiefer geht es nicht, ab hier hilft nur Aktivität.")
+                hinweis = (f"**Grundwert erreicht** ({self._fmt(max(MIN_PRICE, boden))}) – "
+                           f"so viel ist die Aktie wert, weil auf diesem Server "
+                           f"regelmäßig etwas los ist. Tiefer geht es nur, wenn "
+                           f"es dauerhaft still bleibt.")
             elif leer >= 60:
                 hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt mit "
                            f"**{IDLE_PER_30MIN * 100:.0f} % pro halber Stunde** "
@@ -1572,6 +1636,9 @@ class FloAktie:
             name="Regeln, kurz",
             value=(f"📈 Kaufen treibt den Kurs, Verkaufen drückt ihn. Viel Aktivität "
                    f"= hoher Kurs, tote Hose = fallender Kurs.\n"
+                   f"⚓ **Grundwert {self._fmt(int(round(self.boden_base() * (1 + self.total_shares() / LIQUIDITY))))}** "
+                   f"– so weit fällt der Kurs im Leerlauf zurück, tiefer nicht. "
+                   f"Er wächst mit, wenn hier regelmäßig was los ist.\n"
                    f"💰 **Dividende** im Voice (größter Aktionär: doppelt).\n"
                    f"🧾 **Verkaufssteuer {self._sell_fee() * 100:.0f} %** – sie steigt, "
                    f"je weiter der Kurs über seinem Wert steht.\n"

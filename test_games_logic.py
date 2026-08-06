@@ -1458,7 +1458,11 @@ def test_floaktie_market():
         # {"price": 1000}; der Test war dadurch gruen, weil der Vergleich einen
         # veralteten Wert gegen einen frisch gerechneten hielt, nicht weil der
         # Chat irgendetwas bewegt haette.
+        # Deutlich UEBER den Grundwert stellen, sonst faellt der Kurs zu Recht
+        # gar nicht (siehe boden_base) und der Test misst nichts.
         stelle()
+        fa._store.data["base"] = fa.boden_base() * 4.0
+        fa._sync_price()
         vorher = fa.price()
         for _ in range(200):
             fa.note_message()
@@ -1871,12 +1875,16 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         # 7b) DER VORMITTAG: auch mit nur 3 Leuten im Call muss sich ein Depot
         #     ueber ein paar Stunden VERVIELFACHEN - vom normalen Niveau aus, also
         #     dort, wo der Kurs nach einer ruhigen Nacht steht.
+        #     Die Schwelle folgt dem Deckel: CEIL_FACTOR x Zielkurs. Frueher stand
+        #     der bei 6 (also 18-fach), was zusammen mit dem festen Boden eine
+        #     182-fache Tagesspanne ergab - kein Markt, nur ein Saegezahn. Mit
+        #     CEIL_FACTOR 2 sind es rund 6-fach in sechs Stunden mit DREI Leuten.
         for startkurs in (1_000, int(floaktie.FAIR_BASE)):
             frisch(startkurs)
             for _ in range(6 * 60):
                 fa._activity_tick(3, 0)
             faktor = fa.price() / startkurs
-            assert faktor > 8, (startkurs, fa.price(), faktor)
+            assert faktor > 5, (startkurs, fa.price(), faktor)
         # ... aber NICHT unbegrenzt: steht der Kurs schon am Deckel dieser
         # Aktivitaet, hoert es auf. Genau das verhindert die Hyperinflation
         # (vorher: 750 Anteile fuer 1,1 Mio -> Verkauf fuer 43 MILLIARDEN).
@@ -1886,12 +1894,23 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         for _ in range(6 * 60):
             fa._activity_tick(3, 0)
         assert fa.price() <= vorm_deckel * 1.06, (vorm_deckel, fa.price())
-        # Und mehr Leute muessen auf demselben Niveau schneller sein.
-        frisch(50_000)
+        # Und mehr Leute muessen auf demselben Niveau schneller sein - gemessen
+        # UNTERHALB des Deckels, sonst vergleicht man zwei Nullen.
+        frisch(2_000)
         d3 = fa.drift_fuer(fa.activity_of(3, 0, 0, 0))
         d10 = fa.drift_fuer(fa.activity_of(10, 0, 0, 0))
         d10s = fa.drift_fuer(fa.activity_of(10, 10, 0, 0))
-        assert d3 < d10 < d10s or d10s >= floaktie.TICK_CAP * 0.99, (d3, d10, d10s)
+        assert d3 < d10 <= d10s, (d3, d10, d10s)
+        assert d10s >= floaktie.TICK_CAP * 0.99, d10s      # voller Call: Anschlag
+
+        # Umgekehrt: steht der Kurs WEIT ueber dem, was die Aktivitaet hergibt,
+        # geht gar nichts mehr nach oben. Genau das haelt die Spanne im Zaum -
+        # bei Kurs 50.000 rechtfertigen weder 3 noch 10 Leute einen Anstieg,
+        # ein voller Call mit 10 Streams aber schon.
+        frisch(50_000)
+        assert fa.drift_fuer(fa.activity_of(3, 0, 0, 0)) == 0.0
+        assert fa.drift_fuer(fa.activity_of(10, 0, 0, 0)) == 0.0
+        assert fa.drift_fuer(fa.activity_of(10, 10, 0, 0)) > 0.0
 
         # 8) Signal deutlich ueber dem Rauschen - man MUSS es sehen koennen.
         #    (Beim Niveau-Modell zaehlt der Abstand zum Ziel: steht der Kurs auf
@@ -3502,10 +3521,14 @@ def test_floaktie_lebendig_und_ki():
         for _ in range(60):
             fa._activity_tick(5, 4, streams=2, dt=20.0)
         assert fa._store.data["mom"] > 0
-        # Im Leerlauf dreht es ins Minus.
+        # Im Leerlauf dreht es ins Minus - dafuer muss der Kurs aber UEBER dem
+        # Grundwert stehen. Steht er darunter, faellt er zu Recht nicht (und das
+        # Momentum bleibt bei 0), siehe boden_base().
+        fa._store.data["base"] = fa.boden_base() * 3.0
+        fa._sync_price()
         for _ in range(90):
             fa._activity_tick(0, 0, dt=20.0)
-        assert fa._store.data["mom"] < 0
+        assert fa._store.data["mom"] < 0, fa._store.data["mom"]
 
         # 3) TAKTUNABHAENGIG: 60 s und 20 s kommen am Ende auf dasselbe Niveau.
         werte = {}
@@ -3689,6 +3712,140 @@ def test_bilder_blockieren_den_bot_nicht():
 
     assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
                              + ", ".join(verdaechtig))
+
+
+def test_floaktie_grundwert_traegt_den_boden():
+    """Der Boden ist BEWEGLICH: die Aktie ist so viel wert, wie der Server im
+    Schnitt lebendig ist.
+
+    Vorher war der Boden fest (FAIR_BASE = 10). Bei -11 % je halber Stunde ist
+    nach einer Nacht alles weg - in der 60-Tage-Simulation stand der Kurs jeden
+    Morgen bei 10 und jeden Abend bei ~130.000, Spanne 182-fach. Kein Markt,
+    nur ein Saegezahn."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-08-06"
+    try:
+        def frisch(kurs=1000):
+            fa._store = _FakeStore({"price": int(kurs), "base": float(kurs),
+                                    "day": "x", "act_ema": 0.0, "grund_akt": 0.0,
+                                    "msg_count": 0, "last_msg_count": 0,
+                                    "leer_min": 0.0, "mom": 0.0, "holdings": {},
+                                    "history": [], "ticks": [],
+                                    "open_day": "2026-08-06", "open_base": float(kurs)})
+            fa._sync_price()
+
+        # 1) Frischer Server: Grundwert 0 -> Boden ist der Mindestwert.
+        frisch()
+        assert fa.grund_akt() == 0.0
+        assert abs(fa.boden_base() - floaktie.FAIR_BASE) < 0.01, fa.boden_base()
+
+        # 2) Ein paar Tage mit taeglichem Abend-Call heben den Boden deutlich.
+        frisch(1000)
+        for _tag in range(5):
+            for _ in range(4 * 60):                     # 4 h Call
+                fa._activity_tick(6, 3, streams=2)
+            for _ in range(20 * 60):                    # 20 h Ruhe
+                fa._activity_tick(0, 0)
+        boden_lebendig = fa.boden_base()
+        assert boden_lebendig > floaktie.FAIR_BASE * 50, boden_lebendig
+
+        # 3) Genau dorthin faellt der Kurs im Leerlauf - und nicht tiefer.
+        fa._store.data["base"] = boden_lebendig * 5.0
+        fa._sync_price()
+        for _ in range(48 * 60):                        # zwei ganze Tage leer
+            fa._activity_tick(0, 0)
+        assert fa._base() >= fa.boden_base() * 0.98, (fa._base(), fa.boden_base())
+        assert fa.drift_fuer(0.0) == 0.0                # am Grundwert: Schluss
+
+        # 4) Bleibt es WIRKLICH dauerhaft still, schmilzt auch der Grundwert.
+        for _ in range(20 * 24 * 60):                   # 20 Tage tot
+            fa._activity_tick(0, 0)
+        assert fa.boden_base() < boden_lebendig * 0.2, (fa.boden_base(), boden_lebendig)
+
+        # 4b) Der angezeigte Deckel darf NIE unter dem Grundwert liegen - sonst
+        #     stand im Panel "Kurs 6.511, Deckel 22", und der Sofort-Impuls war
+        #     tot (er bricht ab, sobald der Kurs ueber dem Deckel steht - also
+        #     ausgerechnet dann, wenn jemand einen stillen Server betritt).
+        frisch(1000)
+        for _tag in range(5):
+            for _ in range(4 * 60):
+                fa._activity_tick(6, 3, streams=2)
+            for _ in range(20 * 60):
+                fa._activity_tick(0, 0)
+        assert fa.akt_deckel_base() >= fa.boden_base(), (fa.akt_deckel_base(),
+                                                         fa.boden_base())
+        assert fa._deckel_kurs() >= fa.price() * 0.99, (fa._deckel_kurs(), fa.price())
+        vor_puls = fa.price()
+        fa._store.data["pulse_min"] = 0
+        fa._store.data["pulse_sum"] = 0.0
+        fa._puls(floaktie.PULSE_JOIN, "jemand kommt")
+        assert fa.price() >= vor_puls, (vor_puls, fa.price())
+
+        # 5) Ein einzelner Abend darf den Boden nicht hochreissen (Traegheit) -
+        #    sonst waere er nur eine langsamere Kopie des Kurses.
+        frisch(1000)
+        vor = fa.boden_base()
+        for _ in range(4 * 60):
+            fa._activity_tick(10, 5, streams=4)
+        akt = fa.activity_of(10, 4, 0, 5)
+        assert fa.boden_base() < fa.ziel_base(akt) * 0.25, (fa.boden_base(),
+                                                            fa.ziel_base(akt))
+        assert fa.boden_base() > vor
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
+
+
+def test_floaktie_ist_streng_aber_ein_markt():
+    """Die Vorgabe: man kann schnell viel gewinnen UND schnell viel verlieren.
+
+    Gemessen an einem Tagesablauf (Abend-Call, danach Ruhe) - genau der Fall,
+    um den es geht. Die ausfuehrliche 60-Tage-Fassung steht in
+    tools_aktien_sim.py; hier die Kernaussagen als Regressionsschutz."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-08-06"
+    try:
+        fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x",
+                                "act_ema": 0.0, "grund_akt": 0.0, "mom": 0.0,
+                                "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "holdings": {}, "history": [],
+                                "ticks": [], "open_day": "2026-08-06",
+                                "open_base": 1000.0})
+        fa._sync_price()
+        # Eine Woche einschwingen lassen, damit der Grundwert steht.
+        for _tag in range(7):
+            for _ in range(4 * 60):
+                fa._activity_tick(6, 3, streams=2)
+            for _ in range(20 * 60):
+                fa._activity_tick(0, 0)
+
+        # SCHNELL VIEL GEWINNEN: wer zum Call-Start kauft, verdoppelt in Stunden.
+        vor_abend = fa.price()
+        for _ in range(4 * 60):
+            fa._activity_tick(6, 3, streams=2)
+        hoch = fa.price()
+        assert hoch >= vor_abend * 2.0, (vor_abend, hoch)
+
+        # SCHNELL VIEL VERLIEREN: wer bis zum naechsten Morgen haelt, blutet.
+        for _ in range(8 * 60):
+            fa._activity_tick(0, 0)
+        morgen = fa.price()
+        assert morgen <= hoch * 0.65, (hoch, morgen)
+
+        # ABER NICHT INS NICHTS: der Grundwert faengt den Kurs auf.
+        assert morgen > vor_abend * 0.4, (vor_abend, morgen)
+
+        # Und die Tagesspanne bleibt handhabbar (kein Saegezahn ueber 100-fach).
+        assert hoch / max(1, morgen) < 30, (hoch, morgen)
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
 def test_floaktie_chart_klebt_keine_tage_doppelt():
@@ -4036,14 +4193,17 @@ def test_floaktie_faellt_auf_jedem_niveau():
             fa._tages_anker()
             for _ in range(1440):
                 fa._activity_tick(0, 0)
-        boden = floaktie.FAIR_BASE * (1 + 147 / floaktie.LIQUIDITY)
+        # Nach Tagen ohne jede Aktivitaet ist auch der GRUNDWERT abgeschmolzen -
+        # ein wirklich toter Server faellt bis auf den Mindestwert durch.
+        boden = fa.boden_base() * (1 + 147 / floaktie.LIQUIDITY)
         assert fa.price() >= floaktie.MIN_PRICE
         assert abs(fa.price() - boden) < boden * 0.05, (fa.price(), boden)
+        assert abs(fa.boden_base() - floaktie.FAIR_BASE) < 1.0, fa.boden_base()
         # Am Boden sagt das Panel ausdruecklich, dass es nicht tiefer geht.
         restore = _with_economy({2: 0})
         try:
             panel = _embed_text(fa._panel_embed(SimpleNamespace(id=2)))
-            assert "Bodensatz erreicht" in panel, panel
+            assert "Grundwert erreicht" in panel, panel
         finally:
             restore()
 
