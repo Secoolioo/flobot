@@ -7,3 +7,4 @@ __pycache__/
 data/
 # Backups des Wirtschafts-Resets (economy_reset.sh) - nur lokal:
 backups/
+.pytest_cache/
