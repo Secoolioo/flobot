@@ -551,6 +551,19 @@ function api(path,opts){ opts=opts||{}; opts.headers=opts.headers||{};
       function(){ pgDone(); return Promise.reject({error:"Ungültige Antwort"}); });
   },function(e){ pgDone(); return Promise.reject({error:"Netzwerkfehler"}); }); }
 
+/* Doppelklick-Schutz fuer Knoepfe, die etwas BUCHEN (Coins, Anteile, XP, Titel,
+   Schalter). Ohne den hat ein zweiter Klick waehrend der laufenden Anfrage die
+   Buchung einfach ein zweites Mal ausgeloest - aus "1 Mio geben" wurden 2 Mio.
+   Der Knopf ist waehrend der Anfrage aus und kommt danach zurueck, auch im
+   Fehlerfall. Rueckgabe: das Promise, damit .then/.catch weiter dranhaengen. */
+function einmal(btn,p){
+  if(!btn) return p;
+  btn.disabled=true; btn.classList.add("busy");
+  function frei(){ btn.disabled=false; btn.classList.remove("busy"); }
+  p.then(frei,frei);
+  return p;
+}
+
 /* ============ COUNT-UP ============ */
 function countUp(el,to,opts){ opts=opts||{}; var from=(opts.from!=null)?opts.from:0; var dur=opts.dur||900; var dec=opts.dec||0;
   var pre=opts.pre||"",suf=opts.suf||""; var t0=null;
@@ -1137,14 +1150,14 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
   c.innerHTML=""; c.appendChild(v);
 
   $("#pauseToggle").addEventListener("click",function(){ var el=this; var next=!el.classList.contains("on");
-    api("/api/server/sendepause",{method:"POST",body:{on:next}}).then(function(r){ if(!r.ok)throw r;
+    einmal(el,api("/api/server/sendepause",{method:"POST",body:{on:next}})).then(function(r){ if(!r.ok)throw r;
       el.classList.toggle("on",!!r.sendepause); if(S.ov&&S.ov.stats)S.ov.stats.sendepause=!!r.sendepause;
       toast("Sendepause "+(r.sendepause?"aktiviert":"deaktiviert"),r.sendepause?"info":"ok"); }).catch(function(e){ if(e&&e.auth)return; toast("Umschalten fehlgeschlagen","err"); }); });
 
   $("#aktieToggle").addEventListener("click",function(){ var el=this;
     if(!aktie.loaded){ toast("Aktien-Modul ist nicht geladen – Bot neu starten","err"); return; }
     var next=!el.classList.contains("on");
-    api("/api/feature",{method:"POST",body:{key:"floaktie",on:next}}).then(function(r){ if(!r.ok)throw r;
+    einmal(el,api("/api/feature",{method:"POST",body:{key:"floaktie",on:next}})).then(function(r){ if(!r.ok)throw r;
       aktie.on=!!r.on; el.classList.toggle("on",aktie.on);
       var cd=el.parentNode.querySelector(".cd");
       if(cd)cd.textContent=aktie.on?"Handel, Kurs-Ticks und Voice-Dividende laufen"
@@ -1243,7 +1256,7 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
   /* Coins */
   $("#qcGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
     var amt=$("#qcAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
-    api("/api/user/coins",{method:"POST",body:{id:id,action:$("#qcAct").value,amount:amt}}).then(function(r){ if(!r.ok)throw r;
+    einmal(this,api("/api/user/coins",{method:"POST",body:{id:id,action:$("#qcAct").value,amount:amt}})).then(function(r){ if(!r.ok)throw r;
       $("#qcRes").innerHTML='✓ Neuer Kontostand: <b class="num gold">'+fmt(r.coins)+'</b> Coins';
       if(picked)picked.coins=r.coins; toast("Coins aktualisiert","ok");
     }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
@@ -1251,8 +1264,8 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
   /* Anteile */
   $("#qsGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
     var amt=$("#qsAmt").value.trim(); if(!amt){toast("Anzahl eingeben","err");return;}
-    api("/api/user/shares",{method:"POST",body:{id:id,action:$("#qsAct").value,amount:amt,
-                                               keep_price:$("#qsKeep").checked}}).then(function(r){ if(!r.ok)throw r;
+    einmal(this,api("/api/user/shares",{method:"POST",body:{id:id,action:$("#qsAct").value,amount:amt,
+                                               keep_price:$("#qsKeep").checked}})).then(function(r){ if(!r.ok)throw r;
       $("#qsRes").innerHTML='✓ Anteile: <b class="num">'+fmt(r.shares)+'</b> · Kurs <b class="num gold">'+fmt(r.price)+
         '</b> · gesamt im Umlauf <b class="num">'+fmt(r.total_shares)+'</b>';
       if(picked)picked.shares=r.shares; toast("Anteile aktualisiert","ok");
@@ -1261,13 +1274,13 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
   /* XP */
   $("#qxGo").addEventListener("click",function(){ var id=targetId(); if(!id)return;
     var amt=$("#qxAmt").value.trim(); if(!amt){toast("Betrag eingeben","err");return;}
-    api("/api/user/xp",{method:"POST",body:{id:id,action:$("#qxAct").value,amount:amt}}).then(function(r){ if(!r.ok)throw r;
+    einmal(this,api("/api/user/xp",{method:"POST",body:{id:id,action:$("#qxAct").value,amount:amt}})).then(function(r){ if(!r.ok)throw r;
       $("#qxRes").innerHTML='✓ XP: <b class="num">'+fmt(r.xp)+'</b> · Level <b class="num">'+fmt(r.level)+'</b>';
       toast("XP aktualisiert","ok"); }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
 
   /* Kurs */
   $("#qpGo").addEventListener("click",function(){ var p=$("#qpVal").value.trim(); if(!p){toast("Kurs eingeben","err");return;}
-    api("/api/stock/price",{method:"POST",body:{price:p}}).then(function(r){ if(!r.ok)throw r;
+    einmal(this,api("/api/stock/price",{method:"POST",body:{price:p}})).then(function(r){ if(!r.ok)throw r;
       /* Wunsch unter dem Mindestkurs? Dann NICHT einfach Erfolg melden. */
       var abw=(r.requested!=null&&r.requested!==r.price);
       $("#qpRes").innerHTML='✓ Neuer Kurs: <b class="num gold">'+fmt(r.price)+'</b> Coins / Anteil'+

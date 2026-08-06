@@ -1575,6 +1575,49 @@ def test_floaktie_market():
         restore_eco()
 
 
+def test_webpanel_update_nur_einmal_gleichzeitig():
+    """Zwei gleichzeitige Update-Klicks duerfen nicht zwei git-pulls starten.
+
+    Zwei offene Tabs (oder ein zweites Geraet) haetten sonst zwei Pulls im selben
+    Arbeitsverzeichnis losgeschickt; git legt dann index.lock an und der zweite
+    Lauf bricht mit einer Meldung ab, die niemand einordnen kann."""
+    import webpanel
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def lauf():
+        wp = webpanel.WebPanel()
+        wp._enabled = True
+        wp._auth = 0
+        gestartet = []
+
+        async def langsam(request):
+            """Tut so, als liefe der Pull - lange genug fuer den zweiten Klick."""
+            gestartet.append(1)
+            await asyncio.sleep(0.25)
+            return webpanel.web.json_response({"ok": True, "changed": False,
+                                               "log": "test"})
+
+        wp._update_lauf = langsam
+        async with TestClient(TestServer(wp._build_app())) as c:
+            a, b = await asyncio.gather(
+                c.post("/api/update", json={"restart": False}),
+                c.post("/api/update", json={"restart": False}),
+            )
+            codes = sorted([a.status, b.status])
+            texte = [await a.json(), await b.json()]
+            return codes, len(gestartet), texte
+
+    codes, laeufe, texte = asyncio.run(lauf())
+    assert codes == [200, 409], codes
+    assert laeufe == 1, (laeufe, texte)          # nur EIN git pull
+    abgelehnt = [t for t in texte if not t.get("ok")]
+    assert abgelehnt and "läuft bereits" in abgelehnt[0].get("error", ""), texte
+
+    # Und danach geht es wieder.
+    codes2, laeufe2, _ = asyncio.run(lauf())
+    assert laeufe2 == 1, laeufe2
+
+
 def test_webpanel_api():
     """Web-Panel-Backend: Login-Gate, Overview/Users, Coins geben/nehmen/setzen,
     XP, Titel geben, Server-Liste, Sendepause - alles hinter Token-Auth."""

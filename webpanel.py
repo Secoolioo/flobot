@@ -54,6 +54,9 @@ class WebPanel:
         self._enabled = False
         self._runner = None
         self._client = None
+        # Laeuft gerade ein 'git pull' ueber den Update-Knopf? Schuetzt davor,
+        # dass zwei Tabs gleichzeitig im selben Verzeichnis ziehen.
+        self._update_laeuft = False
         self._tokens = {}      # token -> Ablauf-Timestamp
         self._host = "0.0.0.0"
         self._port = 9123
@@ -893,6 +896,22 @@ class WebPanel:
         etwas geaendert hat - sonst waere der Knopf ein Neustart-Knopf mit
         Zusatzschritt."""
         self._guard(request)
+        # Nur EIN git-pull gleichzeitig. Zwei offene Browser-Tabs (oder ein
+        # zweiter Klick aus einem anderen Geraet) haetten sonst zwei Pulls im
+        # selben Arbeitsverzeichnis gestartet - git legt dann index.lock an und
+        # der zweite Lauf bricht mit einem Fehler ab, den niemand einordnen kann.
+        if self._update_laeuft:
+            return web.json_response(
+                {"ok": False, "error": "Update läuft bereits",
+                 "log": "Es läuft schon ein Update. Bitte warten."}, status=409)
+        self._update_laeuft = True
+        try:
+            return await self._update_lauf(request)
+        finally:
+            self._update_laeuft = False
+
+    async def _update_lauf(self, request):
+        """Der eigentliche Update-Ablauf (siehe _api_update)."""
         try:
             data = await request.json()
         except Exception:  # noqa: BLE001
