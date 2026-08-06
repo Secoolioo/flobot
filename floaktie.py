@@ -133,20 +133,18 @@ AKT_WERT = float(os.getenv("FLOAKTIE_AKT_WERT", "1000") or "1000")
 # und 1,3 Mio an einem normalen (3 Leute, ein Stream).
 TICK_GAIN = float(os.getenv("FLOAKTIE_TICK_GAIN", "0.0028") or "0.0028")
 TICK_CAP = float(os.getenv("FLOAKTIE_TICK_CAP", "0.0275") or "0.0275") # max +2,75 %/min
-# Verfall bei LEEREM Server - gestaffelt: je laenger nichts los ist, desto
-# schneller faellt der Kurs (wie eine Aktie, die keiner mehr will).
-#   Verfall/min = IDLE_RATE * min(1, Leerlauf-Minuten / IDLE_RAMP_MIN)
-# Ist der Call leer, soll man ZUSEHEN koennen, wie der Kurs faellt:
-#   ab der ERSTEN Minute  -0,4 %/min  = -21 %/h   (IDLE_DECAY)
-#   ab der 5. Minute      -1,5 %/min  = -60 %/h   (IDLE_RATE, volle Rampe)
-# Der sanfte Anlauf ist bewusst weg - vorher startete es bei -0,2 %/min (-11 %/h)
-# und brauchte 8 Minuten bis zur vollen Wirkung. Das fuehlte sich an, als
-# passiere in der ersten Viertelstunde gar nichts.
-IDLE_RATE = float(os.getenv("FLOAKTIE_IDLE_RATE", "0.015") or "0.015")
-# Nach so vielen zusammenhaengenden Leerlauf-Minuten ist der Verfall voll da.
-IDLE_RAMP_MIN = float(os.getenv("FLOAKTIE_IDLE_RAMP", "5") or "5")
-# Alt (nur noch als Startwert der Rampe, damit auch die erste Minute schon sinkt).
-IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.004") or "0.004")
+# Verfall bei LEEREM Call - SOFORT und GLEICHMAESSIG.
+#
+# Vorgabe des Besitzers: "sinken soll es direkt sobald keiner mehr im Call ist,
+# aber rasant, gute 10 % pro 30 min." Genau das steht hier - und zwar in der
+# Einheit, in der es gedacht ist, damit man beim Nachjustieren nicht erst
+# Minutenraten umrechnen muss. Die Rampe von frueher ist ABSICHTLICH weg: sie
+# hiess, dass in der ersten Viertelstunde spuerbar weniger passierte als danach,
+# und genau das fuehlte sich an wie "es sinkt ja gar nicht".
+IDLE_PER_30MIN = float(os.getenv("FLOAKTIE_IDLE_30MIN", "0.11") or "0.11")
+# Daraus die Rate pro Minute, sauber ueber den Zinseszins: (1-r)^30 = 1-Vorgabe.
+# 0,11 je halbe Stunde -> 0,388 %/min -> 20,8 % je Stunde, 61 % ueber 4 Stunden.
+IDLE_RATE = 1.0 - (1.0 - min(0.99, max(0.0, IDLE_PER_30MIN))) ** (1.0 / 30.0)
 # Wie stark es ueber dem Zielkurs gemaechlicher wird. Die Daempfung ist
 # LOGARITHMISCH und damit sehr langatmig: beim Doppelten des Zielkurses noch 78 %
 # Tempo, beim 15-fachen 48 %, beim 150-fachen 33 %. So steigt der Kurs auch dann
@@ -157,8 +155,8 @@ IDLE_DECAY = float(os.getenv("FLOAKTIE_IDLE_DECAY", "0.004") or "0.004")
 LEVEL_SOFT = float(os.getenv("FLOAKTIE_LEVEL_SOFT", "2.5") or "2.5")
 # Mindest-Anstieg, solange ueberhaupt jemand da ist: EIN Zuhoerer bei hohem Kurs
 # soll den Kurs immer noch heben (+0,48 %/Stunde), nicht nur rechnerisch.
-# BEWUSST genauso gross wie IDLE_DECAY: sonst summiert sich der Mindest-Anstieg
-# bei einem Server, auf dem fast immer jemand online ist, auf +23 %/Tag - und der
+# BEWUSST winzig gegen IDLE_RATE: sonst summiert sich der Mindest-Anstieg auf
+# einem Server, auf dem fast immer jemand im Call haengt, auf +23 %/Tag - und der
 # Kurs laeuft langfristig weg (in der Simulation nach 30 Tagen 50 Millionen).
 MIN_UP = float(os.getenv("FLOAKTIE_MIN_UP", "0.00008") or "0.00008")
 # Notbremse GANZ weit oben, damit der Kurs nicht in absurde Gleitkomma-Regionen
@@ -899,16 +897,28 @@ class FloAktie:
 
     def activity_of(self, people, streams=0, video=0, msgs=0):
         """Aktivitaetspunkte: jeder im Call zaehlt 1, jeder Livestream EXTRA,
-        jede Kamera extra, Nachrichten anteilig (gedeckelt gegen Spam-Pumpen)."""
+        jede Kamera extra, Nachrichten anteilig (gedeckelt gegen Spam-Pumpen).
+
+        WICHTIG - der Call ist die Bedingung: ist NIEMAND im Sprachkanal, sind es
+        0 Punkte, egal wie viel geschrieben wird. Vorher konnte eine einzige
+        Nachricht die Aktivitaet ueber 0 heben und damit den Verfall komplett
+        aussetzen; auf einem Server, auf dem tagsueber immer mal jemand etwas
+        tippt, ist der Kurs deshalb praktisch nie gefallen - genau das Verhalten,
+        das als "die Aktie sinkt nie" aufgefallen ist. Der Chat zaehlt weiter
+        voll mit, aber als VERSTAERKER eines laufenden Calls, nicht als Ersatz."""
+        leute = float(max(0, people))
+        if leute <= 0:
+            return 0.0
         chat = min(MSG_MAX_ACT, MSG_WEIGHT * float(max(0, msgs)))
-        return (float(max(0, people))
+        return (leute
                 + STREAM_BONUS * float(max(0, streams))
                 + VIDEO_BONUS * float(max(0, video))
                 + chat)
 
     def ziel_base(self, activity):
         """Basiskurs, den DIESE Aktivitaet hergibt - dorthin strebt der Kurs.
-        Jeder im Call zaehlt 1, jeder Livestream extra, Chat zaehlt mit."""
+        Jeder im Call zaehlt 1, jeder Livestream extra, Chat zaehlt mit (aber
+        nur bei besetztem Call - siehe activity_of)."""
         return max(BASE_FLOOR, FAIR_BASE + AKT_WERT * max(0.0, float(activity)))
 
     def ziel_kurs(self, activity=None):
@@ -1091,11 +1101,10 @@ class FloAktie:
         return max(-KI_MAX, min(KI_MAX, prozent / 100.0)), text
 
     def _leerlauf_verfall(self):
-        """Verfall pro Minute bei leerem Server - waechst mit der Leerlauf-Dauer.
-        Erste Minute schon spuerbar (IDLE_DECAY), nach IDLE_RAMP_MIN voll (IDLE_RATE)."""
-        leer = float(self._state().get("leer_min", 0.0) or 0.0)
-        anteil = min(1.0, leer / max(1.0, IDLE_RAMP_MIN))
-        return max(IDLE_DECAY, IDLE_RATE * anteil)
+        """Verfall pro Minute bei leerem Call - ab der ERSTEN Minute in voller
+        Hoehe, ohne Anlauf und ohne Staffelung. Konstant heisst auch: man kann
+        es ausrechnen ('nach einer halben Stunde bin ich 11 % los') statt raten."""
+        return IDLE_RATE
 
     def _activity_tick(self, people, msgs_since, streams=0, video=0, dt=60.0):
         """EIN Aktivitaets-Takt. Rueckgabe: (alt, neu, drift, aktivitaet).
@@ -1473,13 +1482,14 @@ class FloAktie:
                            f"so viel ist die Aktie auch auf einem toten Server noch "
                            f"wert. Tiefer geht es nicht, ab hier hilft nur Aktivität.")
             elif leer >= 60:
-                hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt jetzt "
+                hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt mit "
+                           f"**{IDLE_PER_30MIN * 100:.0f} % pro halber Stunde** "
                            f"({self._pro_stunde(self.drift_fuer(0)):+.0f} %/h) bis auf "
-                           f"**{self._fmt(max(MIN_PRICE, boden))}**. "
-                           f"Je länger nichts los ist, desto schneller.")
+                           f"**{self._fmt(max(MIN_PRICE, boden))}**.")
             else:
-                hinweis = ("Niemand da – der Kurs sinkt und wird immer schneller, "
-                           "je länger es leer bleibt.")
+                hinweis = (f"Niemand im Call – der Kurs fällt ab sofort um "
+                           f"**{IDLE_PER_30MIN * 100:.0f} % pro halber Stunde**, "
+                           f"gleichmäßig, bis wieder jemand da ist.")
         elif am_deckel:
             grund = self._deckel_grund()
             if grund == "tag":
@@ -1505,7 +1515,8 @@ class FloAktie:
                    f"Deckel **{self._fmt(self._deckel_kurs())}**\n"
                    f"{self._mess_zeile()}\n"
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
-                   f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit. {hinweis}_"),
+                   f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit – aber nur, "
+                   f"solange jemand im Call ist. {hinweis}_"),
             inline=False)
         kommentar = self.ki_text()
         if kommentar:

@@ -14,9 +14,19 @@ import admin
 import casino
 import cmdnorm
 import economy
+import floaktie
 import luxus
 import render
 import words
+
+# Die Kursbewegung der Aktie WUERFELT pro Minute zweimal: TICK_NOISE (Rauschen
+# am Deckel) und VOL_SPREAD (echte Volatilitaet, +-80 % um den Trend). Die
+# Aktien-Tests haben bisher nur TICK_NOISE genullt und damit in Wahrheit einen
+# Zufallswert geprueft - test_floaktie_aktivitaet_treibt_den_kurs ist deshalb in
+# 17 von 100 Laeufen grundlos gescheitert. Fuer die gesamte Suite ist die
+# Volatilitaet daher AUS; wer sie braucht, schaltet sie im eigenen Test wieder
+# ein (siehe test_floaktie_volatilitaet_ist_symmetrisch).
+floaktie.VOL_SPREAD = 0.0
 
 
 # --- Blackjack -------------------------------------------------------------
@@ -1417,10 +1427,19 @@ def test_floaktie_market():
                                    "act_ema": floaktie.ACT_BASELINE, "leer_min": 0.0})
             fa._sync_price()
 
-        # Auch VIELE NACHRICHTEN treiben den Kurs (msgs / MSG_DIVISOR).
+        # NACHRICHTEN treiben den Kurs - aber nur BEI BESETZTEM CALL. Ohne
+        # jemanden im Sprachkanal sind es 0 Punkte, egal wie viel getippt wird
+        # (sonst setzt ein einziger Schreiber den Leerlauf-Verfall komplett aus).
         stelle()
-        a, n, drift, act = fa._activity_tick(0, 200)         # reger Chat
+        _a, _n, drift_leer, act_leer = fa._activity_tick(0, 200)   # reger Chat, leerer Call
+        assert act_leer == 0.0 and drift_leer < 0, (act_leer, drift_leer)
+        stelle()
+        a, n, drift, act = fa._activity_tick(2, 200)         # zwei im Call + reger Chat
         assert n > a and drift > 0 and act > floaktie.ACT_BASELINE
+        # ... und der Chat macht dabei einen messbaren Unterschied.
+        stelle()
+        _, _, _, act_ohne_chat = fa._activity_tick(2, 0)
+        assert act > act_ohne_chat, (act, act_ohne_chat)
         # Live-Streamer zaehlen EXTRA: gleiche Personen, aber Streams -> mehr Aktivitaet.
         stelle()
         _, _, _, act_plain = fa._activity_tick(12, 0)
@@ -1741,10 +1760,17 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         assert mit > ohne * 2, (ohne, mit)
         assert fa.ziel_base(mit) > fa.ziel_base(ohne)
 
-        # 3) Reiner Chat treibt ihn auch (ohne einen einzigen im Call).
+        # 3) Reiner Chat treibt den Kurs NICHT MEHR (bewusst geaendert).
+        #    Vorher hob eine einzige Nachricht die Aktivitaet ueber 0 und setzte
+        #    den Leerlauf-Verfall komplett aus - auf einem Server, auf dem
+        #    tagsueber immer mal wer tippt, ist der Kurs deshalb praktisch nie
+        #    gefallen. Jetzt gilt: kein Call, keine Punkte.
         frisch()
         _a, _n, drift, akt = fa._activity_tick(0, 40)
-        assert drift > 0 and akt > 0
+        assert akt == 0.0, akt
+        assert drift < 0, drift
+        # ... im Call zaehlt derselbe Chat aber voll mit.
+        assert fa.activity_of(2, 0, 0, 40) > fa.activity_of(2, 0, 0, 0)
 
         # 4) 10 im Call, ALLE streamen: in der ERSTEN Minute sichtbar (>= 1 %),
         #    nach einer Stunde vielfach.
@@ -1769,22 +1795,33 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         assert d < 0, (d, akt)                              # muss FALLEN
         assert fa._state()["act_ema"] == 0.0               # EMA-Rest ist weg
 
-        # 5) Toter Server: sinkt GESTAFFELT und inzwischen HART - eine kurze Pause
-        #    tut wenig, ab ein paar Minuten Leerlauf faellt der Kurs deutlich.
-        #    (Ausdruecklicher Wunsch: "die soll mehr sinken sobald keiner mehr im
-        #    Call ist" - vorher waren es -0,25 %/min mit 25 Minuten Anlauf.)
+        # 5) Leerer Call: faellt SOFORT und GLEICHMAESSIG. Ausdrueckliche
+        #    Vorgabe: "sinken soll es direkt sobald keiner mehr im Call ist,
+        #    aber rasant, gute 10 % pro 30 min." Kein Anlauf mehr, keine
+        #    Staffelung - die halbe Stunde ist das Mass.
         frisch(200_000)
-        for _ in range(3):
+        for _ in range(30):
             fa._activity_tick(0, 0)
-        assert (1 - fa.price() / 200_000) < 0.05           # erste Minuten: sanft
-        for _ in range(57):
+        nach_30 = 1 - fa.price() / 200_000
+        assert 0.10 <= nach_30 <= 0.14, nach_30
+        for _ in range(30):
             fa._activity_tick(0, 0)
         nach_1h = 1 - fa.price() / 200_000
-        assert 0.35 < nach_1h < 0.75, nach_1h              # nach 1 h klar im Minus
+        assert 0.19 <= nach_1h <= 0.26, nach_1h
         for _ in range(60):
             fa._activity_tick(0, 0)
         nach_2h = 1 - fa.price() / 200_000
-        assert nach_2h > 0.70, nach_2h                     # nach 2 h eingebrochen
+        assert 0.34 <= nach_2h <= 0.45, nach_2h
+        # Gleichmaessig heisst: die zweite halbe Stunde kostet anteilig genauso
+        # viel wie die erste (frueher war die erste bewusst schwaecher).
+        frisch(200_000)
+        for _ in range(30):
+            fa._activity_tick(0, 0)
+        h1 = fa.price()
+        for _ in range(30):
+            fa._activity_tick(0, 0)
+        h2 = fa.price()
+        assert abs((1 - h1 / 200_000) - (1 - h2 / h1)) < 0.02, (h1, h2)
         # Beim SINKEN gibt es kein Rauschen - jede Leerlauf-Minute geht wirklich
         # runter (vorher stieg der Kurs in ~30 % der Minuten durch Zufall).
         frisch(200_000)
@@ -3416,9 +3453,12 @@ def test_floaktie_lebendig_und_ki():
     import time as _t
     import floaktie
     fa = floaktie.instance
-    alt = (fa._store, fa._enabled, fa._today)
+    alt = (fa._store, fa._enabled, fa._today, floaktie.VOL_SPREAD)
     fa._enabled = True
     fa._today = lambda: "2026-08-01"
+    # Dieser Test PRUEFT die Volatilitaet - die Suite laeuft sonst ohne (siehe
+    # Kopf der Datei). Mit random.seed() unten ist er trotzdem reproduzierbar.
+    floaktie.VOL_SPREAD = 0.8
 
     def frisch():
         fa._store = _FakeStore({"price": floaktie.START_PRICE,
@@ -3513,7 +3553,7 @@ def test_floaktie_lebendig_und_ki():
         finally:
             restore()
     finally:
-        fa._store, fa._enabled, fa._today = alt
+        fa._store, fa._enabled, fa._today, floaktie.VOL_SPREAD = alt
 
 
 def test_floaktie_bots_zaehlen_nie():
@@ -3573,6 +3613,48 @@ def test_floaktie_bots_zaehlen_nie():
     g = Guild(chan, {1: m_mensch})
     g.afk_channel = SimpleNamespace(id=5)
     assert fa._measure(g) == (0, 0, 0)
+
+
+def test_floaktie_volatilitaet_ist_symmetrisch():
+    """Die Volatilitaet macht den Kurs lebendig - sie darf ihn aber weder
+    systematisch heben noch druecken. Der einzige Test, der sie EINSCHALTET
+    (die Suite laeuft sonst bewusst ohne, siehe Kopf der Datei)."""
+    import statistics
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, floaktie.TICK_NOISE, floaktie.VOL_SPREAD)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    floaktie.VOL_SPREAD = 0.8
+    try:
+        def frisch():
+            fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x",
+                                    "act_ema": 0.0, "msg_count": 0,
+                                    "last_msg_count": 0, "holdings": {},
+                                    "history": [], "ticks": []})
+            fa._sync_price()
+
+        drifts = []
+        for _ in range(400):
+            frisch()
+            _a, _n, d, _akt = fa._activity_tick(10, 20, streams=10)
+            drifts.append(d)
+
+        # 1) Es schwankt ueberhaupt - sonst waere die Aktie tot.
+        assert len(set(drifts)) > 300, len(set(drifts))
+        # 2) Es geht in dieser Lage NIE nach unten (Aktivitaet ist hoch).
+        assert min(drifts) > 0, min(drifts)
+        # 3) Sie bleibt innerhalb ihres Spielraums um den Anschlag.
+        spanne = floaktie.VOL_SPREAD
+        assert max(drifts) <= floaktie.TICK_CAP * (1.0 + spanne) + 1e-9, max(drifts)
+        # 4) Der Mittelwert liegt beim ungestoerten Trend, nicht daneben.
+        floaktie.VOL_SPREAD = 0.0
+        frisch()
+        _a, _n, ruhig, _akt = fa._activity_tick(10, 20, streams=10)
+        schnitt = statistics.mean(drifts)
+        assert abs(schnitt - ruhig) < ruhig * 0.15, (schnitt, ruhig)
+    finally:
+        fa._store, fa._enabled, floaktie.TICK_NOISE, floaktie.VOL_SPREAD = alt
 
 
 def test_floaktie_leerlauf_faellt_ab_der_ersten_minute():
