@@ -1351,14 +1351,23 @@ class FloAktie:
         cutoff = now - max(0.0, float(days)) * 86400
         ticks = [t for t in st.get("ticks", []) if t.get("t", 0) >= cutoff]
         pts = [int(t.get("price", 0)) for t in ticks]
-        # Wie weit reichen die Ticks zurueck? Alles davor kommt aus der Historie.
+        # Die Tages-Schlusskurse ergaenzen NUR den Teil des Fensters, den die
+        # Ticks nicht abdecken - ausgewaehlt ueber das DATUM, nicht ueber eine
+        # Anzahl. Vorher wurden schlicht die n neuesten Tageskurse davorgeklebt;
+        # die liegen aber genau IM Tick-Fenster. Gemessen bei '7 Tage' mit Ticks
+        # der letzten 3 Tage: alle 4 vorangestellten Tage waren doppelt, der
+        # Kurs von vor 7 Tagen kam gar nicht vor, und die angezeigte Veraenderung
+        # war +67 % statt +290 %.
         aeltester = min((t.get("t", now) for t in ticks), default=now)
-        tage_offen = max(0.0, (aeltester - cutoff) / 86400.0)
-        if tage_offen >= 1.0 or len(pts) < 2:
-            hist = [int(h.get("price", 0)) for h in st.get("history", [])]
-            n = int(tage_offen) + 1 if pts else max(2, int(float(days)) + 1)
-            davor = hist[-n:] if hist and n > 0 else []
-            pts = davor + pts
+        ab_tag = datetime.fromtimestamp(aeltester, TIMEZONE).strftime("%Y-%m-%d")
+        von_tag = datetime.fromtimestamp(cutoff, TIMEZONE).strftime("%Y-%m-%d")
+        hist_roh = st.get("history", [])
+        davor = [int(h.get("price", 0)) for h in hist_roh
+                 if von_tag <= str(h.get("day", "")) < ab_tag]
+        if not davor and hist_roh and not any(h.get("day") for h in hist_roh):
+            # Uralter Stand ohne Datum: lieber die alte Naeherung als gar nichts.
+            davor = [int(h.get("price", 0)) for h in hist_roh][-max(2, int(float(days))):]
+        pts = davor + pts
         pts = [p for p in pts if p] or [self.price()]
         # Der letzte Punkt ist IMMER der aktuelle Kurs - sonst endet die Linie auf
         # einem alten Stand und passt nicht zur angezeigten Kurs-Zahl.

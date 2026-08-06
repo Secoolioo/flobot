@@ -1962,10 +1962,16 @@ def test_floaktie_chart_zeitraeume_und_bild():
     for i in range(3 * 1440):
         p *= 1.0002 if i < 2 * 1440 else 1.003
         ticks.append({"t": jetzt - (3 * 1440 - i) * 60, "price": int(p)})
+    # Die Schlusskurse muessen RELATIV ZU HEUTE liegen - die Reihe waehlt sie
+    # ueber das Datum aus. Feste Kalendertage (frueher "2026-06-xx") fallen je
+    # nach Testtag komplett aus dem Fenster.
+    from datetime import datetime as _dt, timedelta as _td
+    _heute = _dt.now(floaktie.TIMEZONE)
     fa._store = _FakeStore({
         "price": int(p), "base": float(p), "day": "x", "act_ema": 20.0,
         "msg_count": 0, "last_msg_count": 0, "holdings": {},
-        "history": [{"day": f"2026-06-{d:02d}", "price": 800 + d * 30} for d in range(1, 25)],
+        "history": [{"day": (_heute - _td(days=24 - d)).strftime("%Y-%m-%d"),
+                     "price": 800 + d * 30} for d in range(1, 25)],
         "ticks": ticks})
     try:
         fa._sync_price()
@@ -3683,6 +3689,66 @@ def test_bilder_blockieren_den_bot_nicht():
 
     assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
                              + ", ".join(verdaechtig))
+
+
+def test_floaktie_chart_klebt_keine_tage_doppelt():
+    """Die Kurs-Reihe darf Tage nicht doppelt zaehlen.
+
+    Vorher wurden schlicht die n NEUESTEN Tages-Schlusskurse vor die Ticks
+    geklebt - die liegen aber genau IM Tick-Fenster. Gemessen bei '7 Tage' mit
+    Ticks der letzten 3 Tage: alle 4 vorangestellten Tage waren doppelt, der
+    Kurs von vor 7 Tagen kam gar nicht vor, und die angezeigte Veraenderung war
+    +67 % statt +290 %."""
+    import time as _t
+    from datetime import datetime as _dt, timedelta as _td
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    try:
+        jetzt = _t.time()
+        heute = _dt.now(floaktie.TIMEZONE)
+        # 10 Tage Schlusskurse (100..1000), Ticks nur fuer die letzten 3 Tage.
+        hist = [{"day": (heute - _td(days=9 - i)).strftime("%Y-%m-%d"),
+                 "price": 100 * (i + 1)} for i in range(10)]
+        ticks = [{"t": jetzt - 3 * 86400 + i * 3600, "price": 1100 + i}
+                 for i in range(72)]
+        fa._store = _FakeStore({"price": 0, "base": 1171.0, "holdings": {},
+                                "history": hist, "ticks": ticks, "act_ema": 0.0,
+                                "leer_min": 0.0, "msg_count": 0,
+                                "last_msg_count": 0})
+        fa._sync_price()
+
+        # 1) Kein Tageskurs aus dem Tick-Fenster darf vorangestellt werden.
+        ab_tag = _dt.fromtimestamp(min(t["t"] for t in ticks),
+                                   floaktie.TIMEZONE).strftime("%Y-%m-%d")
+        drin = {h["price"] for h in hist if h["day"] >= ab_tag}
+        reihe = fa._series(7)
+        kopf = reihe[:len(reihe) - len(ticks)]
+        assert not (drin & set(kopf)), (sorted(drin & set(kopf)), kopf)
+
+        # 2) Die 7-Tage-Reihe beginnt beim Kurs von vor 7 Tagen.
+        vor7 = next(h["price"] for h in hist
+                    if h["day"] == (heute - _td(days=7)).strftime("%Y-%m-%d"))
+        assert reihe[0] == vor7, (reihe[0], vor7)
+        _pts, chg = fa.series(7)
+        assert abs(chg - (1171 - vor7) / vor7 * 100) < 1.0, chg
+
+        # 3) Laengeres Fenster -> frueherer Startpunkt, nie spaeter.
+        starts = [fa._series(d)[0] for d in (1, 7, 30)]
+        assert starts[2] <= starts[1] <= starts[0], starts
+
+        # 4) Decken die Ticks das ganze Fenster ab, kommt KEINE Historie dazu.
+        fa._store.data["ticks"] = [{"t": jetzt - 86400 + i * 600, "price": 1100 + i}
+                                   for i in range(140)]
+        assert fa._series(1)[0] >= 1100, fa._series(1)[0]
+
+        # 5) Ganz ohne Ticks traegt die Historie die Reihe allein.
+        fa._store.data["ticks"] = []
+        ohne = fa._series(7)
+        assert len(ohne) >= 2 and ohne[0] == vor7, ohne[:3]
+    finally:
+        fa._store, fa._enabled = alt
 
 
 def test_floaktie_kurs_ist_nie_veraltet():
