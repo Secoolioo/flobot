@@ -98,6 +98,14 @@ AUTODELETE_CHANNEL_IDS = {
 # Nachrichten, die einen Neustart im 60-s-Fenster ueberlebt haben. Geloescht wird
 # ALLES, was aelter als AUTODELETE_SECONDS ist (ausser Level-Ups + Angepinntes).
 AUTODELETE_SWEEP_SECONDS = float(os.getenv("AUTODELETE_SWEEP_SECONDS", "30"))
+# Wie viele Nachrichten der Sweep je Kanal und Runde ANSCHAUT. Vorher stand hier
+# limit=None, also "die komplette Kanal-Historie" - alle 30 Sekunden. Das Problem:
+# Nachrichten, die absichtlich BLEIBEN (angepinnt, Level-Up-Ansagen, Musik-Panel),
+# werden nie geloescht und deshalb bei jeder Runde wieder mitgelesen. Der Aufwand
+# waechst also dauerhaft mit, obwohl es nichts Neues zu tun gibt. Mit einer
+# Obergrenze bleibt eine Runde guenstig; ein Rueckstand wird ueber mehrere Runden
+# trotzdem vollstaendig abgebaut (jede Runde sieht die naechsten aelteren).
+AUTODELETE_SWEEP_MAX = int(os.getenv("AUTODELETE_SWEEP_MAX", "300") or "300")
 
 # Schutz aktiver Spiele vorm Auto-Loeschen: Solange ein Spiel laeuft (Blackjack,
 # Crash/Keno/Roulette mit 'Nochmal'-Buttons, Casino-Menue, Quiz, Zahlenraten),
@@ -1102,7 +1110,8 @@ class FloBot(discord.Client):
                 )
                 continue
             try:
-                await channel.purge(limit=None, check=self._sweepable, before=cutoff)
+                await channel.purge(limit=AUTODELETE_SWEEP_MAX,
+                                    check=self._sweepable, before=cutoff)
             except discord.HTTPException as exc:
                 log.warning("Auto-Loesch-Sweep in #%s fehlgeschlagen: %s",
                             getattr(channel, "name", cid), exc)
