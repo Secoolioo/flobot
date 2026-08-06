@@ -2973,6 +2973,50 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
+def test_sonderziffern_sprengen_nichts():
+    """str.isdigit() ist die falsche Pruefung vor int() - und hat Geld gekostet.
+
+    "²".isdigit() ist True, int("²") wirft ValueError. Im Betrieb hiess das:
+    'flo mines 100 ²' hat den Einsatz eingezogen und ist danach am Parsen
+    gestorben - das Geld war weg, ohne dass je eine Runde lief. Betroffen waren
+    14 Stellen in 7 Modulen."""
+    import pathlib
+    import numfmt
+
+    # 1) Der Helfer selbst.
+    for gut in ("42", "0", "7"):
+        assert numfmt.ist_zahl(gut), gut
+    for schlecht in ("²", "³", "5²", "１２３", "௫", "¹", "", " 7", "-3", "4.2",
+                     None, 7, True):
+        assert not numfmt.ist_zahl(schlecht), schlecht
+
+    # 2) Was durchkommt, ueberlebt auch int().
+    for s in ("0", "1", "42", "999999"):
+        int(s)                                   # darf nicht werfen
+
+    # 3) KEIN Modul darf sich mehr auf isdigit() verlassen (ausser numfmt selbst,
+    #    das erklaert dort ja gerade warum).
+    schuldige = []
+    for p in sorted(pathlib.Path(".").glob("*.py")):
+        if p.name.startswith("test_") or p.name == "numfmt.py":
+            continue
+        for i, zeile in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if ".isdigit()" in zeile:
+                schuldige.append(f"{p.name}:{i}")
+    assert not schuldige, ("isdigit() vor int() ist unsicher, nutze "
+                           "numfmt.ist_zahl: " + ", ".join(schuldige))
+
+    # 4) Der Mines-Parser nimmt die Sonderziffern nicht mehr an. args[0] ist der
+    #    EINSATZ (den zieht der Aufrufer vorher schon ein), ab args[1] steht die
+    #    Bombenzahl - genau dort ist der Befehl frueher gestorben, NACHDEM das
+    #    Geld weg war.
+    import casino
+    for gift in ("²", "³", "5²", "௫"):
+        n = casino.instance._parse_mines_count(["100", gift])
+        assert n == casino._MINES_DEFAULT, (gift, n)
+    assert casino.instance._parse_mines_count(["100", "3"]) == 3
+
+
 def test_store_verliert_nie_daten():
     """Eine kaputte Datei darf NIEMALS stillschweigend ueberschrieben werden.
 

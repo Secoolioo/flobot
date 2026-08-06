@@ -26,6 +26,8 @@ import os
 
 import discord
 
+import numfmt
+
 import ai
 import economy
 from store import JsonStore
@@ -205,7 +207,7 @@ class Luxus:
         if not self._enabled or self._store is None:
             return None
         raw = self.throne_state().get("owner") or ""
-        return int(raw) if raw.isdigit() else None
+        return int(raw) if numfmt.ist_zahl(raw) else None
 
     def decorate_rows(self, rows):
         """Markiert Leaderboard-Zeilen: 'throne' (goldene Krone) / 'crown'."""
@@ -333,7 +335,7 @@ class Luxus:
         args = parts[1:]
 
         if first in ("luxus", "luxury", "prestige"):
-            if len(args) >= 2 and args[0].lower() in ("kaufen", "kauf", "buy") and args[1].isdigit():
+            if len(args) >= 2 and args[0].lower() in ("kaufen", "kauf", "buy") and numfmt.ist_zahl(args[1]):
                 item = next((i for i in ITEMS if i["n"] == int(args[1])), None)
                 if item is None:
                     return f"Es gibt nur Item 1-{len(ITEMS)}. `{self._bot_name} luxus` zeigt alle."

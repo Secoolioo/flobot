@@ -872,7 +872,11 @@ class Economy:
         channel = self._levelup_target(guild, fallback)
         if channel is None:
             return
-        reward = level * 25
+        # MUSS mit der tatsaechlichen Gutschrift in add_xp zusammenpassen. Hier
+        # stand fest verdrahtet "level * 25", waehrend gebucht wurde
+        # "level * LEVELUP_COINS" (250) - die Ansage nannte also ein Zehntel des
+        # echten Betrags: bei Level 40 hiess es 1.000 statt 10.000 Coins.
+        reward = level * self.LEVELUP_COINS
         roast = await self._levelup_text(member, level)
         emb = discord.Embed(
             title=self.LEVELUP_EMBED_TITLE,
@@ -1093,7 +1097,7 @@ class Economy:
         prof = self._users().get(str(uid)) if self._enabled else None
         if not force and prof is not None:
             vorhanden = (prof.get("name") or "").strip()
-            if vorhanden and not vorhanden.isdigit():
+            if vorhanden and not numfmt.ist_zahl(vorhanden):
                 return vorhanden
 
         def brauchbar(obj):
@@ -1135,7 +1139,7 @@ class Economy:
         auch bei Konten, die nur per ID angefasst wurden."""
         for r in rows:
             name = (r.get("name") or "").strip()
-            if name and not name.isdigit():
+            if name and not numfmt.ist_zahl(name):
                 continue                       # schon ein brauchbarer Name
             uid = int(r.get("id") or 0)
             neu = None
@@ -1606,7 +1610,7 @@ class Economy:
         st = await self._ensure_shop()
         items = st.get("items", [])
         arg = parts[1] if len(parts) > 1 else ""
-        if not arg.isdigit():
+        if not numfmt.ist_zahl(arg):
             return (f"Welche Nummer? z. B. `{self._bot_name} kaufen 1` – oder öffne den "
                     f"`{self._bot_name} shop` und nimm das Dropdown.")
         n = int(arg)

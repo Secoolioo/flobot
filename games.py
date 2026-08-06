@@ -1034,7 +1034,7 @@ class Games:
             if m:
                 count = int(m.group(1) or "1")
                 sides = int(m.group(2))
-            elif args[0].isdigit():
+            elif numfmt.ist_zahl(args[0]):
                 sides = int(args[0])
         count = max(1, min(count, 20))
         sides = max(2, min(sides, 1000))

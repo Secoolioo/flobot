@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 import aiohttp
 import discord
 
+import numfmt
+
 import ai
 
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
@@ -705,7 +707,7 @@ class _PositionModal(discord.ui.Modal):
 
     async def on_submit(self, interaction):
         raw = (self.feld.value or "").strip()
-        if not raw.lstrip("+").isdigit():
+        if not numfmt.ist_zahl(raw.lstrip("+")):
             await interaction.response.send_message(
                 "Gib bitte eine Zahl ein (z. B. `1` für als Nächstes).", ephemeral=True)
             return

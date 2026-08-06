@@ -262,13 +262,23 @@ class Casino:
         return f"Kontostand: {numfmt.fmt(economy.get_coins(uid))} {economy.COIN}"
 
     def _outcome(self, bet, payout):
-        """Farbe + Ergebnis-Feld aus Einsatz und Auszahlung (Auszahlung inkl. Einsatz)."""
+        """Farbe + Ergebnis-Feld aus Einsatz und Auszahlung (Auszahlung inkl. Einsatz).
+
+        Der Verlust ist der TATSAECHLICHE Fehlbetrag, nicht der volle Einsatz.
+        Vorher stand bei einer Teil-Rueckzahlung der ganze Einsatz als Verlust
+        da: Das Gluecksrad hat die Felder x0,5 und x0,2 (3 von 12 Segmenten, also
+        jede vierte Drehung) - bei 1.000 Einsatz und x0,5 kamen 500 zurueck,
+        gemeldet wurde trotzdem "-1.000"."""
         net = payout - bet
         if net > 0:
             return _C_WIN, "Gewinn", f"+{numfmt.fmt(net)} {economy.COIN}"
         if net == 0:
             return _C_PUSH, "Ergebnis", "±0 – Einsatz zurück"
-        return _C_LOSE, "Verlust", f"-{numfmt.fmt(bet)} {economy.COIN}"
+        if payout > 0:
+            return (_C_LOSE, "Verlust",
+                    f"-{numfmt.fmt(-net)} {economy.COIN} "
+                    f"({numfmt.fmt(payout)} zurück)")
+        return _C_LOSE, "Verlust", f"-{numfmt.fmt(-net)} {economy.COIN}"
 
     def _err(self, text):
         return discord.Embed(description=f"⚠️ {text}", color=_C_LOSE)
@@ -610,7 +620,7 @@ class Casino:
     def _parse_picks(self, s):
         picks = []
         for t in (s or "").replace(",", " ").split():
-            if t.isdigit():
+            if numfmt.ist_zahl(t):
                 n = int(t)
                 if 1 <= n <= 40 and n not in picks:
                     picks.append(n)
@@ -677,7 +687,7 @@ class Casino:
             check, label = _EVEN_MONEY[target]
             return (bet * 2 if check(spin) else 0), label
         num = target.replace("zahl", "").strip()
-        if num.isdigit():
+        if numfmt.ist_zahl(num):
             n = int(num)
             if 0 <= n <= 36:
                 return (bet * 36 if spin == n else 0), f"Zahl {n}"
@@ -831,12 +841,23 @@ class Casino:
 
     # --- Mines -----------------------------------------------------------------
     def _mines_mult(self, picked, mines):
-        """Multiplikator nach ``picked`` sicheren Feldern bei ``mines`` Bomben."""
+        """Multiplikator nach ``picked`` sicheren Feldern bei ``mines`` Bomben.
+
+        Mehr als die vorhandenen sicheren Felder gibt es nicht - deshalb wird
+        gedeckelt. Ohne den Deckel wurde durch 0 geteilt: das Embed zeigt immer
+        auch den NAECHSTEN Multiplikator (picked + 1), und wer das Brett komplett
+        aufgedeckt hatte, bekam seinen Gewinn zwar gutgeschrieben, sah ihn aber
+        nie - die Anzeige starb vorher mit ZeroDivisionError."""
+        sicher = max(0, _MINES_TILES - max(0, int(mines)))
+        picked = min(max(0, int(picked)), sicher)
         if picked <= 0:
             return 1.0
         m = 1.0
         for i in range(picked):
-            m *= (_MINES_TILES - i) / (_MINES_TILES - mines - i)
+            nenner = _MINES_TILES - mines - i
+            if nenner <= 0:
+                break
+            m *= (_MINES_TILES - i) / nenner
         return round(0.97 * m, 2)
 
     async def _mines_text_cashout(self, message):
@@ -864,7 +885,7 @@ class Casino:
 
     def _parse_mines_count(self, args):
         for a in args[1:]:
-            if a.isdigit():
+            if numfmt.ist_zahl(a):
                 return max(1, min(int(a), _MINES_MAX))
         return _MINES_DEFAULT
 
@@ -2348,7 +2369,7 @@ class _BetModal(discord.ui.Modal):
 
         if self.kind == "mines":
             raw = (self.extra.value or "").strip()
-            mines = max(1, min(int(raw), _MINES_MAX)) if raw.isdigit() else _MINES_DEFAULT
+            mines = max(1, min(int(raw), _MINES_MAX)) if numfmt.ist_zahl(raw) else _MINES_DEFAULT
             ch = interaction.channel_id
             existing = _mines_views.get((ch, uid))
             if existing and not existing.is_finished() and not existing.settled:
@@ -2791,7 +2812,7 @@ class _NumberBetModal(discord.ui.Modal):
                 ephemeral=True)
             return
         raw = (self.num.value or "").strip()
-        if not raw.isdigit() or not (0 <= int(raw) <= 36):
+        if not numfmt.ist_zahl(raw) or not (0 <= int(raw) <= 36):
             await interaction.response.send_message("Bitte eine Zahl von 0 bis 36.", ephemeral=True)
             return
         bet, err = _check_bet(s.uid, s.bet)

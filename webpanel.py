@@ -35,6 +35,8 @@ from pathlib import Path
 
 import discord
 
+import numfmt
+
 import economy
 
 try:
@@ -455,7 +457,7 @@ class WebPanel:
         Verhindert Geister-Profile: '-1', '0', '0123' (wurde zu 123) oder Text
         legten vorher echte Konten in der Datenbank an."""
         s = str(raw if raw is not None else "").strip()
-        if not s.isdigit() or (len(s) > 1 and s[0] == "0"):
+        if not numfmt.ist_zahl(s) or (len(s) > 1 and s[0] == "0"):
             return None
         v = int(s)
         if v <= 0 or v > 2 ** 63 - 1:

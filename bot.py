@@ -91,7 +91,7 @@ AUTODELETE_CHANNEL_IDS = {
     for part in re.split(
         r"[,\s]+", os.getenv("AUTODELETE_CHANNEL_IDS", "1512045750362837013").strip()
     )
-    if part.isdigit()
+    if numfmt.ist_zahl(part)
 }
 # Sicherheitsnetz: Wie oft (Sekunden) ein Hintergrund-Sweep die Auto-Loesch-
 # Channels nach Altlasten durchforstet - Backlog, der vor dem Start lag, oder

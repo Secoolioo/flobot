@@ -27,3 +27,19 @@ def fmt(n):
         return f"{int(round(wert)):,}".replace(",", ".")
     except (TypeError, ValueError, OverflowError):
         return str(n)
+
+
+def ist_zahl(s):
+    """True, wenn ``s`` eine ganz normale Zahl aus den Ziffern 0-9 ist.
+
+    str.isdigit() ist dafuer die FALSCHE Pruefung: es sagt auch bei hochgestellten
+    und exotischen Ziffern True, waehrend int() dann mit ValueError stirbt -
+    "²".isdigit() ist True, int("²") fliegt. Im Betrieb hiess das: 'flo mines 100 ²'
+    hat den Einsatz eingezogen und ist danach am Parsen gestorben; das Geld war weg,
+    ohne dass eine Runde lief. Auch "5²", "１２３" (fullwidth) und "௫" (Tamil)
+    kommen so nicht mehr durch.
+
+        ist_zahl("42") -> True
+        ist_zahl("²")  -> False
+    """
+    return bool(s) and isinstance(s, str) and s.isascii() and s.isdigit()
