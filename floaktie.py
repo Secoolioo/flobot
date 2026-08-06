@@ -363,7 +363,17 @@ class FloAktie:
         return datetime.now(TIMEZONE).strftime("%Y-%m-%d")
 
     def price(self):
-        return int(self._state().get("price", START_PRICE))
+        """Der aktuelle Anzeigekurs - IMMER frisch aus der Kurve gerechnet.
+
+        Frueher stand hier das gespeicherte Feld st['price']. Das stimmt aber nur
+        so lange, wie JEDER Schreibweg danach _sync_price() aufruft. Ein einziger
+        vergessener Aufruf (oder ein von Hand gesetzter Stand) liefert sonst einen
+        veralteten Kurs - und der landet ueber _record_tick auch noch im Chart und
+        in der Tages-Historie, wo er nicht mehr auffaellt. Rechnen kostet eine
+        Multiplikation; das ist die Verlaesslichkeit allemal wert. st['price']
+        bleibt als gespeicherter Stand erhalten (Migration alter Staende)."""
+        return max(MIN_PRICE, min(MAX_PRICE,
+                                  int(round(self._price_at(self.total_shares())))))
 
     def _record_tick(self, now=None):
         """Schreibt einen Kurs-Zeitpunkt (fuer den Chart) - bei jedem Trade, Sample

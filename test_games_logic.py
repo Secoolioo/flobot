@@ -1451,14 +1451,21 @@ def test_floaktie_market():
         for _ in range(60):
             fa._activity_tick(12, 30, streams=6)
         assert fa.price() > 1030                             # klar gestiegen (Boersenwert mit)
-        # note_message + sample_and_tick: Nachrichten fliessen in die Aktivitaet ein.
-        fa._store.data.update({"price": 1000, "act_ema": floaktie.ACT_BASELINE,
-                               "msg_count": 0, "last_msg_count": 0, "day": fa._today()})
+        # note_message + sample_and_tick: Nachrichten werden GEZAEHLT, heben den
+        # Kurs bei LEEREM Call aber nicht mehr (siehe activity_of).
+        # ACHTUNG: 'base' setzen, nicht 'price' - 'price' ist nur der gespeicherte
+        # Stand, gerechnet wird immer aus der Kurve. Frueher stand hier
+        # {"price": 1000}; der Test war dadurch gruen, weil der Vergleich einen
+        # veralteten Wert gegen einen frisch gerechneten hielt, nicht weil der
+        # Chat irgendetwas bewegt haette.
+        stelle()
+        vorher = fa.price()
         for _ in range(200):
             fa.note_message()
+        assert fa._store.data["msg_count"] == 200
         guild0 = SimpleNamespace(voice_channels=[], afk_channel=None)
         asyncio.run(fa.sample_and_tick(guild0))
-        assert fa.price() > 1000                             # Chat allein hob den Kurs
+        assert fa.price() < vorher, (vorher, fa.price())
 
         # Dividende proportional; groesster Aktionaer doppelt; Leaderboard sortiert.
         fa._store.data["holdings"] = {"1": 100, "2": 300}
@@ -3613,6 +3620,51 @@ def test_floaktie_bots_zaehlen_nie():
     g = Guild(chan, {1: m_mensch})
     g.afk_channel = SimpleNamespace(id=5)
     assert fa._measure(g) == (0, 0, 0)
+
+
+def test_floaktie_kurs_ist_nie_veraltet():
+    """price() muss IMMER zur Kurve passen - auch wenn jemand den gespeicherten
+    Stand von Hand verbiegt oder ein Schreibweg _sync_price() vergisst.
+
+    Aufgefallen im Betriebs-Log: 'Kurs 1.000->6.193' bei NEGATIVEM Drift. Ursache
+    war ein veraltetes st['price']; ueber _record_tick waere dieser falsche Wert
+    zusaetzlich in Chart und Tages-Historie gewandert."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    try:
+        fa._store = _FakeStore({"price": 1000, "base": 1000.0, "day": "x",
+                                "act_ema": 0.0, "msg_count": 0, "last_msg_count": 0,
+                                "leer_min": 0.0, "holdings": {}, "history": [],
+                                "ticks": []})
+        fa._sync_price()
+
+        def erwartet():
+            return max(floaktie.MIN_PRICE, min(floaktie.MAX_PRICE, int(round(
+                fa._base() * (1.0 + fa.total_shares() / floaktie.LIQUIDITY)))))
+
+        # 1) Anteile dazu, ohne zu synchronisieren -> price() zieht trotzdem mit.
+        fa._store.data["holdings"] = {"1": 500}
+        assert fa.price() == erwartet(), (fa.price(), erwartet())
+        # 2) Gespeicherter Stand von Hand verbogen -> price() glaubt ihm NICHT.
+        fa._store.data["price"] = 7
+        assert fa.price() == erwartet(), fa.price()
+        assert fa.price() > 1000
+        # 3) Basiskurs geaendert, ohne zu synchronisieren.
+        fa._store.data["base"] = 250.0
+        assert fa.price() == erwartet(), fa.price()
+        # 4) Und der Chart bekommt nie einen veralteten Wert zu sehen.
+        fa._store.data["ticks"] = []
+        fa._record_tick()
+        assert fa._store.data["ticks"][-1]["price"] == erwartet()
+        # 5) Ein Takt meldet einen ECHTEN Vorher/Nachher-Vergleich: sinkt der
+        #    Kurs, darf 'neu' nicht ueber 'alt' liegen.
+        for _ in range(20):
+            a, n, drift, _akt = fa._activity_tick(0, 0)
+            assert (n <= a) == (drift <= 0), (a, n, drift)
+    finally:
+        fa._store, fa._enabled = alt
 
 
 def test_floaktie_volatilitaet_ist_symmetrisch():
