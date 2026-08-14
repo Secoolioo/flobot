@@ -156,10 +156,14 @@ class Terraria:
         "deerclops", "golem", "destroyer", "twins", "mourning wood",
         # Biome / Orte
         "corruption", "crimson", "hallow", "jungle", "dungeon", "underworld",
-        "hell", "ocean", "snow", "desert", "meteorite", "biome",
+        # "hell" ist raus: das ist auf Deutsch ein Alltagswort ("ist es schon
+        # hell?"). Die Unterwelt findet man ueber "underworld" und "hellstone".
+        "ocean", "snow", "desert", "meteorite", "biome",
         # Items / Mechaniken / Erze / Tools
         "hardmode", "expert mode", "master mode", "calamity", "npc", "pickaxe",
-        "hamaxe", "molten", "hellstone", "wing", "grappling hook", "mana", "boss",
+        # "boss" ebenfalls raus - im Deutschen die normale Anrede/das Wort fuer
+        # den Chef. Die einzelnen Bossnamen oben tragen die Erkennung.
+        "hamaxe", "molten", "hellstone", "wing", "grappling hook", "mana",
         "ore", "demonite", "crimtane", "chlorophyte", "luminite", "zenith",
         "terra blade", "terrablade", "prisma", "terraprisma", "meowmere",
         "adamantite", "orichalcum", "mythril", "titanium", "cobalt", "palladium",
@@ -174,7 +178,9 @@ class Terraria:
         "eye of cthulhu", "brain of cthulhu", "eater of worlds", "wall of flesh",
         "moon lord", "queen bee", "duke fishron", "empress of light", "king slime",
         "queen slime", "lunatic cultist", "skeletron", "plantera", "cthulhu",
-        "deerclops", "golem", "hardmode", "calamity", "hellstone", "demonite",
+        # "golem" ist KEIN eindeutiger Terraria-Begriff (Museum, Sagen, Spiele) -
+        # es bleibt in _TERRA_KEYWORDS, zaehlt aber nicht mehr als starker Treffer.
+        "deerclops", "hardmode", "calamity", "hellstone", "demonite",
         "crimtane", "chlorophyte", "luminite", "zenith", "terra blade", "terrablade",
         "terraprisma", "meowmere", "adamantite", "orichalcum", "hellevator", "hoik",
     }
@@ -430,7 +436,11 @@ class Terraria:
                     schnitt = schnitt if schnitt > 0 else limit
                     pages.append(absatz[:schnitt].strip())
                     absatz = absatz[schnitt:].strip()
-            if len(cur) + len(absatz) + 2 > limit:
+            # Nur umbrechen, wenn ueberhaupt etwas im Puffer steht. Sonst wurde
+            # eine LEERE Seite eingeschoben, sobald ein Absatz genau ans Limit
+            # stiess: bei 1.799 und 1.800 Zeichen zeigte der Blaetterer
+            # "Seite 1/2" ohne einen einzigen Buchstaben.
+            if cur and len(cur) + len(absatz) + 2 > limit:
                 pages.append(cur.strip())
                 cur = ""
             cur += absatz + "\n\n"

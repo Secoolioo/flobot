@@ -103,7 +103,15 @@ class Media:
     async def _cmd_generate(self, message, prompt):
         if not prompt:
             return f"Was soll ich malen? z. B. `{self._bot_name} male einen Drachen aus Neon`."
-        data = await self.generate_image(prompt)
+        # "tippt gerade" anzeigen: das Malen darf bis zu 75 s dauern (Timeout des
+        # Bild-Dienstes), und in dieser Zeit kam bisher NICHTS zurueck - kein
+        # Lebenszeichen, keine Zwischenmeldung. Die meisten tippen den Befehl in
+        # der Zeit ein zweites Mal. food.py macht es an derselben Stelle so.
+        try:
+            async with message.channel.typing():
+                data = await self.generate_image(prompt)
+        except (AttributeError, discord.HTTPException):
+            data = await self.generate_image(prompt)   # ohne Anzeige, aber es laeuft
         if not data:
             return "Der Bild-Dienst zickt gerade - probier's gleich nochmal."
         emb = discord.Embed(description=f"🎨  **{prompt[:230]}**", color=discord.Color.purple())

@@ -379,6 +379,12 @@ class GuildPlayer:
     text_channel: discord.abc.Messageable | None = None
     volume: float = DEFAULT_VOLUME   # 0.0 - 2.0, per Befehl aenderbar
     panel_message: "discord.Message | None" = None  # aktuelles Steuer-Panel
+    # Die View zum Panel. Muss mitgefuehrt werden, um sie beim Ausmustern
+    # abmelden zu koennen: sie laeuft mit timeout=None und wird deshalb von
+    # discord.py NIE von selbst aus dem ViewStore genommen. Gemessen: 200
+    # gepostete Panels = 200 Eintraege, die auch nach dem Loeschen der
+    # Nachricht und aller Referenzen bestehen bleiben.
+    panel_view: "discord.ui.View | None" = None
     speed: float = 1.0               # 0.5 - 2.0, per Tempo-Dropdown im Panel waehlbar
     _seg_start: float | None = None  # monotonic: Start des laufenden Abschnitts (None=aus/pausiert)
     _played: float = 0.0             # bereits gespielte Song-Sekunden vor diesem Abschnitt
@@ -1012,12 +1018,17 @@ class PlaybackControlView(discord.ui.View):
 
     @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
     async def _stop(self, interaction, _b):
-        if self.player.voice is None or not self.player.voice.is_connected():
+        # Gleiche Regel wie beim Textbefehl: bei Desync trotzdem aufraeumen,
+        # sonst holt der Watchdog den Bot zurueck.
+        if (self.player.voice is None and self.player.active_channel_id is None
+                and not self.player.queue and self.player.current is None):
             await interaction.response.send_message("Ich bin in keinem Sprachkanal.", ephemeral=True)
             return
         # Diese Nachricht wird gleich zur 'Gestoppt'-Bestaetigung umgebaut -> aus der
         # Panel-Verwaltung nehmen, damit disconnect()->_retire_panel sie NICHT loescht.
+        # Die View wird unten selbst gestoppt (stop() am Ende), also auch hier abmelden.
         self.player.panel_message = None
+        self.player.panel_view = None
         await self.player.disconnect()
         for child in self.children:
             if isinstance(child, discord.ui.Button):
@@ -1977,6 +1988,18 @@ class Music:
         hier sofort weg, damit nichts liegen bleibt."""
         msg = player.panel_message
         player.panel_message = None
+        # Die View AUSDRUECKLICH beenden. Sie laeuft mit timeout=None und wird
+        # von discord.py sonst nie aus dem ViewStore genommen - auch das Loeschen
+        # der Nachricht raeumt dort nichts weg. Ohne das sammelte sich pro
+        # gespieltem Song ein Eintrag an (gemessen: 200 Panels = 200 Eintraege,
+        # die auch nach dem Loeschen aller Referenzen blieben).
+        view = player.panel_view
+        player.panel_view = None
+        if view is not None:
+            try:
+                view.stop()
+            except Exception:  # noqa: BLE001 - Aufraeumen darf nie stoeren
+                pass
         if msg is not None:
             try:
                 await msg.delete()
@@ -2003,6 +2026,7 @@ class Music:
             return
         view.message = msg
         player.panel_message = msg
+        player.panel_view = view      # zum spaeteren Abmelden (_retire_panel)
 
     # --- Oeffentlicher Einstieg ----------------------------------------------
 
@@ -2068,7 +2092,13 @@ class Music:
                                title=f"{bar}  Lautstärke", color=_COL_CTRL)
 
         if action in ("stop", "leave"):
-            if player.voice is None or not player.voice.is_connected():
+            # Auch bei Voice-DESYNC aufraeumen. Vorher wurde hier abgebrochen,
+            # wenn die Verbindung schon weg war - dann blieb aber
+            # active_channel_id gesetzt, und der Watchdog (heal) holte den Bot
+            # samt laufender Musik prompt zurueck, obwohl der Nutzer gestoppt hat.
+            # Nur wenn WIRKLICH nichts mehr offen ist, gibt es den Hinweis.
+            if (player.voice is None and player.active_channel_id is None
+                    and not player.queue and player.current is None):
                 return self._embed("Ich bin gerade in keinem Sprachkanal.", color=_COL_ERR)
             await player.disconnect()
             return self._embed("Musik gestoppt, Warteschlange geleert und raus aus dem Sprachkanal.",

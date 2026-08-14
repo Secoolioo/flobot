@@ -4078,6 +4078,183 @@ def test_bilder_blockieren_den_bot_nicht():
                              + ", ".join(verdaechtig))
 
 
+def test_musik_advance_raeumt_die_warteschlange_nicht_leer():
+    """Startet jemand selbst einen Song, waehrend der Automat gerade den naechsten
+    aufloest, darf der Automat NICHT weitermachen.
+
+    Nachgestellt: Song A endet, _advance haengt im Aufloesen eines
+    Playlist-Tracks, in der Luecke sagt jemand 'flo spiel X'. Danach lief zwar X,
+    aber _advance machte weiter - jedes start() scheiterte an 'Already playing
+    audio.', wurde als 'Track nicht ladbar' verbucht und uebersprungen. Ergebnis:
+    Warteschlange 4 -> 0, current auf None, und das frisch gepostete Panel
+    geloescht."""
+    import discord
+    import music
+
+    alt_ff = (discord.FFmpegPCMAudio, discord.PCMVolumeTransformer)
+    alt_res, alt_panel, alt_ret = (music._resolve_track, music._send_panel,
+                                   music._retire_panel)
+    try:
+        discord.FFmpegPCMAudio = lambda *a, **k: object()
+        discord.PCMVolumeTransformer = lambda src, volume=1.0: src
+
+        class FakeVoice:
+            def __init__(self):
+                self.spielt = False
+
+            def is_connected(self):
+                return True
+
+            def is_playing(self):
+                return self.spielt
+
+            def is_paused(self):
+                return False
+
+            def play(self, _src, after=None):
+                if self.spielt:
+                    raise discord.ClientException("Already playing audio.")
+                self.spielt = True
+
+            def stop(self):
+                self.spielt = False
+
+            @property
+            def channel(self):
+                return SimpleNamespace(id=42)
+
+        async def langsam(track):
+            await asyncio.sleep(0.05)
+            track.stream_url = "http://x"
+            return track
+
+        async def kein_panel(*a, **k):
+            pass
+
+        geloescht = []
+
+        async def retire(_p):
+            geloescht.append(1)
+
+        music._resolve_track = langsam
+        music._send_panel = kein_panel
+        music._retire_panel = retire
+
+        def aufbau():
+            p = music.GuildPlayer(loop=asyncio.new_event_loop())
+            p.voice = FakeVoice()
+            p.queue = [music.Track(title=f"Song {i}", stream_url="", query=f"q{i}")
+                       for i in range(4)]
+            p.current = music.Track(title="Song A", stream_url="http://a")
+            p.voice.spielt = True
+            return p
+
+        # 1) Jemand startet waehrend des Aufloesens etwas Eigenes.
+        p = aufbau()
+        gen = p._play_gen
+
+        async def stoerung():
+            t = asyncio.ensure_future(p._advance(gen))
+            await asyncio.sleep(0.01)
+            p.voice.stop()
+            p.start(music.Track(title="Wunsch X", stream_url="http://x"))
+            await t
+
+        asyncio.run(stoerung())
+        assert len(p.queue) == 4, len(p.queue)
+        assert p.current is not None and p.current.title == "Wunsch X", p.current
+        assert not geloescht, "Panel des Nutzers wurde geloescht"
+
+        # 2) Der normale Songwechsel funktioniert unveraendert.
+        p = aufbau()
+        p.voice.spielt = False
+        asyncio.run(p._advance(p._play_gen))
+        assert len(p.queue) == 3, len(p.queue)
+        assert p.current.title == "Song 0", p.current.title
+
+        # 3) Aufrufe ohne Generation (aus _reconnect) pruefen nichts.
+        p = aufbau()
+        p.voice.spielt = False
+        asyncio.run(p._advance())
+        assert p.current.title == "Song 0", p.current.title
+    finally:
+        discord.FFmpegPCMAudio, discord.PCMVolumeTransformer = alt_ff
+        music._resolve_track, music._send_panel, music._retire_panel = (
+            alt_res, alt_panel, alt_ret)
+
+
+def test_musik_panel_view_wird_abgemeldet():
+    """Jedes Now-Playing-Panel laeuft mit timeout=None und wurde deshalb von
+    discord.py NIE aus dem ViewStore genommen - auch das Loeschen der Nachricht
+    raeumt dort nichts weg. Gemessen: 200 Panels = 200 Eintraege, die auch nach
+    dem Loeschen aller Referenzen blieben. Mit jedem gespielten Song einer mehr."""
+    import discord
+    import music
+
+    class FakeState:
+        def __init__(self):
+            self._view_store = discord.ui.view.ViewStore(self)
+
+        def store_view(self, view, message_id=None, interaction_id=None):
+            self._view_store.add_view(view, message_id=message_id)
+
+    st = FakeState()
+
+    class P:
+        def __init__(self):
+            self.volume = 1.0
+            self.speed = 1.0
+            self.voice = None
+            self.current = None
+            self.queue = []
+            self.panel_message = None
+            self.panel_view = None
+
+        def is_active(self):
+            return False
+
+    p = P()
+
+    async def lauf():
+        for i in range(50):
+            v = music.PlaybackControlView(p)
+            st.store_view(v, message_id=1000 + i)
+            p.panel_view = v
+            p.panel_message = None
+            await music.instance._retire_panel(p)
+
+    asyncio.run(lauf())
+    assert len(st._view_store._views) == 0, len(st._view_store._views)
+    assert p.panel_view is None
+
+
+def test_terraria_erkennt_kein_alltagsdeutsch():
+    """'hell' und 'boss' sind deutsche Alltagswoerter, 'golem' ist kein
+    eindeutiger Terraria-Begriff. Bei einem Treffer schaltet bot.py den ganzen
+    KI-Fallback ab und antwortet stattdessen mit einem Wiki-Embed."""
+    import terraria
+
+    for harmlos in ("ist es draußen schon hell, boss?",
+                    "was steht heute bei golem?",
+                    "der golem im museum sah krass aus",
+                    "wo ist der boss? es ist noch hell draußen",
+                    "wie wird das wetter morgen in regensburg?"):
+        assert not terraria.erkennt_frage(harmlos), harmlos
+
+    for echt in ("wie besiege ich den Wall of Flesh?",
+                 "wo finde ich Hellstone?",
+                 "wie komme ich in den Hardmode?",
+                 "wo spawnt der Moon Lord?",
+                 "welches Erz brauche ich für Chlorophyte?"):
+        assert terraria.erkennt_frage(echt), echt
+
+    # Und der Blaetterer schiebt keine leere Seite mehr ein (Absatz genau am Limit).
+    p = terraria.instance._paginate
+    for n in (1, 1798, 1799, 1800, 1801, 3600):
+        seiten = p("x" * n)
+        assert all(s.strip() for s in seiten), (n, [len(s) for s in seiten])
+
+
 def test_loeschen_raeumt_nicht_versehentlich_alles():
     """'alle', 'ganz' und 'komplett' sind deutsche FUELLWOERTER - sie duerfen
     nicht mitten im Satz einen kompletten Channel-Wipe ausloesen.
