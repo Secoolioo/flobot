@@ -4078,6 +4078,79 @@ def test_bilder_blockieren_den_bot_nicht():
                              + ", ".join(verdaechtig))
 
 
+def test_teurer_kauf_fragt_nach():
+    """Ueber `kaufen <n>` kostet ein Tippfehler in EINER Ziffer bis zu 90 Mio
+    Coins - unwiderruflich und bisher ohne jede Rueckfrage.
+
+    Nachgefragt wird nur bei teuren Titeln; alles Alltaegliche bleibt ein
+    einziger Schritt. Bestaetigt wird durch nochmal denselben Befehl."""
+    import time as _t
+    import economy
+    e = economy.instance
+    alt = (e._store, e._enabled, e._kauf_offen, e._sync_role)
+    try:
+        e._enabled = True
+        e._sync_role = lambda m: asyncio.sleep(0)     # Rollen-Deko stoert hier
+        mitglied = SimpleNamespace(id=1, display_name="T", name="T")
+
+        def aufsetzen(coins=200_000_000):
+            e._store = _FakeStore({"users": {"1": {
+                "coins": coins, "xp": 0, "owned": [], "name": "T", "title": "",
+                "title_rarity": "", "voice_secs": 0, "msgs": 0, "streak": 0,
+                "last_daily": ""}}, "shop": {}})
+            e._kauf_offen = {}
+            e.refresh_shop(force=True)
+            e._store.data["shop"]["items"] = list(e.get_shop_items()) + [
+                {"n": 9, "label": "Weltenbrand", "text": "Weltenbrand",
+                 "rarity": "goettlich", "price": 90_000_000}]
+            return [x for x in e.get_shop_items()
+                    if x["price"] < e.KAUF_RUECKFRAGE_AB][0]
+
+        def kaufen(n):
+            return asyncio.run(e._buy_text(mitglied, ["kaufen", str(n)]))
+
+        # 1) Guenstig bleibt ein Schritt.
+        billig = aufsetzen()
+        vor = e.get_coins(1)
+        kaufen(billig["n"])
+        assert vor - e.get_coins(1) == billig["price"], (vor, e.get_coins(1))
+
+        # 2) Teuer: erst fragen, nichts abbuchen.
+        aufsetzen()
+        vor = e.get_coins(1)
+        antwort = kaufen(9)
+        assert e.get_coins(1) == vor, "teurer Kauf ohne Rueckfrage gebucht"
+        assert "90.000.000" in str(antwort), antwort
+
+        # 3) Derselbe Befehl noch einmal kauft dann wirklich.
+        kaufen(9)
+        assert vor - e.get_coins(1) == 90_000_000, vor - e.get_coins(1)
+
+        # 4) Ein anderer Kauf dazwischen beendet die Rueckfrage.
+        billig = aufsetzen()
+        vor = e.get_coins(1)
+        kaufen(9)
+        kaufen(billig["n"])
+        kaufen(9)
+        assert (vor - e.get_coins(1)) < 90_000_000, "Rueckfrage nicht abgebrochen"
+
+        # 5) Nach einer Minute gilt sie nicht mehr.
+        aufsetzen()
+        vor = e.get_coins(1)
+        kaufen(9)
+        e._kauf_offen[1] = (9, _t.time() - 1)
+        kaufen(9)
+        assert e.get_coins(1) == vor, "abgelaufene Rueckfrage hat gekauft"
+
+        # 6) Der Merker waechst nicht: abgelaufene Eintraege fliegen raus.
+        e._kauf_offen = {i: (9, _t.time() - 1) for i in range(50)}
+        aufsetzen()
+        kaufen(9)
+        assert len(e._kauf_offen) <= 2, len(e._kauf_offen)
+    finally:
+        e._store, e._enabled, e._kauf_offen, e._sync_role = alt
+
+
 def test_floaktie_chat_haengt_nicht_am_takt():
     """Derselbe Chat-Verkehr muss dieselbe Aktivitaet ergeben - egal wie schnell
     der Loop taktet.

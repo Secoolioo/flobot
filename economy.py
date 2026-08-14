@@ -198,6 +198,10 @@ class Economy:
         # jedem 'top' neu versuchen.
         self._AVATAR_CACHE = {}
         self._AVATAR_FAIL = {}
+        # Offene Rueckfragen bei teuren Kaeufen: uid -> (nummer, ablauf_zeit).
+        # Bewusst nur im Speicher - eine Rueckfrage soll einen Neustart nicht
+        # ueberleben.
+        self._kauf_offen = {}
 
     def setup(self):
         """Aktiviert das Feature. Laeuft immer (keine externen Voraussetzungen)."""
@@ -1670,7 +1674,43 @@ class Economy:
         e = next((x for x in items if x.get("n") == n), None)
         if not e:
             return f"Nummer {n} gibt's heute nicht. Schau in den `{self._bot_name} shop`."
+        rueck = self._kauf_rueckfrage(member, n, e)
+        if rueck is not None:
+            return rueck
         return await self._do_buy(member, e)
+
+    # Ab diesem Preis wird nachgefragt. Darunter (Gewoehnlich bis Legendaer)
+    # bleibt der Kauf ein einziger Schritt - das soll flott gehen.
+    KAUF_RUECKFRAGE_AB = 1_000_000
+
+    def _kauf_rueckfrage(self, member, n, item):
+        """Fragt bei teuren Titeln einmal nach. Rueckgabe: Text, oder None wenn
+        der Kauf durchgehen soll.
+
+        Ueber `kaufen <n>` kostet ein Tippfehler in EINER Ziffer bis zu 90 Mio
+        Coins, unwiderruflich und ohne Rueckfrage. Der Weg ueber das Dropdown ist
+        weniger heikel - dort sieht man den Preis in der Auswahl. Bestaetigt wird
+        durch NOCHMAL DENSELBEN BEFEHL: kein neues Vokabular, keine neue Datei."""
+        jetzt = time.time()
+        offen = self._kauf_offen.get(member.id)
+        # Abgelaufene Rueckfragen wegraeumen, damit das dict nicht waechst.
+        for uid, (_n, ablauf) in list(self._kauf_offen.items()):
+            if ablauf <= jetzt:
+                self._kauf_offen.pop(uid, None)
+        preis = int(item.get("price", 0) or 0)
+        if preis < self.KAUF_RUECKFRAGE_AB:
+            # Jeder andere Kauf dazwischen beendet eine offene Rueckfrage - so
+            # gilt die Bestaetigung wirklich nur fuer zwei Befehle direkt
+            # hintereinander und nicht fuer irgendetwas eine Minute spaeter.
+            self._kauf_offen.pop(member.id, None)
+            return None
+        if offen and offen[0] == n and offen[1] > jetzt:
+            self._kauf_offen.pop(member.id, None)
+            return None
+        self._kauf_offen[member.id] = (n, jetzt + 60.0)
+        return (f"⚠️ **{item['label']}** kostet **{fmt(preis)}** {self.COIN} – das ist "
+                f"keine Kleinigkeit.\nSchick `{self._bot_name} kaufen {n}` noch einmal, "
+                f"wenn du sicher bist (gilt eine Minute).")
 
     async def _equip(self, member, low):
         parts = low.split()
