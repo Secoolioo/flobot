@@ -8,7 +8,6 @@ Befehle (nach 'Flo' - in der DM geht's auch ohne 'Flo' davor):
 - nimm <@wer|ID> <anzahl>       Coins abziehen
 - setcoins <@wer|ID> <anzahl>   Kontostand exakt setzen
 - gibxp <@wer|ID> <anzahl>      XP geben (Level-Ups inklusive)
-- profil <@wer|ID>              Konto-Uebersicht (Level, XP, Coins, Aktivitaet)
 - ansage <channel-id> <text>    Text als Flo in einen Channel senden
 - shopneu                       Tages-Shop sofort neu wuerfeln
 - admin / adminhilfe            diese Liste
@@ -163,8 +162,6 @@ class Admin:
             return await self._set_coins(message, rest)
         if first in ("gibxp", "givexp", "xpgeben"):
             return await self._give_xp(message, rest)
-        if first in ("profil", "profile"):
-            return await self._profile(message, rest)
         if first in ("ansage", "announce"):
             return await self._announce(message, rest)
         if first in ("dm", "flüster", "fluester"):
@@ -278,30 +275,6 @@ class Admin:
         extra = f" → **Level {level}**! 🎉" if level else ""
         return self._emb(f"⭐ **{user.display_name}** bekommt **+{numfmt.fmt(amount)} XP**{extra}")
 
-    async def _profile(self, message, rest):
-        if not economy.is_enabled():
-            return "Economy (Flo Coins) ist gerade aus."
-        uid, _ = self._extract(rest)
-        if uid is None:
-            uid = message.author.id   # ohne Ziel: eigenes Profil
-        # leaderboard_data liefert ALLE Profile (oeffentliche API) - Row suchen.
-        rows = economy.leaderboard_data(limit=10 ** 9)
-        row = next((r for r in rows if r.get("id") == uid), None)
-        name = await self._name_of(message, uid)
-        if row is None:
-            return self._emb(f"**{name}** hat noch kein Profil (nie geschrieben).")
-        h, rem = divmod(int(row.get("voice_secs", 0)), 3600)
-        emb = self._emb(f"👤 **{name}**", color=discord.Color.blurple())
-        emb.add_field(name="Level", value=f"{row.get('level', 0)} ({numfmt.fmt(row.get('xp', 0))} XP)",
-                      inline=True)
-        emb.add_field(name="Coins", value=f"{numfmt.fmt(row.get('coins', 0))} {economy.COIN}",
-                      inline=True)
-        emb.add_field(name="Aktivität",
-                      value=f"{numfmt.fmt(row.get('msgs', 0))} Nachrichten · {numfmt.fmt(h)}h {rem // 60}m Voice",
-                      inline=False)
-        if row.get("title"):
-            emb.add_field(name="Titel", value=row["title"], inline=False)
-        return emb
 
     def _parse_announce(self, rest):
         """Zerlegt 'ansage ...' in (channel_id, text). Akzeptiert die rohe ID
@@ -409,7 +382,7 @@ class Admin:
                       value=(f"`{n} gib @wer 100` · `{n} nimm @wer 100`\n"
                              f"`{n} setcoins @wer 500`"), inline=False)
         emb.add_field(name="XP & Profil",
-                      value=f"`{n} gibxp @wer 250` · `{n} profil @wer`", inline=False)
+                      value=f"`{n} gibxp @wer 250` · `{n} check @wer` (volles Profil)", inline=False)
         emb.add_field(name="Server",
                       value=(f"`{n} ansage <channel-id> <text>` · `{n} shopneu`\n"
                              f"`{n} soundboard an/aus` · `{n} restart`\n"
@@ -439,7 +412,6 @@ handle = instance.handle
 _give = instance._give
 _set_coins = instance._set_coins
 _give_xp = instance._give_xp
-_profile = instance._profile
 _parse_announce = instance._parse_announce
 _announce = instance._announce
 _parse_dm = instance._parse_dm

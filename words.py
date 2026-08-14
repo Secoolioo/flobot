@@ -52,6 +52,22 @@ _URL_RE = re.compile(r"https?://\S+")
 _MARKUP_RE = re.compile(r"<a?:\w+:\d+>|<[@#][&!]?\d+>")
 
 
+# Deutsche Fuellwoerter. Die stehen bei JEDEM ganz oben - als "Lieblingswort"
+# taugen sie deshalb nicht. Nur fuer die Anzeige gefiltert, nicht fuers Zaehlen.
+_FUELLWOERTER = frozenset("""
+ich du er sie es wir ihr mich mir dich dir uns euch ihn ihm ihnen man wer
+der die das den dem des ein eine einen einem eines einer kein keine
+und oder aber auch noch schon nur mal halt eben denn doch ja nein nicht nix
+ist sind war waren bin bist sei sein hab habe hat hatte haben hast wird werden
+wurde kann kannst koennen könnte muss musst muessen müssen will willst wollen
+soll sollte darf machen macht gemacht geht gehen gehts komm kommt kommen
+in im an am auf aus bei zu zum zur von vom mit nach ueber über unter fuer für
+vor durch um gegen ohne bis seit
+so wie was wenn weil dass da dann hier dort jetzt heute immer wieder mehr sehr
+gut ok okay ne nen ah oh hm hmm lol xd
+""".split())
+
+
 class Words:
     def __init__(self):
         self._enabled = False
@@ -200,6 +216,11 @@ class Words:
         """(gesagte Woerter, verschiedene Woerter, [(Wort, Anzahl), ...]) fuer
         fremde Anzeigen (Profil-Lookup).
 
+        Die zurueckgegebenen Woerter sind BEZEICHNEND, nicht bloss haeufig:
+        ohne Filter stehen im Deutschen bei jedem Menschen dieselben Fuellwoerter
+        ganz oben ("ich", "das", "nicht", "und") - dann sagt die Zeile in jedem
+        Profil dasselbe und damit nichts. Die Summen bleiben davon unberuehrt.
+
         Geht EINMAL ueber die Wortliste. Die ist nach Woertern indiziert, nicht
         nach Nutzern - fuer eine Nachschlage-Antwort ist das billig genug, fuer
         einen Hintergrund-Takt waere es das nicht."""
@@ -212,7 +233,8 @@ class Words:
             n = int((eintrag.get("u") or {}).get(key, 0) or 0)
             if n:
                 gesamt += n
-                eigene.append((wort, n))
+                if wort not in _FUELLWOERTER:
+                    eigene.append((wort, n))
         eigene.sort(key=lambda x: x[1], reverse=True)
         return gesamt, len(eigene), eigene[:max(0, int(top))]
 

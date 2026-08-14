@@ -79,7 +79,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 125 Tests
+python3 test_games_logic.py    # 130 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -157,12 +157,17 @@ Weitere Bremsen: Anteil-Limit 150 pro Person, gestaffelte Verkaufssteuer (bis
 
 ```
 Flo check @wer      ganzes Profil    (auch: profil, whois, userinfo, steckbrief)
-Flo avatar @wer     nur das Bild     (auch: pb, pfp, profilbild)
+Flo avatar @wer     nur das Bild     (auch: pb, pfp, profilbild, av)
 Flo banner @wer     nur das Banner
 ```
 
 Ohne Ziel bist du selbst gemeint; statt einer Erwähnung geht auch eine ID oder
 eine Antwort auf eine Nachricht.
+
+`check`, `user`, `pb` und `av` sind auch normales Deutsch. Steht kein Ziel
+dahinter, hält Flo die Klappe und lässt die KI ran — „Flo check mal ob das
+läuft" ist eben kein Befehl. Für dein eigenes Profil nimm `Flo profil`.
+`bild` gehört weiter dem Bildgenerator (`Flo bild ein Drache aus Neon`).
 
 Das **Profilbild kommt in 4096 px und unbeschnitten** — als `set_image`, denn nur
 dort zeigt Discord es rechteckig; als Thumbnail wäre es der übliche Kreis.
@@ -188,6 +193,11 @@ Eine Erwähnung liefert übrigens ein vollständiges Member-Objekt, ohne einen
 einzigen API-Aufruf — Discord schickt es bei jeder Nachricht mit. Nur das
 globale Banner braucht `fetch_user`; das Ergebnis wird 30 min gepuffert, dazu
 ein Cooldown von 4 s pro Person.
+
+> **Merke für neue Befehle:** jedes neue Befehlswort gehört in `cmdnorm.KNOWN`.
+> Sonst korrigiert die Tippfehler-Suche es auf einen fremden Befehl — `banner`
+> wurde zu `banne`, und damit hätte `Flo banner @wer` die Person **gebannt**
+> statt ihr Banner zu zeigen. Ein Test prüft das jetzt für alle Profil-Befehle.
 
 ---
 
@@ -265,6 +275,7 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 | `bot.py` | Handler-Kette, Loops, Lebenszyklus |
 | `guildcfg.py` | Einstellungen je Server |
 | `profil.py` | Profil-Lookup + Namensverlauf |
+| `cmdnorm.py` | Tippfehler-Korrektur — **jedes neue Befehlswort muss hier rein** |
 | `features.py` | Funktions-Schalter (global + je Server) |
 | `economy.py` | Level, Coins, Shop, Steuer |
 | `floaktie.py` | die $FLO-Aktie |

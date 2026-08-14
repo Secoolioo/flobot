@@ -6764,18 +6764,34 @@ def test_profil_erkennt_seine_befehle():
             profil.instance._cooldown.clear()
             assert asyncio.run(antwort(kein)) is None, kein
 
-        # 'user' und 'bild' allein sind normale Woerter - kein Befehl.
-        profil.instance._cooldown.clear()
-        assert asyncio.run(antwort("user")) is None
-        profil.instance._cooldown.clear()
-        assert asyncio.run(antwort("bild")) is None
+        # MEHRDEUTIGE Woerter ohne Ziel sind Gerede, kein Befehl: "check mal ob
+        # das laeuft", "pb ist kaputt". Da muss die Kette weiterlaufen, sonst
+        # beantwortet Flo jeden solchen Satz mit einem Hinweistext und die KI
+        # kommt nie dran.
+        for gerede in ("check", "user", "pb", "av",
+                       "check mal ob das laeuft", "check das bitte kurz"):
+            profil.instance._cooldown.clear()
+            assert asyncio.run(antwort(gerede)) is None, gerede
 
-        # Mit Befehl: Flo antwortet selbst (HANDLED) und schickt ein Embed.
-        for cmd in ("check", "profil", "whois", "avatar", "steckbrief"):
+        # "bild" gehoert dem Bildgenerator in media.py - profil darf es NICHT
+        # anfassen, sonst ist "Flo bild ein Drache aus Neon" tot.
+        assert "bild" not in profil._AVATAR_CMDS
+        profil.instance._cooldown.clear()
+        assert asyncio.run(antwort("bild ein Drache aus Neon")) is None
+
+        # EINDEUTIGE Befehle ohne Ziel zeigen das eigene Profil.
+        for cmd in ("profil", "whois", "steckbrief", "avatar", "userinfo"):
             profil.instance._cooldown.clear()
             del kanal.sent[:]
             assert asyncio.run(antwort(cmd)) is profil.HANDLED, cmd
             assert kanal.sent and kanal.sent[-1]["embeds"], cmd
+
+        # Und "check" MIT Ziel ist selbstverstaendlich ein Befehl.
+        ziel_person = _fake_person(uid=7, name="ziel")
+        profil.instance._cooldown.clear()
+        del kanal.sent[:]
+        assert asyncio.run(antwort("check", [ziel_person])) is profil.HANDLED
+        assert kanal.sent and kanal.sent[-1]["embeds"]
 
         # Ohne Banner sagt Flo das, statt ein leeres Embed zu schicken.
         profil.instance._cooldown.clear()
@@ -6938,6 +6954,121 @@ def test_profil_loest_kein_bot_neuladen_aus():
         # stehen wirklich im fertigen Embed - nicht nur in der Einzelfunktion.
         namen = [f.name for f in kanal.sent[-1]["embeds"][0].fields]
         assert any("Frühere Namen" in n for n in namen), namen
+    finally:
+        zurueck()
+
+
+def test_profil_befehle_kollidieren_nicht():
+    """Die drei Kollisionen, die der neue Lookup ausgeloest hatte.
+
+    1) 'banner' war cmdnorm unbekannt. Die Aehnlichkeitssuche korrigierte es auf
+       'banne' - und da Moderation auf Platz 2 der Handler-Kette steht, hat
+       'Flo banner @wer' die Person GEBANNT statt ihr Banner zu zeigen.
+    2) 'bild' gehoert dem Bildgenerator in media.py.
+    3) 'profil' fing frueher admin.py fuer den Besitzer ab."""
+    import cmdnorm
+    import media
+    import moderation
+    import profil
+
+    # 1) KEIN Profil-Befehl darf auf einen fremden Befehl korrigiert werden.
+    for wort in profil._CHECK_CMDS + profil._AVATAR_CMDS + profil._BANNER_CMDS:
+        korrigiert = cmdnorm.normalize(wort)
+        assert korrigiert in (None, wort), (
+            f"cmdnorm macht aus '{wort}' -> '{korrigiert}'")
+    # ... und die Moderation darf 'banner' nicht mehr als Bann lesen.
+    for text in ("banner", "banner <@777>", "profilbanner"):
+        norm = cmdnorm.normalize(text) or text
+        assert moderation.classify(norm) is None, (text, norm)
+
+    # 2) 'bild' bleibt beim Bildgenerator.
+    assert "bild" not in profil._AVATAR_CMDS + profil._CHECK_CMDS
+    assert media.Media._GEN_RE.match("bild ein Drache aus Neon")
+
+    # 3) admin.py beansprucht 'profil' nicht mehr.
+    quelle = open("admin.py", encoding="utf-8").read()
+    assert '"profil"' not in quelle, "admin faengt 'profil' wieder vor profil.py ab"
+
+
+def test_profil_namensverlauf_zeigt_das_richtige_datum():
+    """'bis' muss das ENDE eines Namens sein.
+
+    _merke schreibt in 't' den Moment, in dem ein Name ANFING. Vorher stand
+    genau dieses 't' hinter dem Wort 'bis' - jede Zeile war damit um einen
+    kompletten Eintrag zu frueh, und beim aeltesten Namen stand sogar der Tag,
+    an dem Flo die Person ueberhaupt zum ersten Mal gesehen hat."""
+    import unittest.mock as mock
+    profil, zurueck = _profil_frisch()
+    try:
+        wer = _fake_person(uid=1, name="start", global_name="G", nick=None)
+        zeiten = {"alt": 1_600_000_000, "mittel": 1_750_000_000, "neu": 1_755_000_000}
+        for name, t in (("alt", zeiten["alt"]), ("mittel", zeiten["mittel"]),
+                        ("neu", zeiten["neu"])):
+            wer.name = name
+            with mock.patch("time.time", lambda t=t: t):
+                profil.notiere(wer, 999)
+
+        text = profil.instance._verlauf_feld(wer, 999)
+        # 'alt' galt bis zu dem Moment, in dem 'mittel' anfing - NICHT bis zu
+        # seinem eigenen Anfang.
+        assert f"„alt“ (bis <t:{zeiten['mittel']}:d>)" in text, text
+        assert f"„mittel“ (bis <t:{zeiten['neu']}:d>)" in text, text
+        # Der eigene Anfangszeitpunkt darf NIRGENDS als 'bis' auftauchen.
+        assert f"„alt“ (bis <t:{zeiten['alt']}:d>)" not in text
+        # Der aktuelle Name ist kein "frueherer".
+        assert "„neu“" not in text
+        # Und es steht dabei, ab wann Flo ueberhaupt mitschreibt.
+        assert "seit" in text
+    finally:
+        zurueck()
+
+
+def test_profil_haelt_muell_und_grenzfaelle_aus():
+    """Kaputte Datei, Emoji-IDs, fehlende Bilder, 0 als Deckel."""
+    import profil
+    profil_m, zurueck = _profil_frisch()
+    try:
+        # 1) Handgeschriebener Muell in profil.json darf nichts umbringen.
+        profil.instance._store = _FakeStore({"users": {"5": {"handle": None,
+                                                             "nick": "kaputt"}},
+                                             "seit": "gestern"})
+        assert profil.verlauf(5, 999) == ([], [], [])
+        wer = _fake_person(uid=5, name="a", global_name="A", nick="N")
+        profil.notiere(wer, 999)          # darf nicht fliegen
+        assert isinstance(profil.instance._store.data["users"]["5"]["handle"], list)
+
+        # 2) Deckel: 0 hiess frueher "unbegrenzt" ([:-0] ist eine leere Scheibe).
+        assert profil.VERLAUF_MAX >= 1
+        assert profil.USER_MAX >= 50
+
+        # 3) Emoji-, Rollen- und Kanal-IDs sind KEINE Konten - sie duerfen
+        #    keine REST-Aufrufe ausloesen.
+        gerufen = []
+
+        class Guild:
+            id = 999
+            name = "S"
+            members = []
+            me = SimpleNamespace(id=1)
+
+            def get_channel(self, _c):
+                return None
+
+            def get_member(self, _u):
+                gerufen.append("get_member")
+                return None
+
+        msg = SimpleNamespace(content="Flo check", mentions=[], reference=None,
+                              author=_fake_person(uid=5), guild=Guild(),
+                              channel=_FakeChannel())
+        for markup in ("<:katze:123456789012345678>",
+                       "<#123456789012345678>", "<@&123456789012345678>"):
+            gerufen.clear()
+            wer2, _problem = asyncio.run(profil.instance._ziel(msg, markup))
+            assert gerufen == [], f"{markup} wurde als Konto behandelt"
+
+        # 4) Ohne Bild kein '[Direktlink](None)'.
+        assert profil.instance._bild_embed(wer, None, "x", None) is None
     finally:
         zurueck()
 

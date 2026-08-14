@@ -82,6 +82,12 @@ class CmdNorm:
         "aktie", "aktien", "kurs", "aktienkurs", "kursverlauf", "flokurs",
         # terraria (Wiki)
         "terraria", "terra", "twiki", "terrariawiki",
+        # profil-lookup - MUSS hier stehen: sonst korrigiert die Aehnlichkeits-
+        # suche 'banner' auf 'banne' (Moderation), und 'Flo banner @wer' hat die
+        # Person GEBANNT statt ihr Banner zu zeigen.
+        "check", "profil", "profile", "userinfo", "whois", "lookup",
+        "nachschlagen", "steckbrief", "avatar", "pfp", "profilbild",
+        "banner", "profilbanner",
         # neue casino-spiele
         "hilo", "tower", "turm", "sieben", "baccarat", "bakkarat", "punto",
         "doppelt",

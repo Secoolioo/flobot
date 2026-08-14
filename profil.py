@@ -8,9 +8,14 @@ Autor-Icon rund - deshalb steht das Bild hier gross unten und nicht als
 Miniatur oben.
 
 Befehle:
-    Flo check @wer      ganzes Profil (auch: profil, whois, userinfo, wer ist)
-    Flo avatar @wer     nur das Bild, gross (auch: pb, pfp, profilbild)
+    Flo check @wer      ganzes Profil (auch: profil, whois, userinfo, steckbrief)
+    Flo avatar @wer     nur das Bild, gross (auch: pb, pfp, profilbild, av)
     Flo banner @wer     nur das Banner
+
+WICHTIG bei neuen Befehlswoertern: sie MUESSEN in cmdnorm.KNOWN stehen. Sonst
+korrigiert die Aehnlichkeitssuche sie auf einen fremden Befehl - 'banner' wurde
+so zu 'banne', und die Moderation hat die erwaehnte Person GEBANNT, statt ihr
+Banner zu zeigen.
 
 Ziel finden geht ueber Erwaehnung, rohe ID, Antwort auf eine Nachricht - oder
 gar nichts, dann bist du selbst gemeint.
@@ -68,8 +73,14 @@ FETCH_MAX = 200
 # REST-Aufrufe aus - ohne Bremse kann man den Bot damit ins Rate-Limit treiben.
 COOLDOWN = float(os.getenv("PROFIL_COOLDOWN", "4") or "4")
 
-# So viele Namen je Art werden aufgehoben.
-VERLAUF_MAX = int(os.getenv("PROFIL_VERLAUF_MAX", "12") or "12")
+# So viele Namen je Art werden aufgehoben. Mindestens 1: bei 0 waere del
+# liste[:-0] eine LEERE Scheibe - der Deckel haette also nichts geloescht und
+# der Verlauf waere unbegrenzt gewachsen, genau das Gegenteil der Absicht.
+VERLAUF_MAX = max(1, int(os.getenv("PROFIL_VERLAUF_MAX", "12") or "12"))
+# So viele Personen behaelt der Verlauf hoechstens. Ohne Deckel waechst
+# profil.json unbegrenzt - und store.save() serialisiert synchron im Event-Loop,
+# haengt also mit der Datei mit.
+USER_MAX = max(50, int(os.getenv("PROFIL_USER_MAX", "5000") or "5000"))
 
 _ID_RE = re.compile(r"\b(\d{15,20})\b")
 
@@ -79,7 +90,15 @@ MAX_PX = 4096
 
 _CHECK_CMDS = ("check", "profil", "profile", "userinfo", "whois", "lookup",
                "nachschlagen", "steckbrief", "user")
-_AVATAR_CMDS = ("avatar", "pb", "pfp", "profilbild", "bild", "av")
+# Woerter, die auch ganz normales Deutsch sind ("check mal ob das geht",
+# "pb ist kaputt"). Findet sich dahinter kein Ziel, gibt handle() None zurueck
+# und laesst die Kette weiterlaufen - statt jeden solchen Satz mit einem
+# Hinweistext zu beantworten und die KI nie drankommen zu lassen.
+_MEHRDEUTIG = ("check", "user", "av", "pb")
+# 'bild' steht hier BEWUSST NICHT drin: media.py macht daraus ein generiertes
+# Bild ('Flo bild ein Drache aus Neon'), und profil.handle laeuft in der Kette
+# vorher - der Bildgenerator waere komplett tot gewesen.
+_AVATAR_CMDS = ("avatar", "pb", "pfp", "profilbild", "av")
 _BANNER_CMDS = ("banner", "profilbanner")
 
 # public_flags -> (Emoji, deutscher Name). Reihenfolge = Anzeige-Reihenfolge.
@@ -115,6 +134,9 @@ class Profil:
         self._voll = {}
         # uid -> Zeitpunkt, ab dem wieder nachgeschlagen werden darf.
         self._cooldown = {}
+        # "Kennt Flo seit" - in handle() gelesen, BEVOR das Nachschlagen selbst
+        # einen Eintrag anlegt. Sonst behauptet jedes Profil "seit heute".
+        self._gesehen_seit = None
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -123,15 +145,25 @@ class Profil:
             log.info("Profil-Lookup aus (PROFIL_ENABLED=0).")
             return False
         self._store = JsonStore("profil.json", default={"users": {}, "seit": 0})
-        if not self._store.data.get("seit"):
+        # Von Hand editierte oder halb geschriebene Datei darf den START nicht
+        # verhindern: ohne diese Pruefung reicht ein "users": null oder ein
+        # "seit": "gestern", und der ganze Bot kommt nicht mehr hoch.
+        if not isinstance(self._store.data.get("users"), dict):
+            log.warning("profil.json: 'users' ist unbrauchbar - fange leer an.")
+            self._store.data["users"] = {}
+        try:
+            seit = int(self._store.data.get("seit", 0) or 0)
+        except (TypeError, ValueError):
+            seit = 0
+        if seit <= 0:
             # Ab wann Flo ueberhaupt mitschreibt - das gehoert unter jeden
             # Verlauf, sonst liest sich "1 Name bekannt" wie eine Aussage
             # ueber die Person statt ueber Flos Gedaechtnis.
-            self._store.data["seit"] = int(time.time())
+            seit = int(time.time())
+        self._store.data["seit"] = seit
         self._enabled = True
         log.info("Profil-Lookup aktiv (%d Profile im Namensverlauf, seit %s).",
-                 len(self._users()),
-                 time.strftime("%d.%m.%Y", time.localtime(self._store.data["seit"])))
+                 len(self._users()), time.strftime("%d.%m.%Y", time.localtime(seit)))
         return True
 
     def is_enabled(self):
@@ -164,13 +196,20 @@ class Profil:
         if not uid or getattr(wer, "bot", False):
             return False
 
+        jetzt = int(time.time())
         eintrag = self._users().get(str(uid))
-        if eintrag is None:
+        if not isinstance(eintrag, dict):
             eintrag = self._users()[str(uid)] = {
                 "handle": [], "anzeige": [], "nick": {},
-                "erst": int(time.time()), "letzt": 0,
+                "erst": jetzt, "letzt": 0,
             }
-        jetzt = int(time.time())
+            self._deckel()
+        # Von Hand kaputt Editiertes darf hier nicht knallen.
+        for feld in ("handle", "anzeige"):
+            if not isinstance(eintrag.get(feld), list):
+                eintrag[feld] = []
+        if not isinstance(eintrag.get("nick"), dict):
+            eintrag["nick"] = {}
         eintrag["letzt"] = jetzt
 
         geaendert = False
@@ -197,6 +236,19 @@ class Profil:
         if geaendert:
             self._dirty = True
         return geaendert
+
+    def _deckel(self):
+        """Haelt die Zahl der Personen begrenzt: wer am laengsten nicht gesehen
+        wurde, fliegt zuerst. Ohne das waechst profil.json unbegrenzt - und
+        store.save() serialisiert synchron im Event-Loop, der Bot haengt also
+        mit der Dateigroesse mit."""
+        users = self._users()
+        if len(users) <= USER_MAX:
+            return
+        nach_alter = sorted(users.items(),
+                            key=lambda kv: int((kv[1] or {}).get("letzt", 0) or 0))
+        for key, _wert in nach_alter[:len(users) - USER_MAX]:
+            users.pop(key, None)
 
     @staticmethod
     def _merke(liste, name, jetzt):
@@ -227,13 +279,25 @@ class Profil:
     def verlauf(self, uid, guild_id=0):
         """Alle bekannten Namen: (Handles, Anzeigenamen, Nicknames) als Listen
         von (Name, Zeitpunkt) - juengster zuletzt."""
-        eintrag = self._users().get(str(uid)) or {}
+        eintrag = self._users().get(str(uid))
+        if not isinstance(eintrag, dict):
+            eintrag = {}
 
         def raus(liste):
-            return [((e.get("n") or ""), int(e.get("t", 0) or 0))
-                    for e in (liste or [])]
+            if not isinstance(liste, list):
+                return []
+            fertig = []
+            for e in liste:
+                if not isinstance(e, dict):
+                    continue
+                try:
+                    fertig.append(((e.get("n") or ""), int(e.get("t", 0) or 0)))
+                except (TypeError, ValueError):
+                    continue
+            return fertig
 
-        nicks = (eintrag.get("nick") or {}).get(str(int(guild_id or 0)), [])
+        nicks = (eintrag.get("nick") or {}).get(str(int(guild_id or 0)), []) \
+            if isinstance(eintrag.get("nick"), dict) else []
         return raus(eintrag.get("handle")), raus(eintrag.get("anzeige")), raus(nicks)
 
     def bekannt_seit(self, uid):
@@ -284,6 +348,20 @@ class Profil:
             while len(self._voll) > FETCH_MAX:
                 self._voll.pop(next(iter(self._voll)), None)
 
+    def _hat_ziel(self, message, rest):
+        """Steht ueberhaupt jemand/etwas hinter dem Befehl?
+
+        Wichtig: eine Erwaehnung steckt als Objekt in message.mentions - im
+        Resttext muss sie nicht auftauchen. Die Erwaehnung des Bots selbst
+        zaehlt nicht, die ist ja nur der Ausloeser."""
+        if (rest or "").strip():
+            return True
+        eigene = getattr(getattr(getattr(message, "guild", None), "me", None), "id", 0)
+        for m in (getattr(message, "mentions", None) or []):
+            if getattr(m, "id", 0) != eigene:
+                return True
+        return getattr(message, "reference", None) is not None
+
     async def _ziel(self, message, rest):
         """Wen soll ich nachschlagen? (Objekt, Hinweistext-falls-Problem).
 
@@ -300,7 +378,12 @@ class Profil:
         if getattr(message, "mentions", None):
             return message.mentions[0], ""
 
-        treffer = _ID_RE.search(rest or "")
+        # Vor der ID-Suche alles in spitzen Klammern wegschneiden: dort stecken
+        # Kanaele (<#123>), Rollen (<@&123>) und Custom-Emojis (<:name:123>).
+        # Deren IDs sind NIE ein Konto - ohne das feuerte jedes Emoji im Text
+        # zwei echte REST-Aufrufe und eine "Konto nicht gefunden"-Antwort.
+        ohne_markup = re.sub(r"<[^>]*>", " ", rest or "")
+        treffer = _ID_RE.search(ohne_markup)
         if treffer:
             return await self._per_id(message, int(treffer.group(1)))
 
@@ -340,23 +423,23 @@ class Profil:
 
     @staticmethod
     def _per_name(guild, text):
-        """Notnagel: im Member-Cache nach Name/Nickname suchen.
+        """Notnagel: im Member-Cache nach Name/Nickname suchen - NUR EXAKT.
 
-        Der Cache ist ohne das Members-Intent klein (im Wesentlichen Leute im
-        Sprachkanal), also ist das ausdruecklich nur ein Bonus - der Weg ueber
-        Erwaehnung oder ID ist der verlaessliche."""
+        Die Teilstring-Suche, die hier mal stand, war gefaehrlich: "mal", "das"
+        oder "der" stecken in irgendeinem Namen fast immer drin, und dann bekam
+        jemand ein FREMDES Profil serviert, obwohl er gar niemanden nachschlagen
+        wollte. Der Cache ist ohne das Members-Intent ohnehin klein (im
+        Wesentlichen Leute im Sprachkanal) - der Weg ueber Erwaehnung oder ID
+        ist der verlaessliche, das hier nur ein Bonus."""
         if guild is None:
             return None
-        suche = text.lower().lstrip("@")
+        suche = text.strip().lower().lstrip("@")
+        if not suche or " " in suche:
+            return None      # ein ganzer Satz ist kein Name
         for m in (getattr(guild, "members", None) or []):
             for kandidat in (getattr(m, "nick", None), getattr(m, "global_name", None),
                              getattr(m, "name", None)):
                 if kandidat and kandidat.lower() == suche:
-                    return m
-        for m in (getattr(guild, "members", None) or []):
-            for kandidat in (getattr(m, "nick", None), getattr(m, "global_name", None),
-                             getattr(m, "name", None)):
-                if kandidat and suche in kandidat.lower():
                     return m
         return None
 
@@ -463,7 +546,14 @@ class Profil:
         return "\n".join(zeilen)
 
     def _verlauf_feld(self, wer, guild_id):
-        """Flos eigener Namensverlauf - ehrlich beschriftet."""
+        """Flos eigener Namensverlauf - ehrlich beschriftet.
+
+        ACHTUNG beim Zeitstempel: _merke schreibt in 't' den Moment, in dem ein
+        Name ANFING zu gelten. Das Ende eines Namens ist deshalb das 't' des
+        NAECHSTEN Eintrags. Vorher stand hier das eigene 't' hinter dem Wort
+        "bis" - damit war jede angezeigte Zeit um genau einen Eintrag zu frueh,
+        und beim aeltesten Namen stand sogar der Tag, an dem Flo die Person
+        ueberhaupt zum ersten Mal gesehen hat."""
         handles, anzeigen, nicks = self.verlauf(getattr(wer, "id", 0), guild_id)
         zeilen = []
         for label, liste in (("Handle", handles), ("Anzeige", anzeigen),
@@ -472,11 +562,16 @@ class Profil:
                 continue        # nur der aktuelle Name = kein Verlauf
             # Juengste Aenderung zuerst, den aktuellen Namen weglassen.
             teile = []
-            for name, ts in reversed(liste[:-1]):
-                teile.append(f"„{name or '—'}“ (bis <t:{ts}:d>)")
+            for i in range(len(liste) - 2, -1, -1):
+                name = liste[i][0]
+                bis = liste[i + 1][1]        # als der NAECHSTE Name anfing
+                teile.append(f"„{name or '—'}“ (bis <t:{bis}:d>)")
             zeilen.append(f"**{label}:** " + " ← ".join(teile[:4]))
         if not zeilen:
             return None
+        seit = self.seit()
+        if seit:
+            zeilen.append(f"_Flo schreibt Namen erst seit <t:{seit}:d> mit._")
         return "\n".join(zeilen)
 
     def _flo_feld(self, wer, guild):
@@ -507,6 +602,16 @@ class Profil:
         except Exception:  # noqa: BLE001
             log.debug("Aktien-Teil des Profils fehlgeschlagen", exc_info=True)
         try:
+            import handel
+            ein, aus, buchungen = handel.summe_von(uid)
+            if buchungen:
+                netto = ein - aus
+                zeilen.append(f"📒 {numfmt.fmt(buchungen)} Coin-Bewegungen · "
+                              f"+{numfmt.fmt(ein)} / −{numfmt.fmt(aus)} · "
+                              f"netto {'+' if netto >= 0 else '−'}{numfmt.fmt(abs(netto))}")
+        except Exception:  # noqa: BLE001
+            log.exception("Handels-Teil des Profils fehlgeschlagen")
+        try:
             import words
             gesagt, verschieden, top = words.statistik_von(uid)
             if gesagt:
@@ -515,17 +620,19 @@ class Profil:
                               f"({numfmt.fmt(verschieden)} verschiedene)"
                               + (f" · {lieblinge}" if lieblinge else ""))
         except Exception:  # noqa: BLE001
-            log.debug("Wort-Teil des Profils fehlgeschlagen", exc_info=True)
+            log.exception("Wort-Teil des Profils fehlgeschlagen")
         try:
             import moderation
             warns = moderation.warns_of(getattr(guild, "id", 0), uid)
             if warns:
                 zeilen.append(f"⚠️ **{warns}** offene Verwarnung(en)")
         except Exception:  # noqa: BLE001
-            log.debug("Moderations-Teil des Profils fehlgeschlagen", exc_info=True)
-        seit = self.bekannt_seit(uid)
+            log.exception("Moderations-Teil des Profils fehlgeschlagen")
+        # Wie lange Flo die Person kennt - der Wert wurde in handle() gelesen,
+        # BEVOR das Nachschlagen selbst einen Eintrag angelegt hat.
+        seit = self._gesehen_seit if self._gesehen_seit is not None else self.bekannt_seit(uid)
         if seit:
-            zeilen.append(f"👀 Flo kennt dich seit <t:{seit}:D>")
+            zeilen.append(f"👀 Kennt {self._bot_name} seit <t:{seit}:D>")
         return "\n".join(zeilen) if zeilen else None
 
     @staticmethod
@@ -558,8 +665,14 @@ class Profil:
         # Typpruefung (und laesst sich testen, ohne discord.Member zu bauen).
         ist_member = getattr(wer, "guild", None) is not None
         emb = discord.Embed(color=self._farbe(wer, voll))
-        emb.set_author(name=getattr(wer, "display_name", "?"),
-                       icon_url=self._gross(bilder["anzeige"], 128) or discord.utils.MISSING)
+        # icon_url NUR setzen, wenn es wirklich eins gibt: discord.utils.MISSING
+        # ist ein Argument-Platzhalter fuer send(), kein gueltiger Embed-Wert -
+        # im Embed landet daraus der String "..." als Bild-Adresse.
+        autor_bild = self._gross(bilder["anzeige"], 128)
+        if autor_bild:
+            emb.set_author(name=getattr(wer, "display_name", "?"), icon_url=autor_bild)
+        else:
+            emb.set_author(name=getattr(wer, "display_name", "?"))
         emb.title = f"@{getattr(wer, 'name', '?')}"
         kopf = [f"{getattr(wer, 'mention', '')} · `{getattr(wer, 'id', 0)}`"]
         if getattr(wer, "bot", False):
@@ -647,9 +760,13 @@ class Profil:
         return " • ".join(teile)
 
     def _bild_embed(self, wer, asset, titel, farbe):
-        """Ein Bild gross und allein - kein Kreis, keine Miniatur."""
-        emb = discord.Embed(title=titel, color=farbe)
+        """Ein Bild gross und allein - kein Kreis, keine Miniatur.
+        None, wenn es das Bild gar nicht gibt (sonst stuende dort ein
+        '[Direktlink](None)' und ein Embed voellig ohne Bild)."""
         url = self._gross(asset)
+        if not url:
+            return None
+        emb = discord.Embed(title=titel, color=farbe)
         emb.set_image(url=url)
         emb.description = f"[Direktlink]({url})"
         png = self._als_png(asset)
@@ -711,9 +828,13 @@ class Profil:
             art = "banner"
         else:
             return None
-        # 'user' und 'bild' sind auch normale Woerter - ohne Ziel dahinter ist
-        # das eher Gerede als ein Befehl, dann soll die KI ran.
-        if erstes in ("user", "bild") and not rest.strip():
+        # Mehrdeutige Woerter ohne JEDES Ziel sind Gerede, kein Befehl.
+        # "Ziel" heisst: eine fremde Erwaehnung, eine Antwort auf jemanden, oder
+        # ueberhaupt Text dahinter. Die Pruefung muss die Erwaehnung wirklich
+        # mitzaehlen - sie steht als Objekt in message.mentions und nicht
+        # zwingend als Text im Rest.
+        mehrdeutig = erstes in _MEHRDEUTIG
+        if mehrdeutig and not self._hat_ziel(message, rest):
             return None
 
         frei, warten = self._darf_schon(message.author.id)
@@ -722,8 +843,18 @@ class Profil:
 
         wer, problem = await self._ziel(message, rest)
         if wer is None:
+            # Bei einem mehrdeutigen Wort war es wohl gar kein Befehl
+            # ("Flo check mal ob das laeuft") - dann lieber gar nichts sagen
+            # und die Kette weiterlaufen lassen, damit die KI antworten kann.
+            if mehrdeutig:
+                self._cooldown.pop(message.author.id, None)
+                return None
             return problem or "Wen soll ich nachschlagen?"
 
+        # Wie lange Flo die Person schon kennt, VOR dem Mitschreiben lesen -
+        # sonst erzeugt das Nachschlagen den Zeitstempel selbst und das Profil
+        # behauptet bei jedem Fremden "kennt ihn seit heute".
+        self._gesehen_seit = self.bekannt_seit(getattr(wer, "id", 0))
         # Auch das Nachschlagen selbst haelt den Namensverlauf frisch.
         self.notiere(wer, getattr(message.guild, "id", 0))
 
@@ -749,6 +880,11 @@ class Profil:
                 embeds.append(self._bild_embed(wer, bilder["global"],
                                                "🌍 Globales Profilbild", farbe))
 
+        # _bild_embed liefert None, wenn es das Bild gar nicht gibt.
+        embeds = [e for e in embeds if e is not None]
+        if not embeds:
+            return (f"Von **{getattr(wer, 'display_name', '?')}** habe ich "
+                    f"gerade kein Bild bekommen. 🤔")
         try:
             await message.channel.send(embeds=embeds, view=self._view(bilder)
                                        or discord.utils.MISSING)

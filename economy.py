@@ -1018,7 +1018,10 @@ class Economy:
             "streak": int(prof.get("streak", 0) or 0),
             "titel": self._clean_title_text(prof.get("title") or ""),
             "seltenheit": prof.get("title_rarity") or "",
-            "titel_anzahl": len(self._owned_list(prof)) if prof else 0,
+            # NICHT ueber _owned_list: das legt per setdefault ein leeres
+            # "owned" im Profil an - eine reine Auskunft darf den geteilten
+            # Speicher nicht veraendern.
+            "titel_anzahl": len(prof.get("owned") or []),
             "platz": platz, "gesamt": gesamt,
             "name": prof.get("name") or "",
         }
