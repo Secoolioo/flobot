@@ -4078,6 +4078,183 @@ def test_bilder_blockieren_den_bot_nicht():
                              + ", ".join(verdaechtig))
 
 
+def test_loeschen_raeumt_nicht_versehentlich_alles():
+    """'alle', 'ganz' und 'komplett' sind deutsche FUELLWOERTER - sie duerfen
+    nicht mitten im Satz einen kompletten Channel-Wipe ausloesen.
+
+    Gemessen loeschten vorher alle diese Saetze den ganzen Verlauf, sofort und
+    ohne Rueckfrage:
+      'loesch das ganz schnell'
+      'loesch mal alle deine Nachrichten'   (gemeint waren Flos Nachrichten)
+      'loesch ganz kurz bitte'
+    Unwiderruflich, mit der Meldung 'N Nachrichten geloescht'."""
+    import re
+    import moderation
+
+    S = moderation._ALL_START_RE
+    def wipe(rest):
+        return bool(S.match(rest)) and re.search(r"\d+", rest) is None
+
+    # Alltagssaetze raeumen NICHT alles weg.
+    for harmlos in ("das ganz schnell", "mal alle deine Nachrichten",
+                    "ganz kurz bitte", "bitte ganz schnell 10", "20",
+                    "die letzten 20", "hier mal komplett durchwischen bitte"):
+        assert not wipe(harmlos), harmlos
+
+    # Die ausdrueckliche Ansage schon.
+    for klar in ("alle", "alles", "all", "alles hier", "alle nachrichten",
+                 "komplett", "everything"):
+        assert wipe(klar), klar
+
+    # Und der Wipe fragt einmal nach, weil er nicht rueckholbar ist.
+    m = moderation.instance
+    alt = (m._enabled, m._store, m._wipe_offen)
+    try:
+        m._enabled = True
+        m._store = _FakeStore({"warns": {}})
+        m._wipe_offen = {}
+        gerufen = []
+
+        class Chan:
+            id = 7
+            name = "c"
+
+            async def purge(self, limit=None, check=None, before=None):
+                gerufen.append(limit)
+                return []
+
+            def permissions_for(self, _m):
+                return SimpleNamespace(manage_messages=True, view_channel=True,
+                                       read_message_history=True, send_messages=True)
+
+            async def send(self, *a, **k):
+                return SimpleNamespace(id=1)
+
+        class Msg:
+            def __init__(self, text):
+                self.content = text
+                self.pinned = False
+                self.author = SimpleNamespace(
+                    id=1, display_name="Mod", name="Mod", bot=False, roles=[],
+                    guild_permissions=SimpleNamespace(manage_messages=True,
+                                                      administrator=True))
+                self.channel = Chan()
+                self.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=99),
+                                             owner_id=1, get_member=lambda u: None)
+                self.mentions = []
+
+            async def reply(self, *a, **k):
+                return SimpleNamespace(id=2)
+
+        # Erster Versuch: nur Rueckfrage, nichts geloescht.
+        antwort = asyncio.run(m._do_purge(Msg("Flo lösch alles"), "lösch alles"))
+        assert not gerufen, gerufen
+        assert "kompletten Verlauf" in str(antwort), antwort
+        # Zweiter Versuch: jetzt wirklich.
+        asyncio.run(m._do_purge(Msg("Flo lösch alles"), "lösch alles"))
+        assert gerufen == [None], gerufen
+
+        # Eine Zahl geht weiterhin sofort durch - da ist nichts unwiderruflich.
+        gerufen.clear()
+        m._wipe_offen = {}
+        asyncio.run(m._do_purge(Msg("Flo lösch 20"), "lösch 20"))
+        assert gerufen == [21], gerufen
+    finally:
+        m._enabled, m._store, m._wipe_offen = alt
+
+
+def test_ban_per_id_umgeht_die_rangordnung_nicht():
+    """Ein Bann per ROHER ID muss dieselben Pruefungen durchlaufen wie per @-Name.
+
+    Der Bot laeuft ohne members-Intent (bot.py: Intents.none()), guild.get_member()
+    liefert deshalb None - und damit war 'isinstance(member, Member)' False und die
+    Rangordnung uebersprungen. Gemessen konnte ein Junior-Mod so einen Senior-Mod,
+    Flo selbst UND sich selbst bannen, nur indem er die ID statt der Erwaehnung
+    tippte."""
+    import discord
+    import moderation
+
+    JUNIOR, SENIOR, FLO = (111111111111111111, 222222222222222222,
+                           999999999999999999)
+    OWNER, EXTERN = 555555555555555555, 333333333333333333
+    gebannt, geprueft = [], []
+
+    class FakeMember(discord.Member):
+        def __init__(self, uid):
+            self._uid = uid
+        id = property(lambda s: s._uid)
+
+    class Guild:
+        id = 1
+        owner_id = OWNER
+
+        def __init__(self):
+            self.me = SimpleNamespace(id=FLO)
+
+        def get_member(self, _uid):
+            return None                      # ohne Intent ist der Cache leer
+
+        async def fetch_member(self, uid):
+            if uid == SENIOR:
+                return FakeMember(SENIOR)
+            raise discord.NotFound(SimpleNamespace(status=404, reason="x"), "weg")
+
+        async def ban(self, obj, reason=None, delete_message_seconds=0):
+            gebannt.append(getattr(obj, "id", obj))
+
+    class Msg:
+        def __init__(self, rest):
+            self.content = "Flo ban " + rest
+            self.pinned = False
+            self.author = SimpleNamespace(
+                id=JUNIOR, display_name="Junior", name="Junior", bot=False, roles=[],
+                guild_permissions=SimpleNamespace(ban_members=True,
+                                                  administrator=False))
+            self.guild = Guild()
+            self.mentions = []
+            self.channel = SimpleNamespace(id=7, name="c")
+
+        async def reply(self, *a, **k):
+            return SimpleNamespace(id=2)
+
+    m = moderation.instance
+    alt = (m._enabled, m._store, m._bot_can, m._modlog, m._hierarchy_problem)
+    try:
+        m._enabled = True
+        m._store = _FakeStore({"warns": {}})
+        m._bot_can = lambda _g, _p: True
+        m._modlog = lambda *a, **k: asyncio.sleep(0)
+
+        def rang(_msg, member):
+            geprueft.append(getattr(member, "id", None))
+            return "Diese Person hat eine gleich hohe oder höhere Rolle als du. ⛔"
+        m._hierarchy_problem = rang
+
+        def bann(uid):
+            gebannt.clear()
+            geprueft.clear()
+            return asyncio.run(m._do_ban(Msg(f"{uid} Spam"), f"{uid} Spam"))
+
+        # 1) Mitglied im Server -> Rangordnung greift jetzt auch per ID.
+        bann(SENIOR)
+        assert geprueft == [SENIOR], geprueft
+        assert not gebannt, gebannt
+
+        # 2) Flo, man selbst und der Besitzer sind hart gesperrt.
+        for uid in (FLO, JUNIOR, OWNER):
+            antwort = bann(uid)
+            assert not gebannt, (uid, gebannt)
+            assert isinstance(antwort, str), (uid, antwort)
+
+        # 3) Wer wirklich nicht auf dem Server ist, laesst sich weiter per ID
+        #    bannen - genau dafuer gibt es den ID-Bann.
+        bann(EXTERN)
+        assert gebannt == [EXTERN], gebannt
+    finally:
+        (m._enabled, m._store, m._bot_can, m._modlog,
+         m._hierarchy_problem) = alt
+
+
 def test_teurer_kauf_fragt_nach():
     """Ueber `kaufen <n>` kostet ein Tippfehler in EINER Ziffer bis zu 90 Mio
     Coins - unwiderruflich und bisher ohne jede Rueckfrage.

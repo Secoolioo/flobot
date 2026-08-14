@@ -534,21 +534,40 @@ class GuildPlayer:
         if gen != self._play_gen:
             return  # veralteter Callback eines ersetzten/gestoppten Players -> ignorieren
         try:
-            asyncio.run_coroutine_threadsafe(self._advance(), self.loop)
+            # Die Generation MITGEBEN: zwischen dieser Pruefung und dem
+            # tatsaechlichen Lauf von _advance liegt der Sprung in den Event-Loop
+            # und danach womoeglich sekundenlanges Aufloesen. In dieser Luecke
+            # kann jemand selbst etwas starten - dann ist dieser Callback veraltet.
+            asyncio.run_coroutine_threadsafe(self._advance(gen), self.loop)
         except Exception:
             log.exception("Konnte naechsten Track nach Songende nicht einplanen")
 
-    async def _advance(self):
+    async def _advance(self, gen=None):
         """Spielt den naechsten abspielbaren Track. Kaputte/altersbeschraenkte
         Eintraege (yt-dlp DownloadError, 'keine Treffer', tote Links) werden
         UEBERSPRUNGEN statt den Player anzuhalten - so bleibt die Musik bei einem
         faulen Song nicht stehen. Schleife statt Rekursion, damit auch eine ganze
-        Reihe toter Songs sauber uebersprungen wird."""
+        Reihe toter Songs sauber uebersprungen wird.
+
+        'gen' ist die Player-Generation, aus der dieser Aufruf stammt. Hat sich
+        die inzwischen geaendert, hat jemand selbst etwas gestartet und dieser
+        Aufruf ist veraltet - dann NICHTS tun. Ohne diese Pruefung passierte
+        Folgendes (nachgestellt): Song A endet, _advance haengt im Aufloesen
+        eines Playlist-Tracks, in der Luecke sagt jemand 'flo spiel X'. Danach
+        laeuft zwar X, aber _advance macht weiter: jedes start() scheitert an
+        'Already playing audio.', wird als 'Track nicht ladbar' verbucht und
+        uebersprungen - die KOMPLETTE Warteschlange lief leer (4 -> 0), current
+        stand auf None, und das gerade gepostete Panel wurde geloescht.
+        Aufrufe ohne 'gen' (z. B. aus _reconnect) pruefen nichts."""
         # _advancing markiert die (ggf. langsame) Aufloesephase, damit der Voice-
         # Watchdog in dieser Luecke KEINEN Zombie-Alarm ausloest.
+        if gen is not None and gen != self._play_gen:
+            return
         self._advancing = True
         try:
             while True:
+                if gen is not None and gen != self._play_gen:
+                    return          # jemand hat inzwischen selbst gestartet
                 if not self.voice or not self.voice.is_connected() or not self.queue:
                     self.current = None
                     await _retire_panel(self)
@@ -557,6 +576,11 @@ class GuildPlayer:
                 try:
                     if not track.stream_url and track.query:
                         track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
+                        if gen is not None and gen != self._play_gen:
+                            # Waehrend des Aufloesens hat jemand selbst gestartet.
+                            # Den Track zurueck in die Schlange, nichts anfassen.
+                            self.queue.insert(0, track)
+                            return
                     self.start(track)
                 except Exception:
                     log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
@@ -2062,6 +2086,7 @@ class Music:
             if player.voice is None or not player.voice.is_playing():
                 return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
             player.voice.pause()
+            player._clock_pause()   # Positions-Uhr einfrieren (wie im Panel-Knopf)
             return self._embed(f"Pausiert. Sag `{self._bot_name} weiter`, wenn's weitergehen soll.",
                                title="⏸️  Pause", color=_COL_CTRL)
 
@@ -2069,6 +2094,7 @@ class Music:
             if player.voice is None or not player.voice.is_paused():
                 return self._embed("Da ist nichts pausiert.", color=_COL_ERR)
             player.voice.resume()
+            player._clock_resume()  # Uhr weiterlaufen lassen (wie im Panel-Knopf)
             return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
 
         # "mach mal Musik an" ohne konkreten Song: pausiert -> weiter, laeuft schon ->
@@ -2076,6 +2102,7 @@ class Music:
         if action == "resume_or_hint":
             if player.voice is not None and player.voice.is_paused():
                 player.voice.resume()
+                player._clock_resume()
                 return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
             if player.is_active():
                 return self._embed("Läuft doch schon. 🎶", color=_COL_INFO)

@@ -66,6 +66,14 @@ _CMD_RE = re.compile(
 )
 # "alle/alles/all/komplett/ganz/everything" -> ganzen Channel leeren / alle Warns.
 _ALL_RE = re.compile(r"\b(?:alles?|all|everything|komplett|ganz)\b", re.IGNORECASE)
+# Fuers LOESCHEN reicht das nicht: 'alle', 'ganz' und 'komplett' sind deutsche
+# Fuellwoerter und standen in ganz normalen Saetzen ('loesch das ganz schnell').
+# Hier muss das Alles-Wort am ANFANG stehen, damit es zaehlt.
+# 'ganz' fehlt hier bewusst: allein steht es im Deutschen fast immer als
+# Verstaerker ('ganz kurz', 'ganz schnell'), nicht als Menge. Die Bedeutung
+# tragen 'alles' und 'komplett'.
+_ALL_START_RE = re.compile(r"^(?:alles?|all|everything|komplett)\b",
+                           re.IGNORECASE)
 
 # Verwarnungen (Reihenfolge in handle(): unwarn -> warns -> warn).
 _WARNS_RE = re.compile(
@@ -125,6 +133,9 @@ class Moderation:
         self._enabled = False
         self._bot_name = "Flo"
         self._store = None
+        # Offene Rueckfragen vor einem kompletten Channel-Wipe: kanal_id -> ablauf.
+        # Nur im Speicher - eine Rueckfrage soll keinen Neustart ueberleben.
+        self._wipe_offen = {}
 
         # Label -> Handler (Purge laeuft gesondert, da es den ganzen Befehl braucht).
         self._HANDLERS = {
@@ -491,6 +502,26 @@ class Moderation:
         member, uid, rest = self._resolve_target(message, rest)
         if member is None and uid is None:
             return f"Wen bannen? z. B. `{self._bot_name} ban @name Grund` (oder per ID)."
+        # Bei einer ROHEN ID war bisher jede Pruefung ausgehebelt: der Bot laeuft
+        # ohne members-Intent (bot.py: Intents.none()), guild.get_member() liefert
+        # deshalb None, 'isinstance(member, Member)' ist False - und die
+        # Rangordnung wurde uebersprungen. Gemessen konnte ein Junior-Mod damit
+        # einen Senior-Mod, Flo selbst UND sich selbst bannen, einfach indem er
+        # die ID statt der Erwaehnung tippte.
+        if member is None and uid is not None:
+            if uid == guild.me.id:
+                return "Mich selbst banne ich nicht. 🙃"
+            if uid == getattr(message.author, "id", 0):
+                return "Dich selbst bannen? Lieber nicht. 🙃"
+            if uid == getattr(guild, "owner_id", 0):
+                return "Den Server-Besitzer banne ich nicht. ⛔"
+            try:
+                member = await guild.fetch_member(uid)   # Cache ist leer, also nachladen
+            except discord.NotFound:
+                member = None            # wirklich nicht auf dem Server -> ID-Bann ok
+            except discord.HTTPException as exc:
+                log.warning("Mitglied %s liess sich nicht laden: %s", uid, exc)
+                return "Ich konnte die Person gerade nicht prüfen – versuch's nochmal."
         if isinstance(member, discord.Member):
             prob = self._hierarchy_problem(message, member)
             if prob:
@@ -553,10 +584,31 @@ class Moderation:
 
         num_match = re.search(r"\d+", rest)
         # Eine EXPLIZIT genannte Zahl hat Vorrang: 'loesch 20 ganz schnell' loescht
-        # 20, nicht den ganzen Channel. Alles loeschen nur bei 'nuke' oder wenn ein
-        # Alles-Wort OHNE Zahl kommt ('loesch alle').
+        # 20, nicht den ganzen Channel.
+        #
+        # Das Alles-Wort muss GANZ VORNE stehen. Vorher genuegte es irgendwo im
+        # Satz - und 'alle', 'ganz' und 'komplett' sind deutsche Fuellwoerter.
+        # Gemessen loeschten deshalb ALLE diese Saetze den kompletten Channel:
+        #   'loesch das ganz schnell'
+        #   'loesch mal alle deine Nachrichten'   (gemeint waren Flos Nachrichten)
+        #   'loesch ganz kurz bitte'
+        # Unwiderruflich, ohne Rueckfrage, mit der Meldung "N Nachrichten geloescht".
         want_all = cmd.lower().startswith("nuke") or (
-            bool(_ALL_RE.search(rest)) and num_match is None)
+            bool(_ALL_START_RE.match(rest)) and num_match is None)
+
+        if want_all:
+            # Ein ganzer Channel ist nicht wiederherstellbar - einmal nachfragen.
+            offen = self._wipe_offen.get(channel.id)
+            jetzt = time.time()
+            for cid, ablauf in list(self._wipe_offen.items()):
+                if ablauf <= jetzt:
+                    self._wipe_offen.pop(cid, None)
+            if not (offen and offen > jetzt):
+                self._wipe_offen[channel.id] = jetzt + 60.0
+                return ("⚠️ Das löscht **den kompletten Verlauf** dieses Channels – "
+                        "das lässt sich nicht rückgängig machen.\nSchick den Befehl "
+                        "noch einmal, wenn du sicher bist (gilt eine Minute).")
+            self._wipe_offen.pop(channel.id, None)
 
         try:
             if want_all:
