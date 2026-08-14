@@ -1315,6 +1315,11 @@ class FloAktie:
                 pro_min = self._atem(self.boden_base())
 
         drift = pro_min * skala
+        # Die TATSAECHLICH angewandte Rate pro Minute merken. Am Deckel und am
+        # Grundwert ist der rechnerische Trend 0, der Kurs bewegt sich dort aber
+        # trotzdem (er atmet) - ohne diesen Merker koennte das Panel dort keine
+        # echte Zahl zeigen.
+        st["letzte_rate"] = pro_min
         st["mom"] = zerfall * mom + (1.0 - zerfall) * pro_min
         activity = roh_aktiv
         alt = self.price()
@@ -1633,9 +1638,18 @@ class FloAktie:
         pro_min = trend * 100
         # Lesbarer machen: kleine Werte pro STUNDE, grosse pro Minute.
         if trend == 0.0:
-            # Kein Trend heisst NICHT Stillstand: der Kurs atmet um sein Niveau,
-            # mal ein Stück rauf, mal runter. "0,00 %/min" waere hier gelogen.
-            tempo = "**seitwärts** _(atmet)_"
+            # Kein TREND heisst nicht Stillstand: am Deckel und am Grundwert
+            # atmet der Kurs um sein Niveau. Hier steht deshalb die Rate des
+            # letzten Takts - eine echte Zahl, die zu dem passt, was der Kurs
+            # gerade macht.
+            letzte = float(st.get("letzte_rate", 0.0) or 0.0) * 100
+            if abs(letzte) >= 0.005:
+                tempo = f"**{letzte:+.2f} %/min** _(atmet ums Niveau)_"
+            else:
+                # Noch kein Takt gelaufen (frischer Stand): dann die Spannweite
+                # nennen statt "0,00" - stillstehen tut der Kurs ja gerade nicht.
+                tempo = (f"**±{self._atem_spanne() * 100:.2f} %/min** "
+                         f"_(atmet ums Niveau)_")
         elif abs(pro_min) >= 0.1:
             tempo = f"**{pro_min:+.2f} %/min**"
             # Am Anschlag: sonst wundert man sich, warum mehr Leute nichts mehr
