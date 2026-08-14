@@ -4343,7 +4343,12 @@ def test_floaktie_grundwert_traegt_den_boden():
         for _ in range(48 * 60):                        # zwei ganze Tage leer
             fa._activity_tick(0, 0)
         assert fa._base() >= fa.boden_base() * 0.98, (fa._base(), fa.boden_base())
-        assert fa.drift_fuer(0.0) == 0.0                # am Grundwert: Schluss
+        # Am Grundwert ist Schluss. Geprueft wird das ueber _am_grundwert() mit
+        # seiner Toleranz und NICHT ueber "drift_fuer(0) == 0.0": der Kurs atmet
+        # dort und liegt mal ein Stueck ueber dem Boden, dann liefert drift_fuer
+        # richtigerweise den Verfall. Mit der strengen Gleichheit war dieser Test
+        # in 2 von 25 Laeufen grundlos rot.
+        assert fa._am_grundwert(), (fa._base(), fa.boden_base())
 
         # 4) Bleibt es WIRKLICH dauerhaft still, schmilzt auch der Grundwert.
         for _ in range(20 * 24 * 60):                   # 20 Tage tot
@@ -4781,7 +4786,13 @@ def test_floaktie_faellt_auf_jedem_niveau():
         # ein wirklich toter Server faellt bis auf den Mindestwert durch.
         boden = fa.boden_base() * (1 + 147 / floaktie.LIQUIDITY)
         assert fa.price() >= floaktie.MIN_PRICE
-        assert abs(fa.price() - boden) < boden * 0.05, (fa.price(), boden)
+        # Die Toleranz muss das ATMEN mitnehmen und wird deshalb aus den
+        # Konstanten abgeleitet statt geraten. Am absoluten Boden ist der Kurs
+        # einstellig - dort ist EINE ganze Zahl schon 8 %, und der Kurs pendelt
+        # gemessen zwischen 10 und 13 (Boden 11,96). Mit festen 5 % war dieser
+        # Test in 5 von 25 Laeufen grundlos rot.
+        toleranz = boden * (0.05 + 3 * fa._atem_spanne()) + 1.0
+        assert abs(fa.price() - boden) < toleranz, (fa.price(), boden, toleranz)
         assert abs(fa.boden_base() - floaktie.FAIR_BASE) < 1.0, fa.boden_base()
         # Am Boden sagt das Panel ausdruecklich, dass es nicht tiefer geht.
         restore = _with_economy({2: 0})
