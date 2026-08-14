@@ -996,6 +996,33 @@ class Economy:
         filled = 0 if step <= 0 else max(0, min(width, round(into / step * width)))
         return "█" * filled + "░" * (width - filled)
 
+    def kurzprofil(self, uid):
+        """Alles, was economy ueber jemanden weiss - flach, fuer fremde Anzeigen
+        (das Profil-Lookup). Legt bewusst KEIN Profil an: wer hier nur
+        nachgeschlagen wird, soll nicht dadurch zum Konto werden. Unbekannte
+        IDs kommen als Nullen zurueck, nie None."""
+        try:
+            key = str(int(uid))
+        except (TypeError, ValueError):
+            return None
+        prof = (self._users().get(key) or {}) if self._enabled else {}
+        xp = int(prof.get("xp", 0) or 0)
+        level, into, step = self._level_for_xp(xp)
+        platz, gesamt = self._rank_of(key) if prof else (None, len(self._users()) if self._enabled else 0)
+        return {
+            "bekannt": bool(prof),
+            "level": level, "xp": xp, "xp_im_level": into, "xp_bis_naechstes": step,
+            "coins": int(prof.get("coins", 0) or 0),
+            "msgs": int(prof.get("msgs", 0) or 0),
+            "voice_secs": int(prof.get("voice_secs", 0) or 0),
+            "streak": int(prof.get("streak", 0) or 0),
+            "titel": self._clean_title_text(prof.get("title") or ""),
+            "seltenheit": prof.get("title_rarity") or "",
+            "titel_anzahl": len(self._owned_list(prof)) if prof else 0,
+            "platz": platz, "gesamt": gesamt,
+            "name": prof.get("name") or "",
+        }
+
     def _rank_of(self, user_id):
         """Platz (1-basiert) nach XP und Gesamtzahl der Profile."""
         ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
@@ -1272,10 +1299,13 @@ class Economy:
 
     async def _resolve_avatar_user(self, guild, uid):
         """Member-/User-Objekt fuer die Avatar-URL. WICHTIG: Ohne das privilegierte
-        Members-Intent ist guild.get_member() unzuverlaessig - im Cache stehen nur
-        Mitglieder, die gerade geschrieben haben oder im Voice sind. Deshalb die
-        Kette Member-Cache -> globaler User-Cache -> API-Fetch. So bekommt das
-        Leaderboard die Bilder IMMER, nicht nur fuer zufaellig aktive Leute."""
+        Members-Intent ist guild.get_member() unzuverlaessig - im Cache stehen im
+        Wesentlichen nur Leute im Sprachkanal. Wer bloss SCHREIBT, landet dort
+        NICHT: discord.py baut aus einer Nachricht zwar ein volles Member-Objekt
+        (message.author, message.mentions), legt es aber nie im Guild-Cache ab.
+        Deshalb die Kette Member-Cache -> globaler User-Cache -> API-Fetch. So
+        bekommt das Leaderboard die Bilder IMMER, nicht nur fuer zufaellig
+        aktive Leute."""
         member = guild.get_member(uid) if guild is not None else None
         if member is not None:
             return member
@@ -1938,5 +1968,6 @@ handle = instance.handle
 leaderboard_data = instance.leaderboard_data
 money_leaderboard_data = instance.money_leaderboard_data
 resolve_display_name = instance.resolve_display_name
+kurzprofil = instance.kurzprofil
 _attach_avatars = instance._attach_avatars
 _resolve_avatar_user = instance._resolve_avatar_user

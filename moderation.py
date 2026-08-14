@@ -337,6 +337,20 @@ class Moderation:
     def _warns_for(self, guild_id):
         return self._store.data.setdefault("warns", {}).setdefault(str(guild_id), {})
 
+    def warns_of(self, guild_id, uid):
+        """Wie viele OFFENE Verwarnungen jemand auf diesem Server hat.
+
+        Fuer fremde Anzeigen (Profil-Lookup). Legt nichts an und braucht keine
+        Rechte - die Zahl steht ohnehin unter 'warns'."""
+        if not self._enabled or self._store is None:
+            return 0
+        try:
+            lst = (self._store.data.get("warns", {})
+                   .get(str(int(guild_id)), {}).get(str(int(uid)), []))
+        except (TypeError, ValueError):
+            return 0
+        return len(lst or [])
+
     async def _do_warn(self, message, rest):
         guild = message.guild
         if not self._actor_can(message, "moderate_members"):
@@ -653,6 +667,7 @@ instance = Moderation()
 
 # Modul-Aliase, damit die bisherige Modul-API weiter funktioniert.
 classify = instance.classify
+warns_of = instance.warns_of
 setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle

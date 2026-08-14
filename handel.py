@@ -118,6 +118,17 @@ class Handel:
         except Exception:  # noqa: BLE001 - Buchhaltung darf nie ein Spiel sprengen
             log.exception("Handelsbuch-Buchung fehlgeschlagen")
 
+    def summe_von(self, uid):
+        """(eingenommen, ausgegeben, Buchungen) fuer fremde Anzeigen (Profil-
+        Lookup). Unbekannte ID -> (0, 0, 0), nie None."""
+        if not self._enabled or self._store is None:
+            return 0, 0, 0
+        try:
+            u = (self._store.data.get("users") or {}).get(str(int(uid))) or {}
+        except (TypeError, ValueError):
+            return 0, 0, 0
+        return int(u.get("in", 0)), int(u.get("out", 0)), int(u.get("n", 0))
+
     def _save_soon(self):
         """Speichern SAMMELN statt bei jeder Buchung neu zu schreiben.
 
@@ -195,4 +206,5 @@ instance = Handel()
 setup = instance.setup
 is_enabled = instance.is_enabled
 record = instance.record
+summe_von = instance.summe_von
 handle = instance.handle

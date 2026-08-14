@@ -7,8 +7,25 @@ test_logic.py):  python test_games_logic.py
 import asyncio
 import os
 import random
+import tempfile
 import time
 from types import SimpleNamespace
+
+# ---------------------------------------------------------------------------
+# ZUERST den Datenordner umbiegen - VOR jedem Modul-Import, denn store.DATA_DIR
+# wird beim Import festgelegt und jeder JsonStore haengt daran.
+#
+# Ohne das schreiben die Tests in die ECHTEN Daten. Nachgemessen: ein einziger
+# Lauf legte in data/economy.json ein Testkonto an und schrieb in
+# data/floaktie.json "holdings": {"1": 5} samt neuem Kurs und History. Die
+# README schickt einen zum Testen ausdruecklich nach /opt/flobot - dort haette
+# ein Testlauf also Depots und Aktienkurs des laufenden Servers veraendert.
+# Zusaetzlich machte der uebriggebliebene Stand die Suite unzuverlaessig:
+# test_floaktie_market ist an geerbten Kursdaten gescheitert.
+# ---------------------------------------------------------------------------
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="flobot-tests-")
+import store                                    # noqa: E402
+store.DATA_DIR = __import__("pathlib").Path(os.environ["DATA_DIR"])
 
 import admin
 import casino
@@ -2469,8 +2486,11 @@ class _FakeChannel:
         self.id = cid
         self.sent = []
 
-    async def send(self, content=None, embed=None, view=None, **_kw):
-        self.sent.append({"content": content, "embed": embed, "view": view})
+    async def send(self, content=None, embed=None, view=None, embeds=None, **_kw):
+        # embeds (Plural) MUSS mit erfasst werden: Module, die mehrere Embeds
+        # auf einmal schicken (Profil-Lookup), waren hier sonst unsichtbar.
+        self.sent.append({"content": content, "embed": embed, "view": view,
+                          "embeds": embeds or ([embed] if embed is not None else [])})
         return SimpleNamespace(id=len(self.sent), edit=self._edit, channel=self)
 
     async def _edit(self, **_kw):
@@ -5890,7 +5910,8 @@ def test_economy_reset_umfang():
     # 5) Nicht-Geld-Dateien stehen NICHT in der Reset-Liste.
     dateien = {name for name, _fn, _b in er.DATEIEN}
     assert not dateien & {"words.json", "moderation.json", "voicegags.json",
-                          "admin.json", "features.json"}
+                          "admin.json", "features.json", "guildcfg.json",
+                          "profil.json"}
     assert "economy.json" in dateien and "floaktie.json" in dateien
 
     # 6) games.json: NUR die Spiele-Tageskappe, der Zaehlspiel-Stand bleibt.
@@ -6548,6 +6569,314 @@ def test_feature_schluessel_passen_ueberall_zusammen():
     #    sonst steht im Panel ein Schalter, der nichts bewirkt.
     tot = katalog - benutzt
     assert not tot, f"Schalter ohne Wirkung in bot.py: {sorted(tot)}"
+
+
+# --- Profil-Lookup ('Flo check @wer') ---------------------------------------
+class _FakeAsset:
+    """Discord-Asset-Ersatz: kennt Groesse, Format und ob es animiert ist."""
+
+    def __init__(self, url="https://cdn.discordapp.com/avatars/1/abc.webp",
+                 animiert=False):
+        self._url, self._animiert = url, animiert
+
+    @property
+    def url(self):
+        return self._url
+
+    def is_animated(self):
+        return self._animiert
+
+    def with_size(self, px):
+        trenner = "&" if "?" in self._url else "?"
+        return _FakeAsset(f"{self._url}{trenner}size={px}", self._animiert)
+
+    def with_format(self, fmt):
+        kopf = self._url.split("?")[0].rsplit(".", 1)[0]
+        schwanz = self._url.split("?", 1)[1] if "?" in self._url else ""
+        return _FakeAsset(f"{kopf}.{fmt}" + (f"?{schwanz}" if schwanz else ""),
+                          self._animiert)
+
+
+def _fake_person(uid=123456789012345678, *, name="secoolio", global_name="Secoolio",
+                 nick=None, member=True, bot=False, avatar=True, animiert=False,
+                 banner=False, server_avatar=False, flags=None, guild=None):
+    """Ein Member (mit guild) oder ein blosser User (ohne)."""
+    from datetime import datetime, timezone
+    p = SimpleNamespace(
+        id=uid, name=name, global_name=global_name, discriminator="0",
+        display_name=nick or global_name or name, bot=bot, system=False,
+        mention=f"<@{uid}>", nick=nick,
+        created_at=datetime(2019, 4, 20, tzinfo=timezone.utc),
+        avatar=_FakeAsset(animiert=animiert) if avatar else None,
+        display_avatar=_FakeAsset(animiert=animiert),
+        banner=_FakeAsset("https://cdn.discordapp.com/banners/1/b.webp") if banner else None,
+        accent_colour=None, avatar_decoration=None, primary_guild=None,
+        public_flags=flags or SimpleNamespace(),
+        colour=SimpleNamespace(value=0),
+    )
+    if member:
+        p.guild = guild or SimpleNamespace(id=999, name="Testserver", members=[])
+        p.joined_at = datetime(2021, 6, 1, tzinfo=timezone.utc)
+        p.premium_since = None
+        p.roles = []
+        p.guild_avatar = _FakeAsset("https://cdn.discordapp.com/guilds/9/u/1/a.webp") \
+            if server_avatar else None
+        p.timed_out_until = None
+        p.is_timed_out = lambda: False
+        p.pending = False
+    return p
+
+
+def _profil_frisch():
+    """profil-Modul mit leerem Speicher; gibt eine Aufraeum-Funktion zurueck."""
+    import profil
+    alt = (profil.instance._enabled, profil.instance._store,
+           dict(profil.instance._voll), dict(profil.instance._cooldown))
+    profil.instance._enabled = True
+    profil.instance._store = _FakeStore({"users": {}, "seit": 1_700_000_000})
+    profil.instance._voll = {}
+    profil.instance._cooldown = {}
+    profil.instance._dirty = False
+
+    def zurueck():
+        (profil.instance._enabled, profil.instance._store,
+         profil.instance._voll, profil.instance._cooldown) = alt
+    return profil, zurueck
+
+
+def test_profil_bild_gross_und_ohne_kreis():
+    """Der Kern des Befehls: das Bild kommt in 4096 px und als set_image.
+
+    set_thumbnail und das Autor-Icon zeigt Discord RUND - nur set_image bleibt
+    rechteckig. Ein Wechsel auf thumbnail waere optisch subtil und genau der
+    Fehler, den dieser Test verhindert."""
+    profil, zurueck = _profil_frisch()
+    try:
+        wer = _fake_person()
+        bilder = profil.instance._bilder(wer, None)
+        emb = profil.instance._profil_embed(wer, None, bilder,
+                                            SimpleNamespace(id=999, name="S"))
+        assert emb.image.url and "size=4096" in emb.image.url, emb.image.url
+        assert not emb.thumbnail.url, \
+            "Profilbild darf NICHT als (runder) Thumbnail gesetzt sein"
+        # Direktlinks stehen auch als Text drin - zum Herunterladen.
+        text = _embed_text(emb)
+        assert "size=4096" in text
+        # Und der Fussnoten-Hinweis nennt die Aufloesung.
+        assert "4096" in (emb.footer.text or "")
+    finally:
+        zurueck()
+
+
+def test_profil_zeigt_keinen_online_status():
+    """Ohne presences-Intent meldet discord.py JEDEN als offline.
+
+    Das waere kein sichtbarer Fehler, sondern eine stille Falschaussage -
+    deshalb darf im Profil ueberhaupt kein Status/keine Aktivitaet stehen."""
+    profil, zurueck = _profil_frisch()
+    try:
+        wer = _fake_person()
+        # Der Bot wuerde hier 'offline' sehen, obwohl die Person online ist.
+        wer.status = "offline"
+        wer.activities = ()
+        emb = profil.instance._profil_embed(wer, None,
+                                            profil.instance._bilder(wer, None),
+                                            SimpleNamespace(id=999, name="S"))
+        # Nur Titel/Beschreibung/Felder pruefen - die FUSSZEILE sagt bewusst,
+        # dass der Status fehlt, und darf das Wort deshalb enthalten.
+        inhalt = " ".join([emb.title or "", emb.description or ""]
+                          + [f"{f.name} {f.value}" for f in emb.fields]).lower()
+        for verboten in ("offline", "online", "abwesend", "beschäftigt", "spielt gerade"):
+            assert verboten not in inhalt, f"'{verboten}' steht im Profil - das waere gelogen"
+        # ... und die Fusszeile erklaert, warum da nichts steht.
+        assert "status" in (emb.footer.text or "").lower()
+    finally:
+        zurueck()
+
+
+def test_profil_namensverlauf_merkt_nur_aenderungen():
+    """Discord fuehrt keinen Namensverlauf - Flo schreibt selbst mit.
+
+    Geschrieben werden darf NUR bei echten Aenderungen: der Hook laeuft bei
+    jeder Nachricht."""
+    profil, zurueck = _profil_frisch()
+    try:
+        wer = _fake_person(name="secoolio", global_name="Secoolio", nick=None)
+
+        # Erste Sichtung legt an.
+        assert profil.notiere(wer, 999) is True
+        # Dieselbe Person nochmal: KEINE Aenderung, kein Schreiben.
+        assert profil.notiere(wer, 999) is False
+        assert profil.notiere(wer, 999) is False
+
+        handles, anzeigen, nicks = profil.verlauf(wer.id, 999)
+        assert [h[0] for h in handles] == ["secoolio"]
+        assert [a[0] for a in anzeigen] == ["Secoolio"]
+
+        # Handle geaendert -> ein Eintrag mehr, der alte bleibt stehen.
+        wer.name = "flotus"
+        assert profil.notiere(wer, 999) is True
+        handles, _a, _n = profil.verlauf(wer.id, 999)
+        assert [h[0] for h in handles] == ["secoolio", "flotus"]
+
+        # Server-Nickname gilt NUR fuer diesen Server.
+        wer.nick = "Chef"
+        assert profil.notiere(wer, 999) is True
+        _h, _a, nicks999 = profil.verlauf(wer.id, 999)
+        _h, _a, nicks111 = profil.verlauf(wer.id, 111)
+        assert [n[0] for n in nicks999][-1] == "Chef"
+        assert nicks111 == [], "Nickname des einen Servers taucht beim anderen auf"
+
+        # Bots bekommen keinen Verlauf.
+        assert profil.notiere(_fake_person(uid=42, bot=True), 999) is False
+
+        # Der Verlauf ist gedeckelt, sonst waechst die Datei ewig.
+        for i in range(profil.VERLAUF_MAX + 10):
+            wer.name = f"name{i}"
+            profil.notiere(wer, 999)
+        handles, _a, _n = profil.verlauf(wer.id, 999)
+        assert len(handles) == profil.VERLAUF_MAX, len(handles)
+
+        # Gespeichert wird gesammelt: flush schreibt nur, wenn etwas anliegt.
+        assert asyncio.run(profil.flush()) is True
+        assert asyncio.run(profil.flush()) is False
+    finally:
+        zurueck()
+
+
+def test_profil_erkennt_seine_befehle():
+    """check/profil/avatar/banner ja - normales Gerede nein."""
+    profil, zurueck = _profil_frisch()
+    try:
+        kanal = _FakeChannel()
+
+        async def antwort(text, mentions=None):
+            msg = SimpleNamespace(
+                content=f"Flo {text}", mentions=mentions or [],
+                author=_fake_person(uid=5, name="ich"), reference=None,
+                guild=SimpleNamespace(id=999, name="S", members=[],
+                                      me=SimpleNamespace(id=1)),
+                channel=kanal)
+            return await profil.handle(msg)
+
+        # Kein Profil-Befehl -> None, damit der naechste Handler drankommt.
+        for kein in ("blackjack 100", "spiel was", "wie geht's", "checke mal ab"):
+            profil.instance._cooldown.clear()
+            assert asyncio.run(antwort(kein)) is None, kein
+
+        # 'user' und 'bild' allein sind normale Woerter - kein Befehl.
+        profil.instance._cooldown.clear()
+        assert asyncio.run(antwort("user")) is None
+        profil.instance._cooldown.clear()
+        assert asyncio.run(antwort("bild")) is None
+
+        # Mit Befehl: Flo antwortet selbst (HANDLED) und schickt ein Embed.
+        for cmd in ("check", "profil", "whois", "avatar", "steckbrief"):
+            profil.instance._cooldown.clear()
+            del kanal.sent[:]
+            assert asyncio.run(antwort(cmd)) is profil.HANDLED, cmd
+            assert kanal.sent and kanal.sent[-1]["embeds"], cmd
+
+        # Ohne Banner sagt Flo das, statt ein leeres Embed zu schicken.
+        profil.instance._cooldown.clear()
+        res = asyncio.run(antwort("banner"))
+        assert isinstance(res, str) and "Banner" in res
+    finally:
+        zurueck()
+
+
+def test_profil_findet_das_richtige_ziel():
+    """Erwaehnung schlaegt alles - und die Erwaehnung des BOTS ist der Ausloeser,
+    nicht das Ziel ('@Flo check @wer')."""
+    profil, zurueck = _profil_frisch()
+    try:
+        ich = _fake_person(uid=5, name="ich")
+        ziel = _fake_person(uid=7, name="ziel")
+        flo = _fake_person(uid=1, name="flo", bot=True)
+        guild = SimpleNamespace(id=999, name="S", members=[ich, ziel],
+                                me=SimpleNamespace(id=1))
+
+        def msg(text, mentions):
+            return SimpleNamespace(content=f"Flo {text}", mentions=mentions,
+                                   author=ich, guild=guild, reference=None,
+                                   channel=_FakeChannel())
+
+        # Ohne alles: ich selbst.
+        wer, _p = asyncio.run(profil.instance._ziel(msg("check", []), ""))
+        assert wer is ich
+        # Mit Erwaehnung: die Person.
+        wer, _p = asyncio.run(profil.instance._ziel(msg("check", [ziel]), ""))
+        assert wer is ziel
+        # Bot-Erwaehnung davor wird uebersprungen.
+        wer, _p = asyncio.run(profil.instance._ziel(msg("check", [flo, ziel]), ""))
+        assert wer is ziel
+        # Nur der Bot erwaehnt -> dann ist der Bot gemeint.
+        wer, _p = asyncio.run(profil.instance._ziel(msg("check", [flo]), ""))
+        assert wer is flo
+        # Name im Text: im Cache suchen (Notnagel ohne Members-Intent).
+        wer, _p = asyncio.run(profil.instance._ziel(msg("check ziel", []), "ziel"))
+        assert wer is ziel
+        # Unbekannter Name: ehrliche Absage statt "gibt es nicht".
+        wer, problem = asyncio.run(profil.instance._ziel(msg("check xyz", []), "xyz"))
+        assert wer is None and "Erwähnung" in problem
+    finally:
+        zurueck()
+
+
+def test_profil_bremst_und_zeigt_flo_daten():
+    """Ein Aufruf kann zwei REST-Aufrufe ausloesen - deshalb ein Cooldown.
+    Und was Flo selbst weiss, gehoert mit ins Profil."""
+    profil, zurueck = _profil_frisch()
+    restore_eco = _with_economy({77: 4242})
+    try:
+        # Cooldown: der zweite Aufruf in Folge wird abgewiesen.
+        frei, _w = profil.instance._darf_schon(5)
+        assert frei is True
+        frei, warten = profil.instance._darf_schon(5)
+        assert frei is False and warten > 0
+        # Eine ANDERE Person ist davon nicht betroffen.
+        assert profil.instance._darf_schon(6)[0] is True
+
+        # Flo-Daten: Level/Coins der Wirtschaft tauchen im Profil auf.
+        economy.instance._profile(77)["msgs"] = 1234
+        wer = _fake_person(uid=77)
+        emb = profil.instance._profil_embed(wer, None,
+                                            profil.instance._bilder(wer, None),
+                                            SimpleNamespace(id=999, name="S"))
+        text = _embed_text(emb)
+        assert "4.242" in text or "4242" in text, text
+        assert "1.234" in text or "1234" in text, text
+    finally:
+        restore_eco()
+        zurueck()
+
+
+def test_tests_fassen_die_echten_daten_nicht_an():
+    """Sicherung gegen den gefaehrlichsten Testfehler ueberhaupt.
+
+    Die README schickt zum Testen nach /opt/flobot - dorthin, wo die ECHTEN
+    Daten liegen. Vorher schrieb ein Lauf dort wirklich hinein (gemessen:
+    ein Testkonto in economy.json, "holdings": {"1": 5} plus neuer Kurs und
+    History in floaktie.json). Seitdem zeigt DATA_DIR auf einen Wegwerf-Ordner;
+    dieser Test haelt das fest."""
+    import pathlib
+    import store
+    echt = pathlib.Path(__file__).resolve().parent / "data"
+    genutzt = pathlib.Path(store.DATA_DIR).resolve()
+    assert genutzt != echt, f"Tests schreiben in die echten Daten: {genutzt}"
+    assert not str(genutzt).startswith(str(echt)), genutzt
+
+    # Und die Module haengen wirklich an diesem Ordner, nicht am alten.
+    for modul in (economy, floaktie):
+        laden = getattr(modul.instance, "_store", None)
+        if laden is not None and getattr(laden, "path", None) is not None:
+            assert pathlib.Path(laden.path).resolve().parent == genutzt, modul.__name__
+
+    # Nach dem kompletten Lauf steht im echten Ordner nichts Neues von uns.
+    if echt.exists():
+        for datei in ("economy.json", "floaktie.json", "profil.json", "guildcfg.json"):
+            pfad = echt / datei
+            assert not pfad.exists() or pfad.stat().st_size > 0, pfad
 
 
 def run():

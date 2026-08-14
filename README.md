@@ -79,12 +79,14 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 117 Tests
+python3 test_games_logic.py    # 125 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
 
-Kein pytest nötig — beide Dateien bringen ihren eigenen Runner mit.
+Kein pytest nötig — beide Dateien bringen ihren eigenen Runner mit. Sie laufen
+in einem Wegwerf-Datenordner (`DATA_DIR` wird ganz oben umgebogen) und fassen
+`data/` **nicht** an — ein Testlauf auf dem Server ist also ungefährlich.
 
 ### Aktie durchrechnen
 
@@ -151,6 +153,44 @@ Weitere Bremsen: Anteil-Limit 150 pro Person, gestaffelte Verkaufssteuer (bis
 
 ---
 
+## Profil nachschlagen
+
+```
+Flo check @wer      ganzes Profil    (auch: profil, whois, userinfo, steckbrief)
+Flo avatar @wer     nur das Bild     (auch: pb, pfp, profilbild)
+Flo banner @wer     nur das Banner
+```
+
+Ohne Ziel bist du selbst gemeint; statt einer Erwähnung geht auch eine ID oder
+eine Antwort auf eine Nachricht.
+
+Das **Profilbild kommt in 4096 px und unbeschnitten** — als `set_image`, denn nur
+dort zeigt Discord es rechteckig; als Thumbnail wäre es der übliche Kreis.
+Direktlinks (inkl. PNG) stehen dabei, animierte Bilder bleiben animiert.
+
+Dazu: alle Namen, Konto-Alter, Beitritt, Boost, Rollen, Abzeichen, Server-Tag,
+Timeout — und was Flo selbst weiß (Level, Coins, Nachrichten, Voice-Zeit,
+$FLO-Anteile, Wörter, Verwarnungen).
+
+**Zwei Dinge bewusst anders:**
+
+*Kein Online-Status.* Ohne das `presences`-Intent meldet discord.py **jeden** als
+offline. Das wäre kein sichtbarer Fehler, sondern eine stille Falschaussage —
+also steht dort gar nichts.
+
+*Namensverlauf führt Flo selbst.* Die Discord-API gibt keinen her, für niemanden,
+mit keinem Intent. Flo vergleicht deshalb bei jeder Nachricht Handle,
+Anzeigename und Server-Nickname und schreibt nur echte Änderungen mit
+(`data/profil.json`). Der Verlauf beginnt also mit dem Tag, an dem die Funktion
+aktiv wurde — das Profil schreibt dazu, seit wann Flo jemanden kennt.
+
+Eine Erwähnung liefert übrigens ein vollständiges Member-Objekt, ohne einen
+einzigen API-Aufruf — Discord schickt es bei jeder Nachricht mit. Nur das
+globale Banner braucht `fetch_user`; das Ergebnis wird 30 min gepuffert, dazu
+ein Cooldown von 4 s pro Person.
+
+---
+
 ## Wirtschaft
 
 **Quellen:** Nachrichten (8–16, mit Cooldown), Voice (30/Minute, gedeckelt auf
@@ -205,7 +245,7 @@ handle = instance.handle          # Modul-Aliase danach
 
 `bot.py` hält die Handler-Kette (der erste, der nicht `None` liefert, gewinnt),
 die Hintergrund-Loops und die Feature-Schalter. `features.py`, `FEATURE_LOADED`
-und die Handler-Kette führen dieselben 21 Schlüssel — `test_feature_schluessel_
+und die Handler-Kette führen dieselben 22 Schlüssel — `test_feature_schluessel_
 passen_ueberall_zusammen` prüft das in beide Richtungen und findet auch einen
 Schalter, den niemand abfragt.
 
@@ -224,6 +264,7 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 |---|---|
 | `bot.py` | Handler-Kette, Loops, Lebenszyklus |
 | `guildcfg.py` | Einstellungen je Server |
+| `profil.py` | Profil-Lookup + Namensverlauf |
 | `features.py` | Funktions-Schalter (global + je Server) |
 | `economy.py` | Level, Coins, Shop, Steuer |
 | `floaktie.py` | die $FLO-Aktie |

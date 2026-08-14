@@ -196,6 +196,26 @@ class Words:
         except Exception:
             log.exception("Wort-Zaehler: Sofort-Speichern fehlgeschlagen")
 
+    def statistik_von(self, uid, top=3):
+        """(gesagte Woerter, verschiedene Woerter, [(Wort, Anzahl), ...]) fuer
+        fremde Anzeigen (Profil-Lookup).
+
+        Geht EINMAL ueber die Wortliste. Die ist nach Woertern indiziert, nicht
+        nach Nutzern - fuer eine Nachschlage-Antwort ist das billig genug, fuer
+        einen Hintergrund-Takt waere es das nicht."""
+        if not self._enabled or self._store is None:
+            return 0, 0, []
+        key = str(uid)
+        gesamt = 0
+        eigene = []
+        for wort, eintrag in (self._store.data.get("words") or {}).items():
+            n = int((eintrag.get("u") or {}).get(key, 0) or 0)
+            if n:
+                gesamt += n
+                eigene.append((wort, n))
+        eigene.sort(key=lambda x: x[1], reverse=True)
+        return gesamt, len(eigene), eigene[:max(0, int(top))]
+
     # --- Einmaliger History-Backfill --------------------------------------------
     def is_scanning(self):
         """True, solange der einmalige History-Einleser noch nicht durch ist."""
@@ -421,6 +441,7 @@ _flush_later = instance._flush_later
 flush_now = instance.flush_now
 _flush_now = instance._flush_now
 is_scanning = instance.is_scanning
+statistik_von = instance.statistik_von
 backfill = instance.backfill
 _send = instance._send
 _scan_hint = instance._scan_hint

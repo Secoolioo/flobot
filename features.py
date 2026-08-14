@@ -49,6 +49,7 @@ CATALOG = [
     {"key": "chaos",    "label": "Chaos & Fun",       "emoji": "😈", "desc": "Roast, Hype, Reactions, DM-Konter, Bot-Hass"},
     {"key": "mod",      "label": "Moderation",        "emoji": "🛡️", "desc": "Löschen, Warnen, Timeout, Kick, Ban"},
     {"key": "bayern",   "label": "Bayrisch-Modus",    "emoji": "🥨", "desc": "Flo antwortet auf Boarisch"},
+    {"key": "profil",   "label": "Profil-Lookup",     "emoji": "🔎", "desc": "flo check @wer – Profilbild in 4096 px, Badges, Namensverlauf"},
 ]
 _KEYS = {f["key"] for f in CATALOG}
 

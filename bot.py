@@ -43,6 +43,7 @@ import merchant
 import moderation
 import music
 import numfmt
+import profil
 import titles
 import render
 import schedule_logic
@@ -196,6 +197,9 @@ SCHULDEN_ENABLED = schulden.setup()
 # Lokales Web-Panel (Port 9123): Server/User/Coins/Statistiken im Browser
 # verwalten. Laeuft im Bot-Prozess, Start passiert in on_ready.
 WEBPANEL_ENABLED = webpanel.setup()
+# Profil-Lookup ('Flo check @wer'): Discord-Profil in voller Aufloesung, plus
+# Flos eigener Namensverlauf (den gibt die Discord-API nicht her).
+PROFIL_ENABLED = profil.setup()
 # Laufzeit-Schalter: einzelne Funktionen per Panel an/aus (ueberlebt Neustarts).
 features.setup()
 # Einstellungen JE SERVER (Kanaele, Lautstaerke, Bayrisch, ...). Flo laeuft auf
@@ -212,7 +216,7 @@ FEATURE_LOADED = {
     "handel": HANDEL_ENABLED, "luxus": LUXUS_ENABLED,
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
     "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
-    "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED,
+    "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
 }
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
@@ -898,6 +902,13 @@ class FloBot(discord.Client):
                 await economy.tick_voice(guild)
             except Exception:
                 log.exception("Voice-XP-Loop Fehler (%s) - laeuft weiter", guild.name)
+        # Gesammelte Namensaenderungen wegschreiben (tut nichts, wenn sich
+        # nichts geaendert hat - der Normalfall).
+        if PROFIL_ENABLED:
+            try:
+                await profil.flush()
+            except Exception:
+                log.exception("Namensverlauf-Speichern fehlgeschlagen")
         # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende. In
         # EINEM Aufruf ueber alle Server: wer auf zweien im Call sitzt, soll die
         # Dividende trotzdem nur einmal bekommen.
@@ -1430,6 +1441,14 @@ class FloBot(discord.Client):
         # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
         if ECONOMY_ENABLED and _on("economy"):
             self._spawn(economy.on_message(message))
+        # Namensverlauf: Discord fuehrt keinen, also schreibt Flo selbst mit.
+        # Im Normalfall drei Zeichenketten-Vergleiche - gespeichert wird nur,
+        # wenn sich wirklich ein Name geaendert hat (und dann gesammelt).
+        if PROFIL_ENABLED and _on("profil"):
+            try:
+                profil.notiere(message.author, message.guild.id)
+            except Exception:
+                log.exception("Namensverlauf-Hook fehlgeschlagen")
         # Wort-Zaehler: synchron und billig (reine dict-Arbeit, Speichern debounced).
         if WORDS_ENABLED and _on("words"):
             try:
@@ -1561,6 +1580,7 @@ class FloBot(discord.Client):
             (FLOAKTIE_ENABLED and _on("floaktie"), floaktie.handle),
             # Aktie AUS: sauberer Hinweis statt Durchfallen an die KI.
             (FLOAKTIE_ENABLED and not _on("floaktie"), floaktie.handle_aus),
+            (PROFIL_ENABLED and _on("profil"), profil.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
             (WORDS_ENABLED and _on("words"), words.handle),
             (ECONOMY_ENABLED and _on("economy"), economy.handle),
@@ -1594,7 +1614,7 @@ class FloBot(discord.Client):
                     or antwort is lotto.HANDLED or antwort is floaktie.HANDLED
                     or antwort is giveaway.HANDLED or antwort is schulden.HANDLED
                     or antwort is steal.HANDLED or antwort is bayern.HANDLED
-                    or antwort is guildcfg.HANDLED):
+                    or antwort is guildcfg.HANDLED or antwort is profil.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
