@@ -37,7 +37,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 100 Tests
+python3 test_games_logic.py    # 109 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -67,11 +67,22 @@ Der Kurs folgt der **Server-Aktivität**, nicht dem Zufall.
 | Chat | zählt mit — **aber nur, solange jemand im Call ist** |
 | Bots | zählen **nie** |
 
-**Steigen:** mehr Aktivität → höheres Tempo, bis zum Deckel (`CEIL_FACTOR` ×
-Zielkurs der aktuellen Aktivität).
+Nachrichten werden dabei auf eine Minute hochgerechnet: sie sind als einzige
+Größe eine *Zählung* über den Takt, alles andere ist ein Zustand. Ohne das hinge
+die Aktivität an der Taktlänge (der Bot taktet alle 20 s).
+
+**Steigen:** mehr Aktivität → höheres Tempo, bis zum Deckel. Den nennt
+`deckel_fuer(aktivität)` — eine Zahl für Drift, Panel und Sofort-Impuls:
+`CEIL_FACTOR` × Zielkurs, nie unter dem Grundwert.
 
 **Fallen:** sobald der Call leer ist, sofort und gleichmäßig — 11 % je halber
 Stunde (`IDLE_PER_30MIN`), ohne Anlauf.
+
+**Stillstand gibt es nicht.** Am Deckel und am Grundwert wäre der Trend
+rechnerisch 0 — dort *atmet* der Kurs stattdessen: eine kleine Bewegung mit
+Vorzeichen, nie exakt 0, im Mittel 0, mit sanftem Zug zurück zum Niveau
+(`ATEM_MAX`, `ATEM_RUECK`). Bei kleinen Kursen wächst die Amplitude mit, sonst
+würde die Bewegung von der ganzzahligen Anzeige weggerundet.
 
 **Der Boden ist beweglich.** Die Aktie ist so viel wert, wie der Server im
 Schnitt lebendig ist (`grund_akt`, träger Mittelwert über 3 Tage). Wer jeden
@@ -111,6 +122,10 @@ oder `-rueckgabe`) — ein zurückgegebener Einsatz ist keine Einnahme.
 
 Die Spiele haben eine **Tageskappe** für Netto-Gewinne; der Einsatz kommt immer
 voll zurück.
+
+Titel ab 1 Mio (`KAUF_RUECKFRAGE_AB`) fragen einmal nach: über `Flo kaufen <n>`
+kostet ein Tippfehler in einer Ziffer sonst bis zu 90 Mio. Bestätigt wird durch
+nochmal denselben Befehl.
 
 ---
 
@@ -183,6 +198,8 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `FLOAKTIE_IDLE_30MIN` | `0.11` | Verfall je halber Stunde |
 | `FLOAKTIE_CEIL` | `2` | wie weit über den Zielkurs |
 | `FLOAKTIE_GRUND_FAKTOR` | `4` | wie stark der Grundwert trägt |
+| `FLOAKTIE_ATEM_MAX` | `0.06` | wie stark der Kurs höchstens atmet |
+| `FLOAKTIE_ATEM_RUECK` | `0.15` | Zug zurück zum Niveau je Minute |
 | `AUTODELETE_SWEEP_MAX` | `300` | Nachrichten je Aufräum-Runde |
 
 Alle weiteren stehen als `os.getenv(...)` bei den Konstanten im jeweiligen Modul,
