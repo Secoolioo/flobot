@@ -200,6 +200,18 @@ MSG_MAX_ACT = float(os.getenv("FLOAKTIE_MSG_MAX_ACT", "12") or "12")       # Cha
 STREAM_BONUS = float(os.getenv("FLOAKTIE_STREAM_BONUS", "2.5") or "2.5")   # ein Live-Streamer zaehlt so viel EXTRA
 VIDEO_BONUS = float(os.getenv("FLOAKTIE_VIDEO_BONUS", "1.5") or "1.5")     # eine Kamera zaehlt so viel extra
 TICK_NOISE = float(os.getenv("FLOAKTIE_TICK_NOISE", "0.0002") or "0.0002") # Rauschen am Deckel
+# --- Atmen: der Kurs steht NIE still -----------------------------------------
+# An zwei Stellen war der Trend rechnerisch genau 0 - am Deckel und am Grundwert.
+# Am Grundwert hiess das echten Stillstand: gemessen 200 von 200 Takten exakt
+# 0,000 %/min und ueber 200 Takte ein einziger Kurswert. Eine Aktie, die stundenlang
+# auf derselben Zahl steht, sieht kaputt aus.
+#
+# Statt 0 atmet der Kurs jetzt um sein Niveau: eine kleine Bewegung mit Vorzeichen,
+# nie exakt 0, im Mittel 0 - dazu ein sanfter Zug zurueck zum Niveau. Ohne diesen
+# Zug waere das Atmen ein freier Zufallslauf, der irgendwann vom Deckel oder unter
+# den Boden wegwandert; damit waere die ganze Kalibrierung hinueber.
+ATEM_MAX = float(os.getenv("FLOAKTIE_ATEM_MAX", "0.06") or "0.06")     # hoechstens 6 %/min
+ATEM_RUECK = float(os.getenv("FLOAKTIE_ATEM_RUECK", "0.15") or "0.15") # Zug zum Niveau je Minute
 # --- Lebendiger Kursverlauf --------------------------------------------------
 # VOL_SPREAD: so stark schwankt die Minutenbewegung um ihren Trend. 0,8 heisst,
 # eine Minute bringt zwischen 20 % und 180 % des rechnerischen Anstiegs. Ohne das
@@ -1008,7 +1020,15 @@ class FloAktie:
             if base <= self.boden_base():
                 return 0.0
             return -self._leerlauf_verfall()
-        if base >= ziel * max(1.0, CEIL_FACTOR):
+        # EINE Decke fuer alle: dieselbe, die akt_deckel_base() nennt und die das
+        # Panel anzeigt. Vorher bremste der Drift schon bei CEIL_FACTOR x Zielkurs,
+        # waehrend akt_deckel_base() zusaetzlich den Grundwert beruecksichtigt.
+        # Bei DAUERHAFT hoher Aktivitaet waechst der Grundwert bis auf die volle
+        # Aktivitaet und liegt dann UEBER dieser Bremse (gemessen: Bremse 94.020,
+        # Grundwert 188.001). Der Kurs stand dann zwischen zwei widerspruechlichen
+        # Decken - er konnte nicht steigen, wurde vom Grundwert aber nach oben
+        # gezogen. Jetzt gibt es nur noch eine Zahl.
+        if base >= self.deckel_fuer(activity):
             return 0.0          # am Deckel: seitwaerts, aber kein Minus
         tempo = min(TICK_CAP, activity * TICK_GAIN)
         ueberhang = max(0.0, base / ziel - 1.0)
@@ -1032,7 +1052,19 @@ class FloAktie:
         Deckel steht, also ausgerechnet dann, wenn jemand einen stillen Server
         wieder betritt."""
         akt = float(self._state().get("act_ema", 0.0) or 0.0)
-        return max(self.ziel_base(akt) * max(1.0, CEIL_FACTOR), self.boden_base())
+        return self.deckel_fuer(akt)
+
+    def deckel_fuer(self, activity):
+        """Hoechster Basiskurs, den DIESE Aktivitaet hergibt.
+
+        Eine Formel fuer alle: drift_fuer bremst genau hier, akt_deckel_base()
+        nennt denselben Wert fuer die aktuelle Aktivitaet, das Panel zeigt ihn an
+        und _puls haelt sich daran. Vorher rechnete drift_fuer selbst mit
+        CEIL_FACTOR x Zielkurs, waehrend akt_deckel_base() zusaetzlich den
+        Grundwert beruecksichtigte - zwei Zahlen, die im Dauerbetrieb um den
+        Faktor 2 auseinanderliefen."""
+        return max(self.ziel_base(activity) * max(1.0, CEIL_FACTOR),
+                   self.boden_base())
 
     # --- Flo als Analyst: die KI bewertet den Markt --------------------------
     def _ki_faktor(self):
@@ -1169,6 +1201,37 @@ class FloAktie:
         text = re.sub(r"\s+", " ", text).strip().strip('"').strip("'")[:120]
         return max(-KI_MAX, min(KI_MAX, prozent / 100.0)), text
 
+    def _atem_spanne(self):
+        """Wie stark der Kurs atmet - gross genug, dass man es auch SIEHT.
+
+        Der angezeigte Kurs ist eine ganze Zahl. Ein Rauschen von 0,1 % bewegt
+        bei Kurs 30.000 rund 30 Punkte (gut sichtbar), bei Kurs 10 aber nur
+        0,01 - das rundet sich weg, und es stuende wieder still. Deshalb waechst
+        die Amplitude bei kleinen Kursen mit, gedeckelt bei ATEM_MAX: Atmen soll
+        sichtbar sein, aber nie zum Antrieb werden."""
+        kurs = max(1, self.price())
+        noetig = 1.0 / float(kurs)           # so viel braucht die gerundete Zahl
+        return max(TICK_NOISE * 5, min(ATEM_MAX, noetig))
+
+    def _atem(self, ziel_base=None):
+        """Bewegung pro Minute, wenn der Trend 0 waere. NIE exakt 0.
+
+        Vorzeichen und Betrag werden getrennt gezogen - so ist ausgeschlossen,
+        dass zufaellig genau 0 herauskommt, und der Erwartungswert bleibt 0.
+        Mit 'ziel_base' kommt der Zug zurueck zum Niveau dazu: liegt der Kurs
+        darunter, zieht es nach oben und umgekehrt. Damit atmet er UM das
+        Niveau, statt von ihm wegzulaufen."""
+        spanne = self._atem_spanne()
+        zeichen = 1.0 if random.random() < 0.5 else -1.0
+        pro_min = zeichen * random.uniform(spanne * 0.25, spanne)
+        if ziel_base is None:
+            return pro_min
+        base = self._base()
+        if base > 0 and ziel_base and ziel_base > 0:
+            zug = (float(ziel_base) / base - 1.0) * ATEM_RUECK
+            pro_min += max(-ATEM_MAX, min(ATEM_MAX, zug))
+        return pro_min
+
     def _leerlauf_verfall(self):
         """Verfall pro Minute bei leerem Call - ab der ERSTEN Minute in voller
         Hoehe, ohne Anlauf und ohne Staffelung. Konstant heisst auch: man kann
@@ -1213,24 +1276,36 @@ class FloAktie:
             # wieder deutlich schneller - die Balance soll aber bleiben.
             basis /= (1.0 + MOM_WEIGHT)
             if basis <= 0.0:
-                # Am Deckel: nicht totenstill stehen, sondern atmen.
-                pro_min = random.uniform(-TICK_NOISE * 5, TICK_NOISE * 5)
+                # Am Deckel: nicht totenstill stehen, sondern um den Deckel
+                # atmen - mit Zug zurueck, damit es nicht wegwandert.
+                pro_min = self._atem(self._deckel_base())
             else:
                 # LEBENDIG: die Bewegung schwankt kraeftig um ihren Trend, dazu
                 # das nachwirkende Momentum. Vorher war der Chart eine gerade
                 # Linie. Nach unten drehen kann es trotzdem nicht - solange jemand
                 # da ist, faellt der Kurs nicht (Zusage an den Besitzer).
+                # Untergrenze MIN_UP statt 0: ein stark negatives Momentum konnte
+                # die Summe auf exakt 0 druecken - Stillstand, obwohl Leute im
+                # Call sitzen.
                 schwung = random.uniform(1.0 - VOL_SPREAD, 1.0 + VOL_SPREAD)
-                pro_min = max(0.0, basis * schwung + MOM_WEIGHT * mom)
+                pro_min = max(MIN_UP, basis * schwung + MOM_WEIGHT * mom)
         else:
             ema = 0.0
             st["act_ema"] = 0.0
             st["leer_min"] = float(st.get("leer_min", 0.0) or 0.0) + skala
-            # Beim SINKEN kein Aufhellen durch Zufall - der Verfall soll klar
-            # sichtbar sein. Ein laufender Absturz zieht ueber das Momentum nach.
-            pro_min = self.drift_fuer(0.0) * (1.0 + self._ki_faktor())
-            pro_min /= (1.0 + MOM_WEIGHT)
-            pro_min = min(0.0, pro_min + MOM_WEIGHT * min(0.0, mom))
+            trend = self.drift_fuer(0.0)
+            if trend < 0.0:
+                # Beim SINKEN kein Aufhellen durch Zufall - der Verfall soll klar
+                # sichtbar sein. Ein laufender Absturz zieht ueber das Momentum nach.
+                pro_min = trend * (1.0 + self._ki_faktor())
+                pro_min /= (1.0 + MOM_WEIGHT)
+                pro_min = min(0.0, pro_min + MOM_WEIGHT * min(0.0, mom))
+            else:
+                # Am Grundwert angekommen: tiefer geht es nicht, aber stehen soll
+                # er auch nicht. Hier war der einzige echte Stillstand im ganzen
+                # Modell - gemessen 200 von 200 Takten exakt 0,000 %/min und ein
+                # einziger Kurswert ueber 200 Takte.
+                pro_min = self._atem(self.boden_base())
 
         drift = pro_min * skala
         st["mom"] = zerfall * mom + (1.0 - zerfall) * pro_min
@@ -1547,16 +1622,21 @@ class FloAktie:
         emb.add_field(name="Aktionäre", value=str(self.holders_count()), inline=True)
         # Nachvollziehbar machen, WARUM der Kurs sich bewegt.
         akt = float(st.get("act_ema", 0.0) or 0.0)
-        pro_min = self.drift_fuer(akt) * 100
+        trend = self.drift_fuer(akt)
+        pro_min = trend * 100
         # Lesbarer machen: kleine Werte pro STUNDE, grosse pro Minute.
-        if abs(pro_min) >= 0.1:
+        if trend == 0.0:
+            # Kein Trend heisst NICHT Stillstand: der Kurs atmet um sein Niveau,
+            # mal ein Stück rauf, mal runter. "0,00 %/min" waere hier gelogen.
+            tempo = "**seitwärts** _(atmet)_"
+        elif abs(pro_min) >= 0.1:
             tempo = f"**{pro_min:+.2f} %/min**"
             # Am Anschlag: sonst wundert man sich, warum mehr Leute nichts mehr
             # bringen. Mehr Aktivitaet hebt dann den DECKEL, nicht das Tempo.
             if pro_min >= TICK_CAP * 100 - 0.001:
                 tempo += " _(Anschlag)_"
         else:
-            tempo = f"**{self._pro_stunde(self.drift_fuer(akt)):+.2f} %/h**"
+            tempo = f"**{self._pro_stunde(trend):+.2f} %/h**"
         am_deckel = self._am_deckel()
         if akt <= 0:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
@@ -1569,7 +1649,8 @@ class FloAktie:
                 hinweis = (f"**Grundwert erreicht** ({self._fmt(max(MIN_PRICE, boden))}) – "
                            f"so viel ist die Aktie wert, weil auf diesem Server "
                            f"regelmäßig etwas los ist. Tiefer geht es nur, wenn "
-                           f"es dauerhaft still bleibt.")
+                           f"es dauerhaft still bleibt. Der Kurs **atmet** hier "
+                           f"weiter – er steht nie still.")
             elif leer >= 60:
                 hinweis = (f"Seit {leer // 60} h leer – der Kurs fällt mit "
                            f"**{IDLE_PER_30MIN * 100:.0f} % pro halber Stunde** "
@@ -1594,7 +1675,8 @@ class FloAktie:
             else:
                 hinweis = (f"**Deckel erreicht** ({self._fmt(self._deckel_kurs())}) – so viel "
                            f"gibt diese Aktivität her. Mehr Leute im Call oder mehr "
-                           f"Livestreams heben den Deckel sofort an.")
+                           f"Livestreams heben den Deckel sofort an. Der Kurs "
+                           f"**atmet** hier weiter – er steht nie still.")
         else:
             hinweis = "Je mehr im Call und je mehr Livestreams, desto schneller."
         emb.add_field(
@@ -1993,6 +2075,7 @@ drift_fuer = instance.drift_fuer
 ziel_base = instance.ziel_base
 ziel_kurs = instance.ziel_kurs
 akt_deckel_base = instance.akt_deckel_base
+deckel_fuer = instance.deckel_fuer
 sample_and_tick = instance.sample_and_tick
 ki_tick = instance.ki_tick
 ki_text = instance.ki_text

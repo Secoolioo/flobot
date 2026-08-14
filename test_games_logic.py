@@ -1891,16 +1891,26 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         #    CEIL_FACTOR x Zielkurs), statt zu explodieren (vorher: 10**16 nach
         #    30 Tagen). Der Deckel steigt nur, wenn die Aktivitaet steigt.
         frisch()
-        for _ in range(4 * 1440):
+        # 14 Tage einschwingen lassen: der Grundwert ist ein 3-Tage-Mittel und
+        # zieht den Deckel in den ersten Tagen noch mit hoch. Frueher wurde ab
+        # Tag 4 gemessen - da war er noch mitten in der Bewegung.
+        for _ in range(14 * 1440):
             fa._activity_tick(10, 40, streams=10)
         vier_tage = fa.price()
-        for _ in range(20 * 1440):
+        for _ in range(16 * 1440):
             fa._activity_tick(10, 40, streams=10)
-        akt = fa.activity_of(10, 10, 0, 40)
-        deckel = fa.ziel_base(akt) * floaktie.CEIL_FACTOR
+        # Der Deckel ist akt_deckel_base() - EINE Zahl fuer Drift, Panel und
+        # Impuls. Bei DAUER-Vollbetrieb waechst der Grundwert bis auf die volle
+        # Aktivitaet und liegt dann ueber CEIL_FACTOR x Zielkurs; frueher hing
+        # der Kurs zwischen zwei widerspruechlichen Decken (Bremse 94.020,
+        # Grundwert 188.001). Im echten Betrieb (Call nur abends) greift das nie,
+        # dort bleibt der Grundwert weit unter der Bremse.
+        deckel = fa.akt_deckel_base()
         # Toleranz = ein voller Takt: die Pruefung im Drift laeuft VOR dem Schritt,
         # der letzte Schritt darf also einmal um bis zu TICK_CAP ueberschiessen.
         assert fa.price() <= deckel * (1 + floaktie.TICK_CAP) * 1.01, (fa.price(), deckel)
+        # ... und der Deckel selbst bleibt gedeckelt: keine Explosion.
+        assert deckel <= fa.ziel_base(fa.activity_of(10, 10, 0, 40)) * 5, deckel
         assert fa.price() < vier_tage * 1.05, (vier_tage, fa.price())
 
         # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
@@ -4052,6 +4062,107 @@ def test_bilder_blockieren_den_bot_nicht():
 
     assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
                              + ", ".join(verdaechtig))
+
+
+def test_floaktie_steht_nie_still():
+    """Der Kurs bewegt sich IMMER - er steigt oder faellt, aber er steht nie.
+
+    Gemessen vorher: am Grundwert 200 von 200 Takten exakt 0,000 %/min und ueber
+    200 Takte ein einziger Kurswert. Eine Aktie, die stundenlang auf derselben
+    Zahl steht, sieht kaputt aus.
+
+    Das Atmen muss dabei SYMMETRISCH bleiben (Erwartungswert 0) und am Niveau
+    haengen - sonst waere es nach oben Inflation und nach unten ein Grab."""
+    import random
+    import statistics
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE,
+           floaktie.VOL_SPREAD)
+    fa._enabled = True
+    fa._today = lambda: "2026-08-06"
+    try:
+        def frisch(base, ema=0.0, grund=0.0, S=0):
+            fa._store = _FakeStore({"price": 0, "base": float(base), "day": "x",
+                                    "act_ema": ema, "grund_akt": grund, "mom": 0.0,
+                                    "msg_count": 0, "last_msg_count": 0,
+                                    "leer_min": 0.0,
+                                    "holdings": ({"1": S} if S else {}),
+                                    "history": [], "ticks": [],
+                                    "open_day": "2026-08-06",
+                                    "open_base": float(base)})
+            fa._sync_price()
+
+        # 1) AM GRUNDWERT (leerer Call) - das war der echte Stillstand.
+        frisch(3000.0, grund=0.75)
+        fa._store.data["base"] = fa.boden_base()
+        fa._sync_price()
+        kurse, drifts = [], []
+        for _ in range(300):
+            _a, n, d, _akt = fa._activity_tick(0, 0)
+            kurse.append(n)
+            drifts.append(d)
+        assert all(d != 0.0 for d in drifts), "Takt mit exakt 0 am Grundwert"
+        assert len(set(kurse)) > 20, (len(set(kurse)), min(kurse), max(kurse))
+
+        # 2) AM DECKEL (Leute im Call).
+        akt = fa.activity_of(6, 2, 0, 0)
+        frisch(fa.ziel_base(akt) * floaktie.CEIL_FACTOR * 1.02, ema=akt, grund=0.75)
+        kurse, drifts = [], []
+        for _ in range(300):
+            _a, n, d, _akt = fa._activity_tick(6, 0, streams=2)
+            kurse.append(n)
+            drifts.append(d)
+        assert all(d != 0.0 for d in drifts), "Takt mit exakt 0 am Deckel"
+        assert len(set(kurse)) > 20, len(set(kurse))
+
+        # 3) NORMALER BETRIEB: auch dort nie exakt 0 - ein stark negatives
+        #    Momentum konnte die Summe frueher auf genau 0 druecken.
+        frisch(1000.0, grund=0.5)
+        drifts = []
+        for _ in range(300):
+            _a, _n, d, _akt = fa._activity_tick(4, 5, streams=1)
+            drifts.append(d)
+        assert all(d != 0.0 for d in drifts), "Takt mit exakt 0 im Normalbetrieb"
+
+        # 4) SYMMETRIE: das Atmen darf den Kurs nicht systematisch tragen.
+        #    Boden festhalten und ueber viele Seeds den Endstand mitteln.
+        enden = []
+        for seed in range(30):
+            random.seed(seed)
+            frisch(3000.0, grund=0.75)
+            fa.boden_base = lambda: 3000.0
+            fa.drift_fuer = lambda _a: 0.0
+            try:
+                for _ in range(300):
+                    fa._activity_tick(0, 0)
+                enden.append(fa.price() / 3000.0 - 1.0)
+            finally:
+                del fa.boden_base, fa.drift_fuer
+        mittel = statistics.mean(enden)
+        streuung = statistics.pstdev(enden)
+        # Der Mittelwert muss im Rauschen liegen (Standardfehler = sd/sqrt(n)).
+        assert abs(mittel) < 3.0 * streuung / (len(enden) ** 0.5) + 0.01, \
+            (mittel, streuung)
+
+        # 5) Das Atmen bleibt klein - es ist kein Antrieb.
+        frisch(3000.0, grund=0.75)
+        for _ in range(200):
+            assert abs(fa._atem()) <= floaktie.ATEM_MAX + 1e-9
+            assert fa._atem() != 0.0
+
+        # 6) Und es zieht ans Niveau zurueck: unter dem Boden nach oben.
+        frisch(1000.0, grund=0.75)          # Boden liegt deutlich hoeher
+        assert fa.boden_base() > 1500, fa.boden_base()
+        zuege = [fa._atem(fa.boden_base()) for _ in range(200)]
+        assert statistics.mean(zuege) > 0, statistics.mean(zuege)
+        # ... und ueber dem Deckel nach unten.
+        frisch(90_000.0, grund=0.1)
+        zuege = [fa._atem(fa.akt_deckel_base()) for _ in range(200)]
+        assert statistics.mean(zuege) < 0, statistics.mean(zuege)
+    finally:
+        (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE,
+         floaktie.VOL_SPREAD) = alt
 
 
 def test_floaktie_grundwert_traegt_den_boden():
