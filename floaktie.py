@@ -1252,7 +1252,14 @@ class FloAktie:
         Mindest-Anstieg heraus und der Kurs "stieg", obwohl niemand da war."""
         st = self._state()
         skala = max(0.05, min(4.0, float(dt) / 60.0))
-        roh_aktiv = self.activity_of(people, streams, video, msgs_since)
+        # Nachrichten sind als einzige Groesse eine ZAEHLUNG ueber den Takt - Leute,
+        # Streams und Kameras sind Zustaende. Ohne Hochrechnen auf eine Minute
+        # haengt die Aktivitaet an der Taktlaenge: gemessen ergab derselbe
+        # Chat-Verkehr (30 Nachrichten/Minute, 3 Leute) bei 60-s-Takt 15,0 Punkte,
+        # bei 20-s-Takt aber nur 8,0. Der Bot taktet alle 20 s - der Chat zaehlte
+        # im Betrieb also deutlich weniger als in jeder Rechnung und Simulation.
+        msgs_rate = float(max(0, msgs_since)) / skala
+        roh_aktiv = self.activity_of(people, streams, video, msgs_rate)
         # Der Grundwert laeuft IMMER mit - auch im Leerlauf, sonst wuerde er nur
         # von aktiven Minuten hochgezogen und nie wieder sinken.
         self._grund_tick(roh_aktiv, skala)
@@ -1642,7 +1649,7 @@ class FloAktie:
             leer = int(float(st.get("leer_min", 0.0) or 0.0))
             boden = int(round(self.boden_base()
                               * (1.0 + self.total_shares() / LIQUIDITY)))
-            if self.drift_fuer(0) >= 0:
+            if self._am_grundwert():
                 # Am Boden angekommen: tiefer geht es nicht, sonst waere die Aktie
                 # irgendwann wertlos. Das ausdruecklich SAGEN - sonst sieht es aus,
                 # als wuerde der Kurs im Leerlauf einfach nicht sinken.
@@ -1792,6 +1799,17 @@ class FloAktie:
         if kleinste >= absolut - 0.5:
             return "max"
         return "aktivitaet" if kleinste <= akt + 0.5 else "aktivitaet"
+
+    def _am_grundwert(self):
+        """Steht der Kurs (praktisch) auf dem Grundwert?
+
+        Die Toleranz richtet sich nach der ATEM-AMPLITUDE: der Kurs atmet um sein
+        Niveau und liegt danach ein Stueck darueber, bis der Verfall ihn wieder
+        eingeholt hat. Bei kleinen Kursen atmet er kraeftiger (sonst rundet sich
+        die Bewegung weg), also darf auch die Toleranz dort groesser sein. Mit
+        einer festen Grenze sprang die Panel-Meldung zwischen 'Grundwert
+        erreicht' und 'faellt gerade' hin und her, obwohl sich nichts aendert."""
+        return self._base() <= self.boden_base() * (1.0 + max(0.02, self._atem_spanne()))
 
     def _am_deckel(self):
         """Steht der Kurs (praktisch) am Deckel? Dann steigt er nur noch minimal."""

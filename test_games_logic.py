@@ -3881,14 +3881,28 @@ def test_floaktie_lebendig_und_ki():
         assert fa._store.data["mom"] < 0, fa._store.data["mom"]
 
         # 3) TAKTUNABHAENGIG: 60 s und 20 s kommen am Ende auf dasselbe Niveau.
+        #    WICHTIG: derselbe Chat-VERKEHR, nicht dieselbe Zahl je Takt. Leute
+        #    und Streams sind Zustaende, Nachrichten sind eine Zaehlung ueber den
+        #    Takt - bei 20 s kommen entsprechend weniger je Takt an. Vorher stand
+        #    hier stur "4", also bei 20 s der dreifache Verkehr; das hat die
+        #    doppelte Division im Code zufaellig ausgeglichen und den Test aus dem
+        #    falschen Grund bestehen lassen.
         werte = {}
         for dt in (60.0, 20.0):
             ergebnisse = []
             for lauf in range(12):
                 random.seed(700 + lauf)
                 frisch()
+                rest = 0.0
                 for _ in range(int(3 * 3600 / dt)):
-                    fa._activity_tick(3, 4, streams=1, dt=dt)
+                    rest += 3.0 * dt / 60.0          # 3 Nachrichten je MINUTE
+                    # 3/min geht bei 60 s UND 20 s glatt auf. Bei 4/min ergaebe
+                    # sich im 20-s-Takt das Muster 1,1,2 - und die bewusst
+                    # asymmetrische Glaettung (schnell rauf, langsam runter)
+                    # hebt bei schwankender Eingabe den Mittelwert an.
+                    n = int(rest)
+                    rest -= n
+                    fa._activity_tick(3, n, streams=1, dt=dt)
                 ergebnisse.append(fa.price())
             werte[dt] = statistics.median(ergebnisse)
         a, b = werte[60.0], werte[20.0]
@@ -4062,6 +4076,52 @@ def test_bilder_blockieren_den_bot_nicht():
 
     assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
                              + ", ".join(verdaechtig))
+
+
+def test_floaktie_chat_haengt_nicht_am_takt():
+    """Derselbe Chat-Verkehr muss dieselbe Aktivitaet ergeben - egal wie schnell
+    der Loop taktet.
+
+    Nachrichten sind als einzige Groesse eine ZAEHLUNG ueber den Takt; Leute,
+    Streams und Kameras sind Zustaende. Ohne Hochrechnen auf eine Minute zaehlte
+    derselbe Verkehr bei 20-s-Takt nur einen Bruchteil: gemessen 8,0 statt 15,0
+    Punkte. Der Bot taktet im Betrieb alle 20 s - der Chat zaehlte dort also
+    deutlich weniger als in jeder Rechnung und jeder Simulation."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE)
+    fa._enabled = True
+    floaktie.TICK_NOISE = 0.0
+    fa._today = lambda: "2026-08-06"
+    try:
+        def aktivitaet_bei(dt, msgs_pro_minute, leute=3, streams=0):
+            fa._store = _FakeStore({"price": 0, "base": 1000.0, "day": "x",
+                                    "act_ema": 0.0, "grund_akt": 0.0, "mom": 0.0,
+                                    "msg_count": 0, "last_msg_count": 0,
+                                    "leer_min": 0.0, "holdings": {},
+                                    "history": [], "ticks": [],
+                                    "open_day": "2026-08-06", "open_base": 1000.0})
+            fa._sync_price()
+            rest, akts = 0.0, []
+            for _ in range(int(30 * 60 / dt)):
+                rest += msgs_pro_minute * dt / 60.0
+                n = int(rest)
+                rest -= n
+                _a, _p, _d, akt = fa._activity_tick(leute, n, streams, 0, dt=dt)
+                akts.append(akt)
+            return sum(akts) / len(akts)
+
+        # Glatt aufgehende Raten: sonst schwankt die Eingabe und die bewusst
+        # asymmetrische Glaettung hebt den Mittelwert (das ist gewollt).
+        for rate in (0, 3, 6, 30):
+            a60 = aktivitaet_bei(60.0, rate)
+            a20 = aktivitaet_bei(20.0, rate)
+            assert abs(a60 - a20) < 0.01, (rate, a60, a20)
+
+        # Und der Chat traegt ueberhaupt spuerbar bei (sonst prueft das nichts).
+        assert aktivitaet_bei(20.0, 30) > aktivitaet_bei(20.0, 0) + 5
+    finally:
+        fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
 def test_floaktie_steht_nie_still():
