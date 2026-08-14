@@ -3,7 +3,49 @@
 Deutschsprachiger Discord-Bot: Level & Coins, Aktie, Casino, Spiele, Musik,
 Moderation — dazu ein Web-Panel zum Verwalten.
 
-Läuft als systemd-Dienst (`flobot.service`), Konfiguration über `.env`.
+Läuft als systemd-Dienst (`flobot.service`), Konfiguration über `.env`,
+**Einstellungen je Server** über `Flo einstellungen` oder das Panel.
+
+---
+
+## Mehrere Server
+
+Flo läuft auf allen Servern, auf die man ihn einlädt. Jeder Server stellt sich
+selbst ein — Kanäle, Lautstärke, Bayrisch, welche Funktionen dort laufen.
+
+```
+Flo einstellungen                     alles anzeigen
+Flo einstellung lautstaerke 80        setzen
+Flo einstellung lautstaerke standard  wieder den Standard nehmen
+```
+
+Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unter
+**Server** auf eine Karte klicken.
+
+| Schlüssel | was |
+|---|---|
+| `ansage_channel` | wohin Flo von sich aus postet (Händler, Lotto, Shop) |
+| `levelup_channel` | wohin die Level-Up-Karten gehen |
+| `event_channel`, `zaehl_channel` | Zufalls-Events, Zählspiel |
+| `kalorien_channel`, `modlog_channel` | Essensfotos, Moderations-Protokoll |
+| `autodelete_channels`, `autodelete_sekunden` | was Flo aufräumt und ab wann |
+| `lautstaerke` | womit die Musik hier anfängt (`flo ls 80` speichert das) |
+| `bayern` | Flo redet hier boarisch |
+| `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
+| `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
+
+Gesetzt wird nur, was abweicht; der Rest folgt dem Standard aus der `.env`. Ein
+bestehender Server verhält sich nach dem Update also **unverändert**.
+
+**Was für alle Server gemeinsam gilt:** Coins, Level, Titel, Schulden, Lotto und
+die $FLO-Aktie. Es gibt einen Topf und einen Kurs — wer auf zwei Servern ist, hat
+dort dasselbe Konto (und bekommt die Voice-Dividende trotzdem nur einmal je Takt).
+Zwei Sachen bleiben deshalb auf einem neuen Server erst mal **aus**: die
+Icon-Automatik und die Aktien-Zählung. `GUILD_ID` sagt nur noch, wo Flo zu Hause
+ist — dort sind beide von Haus aus an.
+
+Der Besitzer behält den Not-Aus: was im Panel **global** abgeschaltet ist, holt
+kein Server-Admin zurück.
 
 ---
 
@@ -37,7 +79,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 109 Tests
+python3 test_games_logic.py    # 117 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -77,6 +119,9 @@ die Aktivität an der Taktlänge (der Bot taktet alle 20 s).
 
 **Fallen:** sobald der Call leer ist, sofort und gleichmäßig — 11 % je halber
 Stunde (`IDLE_PER_30MIN`), ohne Anlauf.
+
+Es gibt genau **eine** Aktie für alle Server. Welche davon den Kurs bewegen
+dürfen, sagt `aktie_zaehlt`; ihre Aktivität wird zusammengezählt.
 
 **Stillstand gibt es nicht.** Am Deckel und am Grundwert wäre der Trend
 rechnerisch 0 — dort *atmet* der Kurs stattdessen: eine kleine Bewegung mit
@@ -135,6 +180,10 @@ Standardmäßig auf `0.0.0.0:9123`, **ohne Login** (`WEBPANEL_AUTH=1` schaltet i
 wieder an). Übersicht mit Kennzahlen und Kurs-Chart, Nutzer verwalten (Coins,
 XP, Titel, Anteile), Server steuern (Sendepause, Ansage, Features), Update-Knopf.
 
+Ein Klick auf eine Server-Karte öffnet die Einstellungen **dieses** Servers:
+Kanäle aus einer echten Auswahlliste, Schalter, Zahlenfelder — und die
+Funktions-Schalter, die nur dort gelten.
+
 Buchende Knöpfe sind während der Anfrage gesperrt, damit ein Doppelklick nicht
 doppelt bucht; `/api/update` lässt nur einen `git pull` gleichzeitig zu.
 
@@ -156,7 +205,14 @@ handle = instance.handle          # Modul-Aliase danach
 
 `bot.py` hält die Handler-Kette (der erste, der nicht `None` liefert, gewinnt),
 die Hintergrund-Loops und die Feature-Schalter. `features.py`, `FEATURE_LOADED`
-und die Handler-Kette führen dieselben 21 Schlüssel — ein Test prüft das.
+und die Handler-Kette führen dieselben 21 Schlüssel — `test_feature_schluessel_
+passen_ueberall_zusammen` prüft das in beide Richtungen und findet auch einen
+Schalter, den niemand abfragt.
+
+Alle Hintergrund-Loops laufen über `self.guilds`, nicht über einen festen
+Server. Was für die ganze Wirtschaft gilt (Händler, Lotto, Shop-Highlights),
+geht in den Ansagen-Kanal **jedes** Servers — mit einer eigenen View pro
+Nachricht, denn eine View gehört zu genau einer.
 
 **Konventionen:** keine Typannotationen (außer in `@dataclass`, wo Python sie
 erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
@@ -167,6 +223,8 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 | Datei | wofür |
 |---|---|
 | `bot.py` | Handler-Kette, Loops, Lebenszyklus |
+| `guildcfg.py` | Einstellungen je Server |
+| `features.py` | Funktions-Schalter (global + je Server) |
 | `economy.py` | Level, Coins, Shop, Steuer |
 | `floaktie.py` | die $FLO-Aktie |
 | `casino.py` | Blackjack, Mines, Crash, Roulette, … |
@@ -191,7 +249,8 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | Variable | Standard | wofür |
 |---|---|---|
 | `DISCORD_TOKEN` | — | Pflicht |
-| `GUILD_ID`, `OWNER_ID` | — | Server und Chef |
+| `GUILD_ID` | — | Flos Hauptserver (optional, keine Sperre) |
+| `OWNER_ID` | — | der Chef |
 | `BOT_NAME` | `Flo` | Ansprache |
 | `WEBPANEL_AUTH` | `0` | Login fürs Panel |
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |

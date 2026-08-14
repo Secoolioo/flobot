@@ -1879,8 +1879,13 @@ def main():
         log.error("DISCORD_TOKEN fehlt in der .env-Datei.")
         sys.exit(1)
     if not GUILD_ID:
-        log.error("GUILD_ID fehlt in der .env-Datei.")
-        sys.exit(1)
+        # KEIN Abbruch mehr: Flo laeuft auf jedem Server, auf den man ihn
+        # einlaedt. GUILD_ID sagt nur, wo er zu Hause ist (Icon-Automatik,
+        # Aktien-Zaehlung, Ziel der Panel-Ansage). Ohne die laeuft alles
+        # andere ganz normal - man muss die zwei Sachen nur selbst einschalten.
+        log.warning("GUILD_ID fehlt - Flo laeuft ohne Hauptserver. Icon-Automatik "
+                    "und Aktien-Zaehlung sind dann ueberall aus; einschalten mit "
+                    "'%s einstellungen'.", ai.bot_name())
     log.info("Starte Bot im Modus: %s", MODE)
     try:
         # reconnect=True (Standard): discord.py faengt Verbindungsabbrueche im

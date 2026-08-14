@@ -142,6 +142,10 @@ _STANDARD_WOERTER = ("standard", "default", "zurück", "zurueck", "reset", "auto
 _CHANNEL_RE = re.compile(r"<#(\d+)>")
 
 
+# _pruefe und _kanal_id stehen BEWUSST auf Modulebene und nicht in GuildConfig:
+# Einstellung.standard() braucht sie, und ein Dataclass-Feld darf nicht am
+# Singleton haengen (sonst haette der Katalog eine Abhaengigkeit auf die
+# Instanz, die ihn selbst benutzt).
 def _pruefe(defn, roh, guild=None):
     """Wandelt eine Eingabe in den Typ der Einstellung. (ok, wert, fehler)."""
     if defn.typ == "an_aus":
@@ -394,8 +398,7 @@ class GuildConfig:
                 zeilen.append(f"{marke} `{defn.key}` — **{self._als_text(defn, self.get(gid, defn.key))}**")
             emb.add_field(name=gruppe, value="\n".join(zeilen), inline=False)
         eigene = len(self._eigene(gid))
-        emb.set_footer(text=(f"▸ = auf diesem Server eigens gesetzt ({eigene}) · "
-                             f"· = Standard"))
+        emb.set_footer(text=f"▸ = hier eigens gesetzt ({eigene}) · · = Standard")
         return emb
 
     def _darf(self, message):

@@ -361,15 +361,28 @@ class WebPanel:
                 rows.append(self._user_row(uid, {}))
         return rows
 
-    def _guild(self):
-        """Die Haupt-Guild (fuer Namens-/Avatar-Auflösung), falls verfuegbar."""
+    def _guild(self, uid=None):
+        """Der Server, ueber den ein Name/Avatar aufgeloest wird.
+
+        Mit uid zuerst der Server, auf dem die Person WIRKLICH ist - sonst
+        stand jemand, der nur auf dem zweiten Server unterwegs ist, in der
+        Liste ohne Server-Nickname. Ohne uid: der Hauptserver."""
+        guilds = list(getattr(self._client, "guilds", None) or [])
+        if uid:
+            for g in guilds:
+                try:
+                    if g.get_member(int(uid)) is not None:
+                        return g
+                except Exception:  # noqa: BLE001
+                    continue
         try:
             gid = int(os.getenv("GUILD_ID", "0") or "0")
             if self._client is not None and gid:
-                return self._client.get_guild(gid)
+                haupt = self._client.get_guild(gid)
+                if haupt is not None:
+                    return haupt
         except Exception:  # noqa: BLE001
             pass
-        guilds = getattr(self._client, "guilds", None) or []
         return guilds[0] if guilds else None
 
     async def _remember_name(self, uid):
@@ -379,7 +392,7 @@ class WebPanel:
         wird, hatte sonst keinen Namen im Profil - und tauchte in 'Flo reichste'
         als 'Unbekannt' auf."""
         try:
-            await economy.resolve_display_name(uid, self._guild())
+            await economy.resolve_display_name(uid, self._guild(uid))
         except Exception:  # noqa: BLE001 - reine Kosmetik, nie fatal
             log.debug("Namens-Merken fuer %s fehlgeschlagen", uid, exc_info=True)
 
@@ -747,7 +760,9 @@ class WebPanel:
             economy.grant_title(uid_int, text, label or text, rarity)
         # Rolle nachziehen, falls das Mitglied auffindbar ist (best effort).
         try:
-            guild = self._guild()
+            # Der Server, auf dem die Person wirklich ist - die Farb-Rolle
+            # gibt es nur dort.
+            guild = self._guild(uid_int)
             member = guild.get_member(uid_int) if guild else None
             if member is not None:
                 await economy.sync_role(member)
@@ -1030,9 +1045,22 @@ class WebPanel:
             if channel is None:
                 return web.json_response({"ok": False, "error": "Kanal nicht gefunden"}, status=400)
         else:
-            gid = self._as_int(os.getenv("GUILD_ID", "0") or "0", 0)
-            guild = self._safe(lambda: self._client.get_guild(gid), None) if self._client else None
-            channel = getattr(guild, "system_channel", None) if guild else None
+            # Ohne Kanal-ID: der Ansagen-Kanal des gewaehlten Servers (sonst des
+            # Hauptservers), notfalls dessen System-Kanal. BEWUSST nicht an alle
+            # Server gleichzeitig - eine Ansage aus Versehen an fremde Server zu
+            # schicken laesst sich nicht zurueckholen.
+            gid = self._as_int(data.get("guild"), 0) \
+                or self._as_int(os.getenv("GUILD_ID", "0") or "0", 0)
+            guild = self._guild_by_id(gid)
+            if guild is not None:
+                try:
+                    import guildcfg
+                    kid = guildcfg.get(guild.id, "ansage_channel")
+                except Exception:  # noqa: BLE001
+                    kid = 0
+                channel = self._safe(lambda: guild.get_channel(kid), None) if kid else None
+                if channel is None:
+                    channel = getattr(guild, "system_channel", None)
         if channel is None:
             return web.json_response({"ok": False, "error": "kein channel"}, status=400)
         if not hasattr(channel, "send"):
@@ -1074,7 +1102,7 @@ class WebPanel:
         else:
             url = None
             try:
-                user = await economy.instance._resolve_avatar_user(self._guild(), uid)
+                user = await economy.instance._resolve_avatar_user(self._guild(uid), uid)
                 if user is not None:
                     asset = user.display_avatar
                     try:

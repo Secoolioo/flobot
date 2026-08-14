@@ -6283,7 +6283,8 @@ def test_aktie_zaehlt_alle_server_zusammen():
     assert fa._measure_alle([A, B]) == (4, 2, 0)
     # Auch ein einzelner Server als Liste geht.
     assert fa._measure_alle([B]) == (2, 1, 0)
-    assert fa._measure_alle(None) == (0, 0, 0) or fa._measure_alle([]) == (0, 0, 0)
+    assert fa._measure_alle(None) == (0, 0, 0)
+    assert fa._measure_alle([]) == (0, 0, 0)
 
     # Dividende: b haelt Anteile und sitzt auf beiden Servern -> genau eine Zahlung.
     alt_store, alt_on = fa._store, fa._enabled
@@ -6511,6 +6512,42 @@ def test_guildcfg_standard_kommt_aus_der_env():
             assert guildcfg.instance.standard(key, haupt) is bool(haupt), key
     finally:
         setze(**alt)
+
+
+def test_feature_schluessel_passen_ueberall_zusammen():
+    """features.CATALOG, bot.FEATURE_LOADED und die Handler-Kette muessen
+    DIESELBEN Schluessel fuehren.
+
+    Ein Tippfehler in genau einem der drei Orte faellt sonst niemandem auf: der
+    Schalter im Panel taucht auf, tut aber nichts - oder eine Funktion laesst
+    sich gar nicht mehr abschalten. bot.py wird bewusst als TEXT gelesen und
+    nicht importiert (das zieht den halben Bot hoch)."""
+    import re
+    import features
+    katalog = {f["key"] for f in features.CATALOG}
+    assert len(katalog) == len(features.CATALOG), "doppelter Schluessel im CATALOG"
+
+    quelle = open("bot.py", encoding="utf-8").read()
+
+    # 1) FEATURE_LOADED = { "ki": ..., "music": ... }
+    block = re.search(r"FEATURE_LOADED\s*=\s*\{(.*?)\n\}", quelle, re.S)
+    assert block, "FEATURE_LOADED nicht gefunden"
+    geladen = set(re.findall(r'"([a-z_]+)":', block.group(1)))
+    assert geladen == katalog, (
+        f"FEATURE_LOADED weicht ab: nur dort {sorted(geladen - katalog)}, "
+        f"nur im CATALOG {sorted(katalog - geladen)}")
+
+    # 2) Jeder Schalter in der Handler-Kette und den passiven Hooks: _on("key")
+    benutzt = set(re.findall(r'_on\("([a-z_]+)"\)', quelle))
+    benutzt |= set(re.findall(r'features\.is_on(?:_in)?\((?:[^,]+,\s*)?"([a-z_]+)"\)',
+                              quelle))
+    unbekannt = benutzt - katalog
+    assert not unbekannt, f"bot.py fragt unbekannte Schalter ab: {sorted(unbekannt)}"
+
+    # 3) Umgekehrt: jeder Katalog-Eintrag wird in bot.py auch WIRKLICH abgefragt -
+    #    sonst steht im Panel ein Schalter, der nichts bewirkt.
+    tot = katalog - benutzt
+    assert not tot, f"Schalter ohne Wirkung in bot.py: {sorted(tot)}"
 
 
 def run():
