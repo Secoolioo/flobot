@@ -6879,6 +6879,69 @@ def test_tests_fassen_die_echten_daten_nicht_an():
             assert not pfad.exists() or pfad.stat().st_size > 0, pfad
 
 
+def test_namensverlauf_wird_wirklich_gespeichert():
+    """Der Verlauf muss in einem Loop wegschreiben, der IMMER laeuft.
+
+    Zuerst hing flush() im Voice-Takt - und der startet nur mit eingeschalteter
+    Wirtschaft (bot.py: 'if ECONOMY_ENABLED and not self.voice_xp_loop...').
+    Ohne economy waere der Namensverlauf also nie auf der Platte gelandet und
+    bei jedem Neustart weg gewesen. bot.py wird als TEXT geprueft, damit der
+    Test den halben Bot nicht hochziehen muss."""
+    import re
+    quelle = open("bot.py", encoding="utf-8").read()
+
+    # In welcher Loop-Methode steht der flush-Aufruf?
+    methoden = re.findall(r"\n    async def (\w+)\(self\):(.*?)(?=\n    (?:async )?def |\n    @)",
+                          quelle, re.S)
+    drin = [name for name, rumpf in methoden if "profil.flush()" in rumpf]
+    assert len(drin) == 1, f"profil.flush() sollte in genau einem Loop stehen, ist in {drin}"
+    loop = drin[0]
+
+    # Und wird dieser Loop bedingungslos gestartet?
+    start = re.search(r"\n(\s*)if ([^\n]*?)not self\.%s\.is_running\(\):" % loop, quelle)
+    assert start, f"{loop} wird nirgends gestartet"
+    bedingung = start.group(2).strip()
+    assert bedingung == "", (
+        f"{loop} startet nur unter der Bedingung '{bedingung}' - dann wuerde der "
+        f"Namensverlauf unter Umstaenden nie gespeichert")
+
+
+def test_profil_loest_kein_bot_neuladen_aus():
+    """profil.py darf bot.py NIEMALS erstmalig importieren.
+
+    Ein 'import bot' fuehrt das Modul aus, wenn es noch nicht geladen ist - und
+    damit saemtliche setup()-Aufrufe erneut. Gemessen: dabei bekommt JEDES Modul
+    einen frischen Speicher, mitten im Betrieb bzw. mitten im Testlauf. Genau
+    daran sind Namensverlauf und Flo-Daten aus dem fertigen Embed verschwunden.
+    Laeuft der Bot, steht er ohnehin in sys.modules."""
+    import sys
+    profil, zurueck = _profil_frisch()
+    hatte_bot = "bot" in sys.modules
+    try:
+        ziel = _fake_person(uid=777, name="alt", global_name="Alt", nick="Nick")
+        profil.notiere(ziel, 999)
+        ziel.name = "neu"
+        profil.notiere(ziel, 999)
+
+        kanal = _FakeChannel()
+        msg = SimpleNamespace(
+            content="Flo check", mentions=[ziel], author=_fake_person(uid=5),
+            reference=None, channel=kanal,
+            guild=SimpleNamespace(id=999, name="S", members=[], me=SimpleNamespace(id=1)))
+        assert asyncio.run(profil.handle(msg)) is profil.HANDLED
+
+        if not hatte_bot:
+            assert "bot" not in sys.modules, \
+                "profil.py hat bot.py importiert und damit alle Module neu aufgesetzt"
+
+        # Und die Felder, die durch genau diesen Nebeneffekt verschwunden waren,
+        # stehen wirklich im fertigen Embed - nicht nur in der Einzelfunktion.
+        namen = [f.name for f in kanal.sent[-1]["embeds"][0].fields]
+        assert any("Frühere Namen" in n for n in namen), namen
+    finally:
+        zurueck()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

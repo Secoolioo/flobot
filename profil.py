@@ -43,6 +43,7 @@ WAS GEHT UND WAS NICHT (nachgemessen, nicht geraten):
 import logging
 import os
 import re
+import sys
 import time
 
 import discord
@@ -180,8 +181,13 @@ class Profil:
         geaendert |= self._merke(eintrag.setdefault("anzeige", []),
                                  getattr(wer, "global_name", None) or "", jetzt)
         # 3) Server-Nickname - gilt nur hier, also je Server getrennt.
+        #    NUR fuer echte Mitglieder: ein blosser User (nachgeschlagene ID von
+        #    jemandem, der nicht auf dem Server ist) hat gar keinen Nickname.
+        #    Ohne diese Bedingung wuerde so ein Nachschlagen als "Nickname
+        #    entfernt" im Verlauf landen - eine erfundene Aenderung.
         gid = int(guild_id or getattr(getattr(wer, "guild", None), "id", 0) or 0)
-        if gid:
+        ist_member = getattr(wer, "guild", None) is not None
+        if gid and ist_member:
             nick = getattr(wer, "nick", None)
             if nick is not None or str(gid) in eintrag.get("nick", {}):
                 geaendert |= self._merke(
@@ -249,9 +255,18 @@ class Profil:
         treffer = self._voll.get(uid)
         if treffer is not None and treffer[1] > jetzt:
             return treffer[0]
+        # Den laufenden Client holen, OHNE bot.py zu importieren: ein echtes
+        # 'import bot' wuerde das Modul erstmalig ausfuehren, wenn es noch nicht
+        # geladen ist - und damit saemtliche setup()-Aufrufe erneut. Im Test
+        # nachgemessen: dabei werden die Speicher aller Module durch frische
+        # ersetzt, mitten im Lauf. Laeuft der Bot, steht er ohnehin in
+        # sys.modules; laeuft er nicht, gibt es auch nichts abzurufen.
+        botmodul = sys.modules.get("bot")
+        client = getattr(botmodul, "client", None) if botmodul is not None else None
+        if client is None:
+            return None
         try:
-            import bot
-            user = await bot.client.fetch_user(uid)
+            user = await client.fetch_user(uid)
         except Exception:  # noqa: BLE001 - geloescht, gesperrt, API-Huster
             log.debug("fetch_user(%s) fehlgeschlagen", uid, exc_info=True)
             self._merken(uid, None, jetzt + FETCH_FAIL_TTL)

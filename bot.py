@@ -890,6 +890,15 @@ class FloBot(discord.Client):
             log.debug("Status (idle): %s", weisheit)
         except Exception as exc:
             log.error("Status-Update fehlgeschlagen: %s", exc)
+        # Gesammelte Namensaenderungen wegschreiben. BEWUSST hier und nicht im
+        # Voice-Takt: der startet nur mit eingeschalteter Wirtschaft, und dann
+        # waere der Namensverlauf ohne economy nie auf der Platte gelandet.
+        # Dieser Loop laeuft immer. Kostet nichts, wenn sich nichts geaendert hat.
+        if PROFIL_ENABLED:
+            try:
+                await profil.flush()
+            except Exception:
+                log.exception("Namensverlauf-Speichern fehlgeschlagen")
 
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
     async def voice_xp_loop(self):
@@ -902,13 +911,6 @@ class FloBot(discord.Client):
                 await economy.tick_voice(guild)
             except Exception:
                 log.exception("Voice-XP-Loop Fehler (%s) - laeuft weiter", guild.name)
-        # Gesammelte Namensaenderungen wegschreiben (tut nichts, wenn sich
-        # nichts geaendert hat - der Normalfall).
-        if PROFIL_ENABLED:
-            try:
-                await profil.flush()
-            except Exception:
-                log.exception("Namensverlauf-Speichern fehlgeschlagen")
         # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende. In
         # EINEM Aufruf ueber alle Server: wer auf zweien im Call sitzt, soll die
         # Dividende trotzdem nur einmal bekommen.
