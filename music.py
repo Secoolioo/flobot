@@ -36,6 +36,7 @@ import discord
 import numfmt
 
 import ai
+import guildcfg
 
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
     import yt_dlp
@@ -1158,9 +1159,24 @@ class Music:
     def _player_for(self, guild_id):
         player = self._players.get(guild_id)
         if player is None:
-            player = GuildPlayer(loop=asyncio.get_running_loop())
+            player = GuildPlayer(loop=asyncio.get_running_loop(),
+                                 volume=self._start_lautstaerke(guild_id))
             self._players[guild_id] = player
         return player
+
+    @staticmethod
+    def _start_lautstaerke(guild_id):
+        """Womit dieser Server zu spielen anfaengt (guildcfg 'lautstaerke').
+
+        Jeder Server stellt seine eigene ein - auf dem einen ist Flo im
+        Hintergrund, auf dem anderen laut. Der Wert steht in Prozent."""
+        try:
+            prozent = guildcfg.get(guild_id, "lautstaerke")
+            if prozent is None:
+                return DEFAULT_VOLUME
+            return max(0.0, min(2.0, float(prozent) / 100.0))
+        except Exception:  # noqa: BLE001 - Musik laeuft auch ohne Einstellung
+            return DEFAULT_VOLUME
 
     async def heal_voice(self, guild):
         """Vom bot.py-Watchdog-Loop aufgerufen: haelt die Voice-Verbindung dieses
@@ -2087,6 +2103,13 @@ class Music:
                 player.voice.source, discord.PCMVolumeTransformer
             ):
                 player.voice.source.volume = player.volume  # live anwenden
+            # Und MERKEN - je Server. Vorher stand die Lautstaerke nur im
+            # Player: nach 'flo stop' oder einem Neustart war sie wieder auf 50,
+            # obwohl man sie gerade eingestellt hatte.
+            try:
+                await guildcfg.setzen(message.guild.id, "lautstaerke", str(new))
+            except Exception:  # noqa: BLE001 - Musik laeuft auch ohne Speichern
+                log.exception("Lautstaerke konnte nicht gespeichert werden")
             bar = "🔉" if new < 50 else ("🔊" if new <= 100 else "📢")
             return self._embed(f"Lautstärke steht jetzt auf **{new}%**.",
                                title=f"{bar}  Lautstärke", color=_COL_CTRL)

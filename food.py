@@ -21,6 +21,7 @@ import aiohttp
 import discord
 
 import ai
+import guildcfg
 import render
 
 log = logging.getLogger("dcbot.food")
@@ -74,7 +75,8 @@ class Food:
             log.info("Kalorien-Feature aus (KI nicht aktiv).")
             return False
         self._enabled = True
-        log.info("Kalorien-Feature aktiv (Auto-Channel: %s).", self.CHANNEL_ID or "-")
+        log.info("Kalorien-Feature aktiv (Auto-Channel je Server, Standard: %s).",
+                 self.CHANNEL_ID or "-")
         return self._enabled
 
     def is_enabled(self):
@@ -212,7 +214,9 @@ class Food:
     async def on_message_passive(self, message):
         """bot.py ruft das fuer jede Nachricht auf: Bild im Kalorien-Channel ->
         automatisch analysieren (ohne dass man Flo ansprechen muss)."""
-        if not self._enabled or self.CHANNEL_ID == 0 or message.channel.id != self.CHANNEL_ID:
+        gid = getattr(getattr(message, "guild", None), "id", 0)
+        kanal = guildcfg.get(gid, "kalorien_channel") if gid else 0
+        if not self._enabled or not kanal or message.channel.id != kanal:
             return
         att = self._image_of(message)
         if att is not None:
@@ -225,8 +229,9 @@ class Food:
         if not self._CMD_RE.match(ai.strip_lead(message.content or "")):
             return None
         # Im Kalorien-Channel analysiert schon der passive Hook jedes Bild -
-        # hier nicht doppelt antworten.
-        if self.CHANNEL_ID and message.channel.id == self.CHANNEL_ID:
+        # hier nicht doppelt antworten. Welcher Kanal das ist, sagt der Server.
+        kanal = guildcfg.get(message.guild.id, "kalorien_channel")
+        if kanal and message.channel.id == kanal:
             return self.HANDLED
         att = self._image_of(message)
         if att is None and message.reference is not None:

@@ -13,7 +13,7 @@ Design-Prinzipien:
   *Flo selbst* es auf dem Server? Dazu eine Rollen-Hierarchie-Pruefung (niemand
   ueber dem Aufrufer/Bot, kein Owner, nicht Flo selbst).
 - Erfolge kommen als sauberes Embed zurueck (bot.py schickt es) und landen
-  zusaetzlich im optionalen Mod-Log-Channel (MOD_LOG_CHANNEL_ID) als Protokoll.
+  zusaetzlich im optionalen Mod-Log-Channel (je Server, guildcfg) als Protokoll.
 - Verwarnungen werden in data/moderation.json gespeichert; bei Erreichen von
   WARN_LIMIT setzt es automatisch einen Timeout (WARN_TIMEOUT_SECONDS).
 - Purge schuetzt angepinnte Nachrichten und loescht auch >14 Tage alte (einzeln).
@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 import discord
 
 import ai
+import guildcfg
 from store import JsonStore
 
 log = logging.getLogger("dcbot.mod")
@@ -170,7 +171,7 @@ class Moderation:
             "Moderation aktiv (Purge bis %d · warn/timeout/kick/ban · "
             "Warn-Limit %d -> %s Timeout · Mod-Log: %s).",
             MAX_PURGE, WARN_LIMIT, self._fmt_duration(WARN_TIMEOUT_SECONDS),
-            "an" if MOD_LOG_CHANNEL_ID else "aus",
+            "je Server",
         )
         return True
 
@@ -309,9 +310,10 @@ class Moderation:
     async def _modlog(self, message, embed):
         """Schreibt das Aktions-Embed zusaetzlich ins Mod-Log (falls eingerichtet und
         nicht ohnehin derselbe Channel, in dem der Befehl kam)."""
-        if not MOD_LOG_CHANNEL_ID:
+        cid = guildcfg.get(message.guild.id, "modlog_channel")
+        if not cid:
             return
-        ch = message.guild.get_channel(MOD_LOG_CHANNEL_ID)
+        ch = message.guild.get_channel(cid)
         if ch is None or ch.id == message.channel.id or not hasattr(ch, "send"):
             return
         if not ch.permissions_for(message.guild.me).send_messages:

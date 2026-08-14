@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+import guildcfg
 import leaderboard_img
 import numfmt
 import render
@@ -120,7 +121,9 @@ class Economy:
     COIN = "Flo Coins"
 
     # Wohin Level-Up-Ansagen gehen. Standard: der Commands-Channel. 0 = im selben
-    # Kanal ansagen, in dem die Nachricht kam. Per .env (LEVELUP_CHANNEL_ID) aenderbar.
+    # STANDARD fuer den Level-Up-Kanal. Der geltende Wert kommt je Server aus
+    # guildcfg ("levelup_channel"); diese Konstante ist nur noch der Vorgabewert
+    # aus der .env, den guildcfg selbst liest.
     LEVELUP_CHANNEL_ID = int(os.getenv("LEVELUP_CHANNEL_ID", "1512045750362837013") or "0")
     # Titel der Level-Up-Embeds. bot.py nimmt solche Nachrichten vom Auto-Loeschen
     # aus, damit Erfolge im Commands-Channel sichtbar bleiben.
@@ -867,10 +870,12 @@ class Economy:
         await self._flush()
 
     def _levelup_target(self, guild, fallback):
-        """Liefert den Ziel-Channel fuer Level-Up-Ansagen (Commands-Channel, sonst
-        der Kanal, in dem die Aktion passierte)."""
-        if guild is not None and self.LEVELUP_CHANNEL_ID:
-            ch = guild.get_channel(self.LEVELUP_CHANNEL_ID)
+        """Liefert den Ziel-Channel fuer Level-Up-Ansagen: den Kanal, den DIESER
+        Server dafuer eingestellt hat (guildcfg 'levelup_channel'), sonst den
+        Kanal, in dem die Aktion passierte."""
+        cid = guildcfg.get(guild.id, "levelup_channel") if guild is not None else 0
+        if guild is not None and cid:
+            ch = guild.get_channel(cid)
             if ch is not None:
                 perms = ch.permissions_for(guild.me)
                 if perms.view_channel and perms.send_messages:

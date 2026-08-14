@@ -129,6 +129,8 @@ class WebPanel:
             web.get("/api/avatar/{uid}", self._api_avatar),
             web.get("/api/features", self._api_features),
             web.post("/api/feature", self._api_feature),
+            web.get("/api/guildcfg", self._api_guildcfg),
+            web.post("/api/guildcfg", self._api_guildcfg_set),
             web.post("/api/update", self._api_update),
         ])
         return app
@@ -1128,13 +1130,104 @@ class WebPanel:
             if on and not self._loaded_flags().get(key, False):
                 return web.json_response({"ok": False,
                                           "error": "Modul ist nicht geladen (Neustart nötig)"}, status=400)
-            res = await features.set_feature(key, on)
+            # Mit 'guild' schaltet der Knopf NUR diesen Server, ohne ihn global.
+            gid = self._as_int(data.get("guild"), 0)
+            if gid:
+                res = await features.set_guild(gid, key, on)
+            else:
+                res = await features.set_feature(key, on)
             if res is None:
                 return web.json_response({"ok": False, "error": "unbekanntes Feature"}, status=400)
         except Exception:  # noqa: BLE001
             log.exception("Feature-Schalter fehlgeschlagen")
             return web.json_response({"ok": False, "error": "fehler"}, status=500)
         return web.json_response({"ok": True, "key": key, "on": res})
+
+    # --- Einstellungen je Server -----------------------------------------
+    def _guild_by_id(self, gid):
+        """Server-Objekt zu einer ID (None, wenn Flo dort nicht ist)."""
+        if not gid or self._client is None:
+            return None
+        try:
+            return self._client.get_guild(int(gid))
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _cfg_wert(typ, wert):
+        """Einen Einstellungs-Wert fuers Formular aufbereiten. Kanal-IDs gehen als
+        TEXT raus: eine Discord-ID ist groesser als JavaScripts genaue Zahlen,
+        als Zahl kaeme im Browser eine falsche ID zurueck."""
+        if typ == "channel":
+            return str(wert or "")
+        if typ == "channels":
+            return ",".join(str(c) for c in (wert or []))
+        return wert
+
+    async def _api_guildcfg(self, request):
+        """Alles, was die Server-Seite fuer EINEN Server braucht: seine
+        Einstellungen, die Kanalliste zum Auswaehlen und seine Feature-Schalter.
+        Ein Aufruf statt drei - die Seite baut sich daraus komplett auf."""
+        self._guard(request)
+        gid = self._as_int(request.query.get("guild"), 0)
+        guild = self._guild_by_id(gid)
+        if guild is None:
+            return web.json_response({"ok": False, "error": "Server nicht gefunden"},
+                                     status=404)
+        try:
+            import guildcfg
+            settings = []
+            for e in guildcfg.alle(gid):
+                # Werte fuer HTML aufbereiten: IDs als Text (JS-Zahlen sind zu
+                # klein fuer Discord-Snowflakes), Listen als Komma-Text.
+                settings.append({**e,
+                                 "wert": self._cfg_wert(e["typ"], e["wert"]),
+                                 "standard": self._cfg_wert(e["typ"], e["standard"]),
+                                 "text": guildcfg.text(gid, e["key"])})
+            kanaele = [{"id": str(c.id), "name": c.name}
+                       for c in (getattr(guild, "text_channels", None) or [])]
+        except Exception:  # noqa: BLE001
+            log.exception("Server-Einstellungen konnten nicht gelesen werden")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
+        try:
+            import features
+            feats = features.state(self._loaded_flags(), gid)
+        except Exception:  # noqa: BLE001
+            feats = []
+        return web.json_response({
+            "ok": True,
+            "guild": {"id": str(guild.id), "name": guild.name},
+            "settings": settings,
+            "channels": kanaele,
+            "features": feats,
+        })
+
+    async def _api_guildcfg_set(self, request):
+        """Eine Einstellung eines Servers setzen (oder mit 'standard' zuruecksetzen)."""
+        self._guard(request)
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = {}
+        gid = self._as_int(data.get("guild"), 0)
+        key = str(data.get("key", "")).strip()
+        wert = data.get("value")
+        if isinstance(wert, bool):
+            wert = "an" if wert else "aus"
+        guild = self._guild_by_id(gid)
+        if guild is None:
+            return web.json_response({"ok": False, "error": "Server nicht gefunden"},
+                                     status=404)
+        try:
+            import guildcfg
+            ok, _wert, fehler = await guildcfg.setzen(gid, key, str(wert), guild)
+            if not ok:
+                return web.json_response({"ok": False, "error": fehler}, status=400)
+            return web.json_response({"ok": True, "key": key,
+                                      "text": guildcfg.text(gid, key)})
+        except Exception:  # noqa: BLE001
+            log.exception("Server-Einstellung konnte nicht gesetzt werden")
+            return web.json_response({"ok": False, "error": "fehler"}, status=500)
 
 
 # --- Singleton + Modul-API ---------------------------------------------------

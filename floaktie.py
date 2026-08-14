@@ -943,6 +943,36 @@ class FloAktie:
         self._zuletzt_gezaehlt = gezaehlt
         return people, streams, video
 
+    @staticmethod
+    def _als_liste(guilds):
+        """Ein Server oder mehrere - beides ist erlaubt.
+
+        Es gibt genau EINE $FLO-Aktie fuer alle Server. Welche Server ihren Kurs
+        bewegen duerfen, entscheidet bot.py (guildcfg 'aktie_zaehlt') und reicht
+        die Liste hier herein."""
+        if guilds is None:
+            return []
+        if isinstance(guilds, (list, tuple, set, frozenset)):
+            return [g for g in guilds if g is not None]
+        return [guilds]
+
+    def _measure_alle(self, guilds):
+        """Summiert die Voice-Aktivitaet ueber alle mitzaehlenden Server."""
+        liste = self._als_liste(guilds)
+        if len(liste) == 1:
+            return self._measure(liste[0])
+        people = streams = video = 0
+        namen = []
+        for g in liste:
+            p, s, v = self._measure(g)
+            people += p
+            streams += s
+            video += v
+            namen.extend(self._zuletzt_gezaehlt)
+        # _measure hat die Namen je Server ueberschrieben - hier die Summe.
+        self._zuletzt_gezaehlt = namen
+        return people, streams, video
+
     def activity_of(self, people, streams=0, video=0, msgs=0):
         """Aktivitaetspunkte: jeder im Call zaehlt 1, jeder Livestream EXTRA,
         jede Kamera extra, Nachrichten anteilig (gedeckelt gegen Spam-Pumpen).
@@ -1157,7 +1187,7 @@ class FloAktie:
                 return None
         except Exception:  # noqa: BLE001
             return None
-        people, streams, video = self._measure(guild)
+        people, streams, video = self._measure_alle(guild)
         msgs = max(0, int(st.get("msg_count", 0)) - int(st.get("last_msg_count", 0)))
         try:
             antwort = await ai.generate(self._ki_lage(people, streams, video, msgs),
@@ -1378,12 +1408,16 @@ class FloAktie:
         """Loop-Einstieg (bot.py, alle FLOAKTIE_SAMPLE_SECONDS - Standard 60 s): misst
         die aktuelle Aktivitaet (Call-Leute + Streamer + Kameras + Nachrichten seit
         dem letzten Takt) und bewegt den Kurs SOFORT - viel los -> steigt, wenig ->
-        faellt."""
-        if not self._enabled or guild is None or self.is_off():
+        faellt.
+
+        'guild' darf ein Server oder eine Liste von Servern sein: die Aktie ist
+        fuer alle Server dieselbe, ihre Aktivitaet wird zusammengezaehlt."""
+        guilds = self._als_liste(guild)
+        if not self._enabled or not guilds or self.is_off():
             return
         try:
             st = self._state()
-            people, streams, video = self._measure(guild)
+            people, streams, video = self._measure_alle(guilds)
             total_msgs = int(st.get("msg_count", 0))
             msgs_since = max(0, total_msgs - int(st.get("last_msg_count", total_msgs)))
             st["last_msg_count"] = total_msgs
@@ -1425,26 +1459,37 @@ class FloAktie:
     async def pay_voice_dividends(self, guild):
         """Zahlt jedem Aktionaer, der GERADE aktiv im Voice ist, seine Dividende.
         Gleiche Regeln wie die Voice-XP (kein AFK, nicht taub, >=2 im Kanal).
-        bot.py ruft das im Voice-Takt auf."""
-        if not self._enabled or guild is None or self.is_off():
+        bot.py ruft das im Voice-Takt auf - mit einem Server oder mit allen.
+
+        Wer auf ZWEI Servern gleichzeitig im Call sitzt, bekommt trotzdem nur
+        einmal: es gibt einen Coin-Topf, also auch nur eine Dividende je Takt."""
+        guilds = self._als_liste(guild)
+        if not self._enabled or not guilds or self.is_off():
             return
         if not self._holdings():
             return
         changed = False
-        for vc in getattr(guild, "voice_channels", []):
-            if guild.afk_channel and vc.id == guild.afk_channel.id:
-                continue
-            members = [m for m in vc.members if not getattr(m, "bot", False)]
-            if len(members) < 2:
-                continue
-            for m in members:
-                vs = getattr(m, "voice", None)
-                if vs is None or getattr(vs, "self_deaf", False) or getattr(vs, "deaf", False):
+        bezahlt = set()
+        for g in guilds:
+            afk_id = getattr(getattr(g, "afk_channel", None), "id", None)
+            for vc in (getattr(g, "voice_channels", None) or []):
+                if afk_id is not None and getattr(vc, "id", None) == afk_id:
                     continue
-                bonus = self.dividend_for(m.id)
-                if bonus > 0:
-                    economy.add_coins(m.id, bonus, reason="dividende")
-                    changed = True
+                members = [m for m in (getattr(vc, "members", None) or [])
+                           if not getattr(m, "bot", False)]
+                if len(members) < 2:
+                    continue
+                for m in members:
+                    if m.id in bezahlt:
+                        continue
+                    vs = getattr(m, "voice", None)
+                    if vs is None or getattr(vs, "self_deaf", False) or getattr(vs, "deaf", False):
+                        continue
+                    bonus = self.dividend_for(m.id)
+                    if bonus > 0:
+                        bezahlt.add(m.id)
+                        economy.add_coins(m.id, bonus, reason="dividende")
+                        changed = True
         if changed:
             try:
                 await economy.flush()

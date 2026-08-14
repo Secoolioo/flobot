@@ -3,7 +3,7 @@
 Befehle (nach 'Flo'):  quiz, zahlenraten, ssp <schere|stein|papier>,
                        coinflip [einsatz] [kopf|zahl], slot [einsatz],
                        wuerfel [NdM]
-Passiv:  Counting-Channel (optional via COUNTING_CHANNEL_ID), Antworten auf
+Passiv:  Counting-Channel (je Server einstellbar, guildcfg), Antworten auf
          laufende Quiz-/Zahlenraten-Runden, und zufaellige 'Schnell-tippen'-Events
          (bot.py ruft dafuer maybe_event() periodisch auf).
 
@@ -28,6 +28,7 @@ import discord
 import ai
 import casino
 import economy
+import guildcfg
 import numfmt
 import render
 from store import JsonStore
@@ -845,7 +846,7 @@ class Games:
         self._enabled = True
         log.info(
             "Spiele-Feature aktiv (Counting: %s, Events: %.0f%%, %d Event-Woerter).",
-            "an" if COUNTING_CHANNEL_ID else "aus", EVENT_CHANCE * 100,
+            "je Server", EVENT_CHANCE * 100,
             len(self._event_words),
         )
         return True
@@ -1280,7 +1281,10 @@ class Games:
 
     # --- Counting-Channel ----------------------------------------------------
     async def _check_counting(self, message):
-        if not COUNTING_CHANNEL_ID or message.channel.id != COUNTING_CHANNEL_ID:
+        # Welcher Kanal das ist, stellt jeder Server selbst ein (guildcfg).
+        gid = getattr(getattr(message, "guild", None), "id", 0)
+        kanal = guildcfg.get(gid, "zaehl_channel") if gid else 0
+        if not kanal or message.channel.id != kanal:
             return False
         assert self._store is not None
         state = self._store.data.setdefault("counting", {}).setdefault(
@@ -1400,8 +1404,9 @@ class Games:
             pass
 
     def _pick_event_channel(self, guild):
-        if EVENT_CHANNEL_ID:
-            ch = guild.get_channel(EVENT_CHANNEL_ID)
+        cid = guildcfg.get(getattr(guild, "id", 0), "event_channel")
+        if cid:
+            ch = guild.get_channel(cid)
             if ch is not None:
                 return ch
         if guild.system_channel and guild.system_channel.permissions_for(guild.me).send_messages:

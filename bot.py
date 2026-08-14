@@ -32,6 +32,7 @@ import floaktie
 import fun
 import food
 import games
+import guildcfg
 import handel
 import giveaway
 import lotto
@@ -72,6 +73,11 @@ log = logging.getLogger("dcbot")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPLICATION_ID = os.getenv("APPLICATION_ID", "")
+# HAUPTSERVER - Flos Zuhause. Flo laeuft auf ALLEN Servern, auf die er eingeladen
+# wird; diese ID ist keine Sperre mehr, sondern sagt nur, wo die Sachen von Haus
+# aus AN sind, die man einem fremden Server nicht ungefragt antut (Server-Icon
+# tauschen, den Aktienkurs bewegen). Alles Weitere stellt jeder Server selbst ein
+# (guildcfg). Ohne GUILD_ID laeuft der Bot trotzdem - dann eben ohne Zuhause.
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 # Bot-Besitzer: nur diese Person darf den ganzen Bot per 'Flo restart' neu starten.
 # Standard = Secoolio; per .env (OWNER_ID) ueberschreibbar.
@@ -192,6 +198,9 @@ SCHULDEN_ENABLED = schulden.setup()
 WEBPANEL_ENABLED = webpanel.setup()
 # Laufzeit-Schalter: einzelne Funktionen per Panel an/aus (ueberlebt Neustarts).
 features.setup()
+# Einstellungen JE SERVER (Kanaele, Lautstaerke, Bayrisch, ...). Flo laeuft auf
+# mehreren Servern; ohne eigenen Wert gilt weiterhin der Standard aus der .env.
+guildcfg.setup()
 # Welche Feature-Module beim Start geladen wurden - das Panel zeigt/schaltet nur
 # geladene Module (nicht geladene brauchen einen Neustart). features.is_on(key)
 # legt darueber die Laufzeit-Schalter.
@@ -602,9 +611,9 @@ class FloBot(discord.Client):
 
     def __init__(self, **options):
         super().__init__(**options)
-        # Merkt sich das zuletzt gesetzte Bild, damit nicht unnoetig editiert wird
-        # (Discord limitiert Server-Aenderungen).
-        self._current_filename = None
+        # Merkt sich JE SERVER das zuletzt gesetzte Bild, damit nicht unnoetig
+        # editiert wird (Discord limitiert Server-Aenderungen).
+        self._current_filename = {}
         self._weisheit_index = 0
         # Zwischenspeicher der gerenderten Hilfe-Karten (PNG je Kategorie).
         self._help_png_cache = {}
@@ -768,47 +777,59 @@ class FloBot(discord.Client):
         emb.set_footer(text=f"{name} <frage> geht immer · Titel im Shop ändern die Anrede")
         return emb
 
+    def icon_guilds(self):
+        """Alle Server, die ihr Icon von Flo setzen lassen wollen.
+
+        Ein frisch eingeladener Server bekommt sein Icon NICHT ungefragt
+        getauscht - das muss dort erst eingeschaltet werden (guildcfg
+        'icon_auto', von Haus aus nur auf dem Hauptserver an)."""
+        return [g for g in self.guilds if guildcfg.an(g.id, "icon_auto")]
+
     async def update_icon(self, *, force = False):
-        """Setzt das Server-Icon, falls ein anderes Bild faellig ist."""
+        """Setzt das Server-Icon auf jedem Server, der das eingeschaltet hat.
+        Rueckgabe: Anzahl der Server, bei denen wirklich etwas geaendert wurde."""
         now = datetime.now(TIMEZONE)
         filename = schedule_logic.get_image_filename(now)
 
-        if filename == self._current_filename and not force:
-            return False
+        ziele = self.icon_guilds()
+        if not ziele:
+            return 0
+        # Datei nur EINMAL lesen, egal wie viele Server sie bekommen.
+        faellig = [g for g in ziele
+                   if force or self._current_filename.get(g.id) != filename]
+        if not faellig:
+            return 0
 
         path = IMAGE_DIR / filename
         if not path.exists():
             log.error("Bilddatei fehlt: %s", path)
-            return False
-
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            log.error(
-                "Server %s nicht gefunden. Bot einladen: %s", GUILD_ID, invite_url()
-            )
-            return False
-
-        if not guild.me.guild_permissions.manage_guild:
-            log.error("Bot fehlt die Berechtigung 'Server verwalten' (Manage Server).")
-            return False
-
+            return 0
         try:
             data = path.read_bytes()
-            await guild.edit(
-                icon=data,
-                reason="Automatische Tageszeit-/Jahreszeit-Anpassung",
-            )
-        except (discord.HTTPException, OSError) as exc:
-            log.error("Icon-Aenderung fehlgeschlagen: %s", exc)
-            return False
+        except OSError as exc:
+            log.error("Bilddatei nicht lesbar: %s", exc)
+            return 0
 
-        self._current_filename = filename
-        log.info(
-            "Server-Icon gesetzt: %s  (%s)",
-            filename,
-            now.strftime("%Y-%m-%d %H:%M %Z"),
-        )
-        return True
+        geaendert = 0
+        for guild in faellig:
+            if not guild.me.guild_permissions.manage_guild:
+                log.error("%s: Flo fehlt 'Server verwalten' - Icon bleibt.", guild.name)
+                continue
+            try:
+                await guild.edit(
+                    icon=data,
+                    reason="Automatische Tageszeit-/Jahreszeit-Anpassung",
+                )
+            except (discord.HTTPException, OSError) as exc:
+                log.error("%s: Icon-Aenderung fehlgeschlagen: %s", guild.name, exc)
+                continue
+            self._current_filename[guild.id] = filename
+            geaendert += 1
+            log.info(
+                "Server-Icon gesetzt: %s auf %s  (%s)",
+                filename, guild.name, now.strftime("%Y-%m-%d %H:%M %Z"),
+            )
+        return geaendert
 
     async def run_check(self):
         """Diagnose: Login, Server, Rechte und Bilder pruefen - ohne Aenderung."""
@@ -817,18 +838,25 @@ class FloBot(discord.Client):
         log.info("Lokale Zeit: %s", now.strftime("%Y-%m-%d %H:%M %Z"))
         log.info("Aktuell faelliges Bild: %s", target)
 
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            log.error("Server %s NICHT gefunden - Bot ist dort wohl nicht.", GUILD_ID)
-            log.error("Einladen mit: %s", invite_url())
+        if not self.guilds:
+            log.error("Flo ist auf KEINEM Server. Einladen mit: %s", invite_url())
             return
 
-        log.info("Server gefunden: %s (Mitglieder: %s)", guild.name, guild.member_count)
-        has_perm = guild.me.guild_permissions.manage_guild
-        log.info(
-            "Berechtigung 'Server verwalten': %s",
-            "JA" if has_perm else "NEIN - bitte dem Bot diese Rolle/Recht geben!",
-        )
+        log.info("Flo ist auf %d Server(n):", len(self.guilds))
+        for guild in self.guilds:
+            zuhause = " [Hauptserver]" if GUILD_ID and guild.id == GUILD_ID else ""
+            eigene = len(guildcfg.alle(guild.id))
+            icon = "an" if guildcfg.an(guild.id, "icon_auto") else "aus"
+            log.info(
+                "   %s (ID %s, %s Mitglieder)%s - Icon-Automatik %s, "
+                "'Server verwalten': %s, %d Einstellungen",
+                guild.name, guild.id, guild.member_count, zuhause, icon,
+                "JA" if guild.me.guild_permissions.manage_guild else "NEIN",
+                eigene,
+            )
+        if GUILD_ID and self.get_guild(GUILD_ID) is None:
+            log.error("Der Hauptserver %s ist NICHT dabei - GUILD_ID falsch gesetzt?",
+                      GUILD_ID)
 
         log.info("Bilder im Ordner %s:", IMAGE_DIR)
         for fn in schedule_logic.all_image_filenames():
@@ -861,62 +889,90 @@ class FloBot(discord.Client):
 
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
     async def voice_xp_loop(self):
-        """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit)."""
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            return
-        try:
-            await economy.tick_voice(guild)
-        except Exception:
-            log.exception("Voice-XP-Loop Fehler - laeuft weiter")
-        # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende.
+        """Gibt regelmaessig XP an aktive Mitglieder in Sprachkanaelen (Voice-Zeit).
+        Laeuft ueber ALLE Server - Level und Coins sind fuer alle dieselben."""
+        for guild in self.guilds:
+            if not features.is_on_in(guild.id, "economy"):
+                continue
+            try:
+                await economy.tick_voice(guild)
+            except Exception:
+                log.exception("Voice-XP-Loop Fehler (%s) - laeuft weiter", guild.name)
+        # FloCorp-Aktionaere kassieren im gleichen Takt ihre Voice-Dividende. In
+        # EINEM Aufruf ueber alle Server: wer auf zweien im Call sitzt, soll die
+        # Dividende trotzdem nur einmal bekommen.
         if FLOAKTIE_ENABLED and features.is_on("floaktie"):
             try:
-                await floaktie.pay_voice_dividends(guild)
+                await floaktie.pay_voice_dividends(self.aktien_guilds())
             except Exception:
                 log.exception("FloCorp-Dividenden-Zahlung fehlgeschlagen - laeuft weiter")
 
     @tasks.loop(seconds=music.VOICE_HEAL_SECONDS)
     async def voice_heal_loop(self):
         """Voice-Watchdog: haelt den Musik-Bot in seinem Sprachkanal und repariert
-        Desyncs/Zombie-Verbindungen selbst (siehe music.heal_voice)."""
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            return
-        try:
-            await music.heal_voice(guild)
-        except Exception:
-            log.exception("Voice-Heal-Loop Fehler - laeuft weiter")
+        Desyncs/Zombie-Verbindungen selbst (siehe music.heal_voice). Jeder Server
+        hat seinen eigenen Player, also auch seinen eigenen Watchdog."""
+        for guild in self.guilds:
+            try:
+                await music.heal_voice(guild)
+            except Exception:
+                log.exception("Voice-Heal-Loop Fehler (%s) - laeuft weiter", guild.name)
 
     @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
     async def event_loop(self):
         """Zieht im Takt mit kleiner Wahrscheinlichkeit ein Zufalls-Event (Schnell-tippen)."""
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            return
-        try:
-            await games.maybe_event(guild)
-        except Exception:
-            log.exception("Event-Loop Fehler - laeuft weiter")
+        for guild in self.guilds:
+            if not features.is_on_in(guild.id, "games"):
+                continue
+            try:
+                await games.maybe_event(guild)
+            except Exception:
+                log.exception("Event-Loop Fehler (%s) - laeuft weiter", guild.name)
 
-    def _event_channel(self):
-        """Ziel-Channel fuer oeffentliche Ansagen (Haendler, Lotto, ...): der
-        Level-Up-/Commands-Channel, sonst der System-Channel. None, wenn nirgends
-        gesendet werden darf."""
-        guild = self.get_guild(GUILD_ID)
+    def _event_channel(self, guild):
+        """Ziel-Channel fuer oeffentliche Ansagen (Haendler, Lotto, ...) auf DIESEM
+        Server: der eingestellte Ansagen-Kanal, sonst der System-Channel. None,
+        wenn dort nirgends gesendet werden darf."""
         if guild is None:
             return None
-        channel = guild.get_channel(economy.LEVELUP_CHANNEL_ID) if ECONOMY_ENABLED else None
+        cid = guildcfg.get(guild.id, "ansage_channel")
+        channel = guild.get_channel(cid) if cid else None
         if channel is None or not channel.permissions_for(guild.me).send_messages:
             channel = guild.system_channel
         if channel is None or not channel.permissions_for(guild.me).send_messages:
             return None
         return channel
 
+    def _ansage_channels(self, feature=None):
+        """Je Server der Kanal fuer oeffentliche Ansagen - fuer alles, was die
+        ganze Wirtschaft betrifft (Haendler, Lotto, Shop). Coins und Titel sind
+        fuer alle Server dieselben, also erfaehrt es auch jeder Server.
+        Server, die das Feature abgeschaltet haben, bleiben aussen vor."""
+        raus = []
+        for guild in self.guilds:
+            if feature and not features.is_on_in(guild.id, feature):
+                continue
+            channel = self._event_channel(guild)
+            if channel is not None:
+                raus.append(channel)
+        return raus
+
+    def aktien_guilds(self):
+        """Alle Server, deren Calls und Chat den $FLO-Kurs bewegen duerfen.
+
+        Es gibt genau EINE Aktie. Ein neu dazugekommener Server soll den Kurs
+        nicht ungefragt mitbewegen - das schaltet man dort erst ein (guildcfg
+        'aktie_zaehlt', von Haus aus nur auf dem Hauptserver an)."""
+        return [g for g in self.guilds
+                if guildcfg.an(g.id, "aktie_zaehlt")
+                and features.is_on_in(g.id, "floaktie")]
+
     @tasks.loop(seconds=MERCHANT_TICK_SECONDS)
     async def merchant_loop(self):
         """Prueft, ob der fahrende Haendler gerade ankommt oder weiterzieht, und
-        postet die Ansage (mit Kauf-/Tausch-Panel beim Eintreffen)."""
+        postet die Ansage (mit Kauf-/Tausch-Panel beim Eintreffen) auf jedem
+        Server. Jeder Server bekommt ein EIGENES Panel - eine View gehoert zu
+        genau einer Nachricht."""
         try:
             res = await merchant.tick()
         except Exception:
@@ -924,18 +980,18 @@ class FloBot(discord.Client):
             return
         if res is None:
             return
-        channel = self._event_channel()
-        if channel is None:
-            return
-        try:
-            if res.kind == "arrive" and res.view is not None:
-                msg = await channel.send(embed=res.embed, view=res.view)
-                res.view.message = msg
-                self.protect_message(msg)
-            else:
-                await channel.send(embed=res.embed)
-        except discord.HTTPException:
-            log.warning("Haendler-Ansage konnte nicht gesendet werden")
+        for channel in self._ansage_channels("merchant"):
+            try:
+                if res.kind == "arrive":
+                    view = merchant.build_view()
+                    msg = await channel.send(embed=res.embed, view=view)
+                    view.message = msg
+                    self.protect_message(msg)
+                else:
+                    await channel.send(embed=res.embed)
+            except discord.HTTPException:
+                log.warning("Haendler-Ansage konnte in #%s nicht gesendet werden",
+                            getattr(channel, "name", "?"))
 
     @tasks.loop(seconds=LOTTO_TICK_SECONDS)
     async def lotto_loop(self):
@@ -948,14 +1004,13 @@ class FloBot(discord.Client):
             return
         if res is None:
             return
-        channel = self._event_channel()
-        if channel is None:
-            return
-        try:
-            content = " ".join(f"<@{u}>" for u in res.winner_ids) or None
-            await channel.send(content=content, embed=res.embed)
-        except discord.HTTPException:
-            log.warning("Lotto-Ansage konnte nicht gesendet werden")
+        content = " ".join(f"<@{u}>" for u in res.winner_ids) or None
+        for channel in self._ansage_channels("lotto"):
+            try:
+                await channel.send(content=content, embed=res.embed)
+            except discord.HTTPException:
+                log.warning("Lotto-Ansage konnte in #%s nicht gesendet werden",
+                            getattr(channel, "name", "?"))
 
     @tasks.loop(seconds=SCHULDEN_MAHN_SECONDS)
     async def schulden_mahn_loop(self):
@@ -983,22 +1038,24 @@ class FloBot(discord.Client):
         Leute im Call + Livestreams + Chat -> rauf, gar nichts -> langsam runter."""
         if not features.is_on("floaktie"):
             return          # Panel-Schalter gilt auch fuer den Kurs-Takt
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            # Ohne Guild misst der Takt NICHTS - der Kurs stand dann still, ohne
+        guilds = self.aktien_guilds()
+        if not guilds:
+            # Ohne Server misst der Takt NICHTS - der Kurs stand dann still, ohne
             # dass irgendwo etwas im Log auftauchte. Jetzt sagt er es (einmal).
             if not self._floaktie_guild_warned:
                 self._floaktie_guild_warned = True
-                log.warning("FloCorp: Guild %s nicht auffindbar - die Aktivitaet kann "
-                            "nicht gemessen werden (GUILD_ID falsch gesetzt?).", GUILD_ID)
+                log.warning("FloCorp: kein Server zaehlt fuer die Aktie - die "
+                            "Aktivitaet kann nicht gemessen werden. Einschalten "
+                            "mit 'Flo einstellung aktie_zaehlt an' (GUILD_ID = %s).",
+                            GUILD_ID)
             return
         self._floaktie_guild_warned = False
         try:
-            await floaktie.sample_and_tick(guild, dt=STOCK_SAMPLE_SECONDS)
+            await floaktie.sample_and_tick(guilds, dt=STOCK_SAMPLE_SECONDS)
             # Flo schaut sich den Markt an und passt die Bewegung an. Kuemmert sich
             # selbst um den Abstand (KI_ALLE_SEK) - hier nur anstossen.
             try:
-                await floaktie.ki_tick(guild)
+                await floaktie.ki_tick(guilds)
             except Exception:
                 log.exception("KI-Markt-Analyse fehlgeschlagen - Loop laeuft weiter")
         except Exception:
@@ -1034,14 +1091,10 @@ class FloBot(discord.Client):
             log.exception("Vermoegenssteuer fehlgeschlagen - Loop laeuft weiter")
 
     async def _announce_legendary(self, items):
-        """Ruft legendaere Shop-Titel oeffentlich aus (nur heute im Angebot!)."""
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            return
-        channel = guild.get_channel(economy.LEVELUP_CHANNEL_ID)
-        if channel is None or not channel.permissions_for(guild.me).send_messages:
-            channel = guild.system_channel
-        if channel is None:
+        """Ruft legendaere Shop-Titel oeffentlich aus (nur heute im Angebot!).
+        Der Shop ist fuer alle Server derselbe - also erfaehrt es auch jeder."""
+        channels = self._ansage_channels("economy")
+        if not channels:
             return
         zeilen = []
         for i in items:
@@ -1058,10 +1111,12 @@ class FloBot(discord.Client):
             title=f"{top.get('emoji', '🟡')} {stufe.upper()} im Shop!",
             description="\n".join(zeilen) + f"\n\nNur **heute** – `{ai.bot_name()} shop` 🏃",
             color=discord.Color(int(top.get("color", 0xF1C40F))))
-        try:
-            await channel.send(embed=emb)
-        except discord.HTTPException:
-            log.warning("Legendary-Ansage konnte nicht gesendet werden")
+        for channel in channels:
+            try:
+                await channel.send(embed=emb)
+            except discord.HTTPException:
+                log.warning("Legendary-Ansage konnte in #%s nicht gesendet werden",
+                            getattr(channel, "name", "?"))
 
     def _keep_bot_msg(self, m):
         """True = diese Bot-Nachricht ist vom Auto-Loeschen ausgenommen: Level-Up-
@@ -1085,6 +1140,21 @@ class FloBot(discord.Client):
             return False
         return True
 
+    @staticmethod
+    def autodelete_ids(guild_id):
+        """Die Aufraeum-Kanaele DIESES Servers (Standard: die aus der .env).
+        Als set, weil danach nur noch 'ist diese ID dabei' gefragt wird."""
+        return set(guildcfg.get(guild_id, "autodelete_channels") or ())
+
+    def _autodelete_fuer(self, message):
+        """(ist ein Aufraeum-Kanal, nach wie vielen Sekunden) fuer diese Nachricht."""
+        guild = getattr(message, "guild", None)
+        if guild is None:
+            return False, 0
+        if getattr(message.channel, "id", 0) not in self.autodelete_ids(guild.id):
+            return False, 0
+        return True, guildcfg.get(guild.id, "autodelete_sekunden")
+
     @tasks.loop(seconds=AUTODELETE_SWEEP_SECONDS)
     async def autodelete_sweep_loop(self):
         """Sicherheitsnetz fuers Auto-Loeschen: raeumt in den konfigurierten Channels
@@ -1092,31 +1162,31 @@ class FloBot(discord.Client):
         Start oder Nachrichten, die einen Neustart ueberlebt haben. So bleibt der
         Channel wirklich leer, nicht nur 'ab jetzt'. Erste Runde laeuft sofort beim
         Start (raeumt den Backlog ab)."""
-        if not AUTODELETE_CHANNEL_IDS:
-            return
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
-            return
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=AUTODELETE_SECONDS)
-        for cid in AUTODELETE_CHANNEL_IDS:
-            channel = guild.get_channel(cid)
-            if channel is None or not hasattr(channel, "purge"):
+        for guild in self.guilds:
+            kanaele = self.autodelete_ids(guild.id)
+            if not kanaele:
                 continue
-            perms = channel.permissions_for(guild.me)
-            if not (perms.view_channel and perms.manage_messages and perms.read_message_history):
-                log.warning(
-                    "Auto-Loesch-Sweep: mir fehlen Rechte in #%s (Nachrichten verwalten / "
-                    "Verlauf lesen).", getattr(channel, "name", cid),
-                )
-                continue
-            try:
-                await channel.purge(limit=AUTODELETE_SWEEP_MAX,
-                                    check=self._sweepable, before=cutoff)
-            except discord.HTTPException as exc:
-                log.warning("Auto-Loesch-Sweep in #%s fehlgeschlagen: %s",
-                            getattr(channel, "name", cid), exc)
-            except Exception:
-                log.exception("Auto-Loesch-Sweep Fehler - laeuft weiter")
+            alter = guildcfg.get(guild.id, "autodelete_sekunden")
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=alter)
+            for cid in kanaele:
+                channel = guild.get_channel(cid)
+                if channel is None or not hasattr(channel, "purge"):
+                    continue
+                perms = channel.permissions_for(guild.me)
+                if not (perms.view_channel and perms.manage_messages and perms.read_message_history):
+                    log.warning(
+                        "Auto-Loesch-Sweep: mir fehlen Rechte in #%s (Nachrichten verwalten / "
+                        "Verlauf lesen).", getattr(channel, "name", cid),
+                    )
+                    continue
+                try:
+                    await channel.purge(limit=AUTODELETE_SWEEP_MAX,
+                                        check=self._sweepable, before=cutoff)
+                except discord.HTTPException as exc:
+                    log.warning("Auto-Loesch-Sweep in #%s fehlgeschlagen: %s",
+                                getattr(channel, "name", cid), exc)
+                except Exception:
+                    log.exception("Auto-Loesch-Sweep Fehler - laeuft weiter")
 
     def _queue_delete(self, message, delay):
         """Merkt eine Nachricht fuers gebuendelte Auto-Loeschen vor."""
@@ -1165,7 +1235,10 @@ class FloBot(discord.Client):
         """Meldet eine aktive Spiel-Nachricht beim Auto-Loesch-Schutz an. Nur in den
         Auto-Loesch-Channels noetig (woanders wird ohnehin nichts geloescht). Von den
         Spiel-Modulen (casino, games) aufgerufen, sobald eine Runde startet."""
-        if message is None or message.channel.id not in AUTODELETE_CHANNEL_IDS:
+        if message is None:
+            return
+        ist_aufraeum, _sek = self._autodelete_fuer(message)
+        if not ist_aufraeum:
             return
         self._protected_msg_ids.add(message.id)
 
@@ -1316,17 +1389,19 @@ class FloBot(discord.Client):
         # entfernen. Bewusst GANZ oben (vor dem Bot-Check), damit auch die eigenen
         # Antworten des Bots dort wieder verschwinden. AUSNAHME: Level-Up-Ansagen des
         # Bots bleiben stehen (Erfolge sollen sichtbar bleiben).
-        if message.channel.id in AUTODELETE_CHANNEL_IDS:
+        ist_aufraeum, aufraeum_sek = self._autodelete_fuer(message)
+        if ist_aufraeum:
             # Level-Up-Ansagen UND das aktuelle Musik-Panel bleiben stehen, alles
             # andere wird nach kurzer Zeit geloescht (gebuendelt, siehe
             # autodelete_batch_loop - schont das Rate-Limit).
             if not self._keep_bot_msg(message):
-                self._queue_delete(message, AUTODELETE_SECONDS)
+                self._queue_delete(message, aufraeum_sek)
 
         if message.author.bot:
             # Flo verachtet fremde Bots: postet ein ANDERER Bot (nicht Flo selbst),
             # laestert Flo mit kleiner Wahrscheinlichkeit (Cooldown steckt in fun).
-            if (FUN_ENABLED and features.is_on("chaos") and message.guild is not None
+            if (FUN_ENABLED and message.guild is not None
+                    and features.is_on_in(message.guild.id, "chaos")
                     and self.user is not None and message.author.id != self.user.id):
                 self._spawn(fun.maybe_roast_bot(message))
             return
@@ -1342,6 +1417,9 @@ class FloBot(discord.Client):
             return
 
         content = message.content or ""
+        # Alle Schalter ab hier gelten fuer GENAU DIESEN Server: was der
+        # Nachbarserver abgeschaltet hat, geht hier trotzdem.
+        _on = features.fuer(message.guild.id)
 
         # Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat (auch ohne direkt
         # angesprochen zu sein), damit er dem Gespraech folgen kann, wenn man ihn fragt.
@@ -1350,20 +1428,20 @@ class FloBot(discord.Client):
 
         # --- Passive Hooks: sehen JEDE Nachricht (vor dem Flo-Trigger) ---
         # XP/Coins fuers Schreiben (laeuft nebenher, blockiert nicht).
-        if ECONOMY_ENABLED and features.is_on("economy"):
+        if ECONOMY_ENABLED and _on("economy"):
             self._spawn(economy.on_message(message))
         # Wort-Zaehler: synchron und billig (reine dict-Arbeit, Speichern debounced).
-        if WORDS_ENABLED and features.is_on("words"):
+        if WORDS_ENABLED and _on("words"):
             try:
                 words.note_message(message)
             except Exception:
                 log.exception("Wort-Zaehler-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
-        if FOOD_ENABLED and features.is_on("food"):
+        if FOOD_ENABLED and _on("food"):
             self._spawn(food.on_message_passive(message))
         # Giveaway-Assistent: laeuft gerade eine Frage-Runde ('Einsatz?', 'Dauer?'),
         # ist DIESE Nachricht die Antwort darauf - und sonst nichts (kein KI-Geplapper).
-        if GIVEAWAY_ENABLED and features.is_on("giveaway"):
+        if GIVEAWAY_ENABLED and _on("giveaway"):
             try:
                 if await giveaway.on_message_passive(message):
                     return
@@ -1371,14 +1449,14 @@ class FloBot(discord.Client):
                 log.exception("Giveaway-Hook fehlgeschlagen")
         # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
         # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
-        if GAMES_ENABLED and features.is_on("games"):
+        if GAMES_ENABLED and _on("games"):
             try:
                 if await games.on_message_passive(message):
                     return
             except Exception:
                 log.exception("Spiele-Hook fehlgeschlagen")
         # Seltene Zufalls-Einwuerfe / Auto-Reactions (laeuft nebenher).
-        if FUN_ENABLED and features.is_on("chaos"):
+        if FUN_ENABLED and _on("chaos"):
             self._spawn(fun.on_message_passive(message))
 
         # --- Ab hier nur, wenn Flo angesprochen wird ---
@@ -1457,15 +1535,18 @@ class FloBot(discord.Client):
         # BEWUSST OHNE channel.typing(): das war ein zusaetzlicher API-Roundtrip VOR
         # jedem Befehl (~100-200 ms Extra-Latenz) - die Spiele antworten schnell
         # genug; nur der (langsame) KI-Fallback tippt weiterhin.
-        # Laufzeit-Schalter (Panel): features.is_on(key) legt sich ueber das
-        # Start-Flag - abgeschaltete Funktionen ueberspringt der Durchlauf. Admin
-        # bleibt IMMER an (sonst sperrt man sich selbst aus).
-        _on = features.is_on
+        # Laufzeit-Schalter (Panel): der legt sich ueber das Start-Flag -
+        # abgeschaltete Funktionen ueberspringt der Durchlauf. _on prueft dabei
+        # GLOBAL und fuer GENAU DIESEN Server (features.fuer): der Nachbarserver
+        # darf dieselbe Funktion anhaben. Admin und die Server-Einstellungen
+        # bleiben IMMER an (sonst sperrt man sich selbst aus).
+        _on = features.fuer(getattr(getattr(message, "guild", None), "id", 0))
         antwort = None
         for enabled, handler in (
             (BAYERN_ENABLED and _on("bayern"), bayern.handle),
             (MOD_ENABLED and _on("mod"), moderation.handle),
             (ADMIN_ENABLED, admin.handle),
+            (True, guildcfg.handle),
             (MUSIC_ENABLED and _on("music"), music.handle),
             (VOICE_GAGS_ENABLED and _on("voice"), voicegags.handle),
             (GAMES_ENABLED and _on("games"), games.handle),
@@ -1512,7 +1593,8 @@ class FloBot(discord.Client):
                     or antwort is terraria.HANDLED or antwort is merchant.HANDLED
                     or antwort is lotto.HANDLED or antwort is floaktie.HANDLED
                     or antwort is giveaway.HANDLED or antwort is schulden.HANDLED
-                    or antwort is steal.HANDLED or antwort is bayern.HANDLED):
+                    or antwort is steal.HANDLED or antwort is bayern.HANDLED
+                    or antwort is guildcfg.HANDLED):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
@@ -1526,7 +1608,7 @@ class FloBot(discord.Client):
         # --- KI-Fallback: kein Befehl erkannt -> Flo antwortet wie eine KI ---
         # Das ist normales Reden, kein Befehl -> zaehlt fuer den Aktienkurs.
         self._note_chat_activity(message)
-        if not (AI_ENABLED and features.is_on("ki")):
+        if not (AI_ENABLED and _on("ki")):
             return
         # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je seltener der
         # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
@@ -1539,13 +1621,13 @@ class FloBot(discord.Client):
         # an (Vision), statt nur den Text zu lesen.
         image_url = _first_image_url(message)
         # Dialekt-Modus in diesem Server aktiv? -> Flo antwortet boarisch.
-        bavarian = BAYERN_ENABLED and features.is_on("bayern") and bayern.is_on(message.guild.id)
+        bavarian = BAYERN_ENABLED and _on("bayern") and bayern.is_on(message.guild.id)
         log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
                  " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
                  content[:150])
         # Klingt die Frage nach Terraria? -> mit ECHTEN Wiki-Daten antworten (Embed
         # mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
-        if TERRARIA_ENABLED and features.is_on("terraria") and not image_url and terraria.erkennt_frage(content):
+        if TERRARIA_ENABLED and _on("terraria") and not image_url and terraria.erkennt_frage(content):
             async with message.channel.typing():
                 try:
                     res = await terraria.beantworte(message, ai.strip_lead(content) or content)
@@ -1575,13 +1657,18 @@ class FloBot(discord.Client):
         ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
         await self._reply_chunks(message, antwort)
 
+    def _zaehlt_fuer_aktie(self, gid):
+        """Darf dieser Server den $FLO-Kurs bewegen? (siehe aktien_guilds)."""
+        return bool(gid) and guildcfg.an(gid, "aktie_zaehlt") \
+            and features.is_on_in(gid, "floaktie")
+
     def _note_chat_activity(self, message):
         """Zaehlt eine echte Chat-Nachricht fuer den Aktienkurs (keine Befehle,
-        nur die Haupt-Guild)."""
+        und nur von Servern, die fuer die Aktie zaehlen duerfen)."""
         if not (FLOAKTIE_ENABLED and features.is_on("floaktie")):
             return
         gid = getattr(getattr(message, "guild", None), "id", 0)
-        if GUILD_ID and gid != GUILD_ID:
+        if not self._zaehlt_fuer_aktie(gid):
             return
         try:
             floaktie.note_message()
@@ -1596,13 +1683,43 @@ class FloBot(discord.Client):
         # schiebt das den Kurs sofort ein Stueck - man muss nicht auf den
         # Minuten-Takt warten.
         if (FLOAKTIE_ENABLED and features.is_on("floaktie")
-                and not getattr(member, "bot", False)):
+                and not getattr(member, "bot", False)
+                and self._zaehlt_fuer_aktie(getattr(getattr(member, "guild", None), "id", 0))):
             live_neu = getattr(after, "self_stream", False) and not getattr(before, "self_stream", False)
             call_neu = getattr(after, "channel", None) is not None and getattr(before, "channel", None) is None
             if live_neu:
                 self._spawn(floaktie.note_stream_start(member))
             elif call_neu:
                 self._spawn(floaktie.note_voice_join(member))
+
+    async def on_guild_join(self, guild):
+        """Flo wurde auf einen neuen Server eingeladen.
+
+        Dort gilt erstmal ueberall der Standard - Icon-Automatik und Aktien-
+        Zaehlung bleiben AUS, bis jemand sie dort einschaltet. Die Farb-Rollen
+        legen wir gleich an, damit der erste Titelkauf nicht daran haengt."""
+        log.info("Neuer Server: '%s' (ID %s, %s Mitglieder). Einstellungen: "
+                 "'%s einstellungen'.", guild.name, guild.id, guild.member_count,
+                 ai.bot_name())
+        if ECONOMY_ENABLED:
+            try:
+                await economy.ensure_roles(guild)
+            except Exception:
+                log.exception("Rarity-Rollen-Setup fehlgeschlagen in '%s'", guild.name)
+
+    async def on_guild_remove(self, guild):
+        """Flo wurde von einem Server geworfen - dessen Einstellungen koennen weg.
+        Level, Coins und Aktien bleiben: die gehoeren den Leuten, nicht dem Server."""
+        log.info("Server verlassen: '%s' (ID %s).", guild.name, guild.id)
+        self._current_filename.pop(guild.id, None)
+        try:
+            await guildcfg.vergessen(guild.id)
+        except Exception:
+            log.exception("Server-Einstellungen konnten nicht geloescht werden")
+        try:
+            await features.vergessen(guild.id)
+        except Exception:
+            log.exception("Server-Schalter konnten nicht geloescht werden")
 
     async def on_ready(self):
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)
@@ -1620,25 +1737,28 @@ class FloBot(discord.Client):
         # aus, dadurch werden Icon und Status direkt beim Start gesetzt.
         # Bei einem Reconnect feuert on_ready erneut - dank is_running() starten
         # wir die Loops dann nicht doppelt.
+        log.info("Flo laeuft auf %d Server(n): %s", len(self.guilds),
+                 ", ".join(g.name for g in self.guilds) or "(keinem)")
         if AI_ENABLED:
-            guild = self.get_guild(GUILD_ID)
-            if guild is not None:
+            for guild in self.guilds:
                 lesbar = [
                     c.name
                     for c in guild.text_channels
                     if c.permissions_for(guild.me).view_channel
                 ]
                 log.info(
-                    "KI aktiv - lesbare Text-Channels (%d/%d): %s",
-                    len(lesbar), len(guild.text_channels),
+                    "KI aktiv in '%s' - lesbare Text-Channels (%d/%d): %s",
+                    guild.name, len(lesbar), len(guild.text_channels),
                     ", ".join(lesbar) or "KEINE - Bot darf keine Channels lesen!",
                 )
-        if AUTODELETE_CHANNEL_IDS:
-            log.info(
-                "Auto-Loeschen aktiv: Channel(s) %s, jeweils nach %.0f s.",
-                ", ".join(str(c) for c in sorted(AUTODELETE_CHANNEL_IDS)),
-                AUTODELETE_SECONDS,
-            )
+        for guild in self.guilds:
+            kanaele = self.autodelete_ids(guild.id)
+            if kanaele:
+                log.info(
+                    "Auto-Loeschen aktiv in '%s': Channel(s) %s, jeweils nach %.0f s.",
+                    guild.name, ", ".join(str(c) for c in sorted(kanaele)),
+                    guildcfg.get(guild.id, "autodelete_sekunden"),
+                )
         # Rarity-Farb-Rollen direkt beim Start im Server anlegen (idempotent), damit
         # die vier Farben (gruen/blau/lila/gold) sofort existieren - nicht erst beim
         # ersten Kauf. Fehlertolerant: fehlende Rechte sprengen den Start nie.
@@ -1682,16 +1802,20 @@ class FloBot(discord.Client):
         # Web-Panel starten (idempotent: laeuft nur einmal, egal wie oft on_ready feuert).
         if WEBPANEL_ENABLED:
             self._spawn(webpanel.start(self))
-        if AUTODELETE_CHANNEL_IDS and not self.autodelete_sweep_loop.is_running():
+        # Die beiden Aufraeum-Loops laufen IMMER: welche Kanaele aufgeraeumt
+        # werden, entscheidet jeder Server selbst - und zwar zur Laufzeit. Frueher
+        # hing der Start an der .env, ein spaeter eingestellter Kanal wurde dann
+        # bis zum Neustart nicht aufgeraeumt. Ohne Kanaele kostet eine Runde nichts.
+        if not self.autodelete_sweep_loop.is_running():
             self.autodelete_sweep_loop.start()
-        if AUTODELETE_CHANNEL_IDS and not self.autodelete_batch_loop.is_running():
+        if not self.autodelete_batch_loop.is_running():
             self.autodelete_batch_loop.start()
         # Wort-Zaehler: einmaliger History-Backfill (neustart-sicher, laeuft im
         # Hintergrund weiter; is_scanning() ist False, sobald alles eingelesen ist).
         if WORDS_ENABLED and words.is_scanning():
-            guild = self.get_guild(GUILD_ID)
-            if guild is not None:
-                self._spawn(words.backfill(guild))
+            for guild in self.guilds:
+                if features.is_on_in(guild.id, "words"):
+                    self._spawn(words.backfill(guild))
         if ECONOMY_ENABLED and not self.shop_refresh_loop.is_running():
             # Beim Start einmal sicherstellen, dass der Shop fuer HEUTE gewuerfelt ist
             # (falls der Bot ueber den 2-Uhr-Termin hinweg offline war), dann den

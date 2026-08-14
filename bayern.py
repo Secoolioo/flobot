@@ -5,6 +5,10 @@
 - Toggle 'Flo bayrisch [an|aus]' -> ab dann antwortet die KI komplett im Dialekt
   (bot.py gibt is_on() an ai.ask_flo/see_image weiter).
 
+Der Dialekt gilt JE SERVER und ueberlebt jetzt einen Neustart: er steht in
+guildcfg ('bayern'). Vorher lag er nur im Arbeitsspeicher - nach jedem Update
+hat Flo wieder hochdeutsch geredet, ohne dass jemand etwas umgestellt haette.
+
 Reine Deko - faellt nie technisch aus.
 """
 
@@ -15,6 +19,7 @@ import re
 import discord
 
 import ai
+import guildcfg
 
 log = logging.getLogger("dcbot.bayern")
 
@@ -61,9 +66,6 @@ class Bayern:
         self._enabled = False
         self._bot_name = "Flo"
 
-        # Server-IDs, in denen die KI gerade boarisch antwortet.
-        self._on = set()
-
     def setup(self):
         self._bot_name = ai.bot_name()
         self._enabled = True
@@ -75,7 +77,7 @@ class Bayern:
 
     def is_on(self, guild_id):
         """True, wenn die KI in diesem Server gerade boarisch antworten soll."""
-        return bool(guild_id) and guild_id in self._on
+        return bool(guild_id) and guildcfg.an(guild_id, "bayern")
 
     async def handle(self, message):
         if not self._enabled or message.guild is None:
@@ -91,10 +93,9 @@ class Bayern:
         tm = self._TOGGLE_RE.match(cleaned)
         if tm:
             off = (tm.group(1) or "").lower() in ("aus", "off", "weg")
+            await guildcfg.setzen(message.guild.id, "bayern", "aus" if off else "an")
             if off:
-                self._on.discard(message.guild.id)
                 return "Oiso guad, i red wieda normal. 🙂"
-            self._on.add(message.guild.id)
             return "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
 
         # Begruessung?

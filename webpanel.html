@@ -1117,11 +1117,14 @@ function viewServers(){ var c=$("#content"); c.innerHTML=skeletonServers();
 function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); var guilds=d.guilds||[];
   var aktie=d.aktie||{loaded:false,on:false};
   var cards=guilds.length?guilds.map(function(g){ var icon=g.icon?'<img src="'+esc(g.icon)+'" alt="">':esc(initials(g.name));
-    return '<div class="card srv-card reveal"><div class="srv-top"><div class="srv-ic">'+icon+'</div>'+
+    /* Karte = Knopf: ein Klick oeffnet die Einstellungen GENAU dieses Servers.
+       Flo laeuft auf mehreren Servern, jeder hat seine eigenen. */
+    return '<div class="card srv-card reveal" data-gid="'+esc(g.id)+'" data-nm="'+esc(g.name)+'" style="cursor:pointer" title="Einstellungen öffnen"><div class="srv-top"><div class="srv-ic">'+icon+'</div>'+
       '<div><div class="srv-nm">'+esc(g.name)+'</div><div class="srv-id">ID '+esc(g.id)+'</div></div></div>'+
       '<div class="srv-meta"><div><div class="mm">Mitglieder</div><div class="mv">'+fmt(g.members)+'</div></div>'+
       '<div><div class="mm">Kanäle</div><div class="mv">'+fmt(g.channels)+'</div></div>'+
-      (g.owner_id?'<div><div class="mm">Owner</div><div class="mv" style="font-size:12px">'+esc(String(g.owner_id).slice(0,8))+'…</div></div>':"")+'</div></div>'; }).join("")
+      (g.owner_id?'<div><div class="mm">Owner</div><div class="mv" style="font-size:12px">'+esc(String(g.owner_id).slice(0,8))+'…</div></div>':"")+'</div>'+
+      '<div class="cd" style="margin-top:12px">⚙️ Einstellungen öffnen →</div></div>'; }).join("")
     : '<div class="empty" style="grid-column:1/-1"><div class="ei">🖥️</div><div class="et">Keine Server verbunden</div></div>';
 
   v.innerHTML='<div class="sec-h"><h2>Verbundene Guilds</h2><div class="ln"></div><div class="tag">'+guilds.length+' Server</div></div>'+
@@ -1191,6 +1194,99 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
     var b=this; b.disabled=true; b.textContent="Sende…";
     api("/api/server/announce",{method:"POST",body:body}).then(function(r){ if(!r.ok)throw r; b.disabled=false; b.textContent="Senden";
       toast("Ansage gesendet","ok"); $("#annText").value=""; $("#annChan").value=""; }).catch(function(e){ b.disabled=false; b.textContent="Senden"; if(e&&e.auth)return; toast(e&&e.error?e.error:"Senden fehlgeschlagen","err"); }); });
+
+  Array.prototype.forEach.call(v.querySelectorAll(".srv-card[data-gid]"),function(el){
+    el.addEventListener("click",function(){ viewGuildCfg(el.getAttribute("data-gid"),el.getAttribute("data-nm")); }); });
+  observeReveals(v); }
+
+/* ============ EINSTELLUNGEN EINES SERVERS ============
+   Jeder Server hat seine eigenen: Kanäle, Lautstärke, Bayrisch, und welche
+   Funktionen hier laufen. Was hier nicht gesetzt ist, folgt dem Standard. */
+function viewGuildCfg(gid,name){ var c=$("#content"); c.innerHTML=skeletonServers();
+  api("/api/guildcfg?guild="+encodeURIComponent(gid)).then(function(d){ if(!d.ok)throw d;
+    renderGuildCfg(d,name); }).catch(function(e){ if(e&&e.auth)return;
+      c.innerHTML=errState("Einstellungen konnten nicht geladen werden"); }); }
+
+function cfgFeld(s,kanaele){ var id="cfg_"+s.key;
+  if(s.typ==="an_aus") return '<div class="toggle'+(s.wert?" on":"")+'" id="'+id+'" data-key="'+esc(s.key)+'"></div>';
+  if(s.typ==="channel"){ var o='<option value="">— aus —</option>';
+    for(var i=0;i<kanaele.length;i++){ var k=kanaele[i];
+      o+='<option value="'+esc(k.id)+'"'+(String(s.wert)===String(k.id)?" selected":"")+'>#'+esc(k.name)+'</option>'; }
+    return '<select class="sel" id="'+id+'" data-key="'+esc(s.key)+'">'+o+'</select>'; }
+  if(s.typ==="channels"){ var have=String(s.wert||"").split(","); var o2="";
+    for(var j=0;j<kanaele.length;j++){ var k2=kanaele[j];
+      o2+='<option value="'+esc(k2.id)+'"'+(have.indexOf(k2.id)>=0?" selected":"")+'>#'+esc(k2.name)+'</option>'; }
+    return '<select class="sel" multiple size="5" id="'+id+'" data-key="'+esc(s.key)+'" style="height:auto">'+o2+'</select>'; }
+  var extra=(s.min!=null?' min="'+s.min+'"':"")+(s.max!=null?' max="'+s.max+'"':"");
+  return '<input class="inp sm" type="number" id="'+id+'" data-key="'+esc(s.key)+'" value="'+esc(String(s.wert))+'"'+extra+'>'; }
+
+function renderGuildCfg(d,name){ var c=$("#content"); var v=ce("div","view");
+  var g=d.guild||{}; var kanaele=d.channels||[]; var sets=d.settings||[]; var feats=d.features||[];
+  var gruppen=[],nach={};
+  sets.forEach(function(s){ if(!nach[s.gruppe]){ nach[s.gruppe]=[]; gruppen.push(s.gruppe); } nach[s.gruppe].push(s); });
+
+  var bloecke=gruppen.map(function(gr){
+    var zeilen=nach[gr].map(function(s){
+      return '<div class="control-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'+
+        '<div class="cl">'+esc(s.label)+(s.eigen?' <span class="tag" style="margin-left:6px">eigener Wert</span>':"")+'</div>'+
+        '<div class="cd">'+esc(s.hinweis||"")+'</div>'+
+        '<div class="cd" style="margin-top:4px;opacity:.7">Schlüssel <code>'+esc(s.key)+'</code>'+
+        (s.eigen?' · <a href="#" class="cfg-std" data-key="'+esc(s.key)+'">auf Standard zurück</a>':" · Standard")+'</div></div>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+cfgFeld(s,kanaele)+
+        (s.typ==="an_aus"?"":'<button class="btn-sm-gold cfg-save" data-key="'+esc(s.key)+'">OK</button>')+'</div></div>'; }).join("");
+    return '<div class="sec-h"><h2>'+esc(gr)+'</h2><div class="ln"></div></div><div class="card reveal">'+zeilen+'</div>'; }).join("");
+
+  var fzeilen=feats.map(function(f){
+    var sperre=(!f.loaded||!f.global_on);
+    var warum=!f.loaded?"Modul nicht geladen – Neustart nötig"
+             :(!f.global_on?"Global abgeschaltet – gilt für alle Server":esc(f.desc||""));
+    return '<div class="control-row"><div style="flex:1;min-width:0"><div class="cl">'+(f.emoji||"")+' '+esc(f.label)+
+      (sperre?' <span class="tag" style="margin-left:6px">gesperrt</span>':"")+'</div>'+
+      '<div class="cd">'+warum+'</div></div>'+
+      '<div class="toggle'+(f.on?" on":"")+(sperre?" off-lock":"")+'" data-fkey="'+esc(f.key)+'" data-lock="'+(sperre?"1":"")+'"></div></div>'; }).join("");
+
+  v.innerHTML='<div class="sec-h"><h2>'+esc(g.name||name||"Server")+'</h2><div class="ln"></div>'+
+      '<button class="btn-sm-gold" id="cfgBack">← Alle Server</button></div>'+
+    '<div class="card reveal"><div class="cd">Diese Einstellungen gelten <b>nur auf diesem Server</b>. '+
+      'Was hier nicht gesetzt ist, folgt dem Standard aus der <code>.env</code>. '+
+      'Im Chat geht dasselbe mit <code>Flo einstellungen</code>.</div></div>'+
+    bloecke+
+    '<div class="sec-h"><h2>Funktionen auf diesem Server</h2><div class="ln"></div></div>'+
+    '<div class="card reveal">'+(fzeilen||'<div class="cd">Keine Module geladen.</div>')+'</div>';
+  c.innerHTML=""; c.appendChild(v);
+
+  $("#cfgBack").addEventListener("click",function(){ viewServers(); });
+
+  function speichern(key,wert,el){
+    return einmal(el,api("/api/guildcfg",{method:"POST",body:{guild:g.id,key:key,value:wert}}))
+      .then(function(r){ if(!r.ok)throw r; toast("Gespeichert: "+r.text,"ok"); return r; })
+      .catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Speichern fehlgeschlagen","err"); throw e; }); }
+
+  Array.prototype.forEach.call(v.querySelectorAll(".toggle[data-key]"),function(el){
+    el.addEventListener("click",function(){ var next=!el.classList.contains("on");
+      speichern(el.getAttribute("data-key"),next?"an":"aus",el).then(function(){ el.classList.toggle("on",next); }); }); });
+
+  Array.prototype.forEach.call(v.querySelectorAll(".cfg-save"),function(b){
+    b.addEventListener("click",function(){ var key=b.getAttribute("data-key"); var f=$("#cfg_"+key); if(!f)return;
+      var wert;
+      if(f.multiple){ wert=[]; for(var i=0;i<f.options.length;i++)if(f.options[i].selected)wert.push(f.options[i].value);
+        wert=wert.join(",")||"aus"; }
+      else wert=f.value||"aus";
+      speichern(key,wert,b).then(function(){ viewGuildCfg(g.id,g.name); }); }); });
+
+  Array.prototype.forEach.call(v.querySelectorAll(".cfg-std"),function(a){
+    a.addEventListener("click",function(ev){ ev.preventDefault();
+      speichern(a.getAttribute("data-key"),"standard",a).then(function(){ viewGuildCfg(g.id,g.name); }); }); });
+
+  Array.prototype.forEach.call(v.querySelectorAll(".toggle[data-fkey]"),function(el){
+    el.addEventListener("click",function(){
+      if(el.getAttribute("data-lock")){ toast("Dieser Schalter ist hier gesperrt","err"); return; }
+      var next=!el.classList.contains("on");
+      einmal(el,api("/api/feature",{method:"POST",body:{guild:g.id,key:el.getAttribute("data-fkey"),on:next}}))
+        .then(function(r){ if(!r.ok)throw r; el.classList.toggle("on",!!r.on);
+          toast("Funktion "+(r.on?"an":"aus")+" auf diesem Server",r.on?"ok":"info"); })
+        .catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Umschalten fehlgeschlagen","err"); }); }); });
+
   observeReveals(v); }
 
 /* ============ COINS QUICK PAGE ============ */

@@ -6089,6 +6089,430 @@ def test_webpanel_token_deckel():
     assert len(wp._tokens) <= wp._TOKEN_MAX
 
 
+# --- Mehrere Server ---------------------------------------------------------
+def _cfg_frisch():
+    """guildcfg mit leerem Speicher - gibt eine Aufraeum-Funktion zurueck."""
+    import guildcfg
+    alt = (guildcfg.instance._enabled, guildcfg.instance._store,
+           guildcfg.instance._owner_id)
+    guildcfg.instance._enabled = True
+    guildcfg.instance._store = _FakeStore({"guilds": {}})
+    guildcfg.instance._owner_id = 0
+
+    def zurueck():
+        (guildcfg.instance._enabled, guildcfg.instance._store,
+         guildcfg.instance._owner_id) = alt
+    return guildcfg, zurueck
+
+
+def test_guildcfg_trennt_die_server():
+    """Zwei Server, zwei Meinungen: was der eine einstellt, geht den anderen
+    nichts an. Ohne eigenen Wert gilt weiterhin der Standard."""
+    guildcfg, zurueck = _cfg_frisch()
+    try:
+        A, B = 111, 222
+        std = guildcfg.get(A, "lautstaerke")
+        assert guildcfg.get(B, "lautstaerke") == std        # beide auf Standard
+        assert not guildcfg.eigen(A, "lautstaerke")
+
+        ok, wert, _f = asyncio.run(guildcfg.setzen(A, "lautstaerke", "80"))
+        assert ok and wert == 80
+        assert guildcfg.get(A, "lautstaerke") == 80
+        assert guildcfg.get(B, "lautstaerke") == std, "Server B wurde mitgezogen"
+        assert guildcfg.eigen(A, "lautstaerke") and not guildcfg.eigen(B, "lautstaerke")
+
+        # Zurueck auf Standard -> der eigene Wert verschwindet wirklich.
+        asyncio.run(guildcfg.setzen(A, "lautstaerke", "standard"))
+        assert guildcfg.get(A, "lautstaerke") == std
+        assert not guildcfg.eigen(A, "lautstaerke")
+
+        # Grenzen und Unsinn werden abgewiesen - und aendern NICHTS.
+        for murks in ("999", "-5", "abc", "inf", "nan", ""):
+            ok, _w, fehler = asyncio.run(guildcfg.setzen(A, "lautstaerke", murks))
+            assert not ok and fehler, murks
+        assert guildcfg.get(A, "lautstaerke") == std
+
+        # An/Aus in allen Schreibweisen.
+        for ja in ("an", "AN", "on", "1", "ja", "true"):
+            asyncio.run(guildcfg.setzen(A, "bayern", ja))
+            assert guildcfg.an(A, "bayern") is True, ja
+        for nein in ("aus", "off", "0", "nein", "false"):
+            asyncio.run(guildcfg.setzen(A, "bayern", nein))
+            assert guildcfg.an(A, "bayern") is False, nein
+        assert guildcfg.an(B, "bayern") is False
+
+        # Kanaele: Erwaehnung, rohe ID, Liste, und wieder aus.
+        ok, wert, _f = asyncio.run(guildcfg.setzen(A, "ansage_channel",
+                                                   "<#1512045750362837013>"))
+        assert ok and wert == 1512045750362837013
+        assert guildcfg.text(A, "ansage_channel") == "<#1512045750362837013>"
+        ok, wert, _f = asyncio.run(guildcfg.setzen(A, "autodelete_channels",
+                                                   "111222333444555666, 777888999000111222"))
+        assert ok and wert == [111222333444555666, 777888999000111222]
+        ok, wert, _f = asyncio.run(guildcfg.setzen(A, "ansage_channel", "aus"))
+        assert ok and wert == 0 and guildcfg.text(A, "ansage_channel") == "aus"
+
+        # Unbekannter Schluessel: sauberes Nein, kein Absturz.
+        ok, _w, fehler = asyncio.run(guildcfg.setzen(A, "gibtsnicht", "1"))
+        assert not ok and fehler
+        assert guildcfg.get(A, "gibtsnicht") is None
+
+        # Von Hand kaputt editierte Datei -> Standard statt Absturz.
+        guildcfg.instance._store.data["guilds"][str(A)]["lautstaerke"] = "quatsch"
+        assert guildcfg.get(A, "lautstaerke") == std
+
+        # Server weg -> Einstellungen weg.
+        assert asyncio.run(guildcfg.vergessen(A)) is True
+        assert guildcfg.instance._store.data["guilds"].get(str(A)) is None
+    finally:
+        zurueck()
+
+
+def test_guildcfg_befehl_braucht_rechte():
+    """'Flo einstellung ...' darf nur, wer den Server verwalten darf."""
+    import guildcfg
+    guildcfg, zurueck = _cfg_frisch()
+    try:
+        def msg(text, darf):
+            return SimpleNamespace(
+                content=f"Flo {text}",
+                author=SimpleNamespace(id=5, bot=False, display_name="T",
+                                       guild_permissions=SimpleNamespace(manage_guild=darf)),
+                guild=SimpleNamespace(id=111, name="Testserver", text_channels=[]),
+                mentions=[])
+
+        # Ohne Recht: Absage, und NICHTS wird gesetzt.
+        antwort = asyncio.run(guildcfg.handle(msg("einstellung lautstaerke 80", False)))
+        assert "Server verwalten" in str(antwort)
+        assert not guildcfg.eigen(111, "lautstaerke")
+
+        # Mit Recht: gesetzt.
+        antwort = asyncio.run(guildcfg.handle(msg("einstellung lautstaerke 80", True)))
+        assert "80" in _embed_text(antwort)
+        assert guildcfg.get(111, "lautstaerke") == 80
+
+        # Nur nachfragen aendert nichts.
+        antwort = asyncio.run(guildcfg.handle(msg("einstellung lautstaerke", True)))
+        assert "80" in _embed_text(antwort) and guildcfg.get(111, "lautstaerke") == 80
+
+        # Unbekannter Schluessel nennt die moeglichen.
+        antwort = asyncio.run(guildcfg.handle(msg("einstellung quatsch 1", True)))
+        assert "lautstaerke" in _embed_text(antwort)
+
+        # Kein Einstellungs-Befehl -> None (naechster Handler ist dran).
+        assert asyncio.run(guildcfg.handle(msg("blackjack 100", True))) is None
+    finally:
+        zurueck()
+
+
+def test_features_je_server():
+    """Der globale Schalter ist der Not-Aus, der Server-Schalter das Feintuning."""
+    import features
+    alt = (features.instance._store, set(features.instance._disabled),
+           dict(features.instance._per_guild))
+    features.instance._store = _FakeStore({"disabled": [], "guilds": {}})
+    features.instance._disabled = set()
+    features.instance._per_guild = {}
+    try:
+        A, B = 111, 222
+        assert features.is_on_in(A, "casino") and features.is_on_in(B, "casino")
+
+        # Nur auf A aus.
+        asyncio.run(features.set_guild(A, "casino", False))
+        assert not features.is_on_in(A, "casino")
+        assert features.is_on_in(B, "casino"), "Nachbarserver mitgerissen"
+        assert features.is_on("casino"), "global faelschlich aus"
+
+        # Global aus schlaegt jedes 'an' eines Servers.
+        asyncio.run(features.set_feature("casino", False))
+        assert not features.is_on_in(B, "casino")
+        assert asyncio.run(features.set_guild(B, "casino", True)) is False
+        assert not features.is_on_in(B, "casino")
+
+        # Global wieder an -> A bleibt aus (sein eigener Wille), B ist an.
+        asyncio.run(features.set_feature("casino", True))
+        assert not features.is_on_in(A, "casino") and features.is_on_in(B, "casino")
+
+        # fuer(gid) ist dieselbe Pruefung, nur vorgemerkt (so nutzt bot.py sie).
+        _on = features.fuer(A)
+        assert _on("casino") is False and _on("music") is True
+        assert features.fuer(0)("casino") is True      # DM: nur global zaehlt
+
+        # Ohne Server (DM) zaehlt nur der globale Schalter.
+        assert features.is_on_in(0, "casino") is True
+
+        # Gespeichert wird beides getrennt.
+        assert features.instance._store.data["guilds"] == {"111": ["casino"]}
+        assert features.instance._store.data["disabled"] == []
+
+        # Server weg -> seine Schalter auch.
+        assert asyncio.run(features.vergessen(A)) is True
+        assert features.is_on_in(A, "casino")
+
+        # Panel-Liste: 'on' gilt fuer den Server, 'global_on' fuers Ganze.
+        asyncio.run(features.set_feature("music", False))
+        st = {f["key"]: f for f in features.state({"music": True, "casino": True}, B)}
+        assert st["music"]["on"] is False and st["music"]["global_on"] is False
+        assert st["casino"]["on"] is True and st["casino"]["global_on"] is True
+    finally:
+        (features.instance._store, features.instance._disabled,
+         features.instance._per_guild) = alt
+
+
+def test_aktie_zaehlt_alle_server_zusammen():
+    """Die Aktie ist fuer alle Server dieselbe: die Aktivitaet wird summiert,
+    die Dividende bekommt trotzdem jeder nur EINMAL."""
+    def mitglied(uid, stream=False):
+        return SimpleNamespace(id=uid, bot=False, display_name=f"U{uid}",
+                               voice=SimpleNamespace(self_stream=stream, self_video=False,
+                                                     self_deaf=False, deaf=False))
+
+    def server(gid, leute):
+        vc = SimpleNamespace(id=gid * 10, members=leute, voice_states={})
+        return SimpleNamespace(id=gid, name=f"S{gid}", afk_channel=None,
+                               voice_channels=[vc], me=SimpleNamespace(id=999))
+
+    a, b = mitglied(1), mitglied(2, stream=True)
+    c = mitglied(3)
+    A, B = server(111, [a, b]), server(222, [b, c])   # b sitzt auf BEIDEN
+
+    fa = floaktie.instance
+    # Ein Server allein.
+    assert fa._measure_alle(A) == (2, 1, 0)
+    # Beide zusammen: 4 Leute (b doppelt anwesend = doppelt aktiv), 2 Streams.
+    assert fa._measure_alle([A, B]) == (4, 2, 0)
+    # Auch ein einzelner Server als Liste geht.
+    assert fa._measure_alle([B]) == (2, 1, 0)
+    assert fa._measure_alle(None) == (0, 0, 0) or fa._measure_alle([]) == (0, 0, 0)
+
+    # Dividende: b haelt Anteile und sitzt auf beiden Servern -> genau eine Zahlung.
+    alt_store, alt_on = fa._store, fa._enabled
+    fa._store = _FakeStore({"holdings": {"2": 1000}, "state": {}})
+    fa._enabled = True
+    gezahlt = []
+    alt_add = economy.add_coins
+    alt_flush = economy.flush
+
+    async def kein_flush():
+        pass
+
+    economy.add_coins = lambda uid, betrag, reason="": gezahlt.append((uid, betrag))
+    economy.flush = kein_flush
+    try:
+        asyncio.run(fa.pay_voice_dividends([A, B]))
+        assert len(gezahlt) == 1, gezahlt
+        assert gezahlt[0][0] == 2 and gezahlt[0][1] > 0
+    finally:
+        economy.add_coins, economy.flush = alt_add, alt_flush
+        fa._store, fa._enabled = alt_store, alt_on
+
+
+def test_module_lesen_ihre_kanaele_vom_server():
+    """Kanaele und Lautstaerke kommen aus der Server-Einstellung, nicht aus der
+    .env - sonst zeigen auf Server B alle IDs ins Leere."""
+    import games
+    import music
+    guildcfg, zurueck = _cfg_frisch()
+    try:
+        A, B = 111, 222
+
+        # Musik: jeder Server faengt mit seiner eigenen Lautstaerke an.
+        assert music.instance._start_lautstaerke(A) == music.DEFAULT_VOLUME
+        asyncio.run(guildcfg.setzen(A, "lautstaerke", "80"))
+        assert abs(music.instance._start_lautstaerke(A) - 0.8) < 1e-9
+        assert music.instance._start_lautstaerke(B) == music.DEFAULT_VOLUME
+
+        # Spiele: der Event-Kanal ist der eingestellte, sonst der System-Kanal.
+        def kanal(cid, name):
+            return SimpleNamespace(id=cid, name=name,
+                                   permissions_for=lambda _me: SimpleNamespace(send_messages=True))
+        allgemein, spiele = kanal(900, "allgemein"), kanal(901, "spiele")
+
+        def server(gid):
+            g = SimpleNamespace(id=gid, me=SimpleNamespace(id=999),
+                                system_channel=allgemein, text_channels=[allgemein, spiele])
+            g.get_channel = lambda cid: {900: allgemein, 901: spiele}.get(cid)
+            return g
+
+        asyncio.run(guildcfg.setzen(A, "event_channel", "901"))
+        assert games.instance._pick_event_channel(server(A)) is spiele
+        assert games.instance._pick_event_channel(server(B)) is allgemein
+    finally:
+        zurueck()
+
+
+def test_bayrisch_ueberlebt_den_neustart():
+    """Der Dialekt lag frueher nur im Arbeitsspeicher - nach jedem Update hat Flo
+    wieder hochdeutsch geredet, obwohl niemand etwas umgestellt hatte."""
+    import bayern
+    guildcfg, zurueck = _cfg_frisch()
+    alt = bayern.instance._enabled
+    bayern.instance._enabled = True
+    try:
+        A, B = 111, 222
+
+        def msg(gid, text):
+            return SimpleNamespace(content=f"Flo {text}", mentions=[],
+                                   author=SimpleNamespace(id=5, bot=False, display_name="T"),
+                                   guild=SimpleNamespace(id=gid, name="S"))
+
+        assert bayern.is_on(A) is False
+        antwort = asyncio.run(bayern.handle(msg(A, "bayrisch an")))
+        assert "boarisch" in str(antwort)
+        assert bayern.is_on(A) is True
+        assert bayern.is_on(B) is False, "Nachbarserver mitgerissen"
+        # Der Zustand liegt jetzt im Speicher, nicht im Arbeitsspeicher.
+        assert guildcfg.an(A, "bayern") is True
+
+        asyncio.run(bayern.handle(msg(A, "bayrisch aus")))
+        assert bayern.is_on(A) is False and guildcfg.an(A, "bayern") is False
+    finally:
+        bayern.instance._enabled = alt
+        zurueck()
+
+
+def test_webpanel_einstellungen_je_server():
+    """Panel-Seite eines Servers: Einstellungen lesen, setzen, zuruecksetzen -
+    und Funktionen NUR fuer diesen Server schalten."""
+    import webpanel
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    import features
+    guildcfg, zurueck = _cfg_frisch()
+    alt_feat = (features.instance._store, set(features.instance._disabled),
+                dict(features.instance._per_guild))
+    features.instance._store = _FakeStore({"disabled": [], "guilds": {}})
+    features.instance._disabled = set()
+    features.instance._per_guild = {}
+
+    ch = SimpleNamespace(id=901, name="spiele")
+    guild = SimpleNamespace(id=111, name="Testserver", text_channels=[ch])
+    guild.get_channel = lambda cid: ch if cid == 901 else None
+
+    wp = webpanel.instance
+    alt = (wp._enabled, wp._auth, wp._client, dict(wp._tokens))
+    wp._enabled, wp._auth = True, False
+    wp._tokens = {}
+    wp._client = SimpleNamespace(guilds=[guild], is_closed=lambda: False,
+                                 get_guild=lambda x: guild if int(x) == 111 else None,
+                                 get_channel=lambda _x: None)
+    app = wp._build_app()
+
+    async def run_it():
+        async with TestClient(TestServer(app)) as cli:
+            # Unbekannter Server -> 404 statt Absturz.
+            assert (await cli.get("/api/guildcfg?guild=999")).status == 404
+            assert (await cli.get("/api/guildcfg?guild=quatsch")).status == 404
+
+            j = await (await cli.get("/api/guildcfg?guild=111")).json()
+            assert j["ok"] and j["guild"]["id"] == "111"
+            keys = {s["key"]: s for s in j["settings"]}
+            assert "lautstaerke" in keys and keys["lautstaerke"]["eigen"] is False
+            assert {"id": "901", "name": "spiele"} in j["channels"]
+            assert any(f["key"] == "casino" for f in j["features"])
+
+            # Setzen.
+            r = await cli.post("/api/guildcfg", json={"guild": "111",
+                                                      "key": "lautstaerke", "value": "80"})
+            assert (await r.json())["ok"] and guildcfg.get(111, "lautstaerke") == 80
+
+            # Unsinn wird abgewiesen und aendert nichts.
+            r = await cli.post("/api/guildcfg", json={"guild": "111",
+                                                      "key": "lautstaerke", "value": "999"})
+            assert r.status == 400 and guildcfg.get(111, "lautstaerke") == 80
+
+            # Kanal-IDs kommen als TEXT zurueck (JS-Zahlen sind zu ungenau).
+            await cli.post("/api/guildcfg", json={"guild": "111",
+                                                  "key": "ansage_channel", "value": "901"})
+            j = await (await cli.get("/api/guildcfg?guild=111")).json()
+            keys = {s["key"]: s for s in j["settings"]}
+            assert keys["ansage_channel"]["wert"] == "901"
+            assert keys["ansage_channel"]["eigen"] is True
+
+            # Fremde Kanal-ID gehoert nicht auf diesen Server -> Absage.
+            r = await cli.post("/api/guildcfg", json={"guild": "111",
+                                                      "key": "ansage_channel", "value": "12345"})
+            assert r.status == 400
+
+            # Zuruecksetzen.
+            await cli.post("/api/guildcfg", json={"guild": "111",
+                                                  "key": "lautstaerke", "value": "standard"})
+            assert guildcfg.eigen(111, "lautstaerke") is False
+
+            # Funktion NUR auf diesem Server abschalten.
+            r = await cli.post("/api/feature", json={"guild": "111",
+                                                     "key": "casino", "on": False})
+            assert (await r.json())["ok"]
+            assert features.is_on_in(111, "casino") is False
+            assert features.is_on("casino") is True, "global mitgerissen"
+            assert features.is_on_in(222, "casino") is True
+
+    try:
+        asyncio.run(run_it())
+    finally:
+        (wp._enabled, wp._auth, wp._client, wp._tokens) = alt
+        (features.instance._store, features.instance._disabled,
+         features.instance._per_guild) = alt_feat
+        zurueck()
+
+
+def test_guildcfg_standard_kommt_aus_der_env():
+    """Nach dem Update darf sich am bestehenden Server NICHTS verschieben.
+
+    Bisher lasen die Module ihre Kanaele direkt aus der .env - mit einem fest
+    verdrahteten Wert, wenn dort nichts stand. Beides muss der Katalog genauso
+    abbilden, inklusive des Unterschieds zwischen "gar nicht gesetzt" und
+    "ausdruecklich leer" (das hiess immer: Funktion aus)."""
+    import guildcfg
+    A = 111
+    alt = {k: os.environ.get(k) for k in
+           ("AUTODELETE_CHANNEL_IDS", "LEVELUP_CHANNEL_ID", "AUTODELETE_SECONDS")}
+
+    def setze(**kw):
+        for k, v in kw.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    try:
+        # 1) Nichts in der .env -> der frueher fest verdrahtete Wert gilt weiter.
+        setze(AUTODELETE_CHANNEL_IDS=None, LEVELUP_CHANNEL_ID=None,
+              AUTODELETE_SECONDS=None)
+        assert guildcfg.instance.standard("autodelete_channels", A) == [1512045750362837013]
+        assert guildcfg.instance.standard("ansage_channel", A) == 1512045750362837013
+        assert guildcfg.instance.standard("kalorien_channel", A) == 1522294725116428329
+        assert guildcfg.instance.standard("autodelete_sekunden", A) == 60
+
+        # 2) AUSDRUECKLICH leer heisst weiterhin: aus.
+        setze(AUTODELETE_CHANNEL_IDS="")
+        assert guildcfg.instance.standard("autodelete_channels", A) == []
+        setze(LEVELUP_CHANNEL_ID="0")
+        assert guildcfg.instance.standard("ansage_channel", A) == 0
+
+        # 3) Gesetzte Werte gewinnen - auch mehrere, mit Komma oder Leerzeichen.
+        setze(AUTODELETE_CHANNEL_IDS="555111222333444555, 666111222333444555",
+              AUTODELETE_SECONDS="45")
+        assert guildcfg.instance.standard("autodelete_channels", A) == \
+            [555111222333444555, 666111222333444555]
+        assert guildcfg.instance.standard("autodelete_sekunden", A) == 45
+
+        # 4) Murks in der .env kippt nichts um - der Fallback traegt.
+        setze(AUTODELETE_SECONDS="ganz schnell")
+        assert guildcfg.instance.standard("autodelete_sekunden", A) == 60
+
+        # 5) Icon-Automatik und Aktien-Zaehlung sind nur zu Hause von selbst an.
+        haupt = guildcfg.HAUPT_GUILD
+        for key in ("icon_auto", "aktie_zaehlt"):
+            assert guildcfg.instance.standard(key, 999999999999999999) is False, key
+            assert guildcfg.instance.standard(key, haupt) is bool(haupt), key
+    finally:
+        setze(**alt)
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
