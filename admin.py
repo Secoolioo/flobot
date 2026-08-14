@@ -226,14 +226,29 @@ class Admin:
         if uid is None or amount is None:
             return f"So: `{self._bot_name} {verb} @wer 100` (oder mit User-ID)."
         delta = sign * abs(amount) if sign < 0 else sign * amount
-        neu = economy.add_coins(uid, delta)
+        # Das ECHTE Delta melden, nicht den Wunsch: add_coins klemmt bei 0 ab.
+        # Vorher hiess es bei 200 Coins und 'nimm 1000' trotzdem "verliert
+        # -1.000", und bei einem leeren Konto meldete 'nimm 500' einen Abzug,
+        # obwohl gar nichts passiert ist. (Nebenbei war "verliert -1.000" eine
+        # doppelte Verneinung.)
+        vorher = economy.get_coins(uid)
+        economy.add_coins(uid, delta)
+        neu = economy.get_coins(uid)
+        echt = neu - vorher
         await economy.flush()
         name = await self._name_of(message, uid)
-        if delta >= 0:
-            return self._emb(f"💰 **{name}** bekommt **+{numfmt.fmt(delta)} {economy.COIN}** "
+        if echt == 0:
+            hinweis = ("hat nichts mehr zu holen (Konto steht auf 0)" if delta < 0
+                       else "konnte nichts gutgeschrieben bekommen")
+            return self._emb(f"🪙 **{name}** {hinweis}.", color=discord.Color.orange())
+        if echt > 0:
+            return self._emb(f"💰 **{name}** bekommt **+{numfmt.fmt(echt)} {economy.COIN}** "
                              f"→ neuer Stand: **{numfmt.fmt(neu)}**.", color=discord.Color.green())
-        return self._emb(f"🪙 **{name}** verliert **{numfmt.fmt(delta)} {economy.COIN}** "
-                         f"→ neuer Stand: **{numfmt.fmt(neu)}**.", color=discord.Color.orange())
+        rest = ("" if echt == delta
+                else f" (mehr war nicht da – gewünscht waren {numfmt.fmt(abs(delta))})")
+        return self._emb(f"🪙 **{name}** verliert **{numfmt.fmt(abs(echt))} {economy.COIN}**"
+                         f"{rest} → neuer Stand: **{numfmt.fmt(neu)}**.",
+                         color=discord.Color.orange())
 
     async def _set_coins(self, message, rest):
         if not economy.is_enabled():

@@ -4078,6 +4078,65 @@ def test_bilder_blockieren_den_bot_nicht():
                              + ", ".join(verdaechtig))
 
 
+def test_admin_meldet_das_echte_delta():
+    """'Flo nimm @wer 1000' meldete den gewuenschten Betrag, auch wenn gar nicht
+    so viel da war - add_coins klemmt bei 0 ab.
+
+    Gemessen bei 200 Coins: abgezogen wurden 200, gemeldet '-1.000'. Bei leerem
+    Konto war die Buchung ein reiner No-Op, gemeldet wurde trotzdem ein Abzug."""
+    import admin
+    import economy
+    UID = 111111111111111111
+    a = admin.instance
+    alt = (a._enabled, a._name_of, economy.instance._store,
+           economy.instance._enabled)
+    try:
+        a._enabled = True
+        a._name_of = lambda _m, _u: asyncio.sleep(0, result="Testnutzer")
+        economy.instance._enabled = True
+        nachricht = SimpleNamespace(author=SimpleNamespace(id=1), guild=None,
+                                    mentions=[])
+
+        def konto(coins):
+            economy.instance._store = _FakeStore({"users": {str(UID): {
+                "coins": coins, "xp": 0, "owned": [], "name": "T", "title": "",
+                "title_rarity": "", "voice_secs": 0, "msgs": 0, "streak": 0,
+                "last_daily": ""}}})
+
+        def lauf(betrag, sign):
+            vor = economy.get_coins(UID)
+            emb = asyncio.run(a._give(nachricht, f"{UID} {betrag}", sign=sign))
+            return economy.get_coins(UID) - vor, _embed_text(emb)
+
+        # 1) Mehr genommen als da war -> echter Betrag, plus Hinweis.
+        konto(200)
+        echt, text = lauf(1000, -1)
+        assert echt == -200, echt
+        assert "200" in text and "1.000" in text, text
+        assert "-1.000 Flo Coins**" not in text, text     # keine falsche Zahl
+
+        # 2) Leeres Konto -> ausdruecklich sagen, dass nichts passiert ist.
+        konto(0)
+        echt, text = lauf(500, -1)
+        assert echt == 0, echt
+        assert "nichts mehr zu holen" in text, text
+
+        # 3) Genug da -> ganz normal, ohne Zusatz.
+        konto(5000)
+        echt, text = lauf(1000, -1)
+        assert echt == -1000, echt
+        assert "mehr war nicht da" not in text, text
+
+        # 4) Geben funktioniert unveraendert.
+        konto(200)
+        echt, text = lauf(1000, +1)
+        assert echt == 1000, echt
+        assert "+1.000" in text, text
+    finally:
+        (a._enabled, a._name_of, economy.instance._store,
+         economy.instance._enabled) = alt
+
+
 def test_musik_advance_raeumt_die_warteschlange_nicht_leer():
     """Startet jemand selbst einen Song, waehrend der Automat gerade den naechsten
     aufloest, darf der Automat NICHT weitermachen.
