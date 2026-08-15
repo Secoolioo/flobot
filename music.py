@@ -455,6 +455,11 @@ class GuildPlayer:
     # einfach etwas anderes gestartet" unterscheiden - _play_gen allein kann
     # das nicht, die steigt bei jedem Songwechsel.
     _session_gen: int = 0
+    # _advance hat nach ADVANCE_MAX_FEHLER aufgegeben und die Warteschlange
+    # bewusst stehen gelassen. Ohne diese Merke stiess der Watchdog (heal, Fall 3)
+    # sie alle 15 s erneut an, fraß dabei je Takt einen Song und schickte
+    # dieselbe Warnung immer wieder in den Chat.
+    _advance_aufgegeben: bool = False
     _last_reconnect: float = 0.0     # monotonic des letzten Reconnect-Versuchs (Loop-Bremse)
     _reconnect_fails: int = 0        # aufeinanderfolgende fehlgeschlagene Reconnects (Aufgabe-Schwelle)
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
@@ -665,6 +670,10 @@ class GuildPlayer:
         # Watchdog in dieser Luecke KEINEN Zombie-Alarm ausloest.
         if gen is not None and gen != self._play_gen:
             return
+        if gen is None:
+            # Ausdruecklich angestossen (skip, weiter, Reconnect) - dann ist eine
+            # frueher aufgegebene Warteschlange wieder freigegeben.
+            self._advance_aufgegeben = False
         self._advancing = True
         sitzung = self._session_gen    # gehoert dieser Lauf noch zur laufenden Sitzung?
         fehler_serie = 0        # Fehlschlaege DIREKT hintereinander
@@ -702,6 +711,7 @@ class GuildPlayer:
                     if fehler_serie >= ADVANCE_MAX_FEHLER:
                         self.queue.insert(0, track)
                         self.current = None
+                        self._advance_aufgegeben = True
                         await _retire_panel(self)
                         log.error("Zwei Songs am Stueck nicht ladbar - Warteschlange "
                                   "(%d) bleibt stehen statt sie wegzuwerfen.",
@@ -713,6 +723,7 @@ class GuildPlayer:
                         return
                     continue  # naechsten Song versuchen, nicht stoppen
                 fehler_serie = 0
+                self._advance_aufgegeben = False
                 # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
                 # aus, darf das den laufenden Song NICHT abbrechen.
                 try:
@@ -871,7 +882,11 @@ class GuildPlayer:
         # setzt current=None und laesst die Queue liegen. Danach stellt der
         # Watchdog zwar die Verbindung wieder her - aber angestossen hat die
         # Warteschlange bisher NIEMAND mehr. Zweiter Dauer-Steckzustand.
-        if self.queue:
+        # ... aber NICHT, wenn _advance gerade selbst aufgegeben hat: dann ist
+        # die Warteschlange absichtlich stehengeblieben, und ein Anstossen im
+        # 15-Sekunden-Takt wuerde sie Song fuer Song aufbrauchen und dabei
+        # dieselbe Warnung immer wieder posten. 'weiter' setzt das zurueck.
+        if self.queue and not self._advance_aufgegeben:
             log.info("Warteschlange lag liegen (%d Songs) - stosse sie an.",
                      len(self.queue))
             await self._advance()
@@ -1552,6 +1567,13 @@ class Music:
         resolved.query = track.query
         return resolved
 
+    @staticmethod
+    def _einreihen(player, track):
+        """Track hinten anhaengen. Ein neuer Song hebt eine frueher aufgegebene
+        Warteschlange auf - vielleicht laesst der sich ja laden."""
+        player.queue.append(track)
+        player._advance_aufgegeben = False
+
     def _lazy_track(self, extract_input, title, requested_by, hint=None):
         """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
         extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename,
@@ -1982,7 +2004,7 @@ class Music:
 
         # Laeuft schon was? -> einreihen, sonst starten + Panel posten.
         if player.is_active():
-            player.queue.append(track)
+            self._einreihen(player, track)
             await interaction.followup.send(
                 embed=self._added_embed(track, len(player.queue), len(player.queue)))
             return
@@ -2136,7 +2158,7 @@ class Music:
         if player.is_active():
             for item in items:
                 inp, title, hint = self._unpack_item(item)
-                player.queue.append(self._lazy_track(inp, title, requested_by, hint))
+                self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
             return self._embed(
                 f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
                 f"in der Warteschlange.",
@@ -2155,7 +2177,7 @@ class Music:
         track.match_hint = first_hint
         for item in rest:
             inp, title, hint = self._unpack_item(item)
-            player.queue.append(self._lazy_track(inp, title, requested_by, hint))
+            self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
         try:
             player.start(track)
         except Exception:
@@ -2617,7 +2639,7 @@ class Music:
         # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
         # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
         if player.is_active():
-            player.queue.append(track)
+            self._einreihen(player, track)
             pos = len(player.queue)
             if pos >= 2:
                 view = QueuePositionView(player, track, message.author.id)

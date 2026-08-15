@@ -150,6 +150,9 @@ class Merchant:
     def __init__(self):
         self._enabled = False
         self._bot_name = "Flo"
+        # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
+        # beim Auto-Loesch-Schutz wieder abmeldet.
+        self._geschuetzt = {}
         self._store = None
         self._present_secs = int(PRESENT_HOURS * 3600)
 
@@ -546,23 +549,26 @@ class Merchant:
             log.exception("Speichern nach Haendler-Aktion fehlgeschlagen")
 
     # --- Auto-Loesch-Schutz fuers Panel -----------------------------------
-    def _protect(self, msg):
+    def _protect(self, msg, *, slot="panel"):
+        """Neues Panel schuetzen und das VORIGE freigeben.
+
+        Der Auto-Loesch-Schutz in bot.py kannte bisher nur den Weg hinein: jedes
+        neue Panel trug seine ID ein, niemand trug je eine aus. Das Set wuchs
+        damit die ganze Laufzeit, und die alten Panels blieben in den
+        Aufraeum-Kanaelen fuer immer stehen. Es kann ohnehin nur EINS je Slot
+        aktuell sein - also gibt das neue das alte frei."""
         if msg is None:
             return
         try:
             import bot
+            alt = self._geschuetzt.get(slot)
+            if alt is not None and alt != msg:
+                bot.release_message(alt)
+            self._geschuetzt[slot] = msg
             bot.protect_message(msg)
         except Exception:  # noqa: BLE001
             pass
 
-    def _release(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 # --- Interaktive Views -------------------------------------------------------
@@ -729,3 +735,6 @@ appear_time_str = instance.appear_time_str
 # bot.py baut fuer JEDEN Server ein eigenes Kauf-Panel - ohne diesen Alias
 # flog dort ein AttributeError, und der Haendler-Loop war fuer immer tot.
 build_view = instance.build_view
+# Den Auto-Loesch-Schutz fuer ein Panel setzt bot.py ueber diesen Weg, damit das
+# vorige Panel desselben Kanals dabei wieder abgemeldet wird.
+protect_panel = instance._protect

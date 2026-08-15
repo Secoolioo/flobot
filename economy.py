@@ -1093,8 +1093,10 @@ class Economy:
         parts = low.split()
         first = parts[0] if parts else ""
 
-        # Zielnutzer (erste Mention), sonst der Autor selbst.
-        target = message.mentions[0] if message.mentions else message.author
+        # Zielnutzer: erste Erwaehnung, die ein MENSCH ist - sonst der Autor.
+        # Wer Flo per @Mention anspricht, hat den Bot in message.mentions
+        # stehen; '@Flo level' zeigte deshalb die Karte des Bots.
+        target = next((m for m in message.mentions if not m.bot), None) or message.author
 
         if first in ("level", "lvl", "rank", "rang"):
             return await self._card_image(target)

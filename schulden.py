@@ -91,6 +91,20 @@ FARBE_SCHULDEN = 0xE04B3C      # rot: da ist was offen
 FARBE_SAUBER = 0x2ECC71        # gruen: blitzsauber
 
 
+def _echtes_ziel(message):
+    """Die erste Erwaehnung, die ein MENSCH ist - oder None.
+
+    Wer Flo per @Mention anspricht, hat den Bot selbst in message.mentions
+    stehen. Ohne diesen Filter zeigte '@Flo schulden' die Paar-Tafel mit Flo
+    als Gegenueber, und '@Flo schulden erlassen @Kumpel' richtete sich gegen
+    den Bot statt gegen den Kumpel. handel.py und profil.py filtern an
+    derselben Stelle laengst."""
+    for m in (getattr(message, "mentions", None) or []):
+        if not getattr(m, "bot", False):
+            return m
+    return None
+
+
 class Schulden:
     """Kapselt die Kreide-Tafel: Saldo je Paar, Hinweis-Texte und die Befehle."""
 
@@ -567,8 +581,11 @@ class Schulden:
             return self._top_embed(message.guild)
         if low.startswith(("erlass", "streich", "vergeb", "schenk", "verzicht")):
             return await self._erlassen(message)
-        if message.mentions:
-            ziel = message.mentions[0]
+        # Wer Flo per @Mention anspricht, hat den BOT in message.mentions stehen -
+        # '@Flo schulden' zeigte deshalb die Paar-Tafel mit Flo als Gegenueber
+        # statt der eigenen Uebersicht. Bots kommen hier nie als Ziel infrage.
+        ziel = _echtes_ziel(message)
+        if ziel is not None:
             if ziel.id == message.author.id:
                 return "Bei dir selbst hast du nichts offen. 😄"
             return self._paar_embed(message.author, ziel)
@@ -672,10 +689,10 @@ class Schulden:
         return e
 
     async def _erlassen(self, message):
-        if not message.mentions:
+        ziel = _echtes_ziel(message)
+        if ziel is None:
             return (f"Wem willst du was erlassen? "
                     f"`{self._bot_name} schulden erlassen @jemand [betrag]`")
-        ziel = message.mentions[0]
         if ziel.id == message.author.id:
             return "Dir selbst etwas erlassen ist... kreativ. 😄"
         offen = self.saldo(message.author.id, ziel.id)

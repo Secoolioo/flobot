@@ -37,18 +37,37 @@ DMROAST_CHANCE = float(os.getenv("FUN_DMROAST_CHANCE", "0.08"))              # 8
 DMROAST_USER_COOLDOWN = float(os.getenv("FUN_DMROAST_USER_COOLDOWN", "21600"))    # 6 h pro Person
 DMROAST_GLOBAL_COOLDOWN = float(os.getenv("FUN_DMROAST_GLOBAL_COOLDOWN", "1800"))  # 30 min serverweit
 
-# Erkennt Beleidigungen / "random Scheiss" (deutsch, grob). Wortgrenzen, damit
-# normale Woerter nicht faelschlich anschlagen. Die niedrige Chance + Cooldowns
-# fangen die paar Fehlalarme locker ab.
+# Erkennt Beleidigungen / "random Scheiss" (deutsch, grob).
+#
+# Die Liste stand frueher in EINEM Regex, und darin standen ganz normale
+# deutsche Woerter: Maul, Opfer, Lappen, Spinner, Arsch, Penner, Noob. Damit
+# galten 15 von 20 harmlosen Alltagssaetzen als Beleidigung - "Der Hund hatte
+# den Ball im Maul", "Bei dem Erdbeben gab es viele Opfer", "Wisch das mit dem
+# Lappen weg". Flo hat wildfremden, hoeflichen Leuten daraufhin eine
+# beleidigende DM geschickt.
+#
+# Deshalb ZWEI Listen: eindeutige Beleidigungen zaehlen ueberall, mehrdeutige
+# Alltagswoerter nur mit direkter Anrede ("du Opfer", "halt dein Maul").
 _INSULT_RE = re.compile(
     r"\b("
-    r"schei(ss|ß)e?|kacke|kack|fuck|fick(en|st|t)?|gefickt|motherfucker|"
-    r"wichser|wixer|wixxer|arschloch|arsch|fotze|hurensohn|huso|hurentochter|"
-    r"hure|nutte|schlampe|missgeburt|spast(i)?|spacko|spacken|"
-    r"idiot|vollidiot|vollpfosten|trottel|depp|opfer|bastard|mistkerl|"
-    r"drecksau|dreckskerl|drecksack|penner|bitch|verpiss|"
-    r"maul|fresse|spinner|lappen|versager|noob|hurensöhne"
+    r"schei(ss|ß)e?|fuck|fick(en|st|t)?|gefickt|motherfucker|"
+    r"wichser|wixer|wixxer|arschloch|fotze|hurensohn|huso|hurentochter|"
+    r"hurensöhne|hure|schlampe|missgeburt|spast(i)?|spacko|spacken|"
+    r"vollidiot|vollpfosten|trottel|idiot|drecksau|dreckskerl|drecksack|"
+    r"mistkerl|bastard|bitch|verpiss"
     r")\b",
+    re.IGNORECASE,
+)
+# Mehrdeutig: nur als Beleidigung zaehlen, wenn wirklich jemand gemeint ist.
+_MEHRDEUTIG = (r"maul|fresse|opfer|lappen|spinner|versager|noob|penner|arsch|"
+               r"kacke|kack|depp|nutte")
+# Nur ANREDE-Formen (du/dein/ihr/euer), nicht dir/dich: "Ich hab dir den Lappen
+# gegeben" ist kein Angriff, "du Lappen" schon. Hoechstens zwei Woerter dazwischen,
+# damit "du hast gestern den Ball ins Maul bekommen" nicht mitzaehlt.
+_INSULT_ANREDE_RE = re.compile(
+    r"\b(?:du|dein(?:e|em|en|er)?|ihr|euer|eure|halt\s+(?:die|dein\w*))\s+"
+    r"(?:\w+\s+){0,2}"
+    rf"(?:{_MEHRDEUTIG})\b",
     re.IGNORECASE,
 )
 # Fertige DM-Konter, falls die KI aus ist oder abblockt ({name} = Ziel).
@@ -178,6 +197,14 @@ class Fun:
         if first in ("hype", "hyped", "props", "gas"):
             return await self._hype(message, rest)
         if first in ("rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler"):
+            # 'rate' ist im Deutschen auch der Imperativ von RATEN: "Flo rate mal
+            # wer gewonnen hat" wurde sonst zur Vibe-Note fuer den Satzrest als
+            # angeblichen Personennamen. Ohne Erwaehnung zaehlt es nur, wenn gar
+            # kein Ziel dahinter steht (oder 'mich'). Die eindeutigen
+            # Slang-Trigger (rizz, sigma, aura ...) bleiben, wie sie sind.
+            if (first in ("rate", "bewerte") and not message.mentions
+                    and rest.lower().strip(" .,!?") not in ("", "mich", "me", "self")):
+                return None
             return await self._rate(message, first, rest)
         if first in ("spruch", "horoskop", "weisheit", "wisdom", "fortune", "keks"):
             return await self._spruch(message, first, rest)
@@ -291,8 +318,14 @@ class Fun:
 
     # --- DM-Konter: Flo beleidigt Poebler privat zurueck ---------------------
     def looks_offensive(self, content):
-        """Grobe Erkennung: enthaelt die Nachricht Beleidigungen / 'random Scheiss'?"""
-        return bool(content) and bool(_INSULT_RE.search(content))
+        """Grobe Erkennung: enthaelt die Nachricht Beleidigungen / 'random Scheiss'?
+
+        Eindeutige Woerter zaehlen ueberall, mehrdeutige nur mit direkter
+        Anrede - sonst wird aus "der Ball im Maul des Hundes" eine
+        beleidigende DM an jemanden, der nur ueber seinen Hund geredet hat."""
+        if not content:
+            return False
+        return bool(_INSULT_RE.search(content)) or bool(_INSULT_ANREDE_RE.search(content))
 
     async def maybe_dm_roast(self, message):
         """Wer im Chat nur Beleidigungen/Muell raushaut, bekommt GANZ SELTEN von Flo

@@ -36,7 +36,15 @@ class Media:
     # Befehle. "male/zeichne/generiere/bild/img <prompt>" bzw. "quote/zitat/meme <text>".
     # ('spruch' bewusst NICHT hier - das ist der Spruch-des-Tages-Befehl aus fun.py,
     # der sonst von media verschluckt wuerde.)
-    _GEN_RE = re.compile(r"^(?:male|zeichne|generier\w*|bild|img)\s+(.+)", re.I | re.S)
+    # Negative Vorschau auf Pronomen: "bild dir nichts ein", "zeichne dich nicht
+    # durch Faulheit aus", "mal mir das mal auf" sind Redewendungen, keine
+    # Bildmotive - ein Motiv faengt nie mit 'dir/dich/mir/sich' an. Ohne das
+    # ging jede dieser Floskeln als Prompt an den externen Bildgenerator, samt
+    # bis zu 75 s Wartezeit je Fehlalarm.
+    _GEN_RE = re.compile(
+        r"^(?:male|zeichne|generier\w*|bild|img)\s+"
+        r"(?!(?:dir|dich|mir|mich|sich|uns|euch|ihm|ihnen|und|ist|war|nicht)\b)"
+        r"(.+)", re.I | re.S)
     _QUOTE_RE = re.compile(r"^(?:quote|zitat|meme)\b\s*(.*)", re.I | re.S)
 
     def __init__(self):

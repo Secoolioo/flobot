@@ -164,6 +164,9 @@ class Giveaway:
         self._enabled = False
         self._store = None
         self._bot_name = "Flo"
+        # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
+        # beim Auto-Loesch-Schutz wieder abmeldet.
+        self._geschuetzt = {}
         self._client = None
         # Laufende Assistenten: (channel_id, user_id) -> dict
         self._wizards = {}
@@ -1110,11 +1113,22 @@ class Giveaway:
             log.info("%d Giveaway-Knopf/Knöpfe wieder angemeldet.", n)
         return n
 
-    def _protect(self, msg):
+    def _protect(self, msg, *, slot="panel"):
+        """Neues Panel schuetzen und das VORIGE freigeben.
+
+        Der Auto-Loesch-Schutz in bot.py kannte bisher nur den Weg hinein: jedes
+        neue Panel trug seine ID ein, niemand trug je eine aus. Das Set wuchs
+        damit die ganze Laufzeit, und die alten Panels blieben in den
+        Aufraeum-Kanaelen fuer immer stehen. Es kann ohnehin nur EINS je Slot
+        aktuell sein - also gibt das neue das alte frei."""
         if msg is None:
             return
         try:
             import bot
+            alt = self._geschuetzt.get(slot)
+            if alt is not None and alt != msg:
+                bot.release_message(alt)
+            self._geschuetzt[slot] = msg
             bot.protect_message(msg)
         except Exception:  # noqa: BLE001
             pass

@@ -8057,6 +8057,163 @@ def test_wort_index_hat_einen_deckel():
         (words.instance._store, words.instance._enabled, words.MAX_WORDS) = alt
 
 
+def test_befehle_kapern_kein_alltagsdeutsch():
+    """Ganz normale deutsche Saetze duerfen keinen Befehl ausloesen.
+
+    Gemessen waren das 75 % Fehlalarm bei der Beleidigungs-Erkennung (Flo hat
+    hoeflichen Leuten daraufhin eine beleidigende DM geschickt), 74 % beim
+    Bildgenerator und 63 % beim Soundboard."""
+    import fun
+    import media
+    import voicegags
+
+    # --- Beleidigungen: Alltagswoerter zaehlen nur mit direkter Anrede -----
+    harmlos = [
+        "Der Hund hatte den Ball im Maul.",
+        "Bei dem Erdbeben gab es leider viele Opfer.",
+        "Wisch das mal mit dem Lappen weg.",
+        "Ich hab mir einen Fidget Spinner gekauft.",
+        "Er hat sich als Noob geoutet, haha, alles gut.",
+        "Der Penner-Bus faehrt gleich, ich muss los.",
+        "Ich hab dir den Lappen doch schon gegeben.",
+        "Mein Arsch tut weh vom langen Sitzen.",
+        "Das war echt Kacke gestern, so ein Pech.",
+    ]
+    for satz in harmlos:
+        assert not fun.instance.looks_offensive(satz), satz
+    beleidigend = [
+        "du opfer",
+        "halt dein maul",
+        "du bist ein lappen ey",
+        "arschloch",
+        "was ein hurensohn",
+        "verpiss dich",
+    ]
+    for satz in beleidigend:
+        assert fun.instance.looks_offensive(satz), satz
+
+    # --- 'rate' ist auch der Imperativ von RATEN --------------------------
+    class _Msg:
+        def __init__(self, text, mentions=()):
+            self.content = text
+            self.mentions = list(mentions)
+            self.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=42))
+            self.author = _fake_person(uid=7, name="wer")
+
+    alt_fun = fun.instance._enabled
+    fun.instance._enabled = True
+    try:
+        for satz in ("rate mal wer gewonnen hat",
+                     "rate mal wieviel Uhr es ist",
+                     "bewerte doch mal unseren neuen Kanal ehrlich"):
+            assert asyncio.run(fun.instance.handle(_Msg(satz))) is None, satz
+    finally:
+        fun.instance._enabled = alt_fun
+
+    # --- Bildgenerator: Redewendungen sind kein Motiv ---------------------
+    for satz in ("bild dir nichts ein", "bild dir nur nichts drauf ein",
+                 "zeichne dich nicht durch Faulheit aus", "male mir nichts vor"):
+        assert media.Media._GEN_RE.match(satz) is None, satz
+    for satz in ("bild ein Drache aus Neon", "male einen Drachen aus Neon",
+                 "zeichne eine Katze im Weltall", "generiere ein Bild von einem Auto",
+                 "img cyberpunk city at night"):
+        assert media.Media._GEN_RE.match(satz) is not None, satz
+
+    # --- Soundboard/TTS: 'sounds gut' ist Zustimmung, kein Befehl ---------
+    def _sag(text):
+        m = SimpleNamespace(content=text, guild=SimpleNamespace(id=1),
+                            author=_fake_person(uid=7), mentions=[])
+        return asyncio.run(voicegags.instance.handle(m))
+
+    alt_v = voicegags.instance._enabled
+    voicegags.instance._enabled = True
+    try:
+        for satz in ("sounds gut, lass uns das so machen", "sounds good!",
+                     "sprich nicht so laut", "say what?",
+                     "vorlesen macht mein Kind gerne", "sprich mal mit ihm"):
+            assert _sag(satz) is None, satz
+    finally:
+        voicegags.instance._enabled = alt_v
+
+
+def test_bot_erwaehnung_ist_kein_ziel():
+    """'@Flo schulden' ist die eigene Tafel, nicht die Tafel MIT Flo.
+
+    Wer Flo per @Mention anspricht, hat den Bot in message.mentions stehen.
+    Ohne Filter zeigte '@Flo schulden' die Paar-Tafel mit Flo als Gegenueber,
+    und '@Flo schulden erlassen @Kumpel' richtete sich gegen den Bot."""
+    import schulden
+
+    flo = _fake_person(uid=42, name="flo", bot=True)
+    ich = _fake_person(uid=7, name="ich")
+    kumpel = _fake_person(uid=8, name="kumpel")
+
+    def _msg(text, mentions):
+        return SimpleNamespace(
+            content=text, mentions=list(mentions), author=ich,
+            guild=SimpleNamespace(id=1, me=flo, get_member=lambda _u: None))
+
+    alt = (schulden.instance._enabled, schulden.instance._store)
+    schulden.instance._enabled = True
+    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    try:
+        # Nur Flo erwaehnt -> eigene Tafel.
+        emb = asyncio.run(schulden.instance.handle(_msg("<@42> schulden", [flo])))
+        assert "Deine Kreide-Tafel" in _embed_text(emb), _embed_text(emb)
+        # Flo UND ein Mensch -> der Mensch ist gemeint.
+        schulden.instance.record_pay(7, 8, 5_000)
+        emb = asyncio.run(schulden.instance.handle(
+            _msg("<@42> schulden <@8>", [flo, kumpel])))
+        assert "<@8>" in _embed_text(emb) and "<@42>" not in _embed_text(emb), _embed_text(emb)
+        # Erlassen richtet sich nie gegen den Bot.
+        antwort = asyncio.run(schulden.instance.handle(
+            _msg("<@42> schulden erlassen", [flo])))
+        assert "Wem willst du was erlassen" in _embed_text(antwort)
+    finally:
+        (schulden.instance._enabled, schulden.instance._store) = alt
+
+
+def test_musik_watchdog_frisst_die_liegengebliebene_queue_nicht():
+    """Gibt _advance auf, darf der Watchdog nicht im 15-s-Takt nachtreten.
+
+    Sonst hebelt Fall 3 der Heilung genau die Aufgabe-Schwelle aus, die
+    verhindern soll, dass ein Netzausfall die ganze Playlist wegfrisst - und
+    dieselbe Warnung landet alle 15 Sekunden im Chat."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+    try:
+        for i in range(6):
+            player.queue.append(music.Track(title=f"T{i}", stream_url="",
+                                            query=f"ytsearch1:T{i}"))
+
+        async def kaputt(_track):
+            raise RuntimeError("Netz weg")
+
+        async def sag(text):
+            gesagt.append(text)
+
+        music._resolve_track = kaputt
+        player._sag = sag
+        asyncio.run(player._advance())
+        assert player._advance_aufgegeben is True
+        rest = len(player.queue)
+
+        # Der Watchdog laeuft mehrfach - und laesst die Warteschlange in Ruhe.
+        voice.spielt = False
+        guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+        for _ in range(3):
+            asyncio.run(player.heal(guild))
+        assert len(player.queue) == rest, (len(player.queue), rest)
+        assert len(gesagt) == 1, gesagt
+
+        # Ein neuer Song hebt die Aufgabe auf - vielleicht laedt der ja.
+        music.instance._einreihen(player, music.Track(title="neu", stream_url="", query="q"))
+        assert player._advance_aufgegeben is False
+    finally:
+        aufraeumen()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

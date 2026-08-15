@@ -291,6 +291,9 @@ class FloAktie:
         # Das ZULETZT gepostete 'flo aktie'-Panel (Message) + fuer wen es gepostet
         # wurde. Es wird live nachgezogen, sobald sich Kurs/Boersenwert aendern.
         self._panel_msg = None
+        # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
+        # beim Auto-Loesch-Schutz wieder abmeldet.
+        self._geschuetzt = {}
         self._panel_uid = None
         # Der ZULETZT gepostete Kurs-Chart ('flo aktienkurs') + sein Zeitraum -
         # das Bild wird ebenfalls live nachgezogen.
@@ -1706,7 +1709,7 @@ class FloAktie:
             file = await self._chart_file(days, self._range_label(days))
             view.message = await message.reply(
                 file=file, view=view, mention_author=False)
-            self._protect(view.message)
+            self._protect(view.message, slot="chart")
             self._chart_msg = view.message
             self._chart_days = days
         except Exception:  # noqa: BLE001
@@ -2039,11 +2042,22 @@ class FloAktie:
         return HANDLED
 
     # --- Auto-Loesch-Schutz -----------------------------------------------
-    def _protect(self, msg):
+    def _protect(self, msg, *, slot="panel"):
+        """Neues Panel schuetzen und das VORIGE freigeben.
+
+        Der Auto-Loesch-Schutz in bot.py kannte bisher nur den Weg hinein: jedes
+        neue Panel trug seine ID ein, niemand trug je eine aus. Das Set wuchs
+        damit die ganze Laufzeit, und die alten Panels blieben in den
+        Aufraeum-Kanaelen fuer immer stehen. Es kann ohnehin nur EINS je Slot
+        aktuell sein - also gibt das neue das alte frei."""
         if msg is None:
             return
         try:
             import bot
+            alt = self._geschuetzt.get(slot)
+            if alt is not None and alt != msg:
+                bot.release_message(alt)
+            self._geschuetzt[slot] = msg
             bot.protect_message(msg)
         except Exception:  # noqa: BLE001
             pass

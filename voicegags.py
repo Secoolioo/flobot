@@ -27,6 +27,15 @@ from store import JsonStore
 
 log = logging.getLogger("dcbot.voice")
 
+# Woerter, die direkt hinter 'sprich/say/tts/vorlesen' stehen koennen, ohne dass
+# ein Vorlese-Auftrag gemeint ist. Der Satz geht dann normal an die KI.
+_KEIN_TTS = frozenset((
+    "nicht", "mal", "bitte", "doch", "mit", "lauter", "leiser", "langsamer",
+    "weiter", "ist", "war", "du", "mir", "wieder", "so", "leise", "laut",
+    "what", "was", "wat", "wie", "warum", "wer", "wann", "macht", "kann",
+    "koennen", "können", "gerne", "gern",
+))
+
 # Sentinel: voicegags hat selbst geantwortet (Soundboard-Menue) -> bot.py schweigt.
 HANDLED = object()
 
@@ -232,7 +241,10 @@ class VoiceGags:
         first = parts[0].lower()
         rest = parts[1] if len(parts) > 1 else ""
 
-        if first in ("sounds", "soundboard", "soundliste"):
+        # Die Soundliste nimmt gar kein Argument - steht etwas dahinter, ist es
+        # kein Befehl: "Flo sounds gut, lass uns das so machen" hat sonst das
+        # komplette Soundboard-Menue aufgeklappt (denglisch 'sounds good').
+        if first in ("sounds", "soundboard", "soundliste") and not rest.strip(" .,!?"):
             if not self.soundboard_enabled():
                 return "Das Soundboard ist gerade **deaktiviert**. 🔇"
             sounds = self._list_sounds()
@@ -247,6 +259,13 @@ class VoiceGags:
             return await self._cmd_sound(message, rest)
 
         if first in ("sprich", "tts", "say", "vorlesen"):
+            # Was dahinter steht, entscheidet: ein Satz-Fortsetzer oder ein
+            # Fragewort ist kein Vorlese-Auftrag. "sprich nicht so laut",
+            # "sprich mal mit ihm", "say what?", "vorlesen macht Spass" haben
+            # sonst alle die Sprachausgabe angeworfen.
+            erstes = rest.split()[0].lower().strip(".,!?") if rest.split() else ""
+            if erstes in _KEIN_TTS:
+                return None
             return await self._cmd_say(message, rest)
         return None
 

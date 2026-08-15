@@ -190,7 +190,11 @@ class Handel:
         target = next((m for m in message.mentions if not m.bot), None) or message.author
         u = (self._store.data.get("users") or {}).get(str(target.id)) \
             if self._store is not None else None
-        if not u or not u.get("n"):
+        # Nicht nur leer, sondern auch KEIN dict: die Typ-Schablone des Store
+        # prueft nur, dass 'users' ein dict ist, nicht was darin steht. Ein
+        # Eintrag als Liste/Zahl warf hier sonst AttributeError, und der Befehl
+        # antwortete dauerhaft nur mit der allgemeinen Fehlermeldung.
+        if not isinstance(u, dict) or not u.get("n"):
             return (f"📒 **{target.display_name}** hat noch keine Coin-Bewegung im "
                     f"Handelsbuch. Schreib was oder zock eine Runde im "
                     f"`{self._bot_name} casino`!")

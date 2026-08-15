@@ -219,6 +219,20 @@ FEATURE_LOADED = {
     "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
 }
 
+# Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle. Vorher war das
+# eine handgepflegte 20-fache or-Kette mitten in on_message: wer ein neues Modul
+# mit eigenem HANDLED baut und die Kette vergisst, faellt damit unten in
+# antwort[:80] und _send_reply - und das ist kein Schweigen, sondern ein
+# AttributeError auf einem object(). Ein Test prueft, dass hier jedes Modul mit
+# einem HANDLED auch wirklich drinsteht.
+_HANDLED_SENTINELS = tuple(
+    getattr(modul, "HANDLED") for modul in (
+        moderation, music, casino, games, economy, media, food, words, luxus,
+        voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
+        steal, bayern, guildcfg, profil)
+    if getattr(modul, "HANDLED", None) is not None
+)
+
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
 EVENT_INTERVAL_SECONDS = float(os.getenv("GAMES_EVENT_INTERVAL", "300"))
@@ -673,6 +687,13 @@ class FloBot(discord.Client):
             except discord.HTTPException as exc:
                 log.error("Embed-Antwort konnte nicht gesendet werden: %s", exc)
             return
+        if not isinstance(payload, str):
+            # Auffangnetz: hier landet nur, was weder File noch Embed noch Text
+            # ist - praktisch also ein durchgerutschtes HANDLED. Lieber eine
+            # klare Zeile im Log als ein AttributeError im Antwort-Weg.
+            log.error("Unbekannte Antwort-Art %s - nicht gesendet. Fehlt das "
+                      "Modul in _HANDLED_SENTINELS?", type(payload).__name__)
+            return
         await self._reply_chunks(message, payload)
 
     async def restart_soon(self, verzoegerung=2.0):
@@ -999,7 +1020,11 @@ class FloBot(discord.Client):
                     view = merchant.build_view()
                     msg = await channel.send(embed=res.embed, view=view)
                     view.message = msg
-                    self.protect_message(msg)
+                    # Ueber merchant schuetzen, nicht direkt: dort wird das
+                    # vorige Panel dieses Kanals wieder abgemeldet. Sonst
+                    # sammelt der Schutz mit jeder Haendler-Ankunft eine ID
+                    # mehr, die nie wieder herauskommt.
+                    merchant.protect_panel(msg, slot=f"ansage:{channel.id}")
                 else:
                     await channel.send(embed=res.embed)
             except Exception:
@@ -1258,6 +1283,10 @@ class FloBot(discord.Client):
         if not ist_aufraeum:
             return
         self._protected_msg_ids.add(message.id)
+        # Laeuft fuer diese Nachricht gerade eine Gnadenfrist, ist sie damit
+        # abgesagt: auf der Nachricht laeuft ja wieder etwas. Vorher loeschte
+        # _release_after sie nach Ablauf trotzdem weg.
+        self._releasing_ids.discard(message.id)
 
     def release_message(self, message, *, delay = None):
         """Spiel vorbei / keine Reaktion mehr -> Schutz nach kurzer Gnadenfrist
@@ -1277,8 +1306,15 @@ class FloBot(discord.Client):
         try:
             await asyncio.sleep(max(0.0, delay))
         finally:
-            self._protected_msg_ids.discard(message.id)
-            self._releasing_ids.discard(message.id)
+            # Wurde die Nachricht waehrend der Frist ERNEUT geschuetzt (neue
+            # Runde auf demselben Panel), hat protect_message unsere ID aus
+            # _releasing_ids genommen. Dann bleibt sie stehen.
+            erneuert = message.id not in self._releasing_ids
+            if not erneuert:
+                self._protected_msg_ids.discard(message.id)
+                self._releasing_ids.discard(message.id)
+        if erneuert:
+            return
         try:
             await message.delete()
         except discord.NotFound:
@@ -1299,10 +1335,20 @@ class FloBot(discord.Client):
             return
         try:
             owner = self.get_user(OWNER_ID) or await self.fetch_user(OWNER_ID)
+            # Anhaenge kamen frueher nur als ZAHL an ("📎 1 Anhang") - weder
+            # Dateiname noch Link, der Besitzer konnte das Bild also gar nicht
+            # ansehen. Und der Text wurde bei 1500 Zeichen kommentarlos
+            # abgeschnitten. Jetzt: Links dabei, Kuerzung sichtbar.
+            anhaenge = "".join(f"\n📎 {a.filename}: {a.url}"
+                               for a in message.attachments[:3])
+            if len(message.attachments) > 3:
+                anhaenge += f"\n📎 … und {len(message.attachments) - 3} weitere"
+            platz = max(200, 1700 - len(anhaenge))
+            kopf = content[:platz]
+            if len(content) > platz:
+                kopf += " …_(gekürzt)_"
             text = (f"📥 **DM von {message.author.display_name}** "
-                    f"(`{message.author.id}`):\n{content[:1500]}")
-            if message.attachments:
-                text += f"\n📎 {len(message.attachments)} Anhang/Anhänge"
+                    f"(`{message.author.id}`):\n{kopf}{anhaenge}")
             text += f"\n-# Antworten: `flo dm {message.author.id} <text>`"
             await owner.send(text)
         except Exception:  # noqa: BLE001 - Weiterleitung ist best effort
@@ -1611,23 +1657,15 @@ class FloBot(discord.Client):
         message.content = _orig_content
 
         if antwort is not None:
-            if (antwort is moderation.HANDLED or antwort is music.HANDLED
-                    or antwort is casino.HANDLED or antwort is games.HANDLED
-                    or antwort is economy.HANDLED or antwort is media.HANDLED
-                    or antwort is food.HANDLED or antwort is words.HANDLED
-                    or antwort is luxus.HANDLED or antwort is voicegags.HANDLED
-                    or antwort is terraria.HANDLED or antwort is merchant.HANDLED
-                    or antwort is lotto.HANDLED or antwort is floaktie.HANDLED
-                    or antwort is giveaway.HANDLED or antwort is schulden.HANDLED
-                    or antwort is steal.HANDLED or antwort is bayern.HANDLED
-                    or antwort is guildcfg.HANDLED or antwort is profil.HANDLED):
+            if any(antwort is s for s in _HANDLED_SENTINELS):
                 return  # Modul hat selbst geantwortet (Musik / Casino / Spiele / Economy / Bild / Terraria ...).
             if isinstance(antwort, discord.File):
                 log.info("Befehl von %s: [Bild] %s", message.author.display_name, antwort.filename)
             elif isinstance(antwort, discord.Embed):
                 log.info("Befehl von %s: [Embed] %s", message.author.display_name, antwort.title or "")
             else:
-                log.info("Befehl von %s: %s", message.author.display_name, antwort[:80])
+                log.info("Befehl von %s: %s", message.author.display_name,
+                         str(antwort)[:80])
             await self._send_reply(message, antwort)
             return
 
