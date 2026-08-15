@@ -169,18 +169,58 @@ def test_words_tokenizer():
 
 
 def test_words_zaehlen():
+    """Gezaehlt wird JE SERVER - frueher lief alles in einen gemeinsamen Topf,
+    und auf dem zweiten Server stand die Statistik des ersten mit drin."""
     # Fake-Store: reine dict-Logik testen, ohne Datei (Zustand lebt in der Instanz).
-    words.instance._store = type("S", (), {"data": {"words": {}, "total": 0, "msgs": 0}})()
-    n = words._count_text("pizza pizza salat", "111")
+    words.instance._store = type("S", (), {"data": {"guilds": {}}})()
+    n = words._count_text("pizza pizza salat", "111", 1)
     assert n == 3
-    n = words._count_text("PIZZA!", "222")
+    n = words._count_text("PIZZA!", "222", 1)
     assert n == 1
-    daten = words.instance._store.data
-    assert daten["words"]["pizza"]["n"] == 3
-    assert daten["words"]["pizza"]["u"] == {"111": 2, "222": 1}
-    assert daten["words"]["salat"]["n"] == 1
-    assert daten["total"] == 4 and daten["msgs"] == 2
+    buch = words.instance._buch(1)
+    assert buch["words"]["pizza"]["n"] == 3
+    assert buch["words"]["pizza"]["u"] == {"111": 2, "222": 1}
+    assert buch["words"]["salat"]["n"] == 1
+    assert buch["total"] == 4 and buch["msgs"] == 2
+
+    # Ein zweiter Server faengt bei null an und faerbt den ersten nicht ein.
+    words._count_text("pizza", "111", 2)
+    assert words.instance._buch(2)["words"]["pizza"]["n"] == 1
+    assert words.instance._buch(1)["words"]["pizza"]["n"] == 3
+    # Der Profil-Lookup fragt ausdruecklich nach EINEM Server; ohne Angabe
+    # (z. B. aus einer DM) kommt die Summe ueber alle.
+    assert words.instance.statistik_von("111", gid=1)[0] == 3
+    assert words.instance.statistik_von("111", gid=2)[0] == 1
+    assert words.instance.statistik_von("111")[0] == 4
     words.instance._store = None
+
+
+def test_words_migriert_den_alten_topf():
+    """Der alte, gemeinsame Wortschatz wird dem HAUPT-Server zugeordnet -
+    etwas anderes waere geraten, denn wem die Woerter gehoerten, steht
+    nirgends. Geloescht wird nichts."""
+    import os
+    alt_env = os.environ.get("GUILD_ID")
+    os.environ["GUILD_ID"] = "77"
+    words.instance._store = _FakeStore({
+        "words": {"pizza": {"n": 5, "u": {"1": 5}}}, "total": 5, "msgs": 2,
+        "guilds": {},
+    })
+    try:
+        words.instance._migrieren()
+        daten = words.instance._store.data
+        assert "words" not in daten and "total" not in daten
+        assert daten["guilds"]["77"]["words"]["pizza"]["n"] == 5
+        assert daten["guilds"]["77"]["total"] == 5
+        # Zweimal migrieren darf nichts doppeln.
+        words.instance._migrieren()
+        assert daten["guilds"]["77"]["total"] == 5
+    finally:
+        words.instance._store = None
+        if alt_env is None:
+            os.environ.pop("GUILD_ID", None)
+        else:
+            os.environ["GUILD_ID"] = alt_env
 
 
 # --- Befehls-Normalisierung ----------------------------------------------------------
@@ -8198,7 +8238,8 @@ def test_kaputte_daten_toeten_kein_feature_zur_laufzeit():
          lambda m: m.owns(7, "krone") is False and m.throne_preis() == luxus.THRONE_START),
         (casino.instance, "_stats", {"stats": None},
          lambda m: m._stats_profile(7)["games"] == 0),
-        (words.instance, "_store", {"words": {"hallo": 5}, "total": "viel"},
+        (words.instance, "_store", {"guilds": {"1": {"words": {"hallo": 5},
+                                                     "total": "viel"}}},
          lambda m: m.statistik_von(7) == (0, 0, [])),
     ]
     for modul, feld, daten, pruefung in faelle:
@@ -8215,13 +8256,15 @@ def test_kaputte_daten_toeten_kein_feature_zur_laufzeit():
     # words zaehlt trotz kaputtem Index weiter (das lief bei JEDER Nachricht).
     alt_w = (words.instance._store, words.instance._enabled)
     words.instance._enabled = True
-    words.instance._store = _FakeStore({"words": None, "total": None, "msgs": "x"})
+    words.instance._store = _FakeStore(
+        {"guilds": {"1": {"words": None, "total": None, "msgs": "x"}}})
     try:
-        words.instance._count_text("hallo welt hallo", "7")
-        words.instance._count_text("hallo welt", "7")
-        assert words.instance._store.data["words"]["hallo"]["n"] == 3
-        assert words.instance._store.data["total"] == 5
-        assert words.instance._store.data["msgs"] == 2
+        words.instance._count_text("hallo welt hallo", "7", 1)
+        words.instance._count_text("hallo welt", "7", 1)
+        buch = words.instance._buch(1)
+        assert buch["words"]["hallo"]["n"] == 3
+        assert buch["total"] == 5
+        assert buch["msgs"] == 2
     finally:
         (words.instance._store, words.instance._enabled) = alt_w
 
@@ -8237,14 +8280,14 @@ def test_wort_index_hat_einen_deckel():
     alt = (words.instance._store, words.instance._enabled, words.MAX_WORDS)
     words.instance._enabled = True
     words.MAX_WORDS = 50
-    words.instance._store = _FakeStore({"words": {}, "total": 0, "msgs": 0})
+    words.instance._store = _FakeStore({"guilds": {}})
     try:
         # Ein haeufiges Wort und viel Einmal-Spam.
         for _ in range(5):
-            words.instance._count_text("wichtig", "7")
+            words.instance._count_text("wichtig", "7", 1)
         for i in range(300):
-            words.instance._count_text(f"spamwort{i:04d}", "7")
-        index = words.instance._store.data["words"]
+            words.instance._count_text(f"spamwort{i:04d}", "7", 1)
+        index = words.instance._buch(1)["words"]
         assert len(index) <= words.MAX_WORDS, len(index)
         # Gekuerzt wird nach Haeufigkeit: das oft gesagte Wort bleibt.
         assert "wichtig" in index

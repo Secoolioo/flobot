@@ -30,13 +30,36 @@ Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unte
 | `kalorien_channel`, `modlog_channel` | Essensfotos, Moderations-Protokoll |
 | `autodelete_channels`, `autodelete_sekunden` | was Flo aufräumt und ab wann |
 | `lautstaerke` | womit die Musik hier anfängt (`flo ls 80` speichert das) |
+| `praefix` | wie Flo hier angesprochen wird (`Flo`, `Bob`, …) |
 | `bayern` | Flo redet hier boarisch |
 | `schulden_pranger` | überfällige Posten (ohne Beträge) im Ansage-Kanal |
+| `musik_max_queue`, `casino_max_einsatz` | Obergrenzen je Server |
+| `levelup_ansagen`, `daily_erinnerung` | Level-Karten, Tagesbonus-Erinnerung |
 | `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
 | `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
 
 Gesetzt wird nur, was abweicht; der Rest folgt dem Standard aus der `.env`. Ein
 bestehender Server verhält sich nach dem Update also **unverändert**.
+
+### Ansprache je Server
+
+```
+Flo einstellung praefix Bob      ab jetzt heißt Flo hier Bob
+Flo einstellung praefix standard zurück zum Namen aus der .env
+```
+
+Wirkt **sofort**, ohne Neustart. Vorher ging das nicht: 21 Module hielten sich
+beim Start ihre eigene Kopie von `BOT_NAME`, und der Trigger-Regex wurde einmal
+beim Import gebaut. Jetzt ist `ai.py` die einzige Stelle, die den Namen kennt —
+alle Module erben von `FeatureBasis`, wo `_bot_name` eine *Eigenschaft* ist, die
+zur Laufzeit nachschaut. `bot.on_message` merkt sich per `ContextVar`, welcher
+Server gerade dran ist; discord.py bearbeitet jedes Ereignis in einem eigenen
+Task, also färbt das keinen anderen Server ein.
+
+Die Ansprache muss **ein Wort** aus 2–32 Zeichen sein und darf keine
+Regex-Sonderzeichen enthalten — sie wird zum Erkennungs-Muster. Die Aliasse aus
+`BOT_ALIASES` (Standard: `Florian`) bleiben absichtlich global: das sind
+Spitznamen der Person, keine Server-Einstellung.
 
 **Was für alle Server gemeinsam gilt:** Coins, Level, Titel, Schulden, Lotto und
 die $FLO-Aktie. Es gibt einen Topf und einen Kurs — wer auf zwei Servern ist, hat
@@ -80,7 +103,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 168 Tests
+python3 test_games_logic.py    # 172 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -337,6 +360,20 @@ Ein Klick auf eine Server-Karte öffnet die Einstellungen **dieses** Servers:
 Kanäle aus einer echten Auswahlliste, Schalter, Zahlenfelder — und die
 Funktions-Schalter, die nur dort gelten.
 
+Ein neuer Eintrag im `guildcfg`-Katalog erscheint dort **ohne Panel-Arbeit** —
+die Server-Seite baut sich aus dem Katalog auf.
+
+Unter **Steuerung** dazu:
+
+* **Backup laden** — alle `data/*.json` als ZIP. Reine Leseoperation; dafür
+  musste man bisher auf den Server.
+* **Panel-Protokoll** — die letzten 200 *schreibenden* Aktionen mit Zeitpunkt,
+  Pfad, Daten und Absender-IP (`data/panel_log.json`). Das hängt an einer
+  Middleware, nicht an den elf Handlern einzeln — so ist auch der zwölfte Knopf
+  erfasst, den jemand später nachrüstet. Das ist **kein** Login-Ersatz (den gibt
+  es hier bewusst nicht), sondern Nachvollziehbarkeit: wer später wissen will,
+  warum ein Konto 5 Mio mehr hat, findet es dort.
+
 Buchende Knöpfe sind während der Anfrage gesperrt, damit ein Doppelklick nicht
 doppelt bucht; `/api/update` lässt nur einen `git pull` gleichzeitig zu.
 
@@ -369,7 +406,17 @@ Nachricht, denn eine View gehört zu genau einer.
 
 **Konventionen:** keine Typannotationen (außer in `@dataclass`, wo Python sie
 erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
-`store.JsonStore`.
+`store.JsonStore`, und jede Feature-Klasse erbt von `basis.FeatureBasis` — nur
+so stimmt die Ansprache je Server. Ein Test schlägt an, wenn ein Modul sich
+`_bot_name` wieder selbst in eine Variable legt.
+
+**Grenzen, dokumentiert statt geraten:** ab etwa 2.500 Servern verlangt Discord
+Sharding — das ist ein Wechsel auf `discord.AutoShardedClient` plus ein Blick
+über die Loops (die laufen alle schon über `self.guilds` und bleiben gültig).
+Das Members-Intent bleibt aus; deshalb gibt es *keine* Begrüßung neuer
+Mitglieder — `on_member_join` feuert ohne dieses Intent schlicht nie, und ein
+Schalter, der nichts tut, wäre schlimmer als keiner. Alle Namens- und
+Avatar-Wege laufen bereits über REST-Fallbacks.
 
 ### Wichtige Module
 
@@ -388,6 +435,7 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 | `render.py` | alle Bilder (PIL) |
 | `webpanel.py` / `webpanel.html` | Web-Panel |
 | `schulden.py` | Schuldbuch: Posten, Tilgung, Kreditwürdigkeit |
+| `basis.py` | `FeatureBasis` — die Ansprache, an EINER Stelle |
 | `store.py` | JSON-Speicher, atomar + Sicherung |
 | `numfmt.py` | Zahlen-Formatierung und `ist_zahl()` |
 

@@ -102,9 +102,10 @@ class Words(FeatureBasis):
             log.info("Wort-Zaehler aus (WORDS_ENABLED=0).")
             return False
         self._store = JsonStore("words.json", default={
-            "words": {}, "total": 0, "msgs": 0,
+            "guilds": {},
             "scan": {"before": 0, "done": False, "channels": {}},
         })
+        self._migrieren()
         # Backfill-Obergrenze SOFORT einfrieren (vor der allerersten Nachricht):
         # alles vor diesem Snowflake liest der Backfill, alles danach zaehlt der
         # Live-Hook - so gibt es kein Doppelzaehl-Fenster beim ersten Start.
@@ -112,12 +113,55 @@ class Words(FeatureBasis):
         if BACKFILL and not scan.get("done") and not scan.get("before"):
             scan["before"] = discord.utils.time_snowflake(discord.utils.utcnow())
         self._enabled = True
-        log.info("Wort-Zaehler aktiv (%d Woerter erfasst, Backfill: %s).",
-                 len(self._store.data.get("words", {})), "an" if BACKFILL else "aus")
+        erfasst = sum(len((b or {}).get("words") or {})
+                      for b in (self._store.data.get("guilds") or {}).values()
+                      if isinstance(b, dict))
+        log.info("Wort-Zaehler aktiv (%d Woerter auf %d Server(n), Backfill: %s).",
+                 erfasst, len(self._store.data.get("guilds") or {}),
+                 "an" if BACKFILL else "aus")
         return True
 
     def is_enabled(self):
         return self._enabled
+
+    # --- Ein Buch JE SERVER ----------------------------------------------------
+    def _buch(self, gid):
+        """Der Wortschatz DIESES Servers ({"words": {}, "total": 0, "msgs": 0}).
+
+        Frueher gab es genau einen Topf fuer alle: auf einem zweiten Server
+        stand im Wort-Zaehler die Statistik des ersten mit drin - "das wurde
+        hier noch nie gesagt" war schlicht falsch, und "Top-Sager" nannte
+        Leute, die dort niemand kennt."""
+        alle = self._store.data.setdefault("guilds", {})
+        if not isinstance(alle, dict):
+            alle = self._store.data["guilds"] = {}
+        buch = alle.get(str(int(gid or 0)))
+        if not isinstance(buch, dict):
+            buch = alle[str(int(gid or 0))] = {"words": {}, "total": 0, "msgs": 0}
+        if not isinstance(buch.get("words"), dict):
+            buch["words"] = {}
+        return buch
+
+    def _migrieren(self):
+        """Der alte, gemeinsame Topf wird zum Buch des HAUPT-Servers.
+
+        Etwas anderes waere geraten: welchem Server die Woerter gehoerten,
+        steht nirgends. Geloescht wird nichts - erst nach dem Umhaengen sind
+        die alten Schluessel weg."""
+        daten = self._store.data
+        if not isinstance(daten.get("words"), dict) or not daten.get("words"):
+            daten.pop("words", None)
+            daten.pop("total", None)
+            daten.pop("msgs", None)
+            return
+        haupt = int(os.getenv("GUILD_ID", "0") or "0")
+        buch = self._buch(haupt)
+        buch["words"] = daten.pop("words")
+        buch["total"] = _zahl(daten.pop("total", 0))
+        buch["msgs"] = _zahl(daten.pop("msgs", 0))
+        log.info("Wort-Zaehler: %d Woerter aus dem gemeinsamen Topf dem Server "
+                 "%s zugeordnet (alles davor lief serveruebergreifend).",
+                 len(buch["words"]), haupt or "ohne ID")
 
     # --- Zaehlen ---------------------------------------------------------------
     def _tokenize(self, text):
@@ -127,19 +171,15 @@ class Words(FeatureBasis):
         text = _MARKUP_RE.sub(" ", text)
         return _WORD_RE.findall(text.lower())
 
-    def _count_text(self, text, uid):
+    def _count_text(self, text, uid, gid=0):
         """Zaehlt alle Woerter einer Nachricht. Gibt die Anzahl gezaehlter Woerter
         zurueck. Reine dict-Arbeit - bewusst synchron (Mikrosekunden)."""
         assert self._store is not None
         tokens = self._tokenize(text)
         if not tokens:
             return 0
-        # setdefault rettet nur einen FEHLENDEN Schluessel - ein vorhandenes
-        # "words": null kam daran vorbei und liess den Zaehler bei JEDER
-        # Nachricht sterben, also dauerhaft.
-        words = self._store.data.get("words")
-        if not isinstance(words, dict):
-            words = self._store.data["words"] = {}
+        buch = self._buch(gid)
+        words = buch["words"]
         for tok in tokens:
             entry = words.get(tok)
             # 'is None' reichte nicht: ein Eintrag, der eine Zahl oder ein Text
@@ -150,8 +190,8 @@ class Words(FeatureBasis):
                 entry["u"] = {}
             entry["n"] = _zahl(entry.get("n")) + 1
             entry["u"][uid] = _zahl(entry["u"].get(uid)) + 1
-        self._store.data["total"] = _zahl(self._store.data.get("total")) + len(tokens)
-        self._store.data["msgs"] = _zahl(self._store.data.get("msgs")) + 1
+        buch["total"] = _zahl(buch.get("total")) + len(tokens)
+        buch["msgs"] = _zahl(buch.get("msgs")) + 1
         if len(words) > MAX_WORDS * 1.2:
             # Hysterese: nicht bei jeder Nachricht kuerzen, sondern erst, wenn
             # der Index deutlich ueber dem Deckel liegt.
@@ -178,19 +218,20 @@ class Words(FeatureBasis):
         log.info("Wort-Index gekuerzt: %d seltene Woerter entfernt (Deckel %d).",
                  raus, MAX_WORDS)
 
-    def _count_guarded(self, text, uid):
+    def _count_guarded(self, text, uid, gid=0):
         """Zaehlt sofort - oder puffert, falls gerade gespeichert wird."""
         if self._saving:
-            self._backlog.append((text, uid))
+            self._backlog.append((text, uid, gid))
         else:
-            self._count_text(text, uid)
+            self._count_text(text, uid, gid)
 
     def note_message(self, message):
         """Passiver Hook: bot.py ruft das fuer jede Nicht-Bot-Guild-Nachricht auf.
         Synchron und billig - das Speichern passiert gesammelt im Hintergrund."""
         if not self._enabled:
             return
-        self._count_guarded(message.content or "", str(message.author.id))
+        self._count_guarded(message.content or "", str(message.author.id),
+                            getattr(message.guild, "id", 0))
         self._mark_dirty()
 
     def _mark_dirty(self):
@@ -230,8 +271,8 @@ class Words(FeatureBasis):
         aufgelaufen sind."""
         if self._backlog:
             pending, self._backlog[:] = list(self._backlog), []
-            for text, uid in pending:
-                self._count_text(text, uid)
+            for text, uid, gid in pending:
+                self._count_text(text, uid, gid)
 
     async def _flush_later(self):
         try:
@@ -263,9 +304,9 @@ class Words(FeatureBasis):
         except Exception:
             log.exception("Wort-Zaehler: Sofort-Speichern fehlgeschlagen")
 
-    def statistik_von(self, uid, top=3):
+    def statistik_von(self, uid, top=3, gid=0):
         """(gesagte Woerter, verschiedene Woerter, [(Wort, Anzahl), ...]) fuer
-        fremde Anzeigen (Profil-Lookup).
+        fremde Anzeigen (Profil-Lookup). Ohne gid ueber ALLE Server zusammen.
 
         Die zurueckgegebenen Woerter sind BEZEICHNEND, nicht bloss haeufig:
         ohne Filter stehen im Deutschen bei jedem Menschen dieselben Fuellwoerter
@@ -280,15 +321,21 @@ class Words(FeatureBasis):
         key = str(uid)
         gesamt = 0
         eigene = []
-        roh = self._store.data.get("words")
-        for wort, eintrag in (roh if isinstance(roh, dict) else {}).items():
-            if not isinstance(eintrag, dict):
-                continue          # kaputter Eintrag zaehlt nicht mit, statt zu crashen
-            n = _zahl((eintrag.get("u") or {}).get(key, 0))
-            if n:
-                gesamt += n
-                if wort not in _FUELLWOERTER:
-                    eigene.append((wort, n))
+        buecher = ([self._buch(gid)] if gid else
+                   [b for b in (self._store.data.get("guilds") or {}).values()
+                    if isinstance(b, dict)])
+        zusammen = {}
+        for buch in buecher:
+            for wort, eintrag in (buch.get("words") or {}).items():
+                if not isinstance(eintrag, dict):
+                    continue
+                n = _zahl((eintrag.get("u") or {}).get(key, 0))
+                if n:
+                    zusammen[wort] = zusammen.get(wort, 0) + n
+        for wort, n in zusammen.items():
+            gesamt += n
+            if wort not in _FUELLWOERTER:
+                eigene.append((wort, n))
         eigene.sort(key=lambda x: x[1], reverse=True)
         return gesamt, len(eigene), eigene[:max(0, int(top))]
 
@@ -336,7 +383,10 @@ class Words(FeatureBasis):
                     async for msg in channel.history(limit=None, after=after_obj,
                                                      before=before_obj, oldest_first=True):
                         if not msg.author.bot:
-                            self._count_guarded(msg.content or "", str(msg.author.id))
+                            # Auf DAS Buch dieses Servers - der Backfill laeuft
+                            # je Guild, und die Zahlen gehoeren dorthin.
+                            self._count_guarded(msg.content or "", str(msg.author.id),
+                                                guild.id)
                         scan["channels"][key] = msg.id   # Checkpoint (aufsteigend)
                         total += 1
                         batch += 1
@@ -358,7 +408,8 @@ class Words(FeatureBasis):
                 scan["done"] = True
                 await self._save_store()
                 log.info("Wort-Zaehler: Backfill fertig - %d Nachrichten gelesen, "
-                         "%d Woerter im Index.", total, len(self._store.data.get("words", {})))
+                         "%d Woerter im Index.", total,
+                         len(self._buch(guild.id)["words"]))
         except Exception:
             log.exception("Wort-Zaehler: Backfill-Fehler (naechster Start macht weiter)")
         finally:
@@ -404,7 +455,7 @@ class Words(FeatureBasis):
             return (f"Gib mir ein echtes Wort – z. B. `{self._bot_name} wörter pizza`. "
                     "(Zahlen/Links zähle ich nicht.)")
         wort = tokens[0]
-        words = self._store.data.get("words", {})
+        words = self._buch(message.guild.id)["words"]
         entry = words.get(wort)
         count = int(entry["n"]) if entry else 0
 
@@ -457,7 +508,8 @@ class Words(FeatureBasis):
 
     async def _top_command(self, message):
         assert self._store is not None
-        words_dict = self._store.data.get("words", {})
+        buch = self._buch(message.guild.id)
+        words_dict = buch["words"]
         if not words_dict:
             emb = discord.Embed(
                 title="📊 Flo Wörter",
@@ -473,7 +525,7 @@ class Words(FeatureBasis):
             self._saving = True
             try:
                 rows, buf = await asyncio.to_thread(
-                    self._build_top, words_dict, int(self._store.data.get("total", 0)))
+                    self._build_top, words_dict, _zahl(buch.get("total")))
             except Exception:
                 log.exception("Woerter-Karte fehlgeschlagen - Text-Fallback")
                 rows, buf = [], None

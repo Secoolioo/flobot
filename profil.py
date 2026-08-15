@@ -615,7 +615,11 @@ class Profil(FeatureBasis):
             log.exception("Handels-Teil des Profils fehlgeschlagen")
         try:
             import words
-            gesagt, verschieden, top = words.statistik_von(uid)
+            # Ausdruecklich JE SERVER: der Wortschatz gehoert zu dem Server,
+            # auf dem geredet wurde. Ein Profil, das hier die Woerter von
+            # woanders mitzaehlt, behauptet etwas Falsches.
+            gesagt, verschieden, top = words.statistik_von(
+                uid, gid=getattr(guild, "id", 0))
             if gesagt:
                 lieblinge = ", ".join(f"„{w}“ ({numfmt.fmt(n)}×)" for w, n in top)
                 zeilen.append(f"🗣️ {numfmt.fmt(gesagt)} Wörter "
