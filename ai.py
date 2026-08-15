@@ -12,6 +12,7 @@ Ohne gueltige Konfiguration ist das Feature einfach aus - der restliche Bot
 """
 
 import asyncio
+import contextlib
 import contextvars
 import json
 import logging
@@ -334,6 +335,24 @@ class FloAI:
     def aktuelle_guild():
         """Der Server, der gerade bedient wird (0 = DM/unbekannt)."""
         return _AKTUELLE_GUILD.get()
+
+    @classmethod
+    @contextlib.contextmanager
+    def guild_kontext(cls, gid):
+        """Fuer alles AUSSERHALB von on_message: Hintergrund-Loops und
+        Knopf-Callbacks.
+
+            with ai.guild_kontext(guild.id):
+                await channel.send(f"{modul._bot_name} spiel ...")
+
+        Die Loops laufen in eigenen Tasks, dort gilt der ContextVar aus
+        on_message nicht - ohne diesen Block stuende in der Haendler-Ansage
+        eines Servers, der Flo 'Bob' nennt, trotzdem 'Flo'."""
+        token = cls.setze_guild(gid)
+        try:
+            yield
+        finally:
+            cls.guild_zuruecksetzen(token)
 
     def _clean_title(self, title):
         """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🤖 NPC' -> 'NPC')."""
@@ -761,6 +780,7 @@ praefix_geaendert = instance.praefix_geaendert
 setze_guild = instance.setze_guild
 guild_zuruecksetzen = instance.guild_zuruecksetzen
 aktuelle_guild = instance.aktuelle_guild
+guild_kontext = FloAI.guild_kontext
 http_session = instance.http_session
 get_weather = instance.get_weather
 generate = instance.generate
