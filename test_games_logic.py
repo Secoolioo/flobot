@@ -7618,6 +7618,169 @@ def test_webpanel_haelt_jeden_json_body_aus():
         restore()
 
 
+# --- Mittlere und niedrige Fehler aus dem Volltest --------------------------
+def test_cmdnorm_kapert_keine_alltagswoerter():
+    """Die Tippfehler-Korrektur schrieb harmlose Woerter auf GEFAEHRLICHE
+    Befehle um: 'banane' -> ban, 'klick'/'kicks' -> kick, 'waren' -> warn,
+    'klaus' (ein Name!) -> klau. Das erste Wort einer an Flo gerichteten
+    Nachricht landet danach direkt bei der Moderation."""
+    import cmdnorm
+    gefaehrlich = {"ban", "bann", "banne", "verbann", "sperr", "kick", "rauswerf",
+                   "warn", "verwarn", "timeout", "mute", "stumm", "knebel",
+                   "lösch", "loesch", "purge", "nuke", "nimm", "setcoins",
+                   "steal", "klau", "klauen", "raub"}
+    harmlos = """banane bananen klick klicks kicks waren ware klaus klaue klauen
+        banner warte warten wanne kanne kicker sperre sperrt bahn band bande baum
+        raum mann liste lieb leben ende engel essen zeit zeig mach macht mag lang
+        kette wette beste feste reste tanne kante kanten""".split()
+    schlecht = []
+    for wort in harmlos:
+        norm = cmdnorm.normalize(wort)
+        if norm and norm != wort and norm.split()[0] in gefaehrlich:
+            schlecht.append(f"{wort} -> {norm}")
+    assert not schlecht, f"harmlose Woerter werden zu Befehlen: {schlecht}"
+
+    # Echte Tippfehler muessen weiterhin korrigiert werden.
+    for falsch, richtig in (("warnn", "warn"), ("timout", "timeout"),
+                            ("purg", "purge"), ("lösche", "lösch")):
+        assert cmdnorm.normalize(falsch) == richtig, (falsch, cmdnorm.normalize(falsch))
+
+
+def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
+    """Die Bestaetigung band nur an die SLOT-NUMMER. Wuerfelt der Shop um 2 Uhr
+    neu, kaufte 'nochmal derselbe Befehl' danach den Titel auf derselben
+    Nummer - einen anderen, dessen Preis nie jemand gesehen hatte."""
+    import economy
+    e = economy.instance
+    alt = dict(e._kauf_offen)
+    e._kauf_offen = {}
+    try:
+        wer = SimpleNamespace(id=4711)
+        teuer_a = {"text": "koenig", "label": "König", "price": 5_000_000}
+        teuer_b = {"text": "kaiser", "label": "Kaiser", "price": 9_000_000}
+        # Erste Anfrage -> Rueckfrage.
+        assert e._kauf_rueckfrage(wer, 2, teuer_a) is not None
+        # Gleicher Titel nochmal -> geht durch.
+        assert e._kauf_rueckfrage(wer, 2, teuer_a) is None
+        # Neue Anfrage, dann Shop-Reroll: gleiche Nummer, ANDERER Titel.
+        assert e._kauf_rueckfrage(wer, 2, teuer_a) is not None
+        assert e._kauf_rueckfrage(wer, 2, teuer_b) is not None, \
+            "anderer Titel auf derselben Nummer wurde ohne Rueckfrage gekauft!"
+    finally:
+        e._kauf_offen = alt
+
+
+def test_casino_deckel_stimmt_mit_dem_konto_ueberein():
+    """_auszahlen deckelt auf MAX_WIN, aber alle Aufrufer verwarfen den
+    Rueckgabewert: Embed und Bilanz meldeten den UNGEDECKELTEN Gewinn, das
+    Konto bekam den gedeckelten. Anzeige und Wirklichkeit widersprachen sich."""
+    import casino
+    import economy
+    restore = _with_economy({5: 0})
+    alt_max = casino.MAX_WIN
+    casino.MAX_WIN = 1000
+    try:
+        gemeldet = casino._auszahlen(5, 999_999)
+        assert gemeldet == 1000, gemeldet
+        assert economy.get_coins(5) == 1000, economy.get_coins(5)
+        # Und der Normalfall bleibt unveraendert.
+        gemeldet = casino._auszahlen(5, 500)
+        assert gemeldet == 500 and economy.get_coins(5) == 1500
+    finally:
+        casino.MAX_WIN = alt_max
+        restore()
+
+    # Kein Aufrufer darf den Rueckgabewert noch wegwerfen.
+    import re
+    quelle = open("casino.py", encoding="utf-8").read()
+    lose = [z.strip() for z in quelle.splitlines()
+            if re.match(r"\s*_auszahlen\(", z) and "self.bet" not in z]
+    assert not lose, f"_auszahlen-Rueckgabe ignoriert: {lose}"
+
+
+def test_los_und_lose_erreichen_das_lotto():
+    """'Flo los' / 'Flo lose 5' landeten im Casino (frueher in der Kette) als
+    Rubbellos - das Lotto-Panel war darueber nicht erreichbar."""
+    import casino
+    import lotto
+    quelle = open("casino.py", encoding="utf-8").read()
+    handle_teil = quelle.split("async def handle", 1)[1][:8000]
+    assert '"los"' not in handle_teil and '"lose"' not in handle_teil, \
+        "casino beansprucht 'los'/'lose' wieder"
+    assert "los" in lotto._CMDS and "lose" in lotto._CMDS
+    # Das Rubbellos behaelt seine eindeutigen Woerter.
+    for wort in ("rubbellos", "rubbel", "scratch"):
+        assert f'"{wort}"' in handle_teil, wort
+
+
+def test_kleine_fehler_der_wirtschaft():
+    """add_coins-Rueckgabe, Admin-Korrekturen und Slot-Deckel."""
+    import economy
+    import games
+    import schulden
+    restore = _with_economy({1: 1000, 2: 0})
+    alt = (schulden.instance._enabled, schulden.instance._store)
+    schulden.instance._enabled = True
+    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    try:
+        schulden.instance.record_pay(2, 1, 5_000)     # 1 schuldet 2 nun 5.000
+        # add_coins meldete den Stand VOR der Tilgung - Anzeigen logen.
+        gemeldet = economy.add_coins(1, 1_000, reason="spiele")
+        assert gemeldet == economy.get_coins(1), \
+            f"add_coins meldet {gemeldet}, Konto ist {economy.get_coins(1)}"
+        # Admin-Korrekturen muessen EXAKT ankommen (wie beim Panel).
+        vor = economy.get_coins(1)
+        economy.add_coins(1, 1_000, reason="admin")
+        assert economy.get_coins(1) - vor == 1_000
+        vor = economy.get_coins(1)
+        economy.add_coins(1, 1_000, reason="setcoins")
+        assert economy.get_coins(1) - vor == 1_000
+    finally:
+        (schulden.instance._enabled, schulden.instance._store) = alt
+        restore()
+
+    # Slot-Textbefehl kannte keine Obergrenze - das Menue schon.
+    quelle = open("games.py", encoding="utf-8").read()
+    slot_teil = quelle.split("async def _slot(", 1)[1][:900]
+    assert "SKILL_MAX_BET" in slot_teil, "Slot-Textpfad ohne Hoechsteinsatz"
+
+
+def test_food_liest_deutsche_tausenderpunkte():
+    """'ca. 1.200 kcal' wurde zu 1,2 kcal - der Punkt ist im Deutschen der
+    Tausender-Trenner, nicht das Dezimalzeichen."""
+    import food
+    num = food.instance._num
+    assert num("ca. 1.200 kcal") == 1200.0
+    assert num("1.234.567 kcal") == 1234567.0
+    assert num("1,5") == 1.5           # Komma bleibt Dezimalzeichen
+    assert num("2.5 g") == 2.5         # Punkt mit 1 Ziffer = Dezimalzeichen
+    assert num("8/10") == 8.0
+    assert num("abc") == 0.0 and num(None) == 0.0
+
+
+def test_bayrisch_versteht_die_standard_schreibweise():
+    """'bayerisch' (mit e) schaltete gar nichts - der Regex kannte nur
+    'bayrisch' und 'boarisch'."""
+    import bayern
+    rx = bayern.instance._TOGGLE_RE
+    for schreibweise in ("bayrisch an", "bayerisch an", "bairisch an",
+                         "baierisch aus", "boarisch an", "dialekt aus"):
+        assert rx.match(schreibweise), schreibweise
+    for kein in ("banane", "bayern muenchen", "bay"):
+        assert not rx.match(kein), kein
+
+
+def test_giveaway_schnellstart_lost_nichts_aus():
+    """'jetzt', 'ende' und 'stop' sind normale Woerter. Weil sie IRGENDWO im
+    Text gesucht wurden, loste 'giveaway 5k 2h weil ich jetzt Lust habe' ein
+    laufendes Giveaway sofort aus - Gewinner Stunden zu frueh."""
+    quelle = open("giveaway.py", encoding="utf-8").read()
+    teil = quelle.split("# Abbrechen / sofort ziehen", 1)[1][:1200]
+    assert "erstes" in teil and "low.split()" in teil, \
+        "ziehen/abbrechen wird nicht mehr am ERSTEN Wort erkannt"
+    assert "self._hat(low, (\"abbrechen\"" not in teil
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

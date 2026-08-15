@@ -76,7 +76,11 @@ TILGUNG_TABU = ("schulden-tilgung", "panel", "floaktie", "giveaway-rueck",
                 "giveaway", "dividende", "pay",
                 # Rueckbuchungen sind keine Einnahme: sonst frisst die Tilgung
                 # einen Teil des zurueckgegebenen Geldes.
-                "shop-rueck", "floaktie-rueck")
+                "shop-rueck", "floaktie-rueck",
+                # Korrekturen des Besitzers muessen EXAKT ankommen - genau wie
+                # beim Panel ('panel' steht schon oben). 'gib 1000' soll 1000
+                # geben und nicht 800, nur weil der Empfaenger Schulden hat.
+                "admin", "setcoins")
 # Mahnung: hoechstens so oft eine DM je Schuldner.
 MAHN_ABSTAND = int(os.getenv("SCHULDEN_MAHN_ABSTAND", "86400") or "86400")
 # Erst ab dieser Summe mahnt Flo ueberhaupt.

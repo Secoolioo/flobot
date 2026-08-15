@@ -972,12 +972,17 @@ class Giveaway:
             return self._liste_embed()
         if low.startswith(("hilfe", "help", "?")):
             return self._hilfe_embed()
-        # Abbrechen / sofort ziehen
-        if self._hat(low, ("abbrechen", "abbruch", "cancel", "stop", "stopp", "löschen",
-                           "loeschen", "zurücknehmen", "zuruecknehmen")):
+        # Abbrechen / sofort ziehen - nur als ERSTES Wort nach 'giveaway'.
+        # Vorher wurde irgendwo im Text gesucht, und der Schnellstart
+        # 'giveaway 5k 2h weil ich jetzt Lust habe' loste dadurch ein LAUFENDES
+        # Giveaway sofort aus (Gewinner Stunden zu frueh) bzw. brach es ab -
+        # 'jetzt', 'ende' und 'stop' sind ganz normale deutsche Woerter.
+        erstes = (low.split() or [""])[0].strip(".,!?:")
+        if erstes in ("abbrechen", "abbruch", "cancel", "stop", "stopp", "löschen",
+                      "loeschen", "zurücknehmen", "zuruecknehmen"):
             return await self._abbrechen(message, low)
-        if self._hat(low, ("ziehen", "ziehe", "auslosen", "losen", "jetzt", "beenden",
-                           "ende", "draw", "sofort")):
+        if erstes in ("ziehen", "ziehe", "auslosen", "losen", "jetzt", "beenden",
+                      "ende", "draw", "sofort"):
             return await self._sofort_ziehen(message, low)
         # Schnellstart: 'giveaway 5k 2h weil ich Lust habe'
         vorgabe = self._vorgabe_aus_text(rest, economy.get_coins(message.author.id))

@@ -139,6 +139,13 @@ class CmdNorm:
         "orte", "ort", "worten", "wert", "werte",
         # 1 Tippfehler von 'minen'/'bomben' - Alltagswoerter nicht kapern:
         "meinen", "mienen", "bombe",
+        # 1 Tippfehler von einem GEFAEHRLICHEN Moderations-/Raub-Befehl. Ohne
+        # diese Liste wurde aus 'banane' ein Bann, aus 'klick'/'kicks' ein Kick,
+        # aus 'waren' eine Verwarnung und aus 'klaus' (ein Name!) ein Coin-Raub.
+        # Neue Eintraege hier gehoeren in test_cmdnorm_kapert_keine_alltagswoerter.
+        "banane", "bananen", "klick", "klicks", "kicks", "waren", "ware",
+        "klaus", "klaue", "klauen", "banner", "bann", "warte", "warten",
+        "wanne", "kanne", "kicker", "sperre", "sperrt",
         # 1 Tippfehler von 'nimm'/'profil'/'ansage' (Admin-Befehle):
         "nimmt", "profi", "ansagen",
         # 1 Tippfehler von 'turm' - 'Sturm' ist Alltagssprache:

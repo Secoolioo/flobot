@@ -391,6 +391,11 @@ class Economy:
         # hier etwas schief, bleibt die eigentliche Gutschrift unberuehrt.
         if delta > 0:
             self._tilgen_falls_schulden(user_id, delta, reason)
+            # NACH der Tilgung nochmal nachsehen: bei Schuldnern sind gerade
+            # 20 % wieder abgeflossen. Vorher gab die Funktion den Stand von
+            # DAVOR zurueck, und jede Anzeige, die ihn uebernimmt ("du hast
+            # jetzt X"), log den Schuldner an.
+            neu = self._profile(user_id)["coins"]
         return neu
 
     def _tilgen_falls_schulden(self, user_id, delta, reason):
@@ -1732,20 +1737,26 @@ class Economy:
         jetzt = time.time()
         offen = self._kauf_offen.get(member.id)
         # Abgelaufene Rueckfragen wegraeumen, damit das dict nicht waechst.
-        for uid, (_n, ablauf) in list(self._kauf_offen.items()):
-            if ablauf <= jetzt:
+        for uid, eintrag in list(self._kauf_offen.items()):
+            if len(eintrag) < 3 or eintrag[2] <= jetzt:
                 self._kauf_offen.pop(uid, None)
         preis = int(item.get("price", 0) or 0)
+        # Der Titel selbst gehoert in den Merker, NICHT nur seine Slot-Nummer:
+        # um 2 Uhr wuerfelt der Shop neu, und danach kaufte eine Bestaetigung
+        # den TITEL AUF DERSELBEN NUMMER - also einen anderen, dessen Preis der
+        # Nutzer nie gesehen hatte. Genau der unbestaetigte Millionen-Kauf, den
+        # die Rueckfrage verhindern soll.
+        kennung = (str(item.get("text") or item.get("label") or ""), preis)
         if preis < self.KAUF_RUECKFRAGE_AB:
             # Jeder andere Kauf dazwischen beendet eine offene Rueckfrage - so
             # gilt die Bestaetigung wirklich nur fuer zwei Befehle direkt
             # hintereinander und nicht fuer irgendetwas eine Minute spaeter.
             self._kauf_offen.pop(member.id, None)
             return None
-        if offen and offen[0] == n and offen[1] > jetzt:
+        if offen and offen[0] == n and offen[1] == kennung and offen[2] > jetzt:
             self._kauf_offen.pop(member.id, None)
             return None
-        self._kauf_offen[member.id] = (n, jetzt + 60.0)
+        self._kauf_offen[member.id] = (n, kennung, jetzt + 60.0)
         return (f"⚠️ **{item['label']}** kostet **{fmt(preis)}** {self.COIN} – das ist "
                 f"keine Kleinigkeit.\nSchick `{self._bot_name} kaufen {n}` noch einmal, "
                 f"wenn du sicher bist (gilt eine Minute).")
@@ -1893,9 +1904,15 @@ class _InventoryView(discord.ui.View):
     async def _equip(self, interaction, text):
         prof = instance._profile(self.uid)
         o = self._owned.get(text)
+        # self._owned ist ein SCHNAPPSCHUSS vom Oeffnen der Ansicht. Wer den
+        # Titel inzwischen weggetauscht hat (Haendler) und dann noch im offenen
+        # Menue darauf klickt, trug ihn danach dauerhaft, ohne ihn zu besitzen.
+        # Deshalb gegen den AKTUELLEN Bestand pruefen.
+        aktuell = {e.get("text"): e for e in instance._owned_list(prof)}
+        o = aktuell.get(text) or (o if text in aktuell else None)
         if not o:
             await interaction.response.send_message(
-                "Den Titel hast du nicht.", ephemeral=True)
+                "Den Titel hast du nicht (mehr).", ephemeral=True)
             return
         prof["title"] = o.get("label")
         prof["title_rarity"] = o.get("rarity", "")

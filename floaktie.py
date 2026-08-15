@@ -578,7 +578,14 @@ class FloAktie:
         SELL_TAX_MAX). Das ist der wichtigste Geld-Abfluss der Wirtschaft: genau
         beim Verkauf in eine Blase entstehen die meisten Coins aus dem Nichts."""
         st = self._state()
-        ziel = self.ziel_base(float(st.get("act_ema", 0.0) or 0.0))
+        # Der Grundwert gehoert MIT in die Bezugsgroesse - genau wie in
+        # deckel_fuer(). Ohne ihn misst die Steuer den "Blasen-Ueberhang"
+        # nachts gegen ziel_base(0), also gegen den nackten Mindestwert: am
+        # voellig legitimen Boden wurden dadurch 35 % statt 2 % faellig, nur
+        # weil gerade niemand im Call war. Derselbe Kurs, 33 Prozentpunkte
+        # Unterschied - je nach Uhrzeit.
+        ziel = max(self.ziel_base(float(st.get("act_ema", 0.0) or 0.0)),
+                   self.boden_base())
         ueberhang = max(0.0, self._base() / max(1.0, ziel) - 1.0)
         return min(SELL_TAX_MAX, TRADE_FEE + SELL_TAX_K * math.log1p(ueberhang))
 

@@ -151,7 +151,7 @@ _DON_P = 0.485
 _DON_MAX = 10
 
 
-def _auszahlen(uid, betrag, spiel = ""):
+def _auszahlen(uid, betrag, spiel = "", *, rueckgabe = False):
     """Schreibt einen Gewinn gut - gedeckelt auf MAX_WIN je Runde.
 
     Zentraler Punkt fuer ALLE Casino-Auszahlungen (auch aus den View-Klassen):
@@ -169,7 +169,10 @@ def _auszahlen(uid, betrag, spiel = ""):
         log.warning("Casino-Auszahlung gedeckelt (%s): %d -> %d fuer %s",
                     spiel or "?", betrag, MAX_WIN, uid)
         betrag = MAX_WIN
-    economy.add_coins(uid, betrag)
+    # Eine reine RUECKGABE (Push, Timeout-Erstattung) ist keine Einnahme und
+    # darf die 20-%-Schulden-Tilgung nicht ausloesen - sonst kaeme beim
+    # Schuldner weniger zurueck, als er gesetzt hat.
+    economy.add_coins(uid, betrag, reason="casino-rueckgabe" if rueckgabe else "")
     return betrag
 
 
@@ -454,12 +457,13 @@ class Casino:
         if first in ("glücksrad", "gluecksrad", "rad", "wheel"):
             return await (self._open_setup(message, "wheel") if not args
                           else self._wheel_command(message, args))
-        if first in ("rubbellos", "rubbel", "scratch", "los", "lose"):
-            # 'los'/'lose' sind Alltagswoerter: nur als Rubbellos deuten, wenn sie
-            # allein stehen oder ein Einsatz folgt ('flo los 50'). 'flo los gehts'
-            # o. Ae. faellt durch an die naechsten Handler / die KI.
-            if first in ("los", "lose") and args and self._resolve_bet(args[0], message.author.id) is None:
-                return None
+        # 'los'/'lose' gehoeren dem LOTTO, nicht dem Rubbellos: ein "Los" ist im
+        # Deutschen ein Lotterie-Los, und 'flo lose 5' meint fast immer fuenf
+        # Lose. Casino steht in der Handler-Kette VOR lotto - mit diesen
+        # Aliassen war das Lotto-Panel per 'flo los' schlicht unerreichbar und
+        # 'flo lose 5' startete ein 5-Coin-Rubbellos. Das Rubbellos hat mit
+        # rubbellos/rubbel/scratch drei eindeutige eigene Woerter.
+        if first in ("rubbellos", "rubbel", "scratch"):
             return await (self._open_setup(message, "scratch") if not args
                           else self._scratch_command(message, args))
         if first in ("hilo", "höhertiefer", "hoehertiefer"):
@@ -549,7 +553,7 @@ class Casino:
             # Anzeige fehlgeschlagen -> Runde abbrechen und Einsatz zurueckgeben,
             # sonst waere er stumm weg (die View wurde nie sichtbar/registriert).
             view.stop()
-            _auszahlen(uid, bet)
+            bet = _auszahlen(uid, bet)
             await economy.flush()
         return HANDLED
 
@@ -594,7 +598,7 @@ class Casino:
         payout = int(bet * target) if cp >= target else 0
         cashed = payout > 0
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "crash", bet, payout)
         color, fname_field, fval = self._outcome(bet, payout)
@@ -657,7 +661,7 @@ class Casino:
         mult = _KENO_TABLE.get((len(picks), len(hits)), 0)
         payout = int(bet * mult)
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "keno", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -722,7 +726,7 @@ class Casino:
         spin = random.randint(0, 36)
         payout, label = self._roulette_payout(target, bet, spin)
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "roulette", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -776,7 +780,7 @@ class Casino:
         mult = _WHEEL_SEGMENTS[idx]
         payout = int(bet * mult)
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "glücksrad", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -827,7 +831,7 @@ class Casino:
         keys, rows, mult = self._scratch_roll()
         payout = bet * mult
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "rubbellos", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -935,7 +939,7 @@ class Casino:
             # Anzeige fehlgeschlagen -> Runde abbrechen, Einsatz zurueck.
             view.settled = True
             view.stop()
-            _auszahlen(uid, bet)
+            bet = _auszahlen(uid, bet)
             await economy.flush()
         return HANDLED
 
@@ -1013,7 +1017,7 @@ class Casino:
                else total == 7)
         payout = int(bet * _SIEBEN_MULT[tip]) if hit else 0
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "sieben", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -1093,7 +1097,7 @@ class Casino:
         else:
             payout = 0
         if payout:
-            _auszahlen(uid, payout)
+            payout = _auszahlen(uid, payout)
         await economy.flush()
         await self.record(uid, "baccarat", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -1398,7 +1402,7 @@ class BlackjackView(discord.ui.View):
         """Sofort-Entscheidung bei Natural (21 auf der Hand). Zahlt aus + flush."""
         pv, dv = _hand_value(self.player), _hand_value(self.dealer)
         if pv == 21 and dv == 21:
-            _auszahlen(self.uid, self.bet)
+            _auszahlen(self.uid, self.bet, rueckgabe=True)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, self.bet)
             return await self._payload(reveal=True, title="🂡 Push", color=_C_PUSH,
@@ -1406,7 +1410,7 @@ class BlackjackView(discord.ui.View):
                                        state="push", anim="reveal")
         if pv == 21:
             payout = self.bet + (self.bet * 3) // 2     # 3:2
-            _auszahlen(self.uid, payout)
+            payout = _auszahlen(self.uid, payout)
             await economy.flush()
             await record(self.uid, "blackjack", self.bet, payout)
             return await self._payload(reveal=True, title="🂡 BLACKJACK! 🎉", color=_C_BJ,
@@ -1441,7 +1445,7 @@ class BlackjackView(discord.ui.View):
             await record(self.uid, "blackjack", self.bet, 0)
             return ("lose", f"Dealer {dv} schlägt deine {pv}. -{numfmt.fmt(self.bet)} {economy.COIN}.",
                     "🂡 Verloren 😬", _C_LOSE)
-        _auszahlen(self.uid, self.bet)
+        _auszahlen(self.uid, self.bet, rueckgabe=True)
         await economy.flush()
         await record(self.uid, "blackjack", self.bet, self.bet)
         return ("push", f"Beide {pv} – Einsatz ({numfmt.fmt(self.bet)} {economy.COIN}) zurück.",
@@ -1598,7 +1602,7 @@ class _MinesAgainBtn(discord.ui.Button):
             nv.stop()
             if _mines_views.get((v.channel_id, v.uid)) is nv:
                 _mines_views.pop((v.channel_id, v.uid), None)
-            _auszahlen(v.uid, bet)
+            bet = _auszahlen(v.uid, bet)
             await economy.flush()
             return
         _protect(interaction.message)
@@ -1724,7 +1728,7 @@ class MinesView(discord.ui.View):
         """Zahlt den aktuellen Stand aus. Rueckgabe: (payout, multiplikator)."""
         mult = _mines_mult(self.picked, self.mines)
         payout = int(self.bet * mult)
-        _auszahlen(self.uid, payout)
+        payout = _auszahlen(self.uid, payout)
         await economy.flush()
         await record(self.uid, "mines", self.bet, payout)
         return payout, mult
@@ -1759,7 +1763,7 @@ class MinesView(discord.ui.View):
                 note = (f"⏰ Zeit um – automatischer Cashout bei ×{mult:.2f} "
                         f"(**{numfmt.fmt(payout)} {economy.COIN}**).")
             else:
-                _auszahlen(self.uid, self.bet)
+                _auszahlen(self.uid, self.bet, rueckgabe=True)
                 await economy.flush()
                 note = "⏰ Zeit um – Einsatz zurück."
             if fremd:
@@ -1851,7 +1855,7 @@ class DuelView(discord.ui.View):
         winner = self.challenger if face == "kopf" else self.target
         loser = self.target if face == "kopf" else self.challenger
         pot = self.bet * 2
-        _auszahlen(winner.id, pot, "duell")
+        pot = _auszahlen(winner.id, pot, "duell")
         await economy.flush()
         await record(winner.id, "duell", self.bet, pot)
         await record(loser.id, "duell", self.bet, 0)
@@ -1936,7 +1940,7 @@ class _SerienView(discord.ui.View):
 
     async def _payout(self, betrag):
         if betrag:
-            _auszahlen(self.uid, betrag, "mines")
+            betrag = _auszahlen(self.uid, betrag, "mines")
         await economy.flush()
         await record(self.uid, self.spiel, self.bet, betrag)
 
@@ -1949,7 +1953,7 @@ class _SerienView(discord.ui.View):
             self.settled = True
             wert = self._timeout_wert()
             if wert:
-                _auszahlen(self.uid, wert, "mines-timeout")
+                wert = _auszahlen(self.uid, wert, "mines-timeout")
             await economy.flush()
             await record(self.uid, self.spiel, self.bet, wert)
             self._disable_all()
@@ -2335,7 +2339,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Blackjack-Formular: Anzeige fehlgeschlagen")
                 if not ended:
                     view.stop()
-                    _auszahlen(uid, bet)
+                    bet = _auszahlen(uid, bet)
                     await economy.flush()
                 return
             view.message = msg
@@ -2436,7 +2440,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Mines-Formular: Anzeige fehlgeschlagen - Einsatz zurueck")
                 view.settled = True
                 view.stop()
-                _auszahlen(uid, bet)
+                bet = _auszahlen(uid, bet)
                 await economy.flush()
                 return
             view.message = msg

@@ -201,8 +201,11 @@ class Profil:
         if not isinstance(eintrag, dict):
             eintrag = self._users()[str(uid)] = {
                 "handle": [], "anzeige": [], "nick": {},
-                "erst": jetzt, "letzt": 0,
+                "erst": jetzt, "letzt": jetzt,
             }
+            # 'letzt' MUSS vor dem Deckel stehen: mit letzt=0 sortierte der
+            # frische Eintrag ganz nach vorn und flog als erstes selbst wieder
+            # raus - bei vollem Verlauf wurde nie wieder jemand Neues erfasst.
             self._deckel()
         # Von Hand kaputt Editiertes darf hier nicht knallen.
         for feld in ("handle", "anzeige"):
@@ -846,7 +849,12 @@ class Profil:
             # Bei einem mehrdeutigen Wort war es wohl gar kein Befehl
             # ("Flo check mal ob das laeuft") - dann lieber gar nichts sagen
             # und die Kette weiterlaufen lassen, damit die KI antworten kann.
-            if mehrdeutig:
+            # ABER: stand eine ID im Text, war es eindeutig ein Nachschlagen.
+            # Sonst blieb der Aufruf stumm UND der Cooldown wurde
+            # zurueckgesetzt - man konnte damit beliebig oft echte REST-Aufrufe
+            # ausloesen.
+            hatte_id = bool(_ID_RE.search(re.sub(r"<[^>]*>", " ", rest or "")))
+            if mehrdeutig and not hatte_id:
                 self._cooldown.pop(message.author.id, None)
                 return None
             return problem or "Wen soll ich nachschlagen?"

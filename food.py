@@ -104,12 +104,27 @@ class Food:
         return self._sanitize(data) if isinstance(data, dict) else None
 
     def _num(self, val):
-        """Macht aus LLM-Werten robuste Zahlen: 1200, "1200", "ca. 1200 kcal",
-        "8/10" -> erste Zahl; alles andere -> 0."""
+        """Macht aus LLM-Werten robuste Zahlen: 1200, "1200", "ca. 1.200 kcal",
+        "8/10" -> erste Zahl; alles andere -> 0.
+
+        Der Punkt ist im Deutschen der TAUSENDER-Trenner: aus "ca. 1.200 kcal"
+        wurde vorher 1,2 kcal. Erkennungsregel wie in economy.parse_amount -
+        ein Punkt mit genau drei Ziffern dahinter trennt Tausender, alles
+        andere ist ein Komma-/Dezimalzeichen."""
         if isinstance(val, (int, float)):
             return float(val)
-        m = re.search(r"-?\d+(?:[.,]\d+)?", str(val or ""))
-        return float(m.group(0).replace(",", ".")) if m else 0.0
+        text = str(val or "")
+        m = re.search(r"-?\d[\d.,]*", text)
+        if not m:
+            return 0.0
+        roh = m.group(0)
+        # Tausenderpunkte entfernen (1.200 / 1.234.567), Dezimalpunkt behalten.
+        roh = re.sub(r"\.(?=\d{3}(?:\D|$))", "", roh)
+        roh = roh.replace(",", ".").rstrip(".")
+        try:
+            return float(roh)
+        except ValueError:
+            return 0.0
 
     def _sanitize(self, data):
         """Zahlenfelder hart normalisieren, damit der Renderer nie an Strings

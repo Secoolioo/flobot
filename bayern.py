@@ -51,7 +51,9 @@ class Bayern:
     ]
 
     # 'Flo bayrisch [an|aus]'
-    _TOGGLE_RE = re.compile(r"^(?:bo?a[iy]risch|boarisch|dialekt)\b\s*(an|ein|on|aus|off|weg)?", re.I)
+    _TOGGLE_RE = re.compile(# "bayerisch" (mit e) ist die STANDARD-Schreibweise - ohne sie schaltete
+        # ausgerechnet der naheliegendste Befehl ueberhaupt nichts.
+        r"^(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*(an|ein|on|aus|off|weg)?", re.I)
 
     # Systemprompt-Zusatz, den ai bei aktivem Dialekt anhaengt.
     DIALECT_PROMPT = (

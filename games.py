@@ -1046,8 +1046,16 @@ class Games:
     async def _slot(self, message, args):
         uid = message.author.id
         bet = self._extract_int(args) or 0
-        if bet > 0 and economy.is_enabled() and economy.get_coins(uid) < bet:
-            return f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
+        if bet > 0 and economy.is_enabled():
+            # Der Text-Pfad kannte KEINE Obergrenze - anders als das Menue
+            # (SKILL_MAX_BET) und anders als der Muenzwurf daneben. 'slot
+            # 1000000' spielte damit mit dem 200-fachen des erlaubten Einsatzes,
+            # und die Auszahlung (bis 25x) lief an der Tageskappe vorbei.
+            if bet > SKILL_MAX_BET:
+                return (f"Höchsteinsatz am Automaten: **{numfmt.fmt(SKILL_MAX_BET)}** "
+                        f"Flo Coins.")
+            if economy.get_coins(uid) < bet:
+                return f"Du hast nicht genug. Konto: {numfmt.fmt(economy.get_coins(uid))} Flo Coins."
         emb, buf, fn = await self._spin_slot(uid, bet)
         return await self._send_image(message, emb, buf, fn)
 
