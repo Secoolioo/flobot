@@ -130,6 +130,10 @@ KATALOG = [
     Einstellung("aktie_zaehlt", "Zählt für die $FLO-Aktie", "an_aus", False, "",
                 "Ob Calls und Chat dieses Servers den Kurs bewegen. Die Aktie "
                 "ist für alle Server dieselbe.", "Verhalten", nur_haupt=True),
+    Einstellung("schulden_pranger", "Überfällige Posten ansagen", "an_aus", False, "",
+                "Ab 14 Tagen Verzug eine neutrale Notiz im Ansagen-Kanal – "
+                "ohne Beträge, nur „X hat einen überfälligen Posten bei Y“. "
+                "Standard: aus.", "Verhalten"),
 ]
 
 _NACH_KEY = {e.key: e for e in KATALOG}

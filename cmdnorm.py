@@ -88,6 +88,13 @@ class CmdNorm:
         "check", "profil", "profile", "userinfo", "whois", "lookup",
         "nachschlagen", "steckbrief", "avatar", "pfp", "profilbild",
         "banner", "profilbanner",
+        # schuldbuch - MUSS hier stehen (sonst korrigiert die Aehnlichkeits-
+        # suche 'leih' auf 'leise' und 'tilg' auf 'titel')
+        "schulden", "schuld", "kreide", "kreidetafel", "zettel", "schuldenbuch",
+        "leih", "leihe", "leihen", "verleih", "verleihe", "kredit", "borg",
+        "borge", "borgen", "schuldschein", "schein", "iou", "anschreiben",
+        "tilg", "tilge", "tilgen", "abzahl", "abzahlen",
+        "insolvenz", "privatinsolvenz", "bankrott", "pleite",
         # neue casino-spiele
         "hilo", "tower", "turm", "sieben", "baccarat", "bakkarat", "punto",
         "doppelt",

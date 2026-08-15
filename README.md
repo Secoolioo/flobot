@@ -31,6 +31,7 @@ Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unte
 | `autodelete_channels`, `autodelete_sekunden` | was Flo aufräumt und ab wann |
 | `lautstaerke` | womit die Musik hier anfängt (`flo ls 80` speichert das) |
 | `bayern` | Flo redet hier boarisch |
+| `schulden_pranger` | überfällige Posten (ohne Beträge) im Ansage-Kanal |
 | `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
 | `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
 
@@ -79,7 +80,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 154 Tests
+python3 test_games_logic.py    # 168 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -254,16 +255,75 @@ Spiele und Casino.
 tägliche **Vermögenssteuer** (Freibetrag 5 Mio, darüber 2 %, ab 400 Mio nur noch
 0,4 %). Sie verbrennt die Coins — es gibt kein Gegenkonto.
 
-**Schulden** werden automatisch getilgt: 20 % jeder echten Einnahme gehen an den
-größten Gläubiger. Rückbuchungen sind ausgenommen (jeder Grund auf `-rueck`
-oder `-rueckgabe`) — ein zurückgegebener Einsatz ist keine Einnahme.
-
 Die Spiele haben eine **Tageskappe** für Netto-Gewinne; der Einsatz kommt immer
 voll zurück.
 
 Titel ab 1 Mio (`KAUF_RUECKFRAGE_AB`) fragen einmal nach: über `Flo kaufen <n>`
 kostet ein Tippfehler in einer Ziffer sonst bis zu 90 Mio. Bestätigt wird durch
 nochmal denselben Befehl.
+
+---
+
+## Das Schuldbuch
+
+```
+Flo leih @wer 5k Pizza bis freitag    Kredit anbieten
+Flo pay @wer 5k als leihgabe          dasselbe, aus der Zahlung heraus
+Flo schuldschein @wer 5k Kino         Schuld ohne Geldfluss
+Flo schulden [@wer | top | erlassen @wer [x]]
+Flo tilg @wer [betrag]                freiwillig abzahlen
+Flo insolvenz                         Neuanfang (kostet 50 % + Score)
+```
+
+> **Eine Schuld entsteht nur durch Zustimmung.** Wer zahlt, schenkt. Wer leiht,
+> leiht ausdrücklich.
+
+Vorher machte **jede** `Flo pay`-Zahlung den Empfänger automatisch zum Schuldner
+— ein Geschenk, ein verlorener Wetteinsatz, eine geteilte Rechnung, alles wurde
+stillschweigend zur Forderung, ohne dass es einer der beiden so gemeint hatte.
+Jetzt braucht jede Schuld einen **Klick der Person, die sie bekommt**: Flo postet
+die Anfrage mit zwei Knöpfen, und erst „Annehmen" bewegt Geld und legt den Posten
+an. Ohne Klick (oder nach 5 Minuten) passiert gar nichts. Beim Schuldschein
+bestätigt der **Schuldner** — niemand kann einem Fremden per Befehl Schulden
+anhängen.
+
+Geführt werden **einzelne Posten**, kein Netto-Saldo je Paar. Nur so gibt es
+Fälligkeit, Grund und Historie je Schuld. Der Saldo zwischen zwei Leuten wird
+immer *berechnet* — ein gespeicherter Saldo wäre eine zweite Wahrheit, die
+irgendwann von der ersten abweicht. Ein erledigter Posten bleibt stehen.
+
+**Tilgung.** 20 % jeder echten Einnahme gehen automatisch an die Gläubiger —
+**anteilig an alle** (früher bekam der größte alles, und wer bei drei Leuten in
+der Kreide stand, sah bei zweien monatelang nichts), überfällige Posten zuerst,
+innerhalb einer Person der älteste zuerst. Rückbuchungen sind ausgenommen (jeder
+Grund auf `-rueck` oder `-rueckgabe`) — ein zurückgegebener Einsatz ist keine
+Einnahme. Eine Zahlung an jemanden, dem man etwas schuldet, wird angerechnet;
+was darüber hinausgeht, ist ein Geschenk und erzeugt **keine** Gegenforderung.
+
+**Kreditwürdigkeit** (0–100, Start 50): pünktlich getilgt +5, freiwillige
+Sondertilgung +2, überfällig −10 (einmal je Posten), ausgefallen −15. Was älter
+als 90 Tage ist, zählt halb. Der Score deckelt, wie viel jemand in *einem* Posten
+geliehen bekommt (Score-Prozent des Vermögens des Verleihers), steht im
+Profil-Lookup als Ampel, und unter 20 gibt es gar nichts Neues.
+
+**Grenzen:** mindestens 50 Coins, höchstens 5 offene Posten je Paar und 25 je
+Person, Gesamtschuld höchstens das Dreifache des eigenen Vermögens.
+
+**Verfall statt Ewigkeit:** ein Posten ohne jede Bewegung ist nach 60 Tagen weg
+(der Gläubiger bekommt 7 Tage vorher eine DM). Die Historie bleibt sichtbar.
+
+**Mahnwesen in Stufen** statt Dauer-DM: fällig → freundliche DM; 7 Tage → DM an
+beide mit Tilgungsvorschlag; 14 Tage → auf ausdrücklichen Wunsch des Servers
+(`schulden_pranger`, Standard **aus**) eine neutrale Notiz im Ansage-Kanal —
+niemals mit Beträgen.
+
+**Privatinsolvenz** zahlt 50 % des Vermögens anteilig aus, erlässt den Rest,
+setzt den Score auf 10 und sperrt 14 Tage. Ein ehrlicher Neuanfang statt
+Konto-Wechsel-Tricks.
+
+Alte Stände werden beim Start **migriert**: je Paar mit offenem Saldo entsteht
+ein Posten „Übernahme alte Kreide-Tafel"; die alten Volumen-Zahlen wandern nach
+`archiv` — gelöscht wird nichts.
 
 ---
 
@@ -327,6 +387,7 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 | `music.py` | Voice, Warteschlange, YouTube/Spotify/SoundCloud |
 | `render.py` | alle Bilder (PIL) |
 | `webpanel.py` / `webpanel.html` | Web-Panel |
+| `schulden.py` | Schuldbuch: Posten, Tilgung, Kreditwürdigkeit |
 | `store.py` | JSON-Speicher, atomar + Sicherung |
 | `numfmt.py` | Zahlen-Formatierung und `ist_zahl()` |
 

@@ -1591,6 +1591,21 @@ class Economy:
             return f"Wie viel denn? `{self._bot_name} pay @{ziel.display_name} 100` (auch `1k`)"
         if self.get_coins(message.author.id) < betrag:
             return f"Du hast nicht genug. Kontostand: {fmt(self.get_coins(message.author.id))} {self.COIN}."
+        # 'pay @wer 5k als leihgabe': daraus wird eine SCHULD - und die entsteht
+        # nur mit Zustimmung. Also fliesst hier noch kein Geld; schulden stellt
+        # die Anfrage mit Knopf, und erst der Klick bucht.
+        try:
+            import features
+            import schulden
+            if (schulden.is_enabled() and features.is_on("schulden")
+                    and schulden.LEIHGABE_RE.search(message.content or "")):
+                return await schulden.leih_anfrage(
+                    message, ziel, betrag,
+                    grund=schulden.instance._lies_grund(rest),
+                    faellig=schulden.instance._lies_frist(message.content or ""),
+                    mit_geld=True)
+        except Exception:  # noqa: BLE001 - im Zweifel ist es eine normale Zahlung
+            log.exception("Leihgabe-Erkennung fehlgeschlagen - zahle normal")
         self.add_coins(message.author.id, -betrag, reason="pay")
         self.add_coins(ziel.id, betrag, reason="pay")
         await self._flush()

@@ -2632,99 +2632,86 @@ def _schulden_setup(coins_by_uid=None):
     import schulden
     restore_eco = _with_economy(coins_by_uid or {})
     sch = schulden.instance
-    alt = (sch._store, sch._enabled)
-    sch._store = _FakeStore({"pairs": {}})
+    alt = (sch._store, sch._enabled, sch.buch._store, sch.buch._posten)
+    sch._store = _FakeStore({"posten": [], "next_id": 1, "score": {}, "stats": {},
+                             "archiv": {}, "pairs": {}})
+    sch.buch.laden(sch._store)
     sch._enabled = True
 
     def restore():
-        sch._store, sch._enabled = alt
+        (sch._store, sch._enabled, sch.buch._store, sch.buch._posten) = alt
         restore_eco()
     return restore, sch
 
 
-def test_schulden_netto_saldo():
-    """Kern der Kreide-Tafel: pro Personen-Paar EIN Netto-Saldo, Rueckzahlungen
-    verrechnen sich automatisch - und die Reihenfolge der IDs ist egal."""
-    restore, sch = _schulden_setup()
+def _schuld(sch, glaeubiger, schuldner, betrag, **kw):
+    """Legt einen Posten direkt an (die Zustimmung ist woanders getestet)."""
+    return sch.buch.anlegen(glaeubiger, schuldner, betrag, **kw)
+
+
+def test_schulden_entstehen_nur_mit_zustimmung():
+    """DER Kernumbau: eine Zahlung ist ein GESCHENK, keine Forderung.
+
+    Vorher erzeugte jede 'Flo pay'-Zahlung automatisch eine Schuld des
+    Empfaengers - ein Geschenk, ein verlorener Wetteinsatz, eine geteilte
+    Rechnung, alles wurde stillschweigend zur Forderung. Jetzt braucht jede
+    Schuld einen Klick der Person, die sie bekommt."""
+    restore, sch = _schulden_setup({1: 50_000, 2: 50_000})
     try:
-        A, B = 111, 222
-        # A gibt B 1.000 -> B steht mit 1.000 bei A in der Kreide.
-        vorher, nachher = sch.record_pay(A, B, 1000)
-        assert (vorher, nachher) == (0, 1000)
-        assert sch.saldo(A, B) == 1000
-        assert sch.saldo(B, A) == -1000            # Gegenrichtung spiegelt
+        # Zahlen erzeugt KEINE Schuld mehr.
+        sch.pay_block(1, 2, 5_000, ziel_name="Bert")
+        assert sch.saldo(1, 2) == 0
+        assert sch.buch.alle() == []
 
-        # B zahlt 400 zurueck -> 600 bleiben offen.
-        vorher, nachher = sch.record_pay(B, A, 400)
-        assert (vorher, nachher) == (-1000, -600)  # aus SICHT von B
-        assert sch.saldo(A, B) == 600
+        # Ein Leih-Angebot bewegt fuer sich genommen auch noch nichts.
+        besteller = _fake_person(uid=1, name="anna")
+        ziel = _fake_person(uid=2, name="bert")
+        vorher = (economy.get_coins(1), economy.get_coins(2))
+        assert economy.get_coins(1) == vorher[0]
 
-        # B zahlt 600 -> ausgeglichen.
-        sch.record_pay(B, A, 600)
-        assert sch.saldo(A, B) == 0 and sch.saldo(B, A) == 0
+        # Erst das Annehmen bucht Geld UND legt den Posten an.
+        ok, text = asyncio.run(sch.annehmen(besteller, ziel, 5_000, grund="Pizza",
+                                            faellig=0, mit_geld=True))
+        assert ok, text
+        assert economy.get_coins(1) == vorher[0] - 5_000
+        assert economy.get_coins(2) == vorher[1] + 5_000
+        assert sch.saldo(1, 2) == 5_000
+        p = sch.buch.alle()[0]
+        assert p.grund == "Pizza" and p.urspruenglich == 5_000 and p.ist_offen()
 
-        # B zahlt 200 zu viel -> jetzt steht A bei B in der Kreide.
-        sch.record_pay(B, A, 200)
-        assert sch.saldo(B, A) == 200 and sch.saldo(A, B) == -200
-
-        # Nur EIN Paar-Eintrag, egal in welcher Richtung gezahlt wurde.
-        assert len(sch._pairs()) == 1
-        saldo, n, vol, log_ = sch.paar_info(A, B)
-        assert saldo == -200 and n == 4 and vol == 2200 and len(log_) == 4
-
-        # Grosse IDs in umgekehrter Reihenfolge: gleiche Rechnung.
-        C, D = 999999999999999999, 111111111111111111
-        sch.record_pay(C, D, 5000)
-        assert sch.saldo(C, D) == 5000 and sch.saldo(D, C) == -5000
-
-        # Unsinn wird ignoriert (kein Eintrag, kein Crash).
-        vorher_anzahl = len(sch._pairs())
-        for von, an, betrag in ((A, A, 100), (A, B, 0), (A, B, -50), ("x", B, 10)):
-            assert sch.record_pay(von, an, betrag) == (0, 0)
-        assert len(sch._pairs()) == vorher_anzahl
+        # Ein Schuldschein bewegt KEIN Geld, legt aber einen Posten an.
+        stand = (economy.get_coins(1), economy.get_coins(2))
+        ok, _t = asyncio.run(sch.annehmen(besteller, ziel, 1_000, grund="Kino",
+                                          faellig=0, mit_geld=False))
+        assert ok
+        assert (economy.get_coins(1), economy.get_coins(2)) == stand
+        assert sch.saldo(1, 2) == 6_000
     finally:
         restore()
 
 
-def test_schulden_hinweis_texte():
-    """Der Hinweis unter 'pay' muss die vier Faelle unterscheiden: neue Forderung,
-    Teil-Rueckzahlung, Ausgleich und Umkehrung - und an eigene offene Posten
-    erinnern. Er darf NIE eine Zahlung verhindern (er ist nur Text)."""
-    restore, sch = _schulden_setup()
+def test_schulden_zahlung_wird_angerechnet():
+    """Wer seinem Glaeubiger etwas ueberweist, meint fast immer die Schuld.
+
+    Der Rest ist ein Geschenk - und aus einem Geschenk wird nie eine
+    Gegenforderung (genau das war der alte Konstruktionsfehler)."""
+    restore, sch = _schulden_setup({1: 0, 2: 0})
     try:
-        A, B, C = 111, 222, 333
-        economy.instance._profile(A)["name"] = "Anna"
-        economy.instance._profile(B)["name"] = "Bert"
-        economy.instance._profile(C)["name"] = "Cem"
+        _schuld(sch, 1, 2, 3_000)           # 2 schuldet 1 dreitausend
+        block = sch.pay_block(2, 1, 1_000, ziel_name="Anna")
+        assert sch.saldo(1, 2) == 2_000
+        assert "2.000" in block["stand"], block["stand"]
 
-        # 1) Neue Forderung
-        t = sch.pay_hinweis(A, B, 1000, ziel_name="Bert")
-        assert "Bert" in t and "1.000" in t and "Kreide" in t
+        # Mehr zahlen als offen ist: der Ueberschuss ist geschenkt, KEINE
+        # Forderung in die Gegenrichtung.
+        block = sch.pay_block(2, 1, 5_000, ziel_name="Anna")
+        assert sch.saldo(1, 2) == 0 and sch.saldo(2, 1) == 0
+        assert "beglichen" in block["stand"].lower()
 
-        # 2) Teil-Rueckzahlung (B zahlt 400 an A)
-        t = sch.pay_hinweis(B, A, 400, ziel_name="Anna")
-        assert "offen" in t and "600" in t and "1.000" in t   # vorher/nachher
-
-        # 3) Ausgleich
-        t = sch.pay_hinweis(B, A, 600, ziel_name="Anna")
-        assert "ausgeglichen" in t.lower()
-
-        # 4) Umkehrung
-        t = sch.pay_hinweis(B, A, 250, ziel_name="Anna")
-        assert "Anna" in t and "250" in t
-
-        # 5) Erinnerung an EIGENE offene Posten bei Dritten: C schuldet A und B,
-        #    zahlt aber an jemand anderen.
-        sch.record_pay(A, C, 5000)     # C schuldet A 5.000
-        sch.record_pay(B, C, 3000)     # C schuldet B 3.000
-        t = sch.pay_hinweis(C, 444, 100)
-        assert "8.100" in t or "8.000" in t, t     # Summe der eigenen Posten
-        assert "Anna" in t and "Bert" in t         # die zwei groessten
-        # Wer selbst nichts offen hat, bekommt keine Erinnerungszeile.
-        # (A schuldet B nach Schritt 4 tatsaechlich 250 - daher ein frischer Nutzer.)
-        assert sch.summen(A)[1] > 0
-        t = sch.pay_hinweis(777, 888, 100)
-        assert "Bei dir selbst" not in t
+        # Zahlung an jemanden, dem man nichts schuldet: reines Geschenk.
+        block = sch.pay_block(2, 9, 500)
+        assert sch.saldo(9, 2) == 0 and sch.saldo(2, 9) == 0
+        assert "geschenk" in block["stand"].lower()
     finally:
         restore()
 
@@ -2734,9 +2721,9 @@ def test_schulden_posten_summen_und_erlassen():
     restore, sch = _schulden_setup()
     try:
         A, B, C, D = 1, 2, 3, 4
-        sch.record_pay(A, B, 1000)      # B schuldet A 1.000
-        sch.record_pay(A, C, 2500)      # C schuldet A 2.500
-        sch.record_pay(D, A, 400)       # A schuldet D   400
+        _schuld(sch, A, B, 1000)      # B schuldet A 1.000
+        _schuld(sch, A, C, 2500)      # C schuldet A 2.500
+        _schuld(sch, D, A, 400)       # A schuldet D   400
 
         forderungen, schulden_ = sch.posten(A)
         assert forderungen == [(C, 2500), (B, 1000)]     # absteigend
@@ -2760,13 +2747,16 @@ def test_schulden_posten_summen_und_erlassen():
         # Mehr erlassen als offen ist -> nur das Offene.
         weg, rest = sch.erlassen(A, B, 999_999)
         assert (weg, rest) == (1000, 0)
+        # Ein erledigter Posten bleibt als Historie stehen.
+        assert len(sch.buch.alle()) == 3
+        assert [p.status for p in sch.buch.alle()].count("erlassen") == 2
     finally:
         restore()
 
 
 def test_schulden_pay_geht_immer_durch():
-    """WICHTIG: die Tafel ist nur Anzeige. 'pay' bewegt die Coins wie vorher, der
-    Hinweis haengt nur dran - und selbst wenn die Tafel kaputt ist, geht die
+    """WICHTIG: das Buch ist nur Buchfuehrung. 'pay' bewegt die Coins wie vorher,
+    der Hinweis haengt nur dran - und selbst wenn das Buch kaputt ist, geht die
     Zahlung durch."""
     import schulden
     restore, sch = _schulden_setup({7: 10_000, 8: 0})
@@ -2776,19 +2766,11 @@ def test_schulden_pay_geht_immer_durch():
         return None
     economy.instance._flush = kein_flush
 
-    class _Autor:
-        id = 7
-        display_name = "Zahler"
-        bot = False
-
-    class _Ziel:
-        id = 8
-        display_name = "Empfänger"
-        bot = False
-
-    ziel = _Ziel()
-    msg = SimpleNamespace(content=f"flo pay <@8> 2500", mentions=[ziel],
-                          author=_Autor(), guild=SimpleNamespace(id=1, get_member=lambda _u: None))
+    ziel = _fake_person(uid=8, name="empfaenger")
+    autor = _fake_person(uid=7, name="zahler")
+    msg = SimpleNamespace(content="flo pay <@8> 2500", mentions=[ziel],
+                          author=autor,
+                          guild=SimpleNamespace(id=1, get_member=lambda _u: None))
     try:
         def text_von(emb):
             teile = [emb.title or "", emb.description or ""]
@@ -2797,65 +2779,82 @@ def test_schulden_pay_geht_immer_durch():
             return "\n".join(teile)
 
         emb = asyncio.run(economy.instance._pay(msg))
-        # Coins sind geflossen ...
         assert economy.get_coins(7) == 7500 and economy.get_coins(8) == 2500
-        # ... und die Karte zeigt Betrag + Kreide-Stand.
         t = text_von(emb)
-        assert "2.500" in t and "Kreide" in t and "Überweisung" in t
-        assert sch.saldo(7, 8) == 2500
+        assert "2.500" in t and "Überweisung" in t
+        # ... aber KEINE Schuld daraus.
+        assert sch.saldo(7, 8) == 0
 
-        # Zweite Zahlung: die Karte zeigt den gewachsenen Stand.
-        msg.content = "flo pay <@8> 500"
-        emb = asyncio.run(economy.instance._pay(msg))
-        assert "3.000" in text_von(emb) and sch.saldo(7, 8) == 3000
-        assert economy.get_coins(7) == 7000
-
-        # Tafel kaputt (wirft) -> Zahlung MUSS trotzdem durchgehen.
+        # Buch kaputt (wirft) -> Zahlung MUSS trotzdem durchgehen.
         def kaputt(*_a, **_k):
-            raise RuntimeError("Tafel kaputt")
+            raise RuntimeError("Buch kaputt")
         alt_note = schulden.instance.note_pay_block
         schulden.instance.note_pay_block = kaputt
         try:
             msg.content = "flo pay <@8> 1000"
             emb = asyncio.run(economy.instance._pay(msg))
-            assert economy.get_coins(7) == 6000 and economy.get_coins(8) == 4000
+            assert economy.get_coins(7) == 6500 and economy.get_coins(8) == 3500
             assert "1.000" in text_von(emb)
         finally:
             schulden.instance.note_pay_block = alt_note
 
-        # Nicht genug Geld -> kein Eintrag auf der Tafel.
-        vorher = sch.saldo(7, 8)
+        # Nicht genug Geld -> gar nichts passiert.
         msg.content = "flo pay <@8> 999999"
         antwort = asyncio.run(economy.instance._pay(msg))
         assert isinstance(antwort, str) and "nicht genug" in antwort.lower()
-        assert sch.saldo(7, 8) == vorher
+        assert economy.get_coins(7) == 6500
     finally:
         economy.instance._flush = alt_flush
         restore()
 
 
+def test_schulden_pay_als_leihgabe_fragt_nach():
+    """'pay @wer 5k als leihgabe' darf NICHT sofort buchen - daraus wird eine
+    Schuld, und die entsteht nur mit Zustimmung."""
+    import schulden
+    restore, sch = _schulden_setup({7: 50_000, 8: 0})
+    ziel = _fake_person(uid=8, name="empfaenger")
+    msg = SimpleNamespace(content="flo pay <@8> 5k als leihgabe", mentions=[ziel],
+                          author=_fake_person(uid=7, name="zahler"),
+                          guild=SimpleNamespace(id=1, get_member=lambda _u: None))
+    gestellt = {}
+
+    async def fake_anfrage(message, ziel_, betrag, *, grund, faellig, mit_geld):
+        gestellt.update(betrag=betrag, grund=grund, mit_geld=mit_geld)
+        return schulden.HANDLED
+
+    alt = schulden.leih_anfrage
+    schulden.leih_anfrage = fake_anfrage
+    try:
+        antwort = asyncio.run(economy.instance._pay(msg))
+        assert antwort is schulden.HANDLED
+        assert gestellt == {"betrag": 5000, "grund": "", "mit_geld": True}, gestellt
+        # Kein Coin hat sich bewegt.
+        assert economy.get_coins(7) == 50_000 and economy.get_coins(8) == 0
+    finally:
+        schulden.leih_anfrage = alt
+        restore()
+
+
 def test_schulden_automatische_tilgung():
     """Der Zwang zum Zahlen: von jeder ECHTEN Einnahme wandert ein Anteil
-    automatisch an den groessten Glaeubiger. Coins entstehen dabei nie und
-    verschwinden nie - sie wechseln nur den Besitzer."""
-    import schulden
+    automatisch an die Glaeubiger - anteilig an ALLE, nicht mehr alles an den
+    groessten. Coins entstehen dabei nie und verschwinden nie."""
     restore, sch = _schulden_setup({1: 0, 2: 0, 3: 0})
     try:
         A, B, C = 1, 2, 3
-        sch.record_pay(B, A, 10_000)          # A schuldet B 10.000
-        sch.record_pay(C, A, 4_000)           # A schuldet C  4.000
-        assert sch.saldo(B, A) == 10_000 and sch.saldo(C, A) == 4_000
+        _schuld(sch, B, A, 7_500)             # A schuldet B 7.500
+        _schuld(sch, C, A, 2_500)             # A schuldet C 2.500
         summe_vorher = sum(economy.get_coins(u) for u in (A, B, C))
 
-        # A gewinnt 1.000 im Casino -> 20 % gehen an den GROESSTEN Glaeubiger (B).
-        economy.add_coins(A, 1000, reason="casino")
-        assert economy.get_coins(A) == 800, economy.get_coins(A)
-        assert economy.get_coins(B) == 200
-        assert sch.saldo(B, A) == 9_800       # Schuld ist echt kleiner
-        assert sch.saldo(C, A) == 4_000       # der kleinere Posten bleibt
-        assert sch.getilgt_summe(A) == 200
-        # Coins nur umverteilt (plus die 1.000 Einnahme von aussen).
-        assert sum(economy.get_coins(u) for u in (A, B, C)) == summe_vorher + 1000
+        # A gewinnt 5.000 -> 20 % = 1.000 gehen anteilig raus (75/25).
+        economy.add_coins(A, 5_000, reason="casino")
+        assert economy.get_coins(A) == 4_000, economy.get_coins(A)
+        assert economy.get_coins(B) == 750 and economy.get_coins(C) == 250
+        assert sch.saldo(B, A) == 6_750 and sch.saldo(C, A) == 2_250
+        assert sch.getilgt_summe(A) == 1_000
+        # Coins nur umverteilt (plus die Einnahme von aussen).
+        assert sum(economy.get_coins(u) for u in (A, B, C)) == summe_vorher + 5_000
 
         # Kleinstbetraege bleiben unberuehrt.
         vor = economy.get_coins(A)
@@ -2873,20 +2872,13 @@ def test_schulden_automatische_tilgung():
         economy.add_coins(A, -500, reason="casino")
         assert economy.get_coins(B) == vor_b
 
-        # Getilgt wird immer beim GROESSTEN Posten - erst B (9.800), dann C.
-        sch.erlassen(B, A, sch.saldo(B, A) - 3_000)   # B nur noch 3.000, C 4.000
-        vor_c = economy.get_coins(C)
-        economy.add_coins(A, 1000, reason="casino")
-        assert economy.get_coins(C) == vor_c + 200    # jetzt ist C der groesste
-        assert sch.saldo(C, A) == 3_800
-
-        # Nie mehr als die Restschuld: alles bis auf 50 erlassen, dann gross gewinnen.
-        sch.erlassen(C, A)                            # C komplett erlassen
-        sch.erlassen(B, A, sch.saldo(B, A) - 50)      # bei B bleiben 50
+        # Nie mehr als die Restschuld.
+        sch.erlassen(B, A, sch.saldo(B, A) - 50)
+        sch.erlassen(C, A)
         assert sch.saldo(B, A) == 50 and sch.saldo(C, A) == 0
         vor_b = economy.get_coins(B)
         economy.add_coins(A, 100_000, reason="spiele")
-        assert economy.get_coins(B) == vor_b + 50     # exakt die Restschuld
+        assert economy.get_coins(B) == vor_b + 50
         assert sch.saldo(B, A) == 0
 
         # Ohne Schulden passiert nichts.
@@ -2901,13 +2893,194 @@ def test_schulden_automatische_tilgung():
         restore()
 
 
+def test_schulden_tilgung_bevorzugt_ueberfaellige():
+    """Ueberfaellige Posten zuerst, danach der Rest - und innerhalb einer
+    Person der aelteste Posten zuerst (FIFO)."""
+    restore, sch = _schulden_setup({1: 0, 2: 0, 3: 0})
+    try:
+        jetzt = time.time()
+        # B: ein ueberfaelliger Posten. C: ein dickerer, aber nicht faelliger.
+        p_alt = _schuld(sch, 2, 1, 1_000, faellig=jetzt - 86400,
+                        entstanden=jetzt - 20 * 86400)
+        _schuld(sch, 3, 1, 9_000, entstanden=jetzt - 10 * 86400)
+        economy.add_coins(1, 5_000, reason="casino")     # 1.000 Budget
+        # Alles ging an den ueberfaelligen Posten, obwohl der kleiner ist.
+        assert p_alt.offen == 0 and p_alt.status == "getilgt"
+        assert sch.saldo(3, 1) == 9_000
+        assert economy.get_coins(2) == 1_000 and economy.get_coins(3) == 0
+
+        # FIFO innerhalb eines Glaeubigers: der aeltere Posten zuerst.
+        sch.erlassen(3, 1, 9_000)                        # den dicken wegraeumen
+        alt_1 = _schuld(sch, 3, 1, 500, entstanden=jetzt - 30 * 86400)
+        neu_1 = _schuld(sch, 3, 1, 500, entstanden=jetzt - 1 * 86400)
+        economy.add_coins(1, 1_000, reason="casino")     # 200 Budget
+        assert (alt_1.offen, neu_1.offen) == (300, 500), (alt_1.offen, neu_1.offen)
+    finally:
+        restore()
+
+
+def test_schulden_grenzen_und_kreditwuerdigkeit():
+    """Grenzen schuetzen beide Seiten - und die Kreditwuerdigkeit bewegt sich
+    nur durch eigenes Verhalten."""
+    import schulden
+    restore, sch = _schulden_setup({1: 10_000_000, 2: 1_000_000})
+    try:
+        # Zu klein lohnt die Buchfuehrung nicht.
+        ok, fehler = sch._darf_anlegen(1, 2, 10)
+        assert not ok and "lohnt" in fehler
+
+        # Bei sich selbst geht gar nichts.
+        assert sch._darf_anlegen(1, 1, 1_000)[0] is False
+
+        # Der Start-Score ist 50 und die Ampel gelb.
+        assert sch.score.score(2) == 50 and sch.score.ampel(2) == "🟡"
+
+        # Hoechstens fuenf offene Posten je Paar.
+        for _ in range(schulden.MAX_POSTEN_JE_PAAR):
+            _schuld(sch, 1, 2, 1_000)
+        ok, fehler = sch._darf_anlegen(1, 2, 1_000)
+        assert not ok and "offene" in fehler.lower()
+        for p in sch.buch.alle():
+            p.status = "erlassen"
+            p.offen = 0
+
+        # Puenktlich getilgt hebt den Score, ueberfaellig senkt ihn.
+        p = _schuld(sch, 1, 2, 1_000, faellig=time.time() + 86400)
+        sch._abbuchen(p, 1_000)
+        assert sch.score.score(2) == 55, sch.score.score(2)
+        sch.score.notiere(2, schulden.Kreditwuerdigkeit.UEBERFAELLIG, "test")
+        assert sch.score.score(2) == 45
+
+        # Alte Eintraege zaehlen nur halb.
+        sch.buch.score_daten()["2"] = [
+            {"t": time.time() - 200 * 86400, "d": -20, "g": "alt"}]
+        assert sch.score.score(2) == 40
+
+        # Der Score deckelt, wie viel jemand geliehen bekommt. (Damit hier
+        # wirklich der Score greift und nicht der Vermoegens-Deckel des
+        # Schuldners, ist der Schuldner reich.)
+        economy.instance._profile(2)["coins"] = 500_000_000
+        limit = sch.score.leih_limit(1, 2)
+        assert limit == int(10_000_000 * 0.40), limit
+        ok, fehler = sch._darf_anlegen(1, 2, limit + 1)
+        assert not ok and "Kreditwürdigkeit" in fehler, fehler
+
+        # Unter 20 ist ganz Schluss.
+        sch.buch.score_daten()["2"] = [{"t": time.time(), "d": -40, "g": "test"}]
+        gesperrt, warum = sch.score.gesperrt(2)
+        assert gesperrt and "niedrig" in warum
+    finally:
+        restore()
+
+
+def test_schulden_gesamtdeckel():
+    """Niemand darf mehr als das Dreifache seines Vermoegens schulden - sonst
+    entstehen Schuldenberge, die nie tilgbar sind."""
+    restore, sch = _schulden_setup({1: 100_000_000, 2: 1_000_000})
+    try:
+        _schuld(sch, 1, 2, 2_900_000)
+        ok, fehler = sch._darf_anlegen(1, 2, 200_000)
+        assert not ok and "Grenze" in fehler, fehler
+        # Knapp darunter geht noch.
+        assert sch._darf_anlegen(1, 2, 50_000)[0] is True
+    finally:
+        restore()
+
+
+def test_schulden_verfall_und_mahnstufen():
+    """Ein Posten ohne jede Bewegung verfaellt - kein ewiges Druckmittel. Und
+    gemahnt wird in Stufen, nicht jeden Tag gleich."""
+    import schulden
+    restore, sch = _schulden_setup({1: 0, 2: 0})
+    try:
+        jetzt = time.time()
+        # Kurz vor dem Verfall -> Warnung an den Glaeubiger.
+        p = _schuld(sch, 1, 2, 5_000, entstanden=jetzt - 55 * 86400)
+        p.log = [{"t": jetzt - 55 * 86400, "art": "entstanden", "betrag": 5_000}]
+        verfallen, warnen = sch.verfall_pruefen()
+        assert not verfallen and len(warnen) == 1 and warnen[0][1] <= 7
+
+        # Drueber -> verfallen, und der Score des Schuldners leidet.
+        p.log = [{"t": jetzt - 61 * 86400, "art": "entstanden", "betrag": 5_000}]
+        p.entstanden = jetzt - 61 * 86400
+        verfallen, _w = sch.verfall_pruefen()
+        assert len(verfallen) == 1 and p.status == "verfallen"
+        assert sch.saldo(1, 2) == 0
+        assert sch.score.score(2) == 35
+
+        # Mahnstufen: 1 = faellig, 2 = eine Woche, 3 = zwei Wochen.
+        for tage, erwartet in ((1, 1), (schulden.MAHN_STUFE_2 + 1, 2),
+                               (schulden.MAHN_STUFE_3 + 1, 3)):
+            q = _schuld(sch, 1, 2, 1_000, faellig=jetzt - tage * 86400)
+            stufen = [s for _u, s, post in sch.faellige_stufen() if post is q]
+            assert stufen == [erwartet], (tage, stufen)
+            q.status = "erlassen"
+            q.offen = 0
+    finally:
+        restore()
+
+
+def test_schulden_insolvenz():
+    """Privatinsolvenz: die Haelfte des Vermoegens anteilig raus, der Rest
+    erlassen, Score unten und 14 Tage Sperre."""
+    import schulden
+    restore, sch = _schulden_setup({1: 10_000, 2: 0, 3: 0})
+    try:
+        _schuld(sch, 2, 1, 30_000)
+        _schuld(sch, 3, 1, 10_000)
+        text = asyncio.run(sch.insolvenz_durchfuehren(1))
+        # 50 % von 10.000 = 5.000, anteilig 75/25.
+        assert economy.get_coins(1) == 5_000, economy.get_coins(1)
+        assert economy.get_coins(2) == 3_750 and economy.get_coins(3) == 1_250
+        assert sch.summen(1)[1] == 0
+        assert all(p.status in ("getilgt", "erlassen") for p in sch.buch.alle())
+        assert sch.score.score(1) == schulden.Kreditwuerdigkeit.INSOLVENZ_SCORE
+        # Gesperrt ist gesperrt - hier greift schon der Score (10 < 20), die
+        # 14-Tage-Frist steht zusaetzlich im Buch.
+        gesperrt, warum = sch.score.gesperrt(1)
+        assert gesperrt and warum
+        bis = sch.buch.stats(1)["insolvenz_bis"]
+        assert bis > time.time() + 13 * 86400
+        assert "erlassen" in text
+    finally:
+        restore()
+
+
+def test_schulden_migration_alter_tafel():
+    """Der alte Netto-Saldo je Paar wird zu je EINEM Posten - und nichts geht
+    verloren: die alten Zahlen wandern ins Archiv."""
+    restore, sch = _schulden_setup()
+    try:
+        store = _FakeStore({
+            "pairs": {"1:2": {"net": 5_000, "vol": 9_000, "n": 4, "first": 1_000_000},
+                      "3:4": {"net": -2_000, "vol": 2_000, "n": 1},
+                      "5:6": {"net": 0, "vol": 500, "n": 2}},
+            "posten": [], "next_id": 1, "score": {}, "stats": {}, "archiv": {},
+        })
+        sch.buch.laden(store)
+        # net > 0 heisst "der ZWEITE schuldet dem ERSTEN".
+        assert sch.buch.saldo(1, 2) == 5_000
+        assert sch.buch.saldo(4, 3) == 2_000
+        # Ein ausgeglichenes Paar erzeugt keinen Posten.
+        assert len(sch.buch.alle()) == 2
+        assert all(p.grund.startswith("Übernahme") for p in sch.buch.alle())
+        # Nichts geloescht: die alte Tafel liegt im Archiv.
+        assert store.data["archiv"]["pairs"]["1:2"]["vol"] == 9_000
+        assert store.data["pairs"] == {}
+        # Zweites Laden legt NICHT nochmal an.
+        sch.buch.laden(store)
+        assert len(sch.buch.alle()) == 0     # posten stand noch nicht im Store
+    finally:
+        restore()
+
+
 def test_schulden_mahnung():
     """Mahnung per DM: nur ab einer Mindestsumme und hoechstens einmal je Abstand."""
     import schulden
     restore, sch = _schulden_setup()
     try:
-        sch.record_pay(1, 2, 50_000)      # 2 schuldet 1 -> 2 wird gemahnt
-        sch.record_pay(1, 3, 10)          # zu klein -> keine Mahnung
+        _schuld(sch, 1, 2, 50_000)        # 2 schuldet 1 -> 2 wird gemahnt
+        _schuld(sch, 1, 3, 10)            # zu klein -> keine Mahnung
         gesendet = []
 
         class _User:
@@ -2917,7 +3090,7 @@ def test_schulden_mahnung():
             async def send(self, **kw):
                 gesendet.append((self.id, kw.get("embed")))
 
-        client = SimpleNamespace(get_user=lambda uid: _User(uid))
+        client = SimpleNamespace(get_user=lambda uid: _User(uid), guilds=[])
         n = asyncio.run(sch.mahn_tick(client))
         assert n == 1 and gesendet[0][0] == 2
         emb = gesendet[0][1]
@@ -2928,7 +3101,7 @@ def test_schulden_mahnung():
         # Direkt nochmal -> keine zweite DM (Abstand).
         assert asyncio.run(sch.mahn_tick(client)) == 0
         # Nach Ablauf des Abstands wieder.
-        sch._stats(2)["mahnung"] = time.time() - schulden.MAHN_ABSTAND - 5
+        sch.buch.stats(2)["mahnung"] = time.time() - schulden.MAHN_ABSTAND - 5
         assert asyncio.run(sch.mahn_tick(client)) == 1
     finally:
         restore()
@@ -3120,6 +3293,7 @@ def test_einsatz_rueckgabe_ist_keine_einnahme():
 
     alt = (economy.instance._store, economy.instance._enabled,
            schulden.instance._store, schulden.instance._enabled,
+           schulden.instance.buch._store, schulden.instance.buch._posten,
            games.instance._store, games.instance._enabled)
     try:
         def aufsetzen():
@@ -3130,9 +3304,12 @@ def test_einsatz_rueckgabe_ist_keine_einnahme():
                          "msgs": 0, "streak": 0, "last_daily": ""}
                 for i in (1, 2)}})
             schulden.instance._enabled = True
-            # net < 0 aus Sicht von a=1: Spieler 1 schuldet Spieler 2.
             schulden.instance._store = _FakeStore(
-                {"pairs": {"1:2": {"net": -100_000}}, "stats": {}})
+                {"posten": [], "next_id": 1, "score": {}, "stats": {},
+                 "archiv": {}, "pairs": {}})
+            schulden.instance.buch.laden(schulden.instance._store)
+            # Spieler 1 schuldet Spieler 2 hunderttausend.
+            schulden.instance.buch.anlegen(2, 1, 100_000)
             schulden.instance._tilgung_laeuft = False
             games.instance._enabled = True
             games.instance._store = _FakeStore(
@@ -3175,6 +3352,7 @@ def test_einsatz_rueckgabe_ist_keine_einnahme():
     finally:
         (economy.instance._store, economy.instance._enabled,
          schulden.instance._store, schulden.instance._enabled,
+         schulden.instance.buch._store, schulden.instance.buch._posten,
          games.instance._store, games.instance._enabled) = alt
 
 
@@ -7617,11 +7795,15 @@ def test_einsatz_rueckgaben_werden_nicht_getilgt():
     import economy
     import schulden
     restore = _with_economy({1: 10_000, 2: 0})
-    alt = (schulden.instance._enabled, schulden.instance._store)
+    alt = (schulden.instance._enabled, schulden.instance._store,
+           schulden.instance.buch._store, schulden.instance.buch._posten)
     schulden.instance._enabled = True
-    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    schulden.instance._store = _FakeStore(
+        {"posten": [], "next_id": 1, "score": {}, "stats": {}, "archiv": {},
+         "pairs": {}})
+    schulden.instance.buch.laden(schulden.instance._store)
     try:
-        schulden.instance.record_pay(2, 1, 5_000)     # 1 schuldet 2 nun 5.000
+        schulden.instance.buch.anlegen(2, 1, 5_000)   # 1 schuldet 2 nun 5.000
         vor = economy.get_coins(1)
         economy.add_coins(1, 1_000, reason="spiele-rueck")
         assert economy.get_coins(1) - vor == 1_000, "Rueckgabe wurde getilgt"
@@ -7629,7 +7811,8 @@ def test_einsatz_rueckgaben_werden_nicht_getilgt():
         economy.add_coins(1, 1_000, reason="spiele")
         assert economy.get_coins(1) - vor == 800, "echter Gewinn wurde NICHT getilgt"
     finally:
-        (schulden.instance._enabled, schulden.instance._store) = alt
+        (schulden.instance._enabled, schulden.instance._store,
+         schulden.instance.buch._store, schulden.instance.buch._posten) = alt
         restore()
 
     # Und: keine Rueckgabe-Stelle darf den reason vergessen.
@@ -7788,11 +7971,15 @@ def test_kleine_fehler_der_wirtschaft():
     import games
     import schulden
     restore = _with_economy({1: 1000, 2: 0})
-    alt = (schulden.instance._enabled, schulden.instance._store)
+    alt = (schulden.instance._enabled, schulden.instance._store,
+           schulden.instance.buch._store, schulden.instance.buch._posten)
     schulden.instance._enabled = True
-    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    schulden.instance._store = _FakeStore(
+        {"posten": [], "next_id": 1, "score": {}, "stats": {}, "archiv": {},
+         "pairs": {}})
+    schulden.instance.buch.laden(schulden.instance._store)
     try:
-        schulden.instance.record_pay(2, 1, 5_000)     # 1 schuldet 2 nun 5.000
+        schulden.instance.buch.anlegen(2, 1, 5_000)   # 1 schuldet 2 nun 5.000
         # add_coins meldete den Stand VOR der Tilgung - Anzeigen logen.
         gemeldet = economy.add_coins(1, 1_000, reason="spiele")
         assert gemeldet == economy.get_coins(1), \
@@ -7805,7 +7992,8 @@ def test_kleine_fehler_der_wirtschaft():
         economy.add_coins(1, 1_000, reason="setcoins")
         assert economy.get_coins(1) - vor == 1_000
     finally:
-        (schulden.instance._enabled, schulden.instance._store) = alt
+        (schulden.instance._enabled, schulden.instance._store,
+         schulden.instance.buch._store, schulden.instance.buch._posten) = alt
         restore()
 
     # Slot-Textbefehl kannte keine Obergrenze - das Menue schon.
@@ -8160,15 +8348,13 @@ def test_bot_erwaehnung_ist_kein_ziel():
             content=text, mentions=list(mentions), author=ich,
             guild=SimpleNamespace(id=1, me=flo, get_member=lambda _u: None))
 
-    alt = (schulden.instance._enabled, schulden.instance._store)
-    schulden.instance._enabled = True
-    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    restore, sch = _schulden_setup()
     try:
-        # Nur Flo erwaehnt -> eigene Tafel.
+        # Nur Flo erwaehnt -> eigenes Buch.
         emb = asyncio.run(schulden.instance.handle(_msg("<@42> schulden", [flo])))
-        assert "Deine Kreide-Tafel" in _embed_text(emb), _embed_text(emb)
+        assert "Dein Schuldbuch" in _embed_text(emb), _embed_text(emb)
         # Flo UND ein Mensch -> der Mensch ist gemeint.
-        schulden.instance.record_pay(7, 8, 5_000)
+        _schuld(sch, 8, 7, 5_000)
         emb = asyncio.run(schulden.instance.handle(
             _msg("<@42> schulden <@8>", [flo, kumpel])))
         assert "<@8>" in _embed_text(emb) and "<@42>" not in _embed_text(emb), _embed_text(emb)
@@ -8177,7 +8363,7 @@ def test_bot_erwaehnung_ist_kein_ziel():
             _msg("<@42> schulden erlassen", [flo])))
         assert "Wem willst du was erlassen" in _embed_text(antwort)
     finally:
-        (schulden.instance._enabled, schulden.instance._store) = alt
+        restore()
 
 
 def test_musik_watchdog_frisst_die_liegengebliebene_queue_nicht():

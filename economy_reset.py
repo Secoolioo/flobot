@@ -330,10 +330,13 @@ def reset_lotto(d, bericht):
 
 
 def reset_schulden(d, bericht):
-    """Kreide-Tafel: alle offenen Schulden erlassen."""
-    paare = len(d.get("pairs") or {})
-    setze(d, {"pairs": {}, "stats": {}})
-    bericht.append(f"{_mehrzahl(paare, 'Schuldverhältnis', 'Schuldverhältnisse')} erlassen")
+    """Schuldbuch: alle Posten erlassen, Kreditwuerdigkeit zurueck auf Start."""
+    posten = [p for p in (d.get("posten") or [])
+              if isinstance(p, dict) and p.get("status") == "offen"]
+    paare = len(d.get("pairs") or {})       # Altbestand vor der Umstellung
+    setze(d, {"posten": [], "next_id": 1, "score": {}, "stats": {}, "pairs": {}})
+    bericht.append(f"{_mehrzahl(len(posten) + paare, 'Schuldposten', 'Schuldposten')} "
+                   f"erlassen, Kreditwürdigkeit zurückgesetzt")
     return 0, 0
 
 
@@ -393,7 +396,7 @@ DATEIEN = (
     ("luxus.json",    reset_luxus,    "Luxus-Besitz + Thron"),
     ("merchant.json", reset_merchant, "Händler: Lager & Käufe"),
     ("lotto.json",    reset_lotto,    "Lotto: Lose, Jackpot, Hauskasse"),
-    ("schulden.json", reset_schulden, "Kreide-Tafel (Schulden)"),
+    ("schulden.json", reset_schulden, "Schuldbuch (Posten + Score)"),
     ("casino.json",   reset_casino,   "Casino-Statistik"),
     ("steal.json",    reset_steal,    "Raub-Cooldowns"),
     ("giveaway.json", reset_giveaway, "laufende Giveaways"),

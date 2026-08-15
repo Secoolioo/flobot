@@ -625,6 +625,21 @@ class Profil:
         except Exception:  # noqa: BLE001
             log.exception("Wort-Teil des Profils fehlgeschlagen")
         try:
+            import schulden
+            haben, soll, _netto = schulden.summen(uid)
+            wert, ampel = schulden.kredit_score(uid)
+            if soll or haben:
+                teile = []
+                if soll:
+                    teile.append(f"−{numfmt.fmt(soll)} offen")
+                if haben:
+                    teile.append(f"+{numfmt.fmt(haben)} ausstehend")
+                zeilen.append(f"🧾 {' · '.join(teile)}"
+                              + (f" · Kreditwürdigkeit {ampel} **{wert}**/100"
+                                 if wert is not None else ""))
+        except Exception:  # noqa: BLE001
+            log.debug("Schuldbuch-Teil des Profils fehlgeschlagen", exc_info=True)
+        try:
             import moderation
             warns = moderation.warns_of(getattr(guild, "id", 0), uid)
             if warns:
