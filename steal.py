@@ -24,6 +24,7 @@ import time
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 from store import JsonStore
 
@@ -89,13 +90,12 @@ _POOR_LINES = [
 ]
 
 
-class Steal:
+class Steal(FeatureBasis):
     """Objektorientierte Huelle: der veraenderliche Zustand lebt auf der Instanz."""
 
     def __init__(self):
         # Veraenderlicher Zustand (frueher Modul-Globals).
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         self._cooldown = DEFAULT_COOLDOWN
         self._success_chance = DEFAULT_SUCCESS_CHANCE
@@ -122,7 +122,6 @@ class Steal:
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
         """Aktiviert den Raub. Braucht economy (dort liegt der Coin-Topf)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("STEAL_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Steal-Feature aus (STEAL_ENABLED=0).")
             return False

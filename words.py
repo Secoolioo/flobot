@@ -25,6 +25,7 @@ import re
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import render
 from store import JsonStore
@@ -81,10 +82,9 @@ gut ok okay ne nen ah oh hm hmm lol xd
 """.split())
 
 
-class Words:
+class Words(FeatureBasis):
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
 
         self._dirty = False
@@ -98,7 +98,6 @@ class Words:
 
     def setup(self):
         """Aktiviert den Wort-Zaehler und laedt data/words.json."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("WORDS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Wort-Zaehler aus (WORDS_ENABLED=0).")
             return False

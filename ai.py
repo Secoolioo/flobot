@@ -12,6 +12,7 @@ Ohne gueltige Konfiguration ist das Feature einfach aus - der restliche Bot
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -30,6 +31,10 @@ log = logging.getLogger("dcbot.ai")
 
 # So viele Kanaele behaelt das Kurzzeit-Gedaechtnis hoechstens.
 _HISTORY_MAX_CHANNELS = 200
+
+# Welcher Server gerade bedient wird. Steht hier und nicht auf der Instanz,
+# damit er wirklich JE TASK gilt - siehe FloAI.setze_guild.
+_AKTUELLE_GUILD = contextvars.ContextVar("flo_guild", default=0)
 
 
 class FloAI:
@@ -170,6 +175,10 @@ class FloAI:
         self._http = None
         # Kurzzeit-Gedaechtnis pro Channel (deque je Channel-ID).
         self._HISTORY = {}
+        # Fertige Namens-Regexe je (Art, Server). Ein Regex je Nachricht neu zu
+        # bauen waere Verschwendung; ein globaler waere falsch, sobald ein
+        # Server einen eigenen Praefix hat.
+        self._RE_CACHE = {}
 
     def setup(self):
         """Liest die Konfiguration aus der Umgebung und baut den LLM-Client auf.
@@ -211,41 +220,120 @@ class FloAI:
         """True, wenn der LLM-Client einsatzbereit ist."""
         return self._client is not None
 
-    def bot_name(self):
-        """Name, auf den der Bot hoert (fuer den Trigger in bot.py)."""
-        return self._bot_name
+    # --- Ansprache: die EINZIGE Autoritaet fuer den Namen -------------------
+    # Frueher hielt sich jedes der 21 Feature-Module beim Start seine eigene
+    # Kopie (self._bot_name = os.getenv("BOT_NAME")), und bot.py baute den
+    # Trigger-Regex EINMAL beim Import. Ein eigener Praefix je Server war damit
+    # unmoeglich: der Name stand fest, sobald der Bot hochkam. Jetzt fuehrt
+    # jeder Weg hierher, und hier wird je Guild nachgeschlagen.
+    def praefix_von(self, gid):
+        """Der eigene Praefix dieses Servers - oder "" (dann gilt BOT_NAME).
 
-    def names(self):
+        guildcfg wird BEWUSST erst hier importiert: guildcfg importiert ai,
+        andersherum gaebe es einen Ring."""
+        if not gid:
+            return ""
+        try:
+            import guildcfg
+            return (guildcfg.get(int(gid), "praefix") or "").strip()
+        except Exception:  # noqa: BLE001 - ohne guildcfg gilt eben der Standard
+            return ""
+
+    def bot_name(self, gid=None):
+        """Name, auf den der Bot hoert. Ohne gid gilt der Server, der gerade
+        bedient wird (siehe aktuelle_guild), sonst der Name aus der .env."""
+        gid = self.aktuelle_guild() if gid is None else gid
+        return self.praefix_von(gid) or self._bot_name
+
+    def names(self, gid=None):
         """Alle Namen, auf die der Bot hoert: Hauptname + Aliasse aus BOT_ALIASES
         (Standard: 'Florian'). Dadurch reagiert Flo auch auf 'Florian ...' wie eine
-        Alexa. Mehrere Aliasse per Komma/Leerzeichen trennen; BOT_ALIASES='' = nur Flo."""
+        Alexa. Mehrere Aliasse per Komma/Leerzeichen trennen; BOT_ALIASES='' = nur Flo.
+
+        Die Aliasse sind ABSICHTLICH global: sie sind Spitznamen der Person,
+        nicht eine Server-Einstellung. Nur der Hauptname ist je Server frei."""
+        haupt = self.bot_name(gid)
         raw = os.getenv("BOT_ALIASES", "Florian")
-        out = [self._bot_name]
+        out = [haupt]
         for a in re.split(r"[,\s]+", raw):
             a = a.strip()
-            if a and a.lower() != self._bot_name.lower() and a not in out:
+            if a and a.lower() != haupt.lower() and a not in out:
                 out.append(a)
         return out
 
-    def _names_alt(self):
+    def _names_alt(self, gid=None):
         """Regex-Alternation der Namen, laengster zuerst ('Florian|Flo')."""
-        return "|".join(re.escape(n) for n in sorted(self.names(), key=len, reverse=True))
+        return "|".join(re.escape(n) for n in sorted(self.names(gid), key=len,
+                                                     reverse=True))
 
-    def trigger_re(self):
+    def _regex(self, art, gid):
+        """Gecachter Regex je (Art, Server). Neu gebaut wird nur nach einer
+        Praefix-Aenderung (guildcfg ruft dafuer praefix_geaendert)."""
+        gid = int(gid or 0)
+        schluessel = (art, gid)
+        fertig = self._RE_CACHE.get(schluessel)
+        if fertig is not None:
+            return fertig
+        alt = self._names_alt(gid)
+        if art == "trigger":
+            fertig = re.compile(rf"\b(?:{alt})\b", re.IGNORECASE)
+        else:
+            fertig = re.compile(rf"^\s*(?:{alt})\b[\s,:!.\-]*", re.IGNORECASE)
+        self._RE_CACHE[schluessel] = fertig
+        return fertig
+
+    def praefix_geaendert(self, gid=None):
+        """Hook fuer guildcfg: der Praefix dieses Servers hat sich geaendert.
+
+        Ohne gid wird alles verworfen (z. B. nach einem .env-Neustart)."""
+        if gid is None:
+            self._RE_CACHE.clear()
+            return
+        gid = int(gid or 0)
+        for schluessel in [k for k in self._RE_CACHE if k[1] == gid]:
+            self._RE_CACHE.pop(schluessel, None)
+
+    def trigger_re(self, gid=None):
         """Erkennt, ob der Bot angesprochen wird (Name/Alias als ganzes Wort)."""
-        return re.compile(rf"\b(?:{self._names_alt()})\b", re.IGNORECASE)
+        return self._regex("trigger", self.aktuelle_guild() if gid is None else gid)
 
-    def lead_re(self):
+    def lead_re(self, gid=None):
         """Matcht einen fuehrenden Namen/Alias samt Satzzeichen am Zeilenanfang."""
-        return re.compile(rf"^\s*(?:{self._names_alt()})\b[\s,:!.\-]*", re.IGNORECASE)
+        return self._regex("lead", self.aktuelle_guild() if gid is None else gid)
 
-    def strip_lead(self, text):
+    def strip_lead(self, text, gid=None):
         """Entfernt @-Mentions und einen fuehrenden Botnamen/Alias.
         'Florian, level' -> 'level'. Die Feature-Module nutzen das fuer ihre
-        Befehlserkennung, damit Befehle auch mit 'Florian' davor funktionieren."""
+        Befehlserkennung, damit Befehle auch mit 'Florian' davor funktionieren.
+
+        Ohne gid gilt der Server, der gerade bedient wird - deshalb mussten die
+        37 Aufrufstellen in den Modulen nicht angefasst werden."""
         t = re.sub(r"<@!?\d+>", " ", text or "")
-        t = self.lead_re().sub("", t)
+        t = self.lead_re(gid).sub("", t)
         return t.strip()
+
+    # --- Welcher Server wird gerade bedient? -------------------------------
+    @staticmethod
+    def setze_guild(gid):
+        """Merkt fuer die Dauer dieser Nachricht, welcher Server dran ist.
+
+        Ein ContextVar und keine normale Variable: discord.py bearbeitet jedes
+        Ereignis in einem eigenen Task, und ein ContextVar gilt genau in dem
+        Task, der ihn gesetzt hat. Zwei Server gleichzeitig kommen sich damit
+        nicht in die Quere. Rueckgabe: der Token zum Zuruecksetzen."""
+        return _AKTUELLE_GUILD.set(int(gid or 0))
+
+    @staticmethod
+    def guild_zuruecksetzen(token):
+        try:
+            _AKTUELLE_GUILD.reset(token)
+        except (ValueError, LookupError):
+            pass          # anderer Task - dann galt der Wert dort ohnehin nicht
+
+    @staticmethod
+    def aktuelle_guild():
+        """Der Server, der gerade bedient wird (0 = DM/unbekannt)."""
+        return _AKTUELLE_GUILD.get()
 
     def _clean_title(self, title):
         """Entfernt fuehrende Emojis/Symbole vom Shop-Titel ('🤖 NPC' -> 'NPC')."""
@@ -668,6 +756,11 @@ names = instance.names
 trigger_re = instance.trigger_re
 lead_re = instance.lead_re
 strip_lead = instance.strip_lead
+praefix_von = instance.praefix_von
+praefix_geaendert = instance.praefix_geaendert
+setze_guild = instance.setze_guild
+guild_zuruecksetzen = instance.guild_zuruecksetzen
+aktuelle_guild = instance.aktuelle_guild
 http_session = instance.http_session
 get_weather = instance.get_weather
 generate = instance.generate

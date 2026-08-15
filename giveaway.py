@@ -37,6 +37,7 @@ import time
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import numfmt
 from store import JsonStore
@@ -157,13 +158,12 @@ _DRITTEL = ("drittel", "ein drittel", "1/3", "33%")
 _VIERTEL = ("viertel", "ein viertel", "1/4", "25%")
 
 
-class Giveaway:
+class Giveaway(FeatureBasis):
     """Kapselt Assistent, Escrow, Mitmach-Knopf und Ziehung."""
 
     def __init__(self):
         self._enabled = False
         self._store = None
-        self._bot_name = "Flo"
         # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
         # beim Auto-Loesch-Schutz wieder abmeldet.
         self._geschuetzt = {}
@@ -175,7 +175,6 @@ class Giveaway:
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("GIVEAWAY_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Giveaways aus (GIVEAWAY_ENABLED=0).")
             return False

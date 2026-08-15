@@ -21,13 +21,14 @@ import aiohttp
 import discord
 
 import ai
+from basis import FeatureBasis
 import guildcfg
 import render
 
 log = logging.getLogger("dcbot.food")
 
 
-class Food:
+class Food(FeatureBasis):
     HANDLED = object()
 
     # In DIESEM Channel wird jedes gepostete Essensbild automatisch analysiert.
@@ -64,13 +65,11 @@ class Food:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         # Nie mehr als 2 Analysen gleichzeitig (schont das kostenlose Vision-Limit).
         self._sem = asyncio.Semaphore(2)
 
     def setup(self):
         """Aktiviert die Kalorien-Analyse (braucht die KI/Vision)."""
-        self._bot_name = ai.bot_name()
         if not ai.is_enabled():
             log.info("Kalorien-Feature aus (KI nicht aktiv).")
             return False

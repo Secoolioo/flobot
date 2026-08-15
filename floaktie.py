@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import economy
+from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.floaktie")
@@ -281,12 +282,11 @@ HISTORY_MAX = 60
 _SPARK = "▁▂▃▄▅▆▇█"
 
 
-class FloAktie:
+class FloAktie(FeatureBasis):
     """Objektorientierte Huelle: Kurs, Depots & Historie leben auf der Instanz."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         # Das ZULETZT gepostete 'flo aktie'-Panel (Message) + fuer wen es gepostet
         # wurde. Es wird live nachgezogen, sobald sich Kurs/Boersenwert aendern.
@@ -312,7 +312,6 @@ class FloAktie:
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("FLOAKTIE_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("FloCorp-Aktie aus (FLOAKTIE_ENABLED=0).")
             return False

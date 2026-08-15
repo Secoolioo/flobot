@@ -8407,6 +8407,150 @@ def test_musik_watchdog_frisst_die_liegengebliebene_queue_nicht():
         aufraeumen()
 
 
+def test_praefix_gilt_je_server():
+    """Jeder Server darf Flo anders nennen - ohne Neustart.
+
+    Frueher cachte sich JEDES der 21 Module beim Start seinen eigenen
+    self._bot_name, und bot.py baute den Trigger-Regex einmal beim Import. Ein
+    eigener Praefix je Server war damit nicht moeglich. Jetzt ist ai.py die
+    einzige Autoritaet, und der Name wird zur Laufzeit nachgeschlagen."""
+    import ai
+    import economy
+    import music
+    guildcfg, zurueck = _cfg_frisch()
+    try:
+        guild = SimpleNamespace(id=4711, text_channels=[], get_channel=lambda _c: None)
+        ok, wert, fehler = asyncio.run(guildcfg.setzen(4711, "praefix", "Bob", guild))
+        assert ok, fehler
+        assert guildcfg.get(4711, "praefix") == "Bob"
+
+        # Der Name kommt je Server heraus ...
+        assert ai.bot_name(4711) == "Bob"
+        assert ai.bot_name(9999) == ai.instance._bot_name      # fremder Server
+        # ... und die Regexe ziehen mit.
+        assert ai.trigger_re(4711).search("bob mach mal was")
+        assert not ai.trigger_re(9999).search("bob mach mal was")
+        assert ai.strip_lead("Bob, level", 4711) == "level"
+        assert ai.strip_lead("Bob, level", 9999) == "Bob, level"
+
+        # Ohne ausdrueckliche gid gilt der Server, der gerade bedient wird -
+        # daran haengen alle Module, ohne dass sie es selbst wissen muessen.
+        token = ai.setze_guild(4711)
+        try:
+            assert ai.bot_name() == "Bob"
+            assert economy.instance._bot_name == "Bob"
+            assert music.instance._bot_name == "Bob"
+            assert ai.strip_lead("bob level") == "level"
+        finally:
+            ai.guild_zuruecksetzen(token)
+        assert economy.instance._bot_name != "Bob"
+
+        # Aendern wirkt sofort - der Regex-Cache wird ueber den Hook geleert.
+        asyncio.run(guildcfg.setzen(4711, "praefix", "Klaus", guild))
+        assert ai.bot_name(4711) == "Klaus"
+        assert ai.trigger_re(4711).search("klaus?") and not ai.trigger_re(4711).search("bob")
+        # Zuruecksetzen ebenso.
+        asyncio.run(guildcfg.loeschen(4711, "praefix"))
+        assert ai.bot_name(4711) == ai.instance._bot_name
+
+        # Unsinn kommt gar nicht erst rein: die Ansprache wird zum Regex.
+        for murks in ("a", "x" * 40, "Flo Bot", "Fl(o", "flo|.*"):
+            ok, _w, fehler = asyncio.run(guildcfg.setzen(4711, "praefix", murks, guild))
+            assert not ok and fehler, murks
+    finally:
+        ai.praefix_geaendert()
+        zurueck()
+
+
+def test_kein_modul_haelt_den_botnamen_selbst():
+    """Kein Modul darf sich den Namen wieder in eine eigene Variable legen.
+
+    Genau das war die Bremse: 21 Kopien von os.getenv("BOT_NAME"), die beim
+    Start eingefroren wurden. Wer ein neues Modul baut, erbt von FeatureBasis -
+    dann stimmt der Name je Server von allein."""
+    import pathlib
+    import basis
+
+    treffer = []
+    for pfad in sorted(pathlib.Path(".").glob("*.py")):
+        if pfad.name in ("ai.py", "basis.py", "test_games_logic.py", "test_logic.py"):
+            continue          # ai haelt den .env-Standard, basis erklaert die Regel
+        for nr, zeile in enumerate(pfad.read_text(encoding="utf-8").splitlines(), 1):
+            if "self._bot_name = " in zeile and not zeile.strip().startswith("#"):
+                treffer.append(f"{pfad.name}:{nr}")
+    assert not treffer, f"eigene Kopie des Botnamens: {treffer}"
+
+    # Und die Basis liefert wirklich den Namen des gerade bedienten Servers.
+    class Beispiel(basis.FeatureBasis):
+        pass
+
+    import ai
+    token = ai.setze_guild(0)
+    try:
+        assert Beispiel()._bot_name == ai.instance._bot_name
+    finally:
+        ai.guild_zuruecksetzen(token)
+
+
+def test_panel_protokolliert_und_sichert():
+    """Jede SCHREIBENDE Panel-Aktion landet im Protokoll, und das Backup
+    liefert wirklich ein ZIP.
+
+    Das Protokoll ist kein Login-Thema (den gibt es hier bewusst nicht),
+    sondern Nachvollziehbarkeit: wer spaeter wissen will, warum ein Konto
+    5 Mio mehr hat, findet es hier. Es haengt an einer Middleware, damit auch
+    der naechste neue Knopf mit protokolliert wird."""
+    import pathlib
+    import tempfile
+    import store
+    import webpanel
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    restore = _with_economy({1: 100})
+    wp = webpanel.instance
+    alt = (wp._enabled, wp._auth, wp._client, dict(wp._tokens), list(wp._log),
+           wp._log_store, store.DATA_DIR)
+    d = pathlib.Path(tempfile.mkdtemp())
+    store.DATA_DIR = d
+    (d / "economy.json").write_text('{"users":{}}', encoding="utf-8")
+    (d / "games.json").write_text('{"counting":{}}', encoding="utf-8")
+    wp._enabled, wp._auth = True, False
+    wp._tokens, wp._log, wp._log_store = {}, [], None
+    wp._client = SimpleNamespace(guilds=[], is_closed=lambda: False,
+                                 get_guild=lambda _x: None, get_channel=lambda _x: None)
+    app = wp._build_app()
+
+    async def run_it():
+        async with TestClient(TestServer(app)) as cli:
+            await cli.post("/api/user/coins", json={"uid": 1, "delta": 5000})
+            await cli.get("/api/features")           # Lesen wird NICHT notiert
+            r = await cli.get("/api/log")
+            daten = await r.json()
+            eintraege = daten["eintraege"]
+            assert len(eintraege) == 1, eintraege
+            assert eintraege[0]["pfad"] == "/api/user/coins"
+            assert eintraege[0]["daten"]["delta"] == 5000
+            # Backup: echtes ZIP mit den Dateien drin.
+            r = await cli.get("/api/backup")
+            assert r.status == 200
+            roh = await r.read()
+            import io
+            import zipfile
+            with zipfile.ZipFile(io.BytesIO(roh)) as zf:
+                assert set(zf.namelist()) >= {"economy.json", "games.json"}
+            assert "flobot-backup-" in r.headers.get("Content-Disposition", "")
+
+    try:
+        asyncio.run(run_it())
+    finally:
+        (wp._enabled, wp._auth, wp._client, wp._tokens, wp._log,
+         wp._log_store, store.DATA_DIR) = alt
+        restore()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

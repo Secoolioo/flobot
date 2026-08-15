@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import economy
+from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.lotto")
@@ -84,12 +85,11 @@ _FLAVOR = [
 ]
 
 
-class Lotto:
+class Lotto(FeatureBasis):
     """Objektorientierte Huelle: der Lotto-Zustand lebt auf der Instanz."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
         # beim Auto-Loesch-Schutz wieder abmeldet.
         self._geschuetzt = {}
@@ -99,7 +99,6 @@ class Lotto:
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
         """Aktiviert das Lotto. Braucht economy (dort liegt der Coin-Topf)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("LOTTO_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Lotto-Feature aus (LOTTO_ENABLED=0).")
             return False

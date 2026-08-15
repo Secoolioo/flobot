@@ -19,6 +19,7 @@ import re
 import discord
 
 import ai
+from basis import FeatureBasis
 import guildcfg
 
 log = logging.getLogger("dcbot.bayern")
@@ -26,7 +27,7 @@ log = logging.getLogger("dcbot.bayern")
 HANDLED = object()
 
 
-class Bayern:
+class Bayern(FeatureBasis):
     # Begruessungen (erstes Wort / erste zwei Woerter).
     _GREET1 = {"servus", "servas", "sers", "seas", "habidere", "pfiadi", "pfiati",
                "griasdi", "griaßdi", "griasgod", "zefix", "griaseich"}
@@ -72,10 +73,8 @@ class Bayern:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
 
     def setup(self):
-        self._bot_name = ai.bot_name()
         self._enabled = True
         log.info("Bayrisch-Feature aktiv (Begruessungen + Dialekt-Toggle).")
         return self._enabled

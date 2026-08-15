@@ -1146,6 +1146,15 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
       '<div class="cd">Holt die neueste Version (git pull) und startet Flo neu – nur wenn es wirklich etwas Neues gibt.</div></div>'+
       '<button class="btn btn-gold" style="width:auto;padding:12px 22px;margin:0" id="updGo">Update</button></div>'+
       '<pre id="updLog" style="display:none;margin:14px 0 0;padding:12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto"></pre></div>'+
+    /* Datensicherung: reines Lesen (ZIP aus data/*.json) - dafuer musste man
+       bisher auf den Server. Daneben das Protokoll: was hat das Panel getan? */
+    '<div class="card reveal" style="margin-top:16px"><div class="control-row"><div><div class="cl">💾 Daten sichern</div>'+
+      '<div class="cd">Lädt alle <code>data/*.json</code> als ZIP herunter. Ändert nichts.</div></div>'+
+      '<button class="btn" style="width:auto;padding:12px 22px;margin:0" id="bkGo">Backup laden</button></div>'+
+      '<div class="control-row" style="margin-top:4px"><div><div class="cl">🧾 Panel-Protokoll</div>'+
+      '<div class="cd">Die letzten schreibenden Aktionen – zum Nachvollziehen, nicht zum Sperren.</div></div>'+
+      '<button class="btn" style="width:auto;padding:12px 22px;margin:0" id="logGo">Anzeigen</button></div>'+
+      '<pre id="logOut" style="display:none;margin:14px 0 0;padding:12px;border-radius:10px;background:var(--surface-2);border:1px solid var(--border);font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto"></pre></div>'+
     '<div class="card composer reveal" style="margin-top:16px"><div class="ph" style="margin-bottom:14px"><div class="pt">📢 Ansage senden</div><div class="pm">Broadcast</div></div>'+
       '<textarea id="annText" placeholder="Deine Nachricht an den Server…"></textarea>'+
       '<div class="crow"><input class="inp" id="annChan" placeholder="Kanal-ID (optional)">'+
@@ -1188,6 +1197,27 @@ function renderServers(d,pause){ var c=$("#content"); var v=ce("div","view"); va
         toast(r.hinweis||"Update geladen – bitte selbst neu starten","info"); }
     }).catch(function(e){ b.disabled=false; b.textContent="Update"; if(e&&e.auth)return;
       log.textContent=(e&&e.log)||""; toast((e&&e.error)||"Update fehlgeschlagen","err"); }); });
+
+  $("#bkGo").addEventListener("click",function(){ var b=this; b.disabled=true; b.textContent="Packe…";
+    fetch("/api/backup",{headers:{"Authorization":"Bearer "+(S.token||"")}}).then(function(res){
+      if(!res.ok)throw res; return res.blob(); }).then(function(blob){
+      var url=URL.createObjectURL(blob), a=document.createElement("a");
+      a.href=url; a.download="flobot-backup.zip"; document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      b.disabled=false; b.textContent="Backup laden"; toast("Backup heruntergeladen","ok");
+    }).catch(function(){ b.disabled=false; b.textContent="Backup laden"; toast("Backup fehlgeschlagen","err"); }); });
+
+  $("#logGo").addEventListener("click",function(){ var b=this, out=$("#logOut");
+    if(out.style.display==="block"){ out.style.display="none"; b.textContent="Anzeigen"; return; }
+    b.disabled=true; api("/api/log").then(function(r){ b.disabled=false;
+      var zs=(r.eintraege||[]).map(function(e){
+        var d=new Date((e.t||0)*1000).toLocaleString("de-DE");
+        var daten=JSON.stringify(e.daten||{});
+        if(daten.length>90)daten=daten.slice(0,90)+"…";
+        return d+"  "+String(e.status)+"  "+e.pfad+"  "+daten+"  ("+(e.von||"?")+")"; });
+      out.textContent=zs.length?zs.join("\n"):"Noch nichts passiert.";
+      out.style.display="block"; b.textContent="Ausblenden";
+    }).catch(function(e){ b.disabled=false; if(e&&e.auth)return; toast("Protokoll nicht ladbar","err"); }); });
 
   $("#annGo").addEventListener("click",function(){ var text=$("#annText").value.trim(); if(!text){toast("Nachricht eingeben","err");return;}
     var chan=$("#annChan").value.trim(); var body={text:text}; if(chan)body.channel_id=chan;

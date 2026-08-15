@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+from basis import FeatureBasis
 import guildcfg
 import leaderboard_img
 import numfmt
@@ -42,7 +43,7 @@ log = logging.getLogger("dcbot.economy")
 HANDLED = object()
 
 
-class Economy:
+class Economy(FeatureBasis):
     """Kapselt das komplette Level-/Coin-System: Konfiguration, Datenzugriff,
     XP-Vergabe, Shop, Inventar und die Befehls-Verarbeitung."""
 
@@ -192,7 +193,6 @@ class Economy:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         # Cooldowns nur im Speicher (gehen bei Neustart verloren - egal, sind kurz).
         self._last_msg_xp = {}
         self._store = None
@@ -208,7 +208,6 @@ class Economy:
 
     def setup(self):
         """Aktiviert das Feature. Laeuft immer (keine externen Voraussetzungen)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("ECONOMY_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Level/Coins-Feature aus (ECONOMY_ENABLED=0).")
             return False
@@ -945,6 +944,10 @@ class Economy:
         return random.choice(self._LEVELUP_FALLBACK).format(lvl=level)
 
     async def _announce_levelup(self, guild, member, level, fallback=None):
+        # Manche Server wollen die Karten nicht - XP und Coins laufen trotzdem
+        # weiter, nur die Ansage bleibt aus (guildcfg 'levelup_ansagen').
+        if guild is not None and not guildcfg.an(guild.id, "levelup_ansagen"):
+            return
         channel = self._levelup_target(guild, fallback)
         if channel is None:
             return

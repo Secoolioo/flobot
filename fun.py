@@ -20,6 +20,7 @@ import time
 import discord
 
 import ai
+from basis import FeatureBasis
 
 log = logging.getLogger("dcbot.fun")
 
@@ -134,12 +135,11 @@ _HYPE_FALLBACKS = [
 ]
 
 
-class Fun:
+class Fun(FeatureBasis):
     """Kapselt das Chaos-Feature (Befehle, Reactions, Einwuerfe) als Klasse."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._last_interject = 0.0
         self._last_botroast = 0.0
         self._last_dmroast = 0.0       # serverweiter Cooldown fuer den DM-Konter
@@ -150,7 +150,6 @@ class Fun:
 
     def setup(self):
         """Aktiv, wenn die KI laeuft (Roast/Hype/Spruch brauchen das LLM)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if not ai.is_enabled():
             log.info("Chaos-Feature aus: KI ist nicht aktiv.")
             return False

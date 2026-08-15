@@ -23,6 +23,7 @@ import re
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import numfmt
 from store import JsonStore
@@ -32,7 +33,7 @@ log = logging.getLogger("dcbot.admin")
 OWNER_ID = int(os.getenv("OWNER_ID", "1040135855710404659") or "0")
 
 
-class Admin:
+class Admin(FeatureBasis):
     """Kapselt die Admin-Befehle samt veraenderlichem Zustand als Instanz."""
 
     _MENTION_RE = re.compile(r"<@!?(\d{15,20})>")
@@ -42,7 +43,6 @@ class Admin:
     def __init__(self):
         # Veraenderlicher Modulzustand (frueher per 'global' neu zugewiesen).
         self._enabled = False
-        self._bot_name = "Flo"
         # Sendepause ('Funkstille'): ist sie an, ignoriert der Bot JEDEN ausser dem
         # Besitzer komplett. Persistiert in data/admin.json (ueberlebt Neustarts).
         self._store = None
@@ -50,7 +50,6 @@ class Admin:
 
     def setup(self):
         """Aktiviert die Admin-Befehle (braucht nur eine OWNER_ID)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if not OWNER_ID:
             log.info("Admin-Befehle aus (keine OWNER_ID).")
             return False

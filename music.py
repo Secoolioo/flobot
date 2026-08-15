@@ -36,6 +36,7 @@ import discord
 import numfmt
 
 import ai
+from basis import FeatureBasis
 import guildcfg
 
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
@@ -49,7 +50,21 @@ log = logging.getLogger("dcbot.music")
 # bot.py erkennt das und schickt KEINE zusaetzliche Antwort.
 HANDLED = object()
 
-MAX_QUEUE = 50          # Schutz: maximale Laenge der Warteschlange pro Server
+MAX_QUEUE = int(os.getenv("MUSIC_MAX_QUEUE", "50") or "50")
+# ^ Vorgabewert. Was WIRKLICH gilt, sagt max_queue(gid) - jeder Server stellt
+#   seinen eigenen Deckel ein (guildcfg 'musik_max_queue').
+
+
+def max_queue(gid=0):
+    """Wie viele Songs hier gleichzeitig warten duerfen."""
+    if not gid:
+        return MAX_QUEUE
+    try:
+        import guildcfg
+        wert = int(guildcfg.get(int(gid), "musik_max_queue") or 0)
+        return wert if wert > 0 else MAX_QUEUE
+    except Exception:  # noqa: BLE001 - im Zweifel der Vorgabewert
+        return MAX_QUEUE
 DEFAULT_VOLUME = 0.5    # 0.0 - 1.0
 # Takt des Voice-Watchdogs (bot.py-Loop). Haelt die Verbindung am Leben und
 # repariert Desyncs/Zombies selbst, solange der Bot in einem Call sein SOLL.
@@ -421,6 +436,9 @@ class Track:
 class GuildPlayer:
     """Haelt Voice-Verbindung und Warteschlange fuer EINEN Server."""
     loop: asyncio.AbstractEventLoop
+    # Zu welchem Server dieser Player gehoert - daran haengen die Einstellungen
+    # dieses Servers (Lautstaerke, Warteschlangen-Deckel).
+    guild_id: int = 0
     queue: list[Track] = field(default_factory=list)
     history: list[Track] = field(default_factory=list)  # zuletzt gespielt (fuer 'nochmal')
     voice: discord.VoiceClient | None = None
@@ -1306,14 +1324,13 @@ class PlaybackControlView(discord.ui.View):
             await interaction.followup.send(embed=emb, ephemeral=True)
 
 
-class Music:
+class Music(FeatureBasis):
     """Buendelt Zustand und Logik des Musik-Features (frueher freie
     Modul-Funktionen und globale Variablen dieses Moduls)."""
 
     def __init__(self):
         # --- Konfiguration (in setup() aus der .env gelesen) ---------------------
         self._enabled = False
-        self._bot_name = "Flo"
         self._spotify_id = ""
         self._spotify_secret = ""
         # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
@@ -1374,7 +1391,6 @@ class Music:
 
         Rueckgabe: True, wenn das Musik-Feature aktiv ist.
         """
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         self._spotify_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
         self._spotify_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
 
@@ -1405,6 +1421,7 @@ class Music:
         player = self._players.get(guild_id)
         if player is None:
             player = GuildPlayer(loop=asyncio.get_running_loop(),
+                                 guild_id=int(guild_id or 0),
                                  volume=self._start_lautstaerke(guild_id))
             self._players[guild_id] = player
         return player
@@ -2150,9 +2167,11 @@ class Music:
             return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
                                color=_COL_ERR)
 
-        space = MAX_QUEUE - len(player.queue)
+        deckel = max_queue(player.guild_id)
+        space = deckel - len(player.queue)
         if space <= 0:
-            return self._embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
+            return self._embed(f"Die Warteschlange ist voll ({deckel}). Warte kurz.",
+                               color=_COL_ERR)
         items = items[:space]
 
         if player.is_active():
@@ -2590,8 +2609,10 @@ class Music:
                 message.author.display_name, "aus dem SoundCloud-Set", reply_to=message,
             )
 
-        if len(player.queue) >= MAX_QUEUE:
-            return self._embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
+        deckel = max_queue(player.guild_id)
+        if len(player.queue) >= deckel:
+            return self._embed(f"Die Warteschlange ist voll ({deckel}). Warte kurz.",
+                               color=_COL_ERR)
 
         # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
         try:
@@ -2683,6 +2704,7 @@ _extract = instance._extract
 _resolve_input = instance._resolve_input
 _resolve_track = instance._resolve_track
 _lazy_track = instance._lazy_track
+max_queue = max_queue
 _norm_match = instance._norm_match
 _pick_best_match = instance._pick_best_match
 _youtube_search_best = instance._youtube_search_best

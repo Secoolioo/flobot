@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import numfmt
 from store import JsonStore
@@ -616,13 +617,12 @@ class Tilgungsplan:
         return plan, budget - gezahlt
 
 
-class Schulden:
+class Schulden(FeatureBasis):
     """Das Feature: Befehle, Anzeige und die Bruecke zu economy/bot."""
 
     def __init__(self):
         self._enabled = False
         self._store = None
-        self._bot_name = "Flo"
         self.buch = Schuldbuch()
         self.score = Kreditwuerdigkeit(self.buch)
         self.plan = Tilgungsplan(self.buch)
@@ -635,7 +635,6 @@ class Schulden:
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("SCHULDEN_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Schuldbuch aus (SCHULDEN_ENABLED=0).")
             return False

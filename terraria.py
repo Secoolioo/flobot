@@ -29,6 +29,7 @@ import aiohttp
 import discord
 
 import ai
+from basis import FeatureBasis
 
 log = logging.getLogger("dcbot.terraria")
 
@@ -136,7 +137,7 @@ class TerrariaView(discord.ui.View):
                 pass
 
 
-class Terraria:
+class Terraria(FeatureBasis):
     """Terraria-Wiki-Nachschlagewerk als Objekt gekapselt."""
 
     # bot.py erkennt das: das Modul hat selbst geantwortet.
@@ -234,14 +235,12 @@ class Terraria:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
 
     def setup(self):
         """Aktiviert das Terraria-Wiki-Feature (braucht nur Internet).
 
         Die KI ist optional: ohne sie zeigt Flo den rohen Wiki-Auszug, mit ihr
         beantwortet Flo die konkrete Frage auf Basis der Wiki-Fakten (RAG)."""
-        self._bot_name = ai.bot_name()
         self._enabled = True
         log.info("Terraria-Wiki-Feature aktiv (KI-Kontext: %s).",
                  "ja" if ai.is_enabled() else "nein")

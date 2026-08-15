@@ -23,6 +23,7 @@ from pathlib import Path
 import discord
 
 import ai
+from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.voice")
@@ -107,10 +108,9 @@ class SoundboardView(discord.ui.View):
             instance._release(self.message)
 
 
-class VoiceGags:
+class VoiceGags(FeatureBasis):
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._tts_engine = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
         self._join_sounds = False
         self._store = None   # persistente Schalter (Soundboard an/aus)
@@ -143,7 +143,6 @@ class VoiceGags:
 
     def setup(self):
         """Aktiv, wenn Voice moeglich ist (ffmpeg + PyNaCl). TTS-Engine wird erkannt."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("VOICE_GAGS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Voice-Gags aus (VOICE_GAGS_ENABLED=0).")
             return False

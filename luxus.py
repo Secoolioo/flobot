@@ -29,6 +29,7 @@ import discord
 import numfmt
 
 import ai
+from basis import FeatureBasis
 import economy
 from store import JsonStore
 
@@ -112,13 +113,12 @@ _FRAME_ORDER = [i["key"] for i in sorted(ITEMS, key=lambda x: x["rang"])
                 if i["art"] in ("rahmen", "imperium", "multiversum")]
 
 
-class Luxus:
+class Luxus(FeatureBasis):
     """Objektorientierte Huelle: veraenderlicher Zustand lebt auf der Instanz."""
 
     def __init__(self):
         # Veraenderlicher Zustand (frueher Modul-Globals).
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
 
     def fmt_coins(self, n):
@@ -135,7 +135,6 @@ class Luxus:
 
     def setup(self):
         """Aktiviert den Luxus-Shop. Braucht economy (den Coin-Topf)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("LUXUS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Luxus-Feature aus (LUXUS_ENABLED=0).")
             return False

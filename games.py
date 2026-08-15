@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+from basis import FeatureBasis
 import casino
 import economy
 import guildcfg
@@ -667,13 +668,12 @@ class _SSPDuel(discord.ui.View):
             _release(self.message)
 
 
-class Games:
+class Games(FeatureBasis):
     """Spiel-Logik als Objekt: der komplette veraenderliche Zustand (laufende
     Runden, Store, Wortliste) lebt auf der Instanz statt in Modul-Globals."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         # Laufende Runden je Channel (nur im Speicher).
         self._quiz = {}
@@ -842,7 +842,6 @@ class Games:
         return HANDLED
 
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("GAMES_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Spiele-Feature aus (GAMES_ENABLED=0).")
             return False

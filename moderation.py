@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 import discord
 
 import ai
+from basis import FeatureBasis
 import guildcfg
 from store import JsonStore
 
@@ -131,10 +132,9 @@ _ROUTES = (
 )
 
 
-class Moderation:
+class Moderation(FeatureBasis):
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         # Offene Rueckfragen vor einem kompletten Channel-Wipe:
         # kanal_id -> (nutzer_id, ablauf). Die Nutzer-ID gehoert unbedingt dazu:
@@ -168,7 +168,6 @@ class Moderation:
     def setup(self):
         """Aktiviert das Moderation-Feature. Keine externen Voraussetzungen - die
         noetigen Rechte werden erst beim jeweiligen Befehl geprueft."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("MOD_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Moderation-Feature aus (MOD_ENABLED=0).")
             return False

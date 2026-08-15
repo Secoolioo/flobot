@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import discord
 
 import ai
+from basis import FeatureBasis
 import numfmt
 from store import JsonStore
 
@@ -86,6 +87,12 @@ _ALT_KALORIEN = 1522294725116428329
 # Alle einstellbaren Werte. Jeder Eintrag hier wird auch WIRKLICH irgendwo
 # gelesen - lieber zwoelf echte Schalter als vierzig, die nichts tun.
 KATALOG = [
+    # --- Ansprache -------------------------------------------------------
+    Einstellung("praefix", "Ansprache", "text", "", "BOT_NAME",
+                "Wie Flo auf DIESEM Server angesprochen wird (2–32 Zeichen, "
+                "ein Wort). Die Aliasse aus BOT_ALIASES gelten weiter überall.",
+                "Ansprache"),
+
     # --- Kanaele ---------------------------------------------------------
     Einstellung("ansage_channel", "Ansagen-Kanal", "channel", _ALT_COMMANDS,
                 "LEVELUP_CHANNEL_ID",
@@ -115,6 +122,21 @@ KATALOG = [
     Einstellung("lautstaerke", "Lautstärke", "prozent", 50, "MUSIC_DEFAULT_VOLUME",
                 "Womit Flo hier zu spielen anfängt (0–200 %).", "Musik",
                 minimum=0, maximum=200),
+    Einstellung("musik_max_queue", "Warteschlange höchstens", "zahl", 50,
+                "MUSIC_MAX_QUEUE",
+                "So viele Songs dürfen hier gleichzeitig warten.", "Musik",
+                minimum=1, maximum=500),
+
+    # --- Spiel & Wirtschaft ----------------------------------------------
+    Einstellung("casino_max_einsatz", "Maximaleinsatz", "zahl", 0, "",
+                "Obergrenze je Casino-Runde auf DIESEM Server. 0 = die globale "
+                "Grenze aus der .env.", "Spiel", minimum=0),
+    Einstellung("levelup_ansagen", "Level-Up-Karten", "an_aus", True, "",
+                "Ob Flo hier Level-Aufstiege ansagt. Aus = XP zählt weiter, "
+                "aber ohne Karte.", "Spiel"),
+    Einstellung("daily_erinnerung", "An den Daily erinnern", "an_aus", False, "",
+                "Einmal am Tag eine kurze Erinnerung an den Tagesbonus im "
+                "Ansagen-Kanal.", "Spiel"),
 
     # --- Verhalten -------------------------------------------------------
     Einstellung("autodelete_sekunden", "Aufräumen nach", "zahl", 60,
@@ -207,7 +229,19 @@ def _pruefe(defn, roh, guild=None):
         return True, raus, ""
 
     # text
-    return True, str(roh).strip()[:200], ""
+    wert = str(roh).strip()
+    if defn.key == "praefix" and wert:
+        # Die Ansprache ist kein Fliesstext: sie steht am Satzanfang und wird
+        # zum Regex. Mehrere Woerter, Regex-Sonderzeichen oder ein einzelner
+        # Buchstabe wuerden entweder nie oder staendig treffen.
+        if len(wert) < 2 or len(wert) > 32:
+            return False, None, "Die Ansprache braucht 2 bis 32 Zeichen."
+        if re.search(r"\s", wert):
+            return False, None, "Die Ansprache muss EIN Wort sein (ohne Leerzeichen)."
+        if not re.match(r"^[\w'-]+$", wert, re.UNICODE):
+            return False, None, ("Nur Buchstaben, Ziffern, Unterstrich, "
+                                 "Bindestrich und Apostroph.")
+    return True, wert[:200], ""
 
 
 def _kanal_id(roh, guild=None):
@@ -233,7 +267,7 @@ def _kanal_id(roh, guild=None):
     return 0, "Kanal nicht gefunden – nimm eine #Erwähnung."
 
 
-class GuildConfig:
+class GuildConfig(FeatureBasis):
     """Haelt je Server die Abweichungen vom Standard - und den Befehl dazu."""
 
     _CMDS = ("einstellungen", "einstellung", "config", "konfig", "konfiguration",
@@ -241,13 +275,11 @@ class GuildConfig:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._owner_id = 0
         self._store = None
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         self._owner_id = int(os.getenv("OWNER_ID", "0") or "0")
         self._store = JsonStore("guildcfg.json", default={"guilds": {}})
         self._enabled = True
@@ -321,6 +353,7 @@ class GuildConfig:
             return False, None, "Die Einstellungen sind gerade nicht bereit."
         self._guilds().setdefault(str(int(gid)), {})[key] = wert
         await self._speichern()
+        self._nachziehen(gid, key)
         log.info("Server %s: '%s' = %r", gid, key, wert)
         return True, wert, ""
 
@@ -333,6 +366,7 @@ class GuildConfig:
         if not eigen:
             self._guilds().pop(str(int(gid)), None)
         await self._speichern()
+        self._nachziehen(gid, key)
         log.info("Server %s: '%s' auf Standard zurueck.", gid, key)
         return True
 
@@ -341,8 +375,22 @@ class GuildConfig:
         if self._guilds().pop(str(int(gid or 0)), None) is None:
             return False
         await self._speichern()
+        self._nachziehen(gid, "praefix")
         log.info("Server %s: Einstellungen geloescht (Bot ist dort nicht mehr).", gid)
         return True
+
+    @staticmethod
+    def _nachziehen(gid, key):
+        """Wer haengt an dieser Einstellung und muss davon erfahren?
+
+        Die Ansprache steckt in fertig gebauten Regexen (ai._RE_CACHE). Ohne
+        diesen Anstoss haette ein 'Flo einstellung praefix Bob' erst nach einem
+        Neustart gewirkt - und genau das soll die Einstellung ja ersparen."""
+        if key == "praefix":
+            try:
+                ai.praefix_geaendert(gid)
+            except Exception:  # noqa: BLE001 - eine Einstellung ist nie fatal
+                log.debug("Praefix-Cache nicht geleert", exc_info=True)
 
     async def _speichern(self):
         if self._store is None:

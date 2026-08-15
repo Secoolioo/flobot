@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import numfmt
 import render
@@ -45,7 +46,7 @@ def _zahl(wert):
         return 0
 
 
-class Handel:
+class Handel(FeatureBasis):
     """Kapselt das Handelsbuch: Buchungs-Erfassung, Speicher und den Befehl."""
 
     _tz = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
@@ -60,7 +61,6 @@ class Handel:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         # Referenzen auf laufende Speicher-Tasks halten - sonst kann der GC einen
         # noch nicht fertigen Task einsammeln (asyncio-Doku).
@@ -70,7 +70,6 @@ class Handel:
 
     def setup(self):
         """Aktiviert das Handelsbuch. Braucht economy (dort liegt der Coin-Topf)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("HANDEL_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Handelsbuch aus (HANDEL_ENABLED=0).")
             return False

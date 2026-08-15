@@ -35,6 +35,7 @@ import discord
 
 import economy
 import titles
+from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.merchant")
@@ -144,12 +145,11 @@ _HAGGLE = [
 ]
 
 
-class Merchant:
+class Merchant(FeatureBasis):
     """Objektorientierte Huelle: der Haendler-Zustand lebt auf der Instanz."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         # Zuletzt geschuetztes Panel je Slot - damit das neue das alte
         # beim Auto-Loesch-Schutz wieder abmeldet.
         self._geschuetzt = {}
@@ -169,7 +169,6 @@ class Merchant:
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
         """Aktiviert den Haendler. Braucht economy (Coins + Titel-Inventar)."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("MERCHANT_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Haendler-Feature aus (MERCHANT_ENABLED=0).")
             return False

@@ -54,6 +54,7 @@ import time
 import discord
 
 import ai
+from basis import FeatureBasis
 import numfmt
 from store import JsonStore
 
@@ -122,12 +123,11 @@ _BADGES = (
 )
 
 
-class Profil:
+class Profil(FeatureBasis):
     """Profil-Lookup: Discord-Daten, Flos eigene Daten, eigener Namensverlauf."""
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._store = None
         self._dirty = False
         # uid -> (User-Objekt|None, gueltig_bis) aus fetch_user (Banner!).
@@ -140,7 +140,6 @@ class Profil:
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("PROFIL_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Profil-Lookup aus (PROFIL_ENABLED=0).")
             return False

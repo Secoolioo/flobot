@@ -18,12 +18,13 @@ import aiohttp
 import discord
 
 import ai
+from basis import FeatureBasis
 import render
 
 log = logging.getLogger("dcbot.media")
 
 
-class Media:
+class Media(FeatureBasis):
     """Bild-Features (Bild generieren + Quote-Meme) als Objekt gekapselt."""
 
     # bot.py erkennt das: das Modul hat selbst geantwortet (Bild gesendet).
@@ -49,11 +50,9 @@ class Media:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
 
     def setup(self):
         """Aktiviert das Media-Feature (braucht nur Pillow + Internet)."""
-        self._bot_name = ai.bot_name()
         self._enabled = True
         log.info("Media-Feature aktiv (Bild generieren + Quote-Meme).")
         return self._enabled

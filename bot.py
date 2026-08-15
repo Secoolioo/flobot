@@ -129,7 +129,10 @@ AI_ENABLED = ai.setup()
 # Trigger: der Name "Flo" ODER ein Alias ("Florian", per BOT_ALIASES anpassbar) -
 # als ganzes Wort irgendwo in der Nachricht. So reagiert Flo wie eine Alexa,
 # sobald jemand "Flo" oder "Florian" schreibt.
-_TRIGGER_RE = ai.trigger_re()
+# Die Ansprache haengt am SERVER (guildcfg 'praefix'), nicht mehr am Prozess:
+# ai.py baut und cacht den Regex je Guild, hier wird er nur noch geholt. Frueher
+# stand hier ein einziger, beim Import gebauter Regex - ein eigener Praefix je
+# Server war damit unmoeglich.
 
 # Musik-Feature initialisieren (YouTube via yt-dlp, Spotify-Aufloesung ueber die
 # Spotify-API). Ohne yt-dlp/ffmpeg/PyNaCl bleibt es aus, der Bot laeuft weiter.
@@ -621,6 +624,10 @@ def _first_image_url(message):
 # tasks.loop(time=...) feuert exakt zur angegebenen Ortszeit; bei mehreren
 # Reconnects schuetzt is_running() vor doppeltem Start.
 SHOP_REFRESH_TIME = dtime(hour=2, minute=0, tzinfo=TIMEZONE)
+# Wann Flo an den Tagesbonus erinnert - nur auf Servern, die das eingeschaltet
+# haben (guildcfg 'daily_erinnerung', Standard aus).
+DAILY_REMIND_TIME = dtime(
+    hour=int(os.getenv("DAILY_REMIND_HOUR", "18") or "18"), minute=0, tzinfo=TIMEZONE)
 
 
 class FloBot(discord.Client):
@@ -1103,6 +1110,30 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("FloCorp-Markt-Loop Fehler - laeuft weiter")
 
+    @tasks.loop(time=DAILY_REMIND_TIME)
+    async def daily_remind_loop(self):
+        """Einmal am Tag eine kurze Erinnerung an den Tagesbonus.
+
+        Ausdruecklich je Server einschaltbar (guildcfg 'daily_erinnerung') und
+        von Haus aus AUS - eine taegliche Ansage, die keiner bestellt hat, ist
+        Spam."""
+        if not ECONOMY_ENABLED:
+            return
+        for guild in self.guilds:
+            try:
+                if not guildcfg.an(guild.id, "daily_erinnerung"):
+                    continue
+                if not features.is_on_in(guild.id, "economy"):
+                    continue
+                channel = self._event_channel(guild)
+                if channel is None:
+                    continue
+                await channel.send(
+                    f"🎁 Der **Tagesbonus** wartet – `{ai.bot_name(guild.id)} daily` "
+                    f"holt ihn ab. Wer die Serie haelt, bekommt jeden Tag mehr.")
+            except Exception:
+                log.exception("Daily-Erinnerung in '%s' fehlgeschlagen", guild.name)
+
     @tasks.loop(time=SHOP_REFRESH_TIME)
     async def shop_refresh_loop(self):
         """Wuerfelt jede Nacht um 2 Uhr die Tagesauswahl des Flo Shops neu (random,
@@ -1448,6 +1479,12 @@ class FloBot(discord.Client):
     async def on_message(self, message):
         """Zentrale Nachrichten-Verarbeitung: Auto-Loeschen, passive Spass-Hooks
         (XP, Spiele, Reactions) und - wenn 'Flo' angesprochen wird - Befehle + KI."""
+        # Fuer die Dauer DIESER Nachricht merken, welcher Server dran ist. Daran
+        # haengt die ganze Ansprache: ai.bot_name(), ai.strip_lead() und die
+        # ~180 Stellen, die self._bot_name in einen Text schreiben, schauen hier
+        # nach. discord.py bearbeitet jedes Ereignis in einem eigenen Task, der
+        # ContextVar gilt also genau hier und faerbt keinen anderen Server ein.
+        ai.setze_guild(getattr(message.guild, "id", 0))
         # Auto-Loeschen: in konfigurierten Channels ALLE Nachrichten nach kurzer Zeit
         # entfernen. Bewusst GANZ oben (vor dem Bot-Check), damit auch die eigenen
         # Antworten des Bots dort wieder verschwinden. AUSNAHME: Level-Up-Ansagen des
@@ -1531,7 +1568,7 @@ class FloBot(discord.Client):
             self._spawn(fun.on_message_passive(message))
 
         # --- Ab hier nur, wenn Flo angesprochen wird ---
-        angesprochen = bool(_TRIGGER_RE.search(content))
+        angesprochen = bool(ai.trigger_re().search(content))
         if not angesprochen and self.user in message.mentions:
             angesprochen = True
         # Antwort auf eine Flo-Nachricht zaehlt auch als angesprochen (natuerliches
@@ -1770,6 +1807,32 @@ class FloBot(discord.Client):
                 await economy.ensure_roles(guild)
             except Exception:
                 log.exception("Rarity-Rollen-Setup fehlgeschlagen in '%s'", guild.name)
+        # Kurze Begruessung an den Server-Besitzer: sonst erfaehrt niemand, dass
+        # es die Einstellungen ueberhaupt gibt (bisher stand das nur im Log).
+        self._spawn(self._begruessen(guild))
+
+    async def _begruessen(self, guild):
+        """Eine DM an den Server-Besitzer mit dem Noetigsten. Wirft nie."""
+        name = ai.bot_name(guild.id)
+        besitzer = getattr(guild, "owner", None)
+        if besitzer is None:
+            return
+        try:
+            emb = discord.Embed(
+                title=f"👋 Danke fuers Einladen!",
+                description=(
+                    f"Ich bin jetzt auf **{guild.name}**. Angesprochen werde ich "
+                    f"mit **{name}** – einfach schreiben, kein Slash noetig.\n\n"
+                    f"`{name} einstellungen` zeigt alles, was dieser Server selbst "
+                    f"festlegen kann: Kanaele, Lautstaerke, Ansprache, welche "
+                    f"Funktionen hier laufen.\n"
+                    f"`{name} hilfe` listet die Befehle."),
+                color=discord.Color.gold())
+            emb.set_footer(text="Diese Nachricht kommt genau einmal – beim Einladen.")
+            await besitzer.send(embed=emb)
+        except Exception:  # noqa: BLE001 - DMs koennen zu sein, nie fatal
+            log.debug("Begruessung an den Besitzer von '%s' nicht moeglich",
+                      guild.name, exc_info=True)
 
     async def on_guild_remove(self, guild):
         """Flo wurde von einem Server geworfen - dessen Einstellungen koennen weg.
@@ -1889,6 +1952,9 @@ class FloBot(discord.Client):
             except Exception:
                 log.exception("Shop-Start-Refresh fehlgeschlagen - egal, Loop folgt")
             self.shop_refresh_loop.start()
+            # Erinnert an den Tagesbonus - nur dort, wo es eingeschaltet ist.
+            if not self.daily_remind_loop.is_running():
+                self.daily_remind_loop.start()
 
     async def on_disconnect(self):
         """Gateway-Verbindung weg (Internet-Hickup o. Ae.). discord.py versucht

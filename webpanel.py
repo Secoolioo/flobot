@@ -38,6 +38,7 @@ import discord
 import numfmt
 
 import economy
+from basis import FeatureBasis
 
 try:
     from aiohttp import web
@@ -46,10 +47,13 @@ except Exception:  # noqa: BLE001 - ohne aiohttp laeuft das Panel eben nicht
 
 log = logging.getLogger("dcbot.webpanel")
 
+# So viele Panel-Aktionen bleiben im Protokoll stehen.
+PANEL_LOG_MAX = int(os.getenv("PANEL_LOG_MAX", "200") or "200")
+
 _HTML_PATH = Path(__file__).resolve().parent / "webpanel.html"
 
 
-class WebPanel:
+class WebPanel(FeatureBasis):
     """Objektorientierte Huelle fuers Web-Panel (aiohttp-Server im Bot-Loop)."""
 
     def __init__(self):
@@ -66,20 +70,33 @@ class WebPanel:
         self._pass = "Secoolio"
         self._ttl = 12 * 3600
         self._html_cache = None
-        self._bot_name = "Flo"
         self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
         self._fails = {}       # ip -> (Fehlversuche, gesperrt_bis) gegen Raten
         self._auth = False     # Login verlangen? (WEBPANEL_AUTH, Standard aus)
+        # Protokoll der schreibenden Panel-Aktionen (Nachvollziehbarkeit, kein
+        # Login-Thema - den gibt es hier bewusst nicht).
+        self._log = []
+        self._log_store = None
+        self._log_tasks = set()
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("WEBPANEL_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Web-Panel aus (WEBPANEL_ENABLED=0).")
             return False
         if web is None:
             log.warning("Web-Panel aus: aiohttp nicht verfuegbar.")
             return False
+        # Protokoll laden (ueberlebt Neustarts).
+        try:
+            from store import JsonStore
+            self._log_store = JsonStore("panel_log.json", default={"eintraege": []})
+            roh = self._log_store.data.get("eintraege")
+            self._log = [e for e in (roh if isinstance(roh, list) else [])
+                         if isinstance(e, dict)][-PANEL_LOG_MAX:]
+        except Exception:  # noqa: BLE001 - ein Protokoll ist nie start-kritisch
+            log.exception("Panel-Protokoll konnte nicht geladen werden")
+            self._log_store, self._log = None, []
         self._host = os.getenv("WEBPANEL_HOST", "0.0.0.0").strip() or "0.0.0.0"
         try:
             self._port = int(os.getenv("WEBPANEL_PORT", "9123") or "9123")
@@ -108,7 +125,7 @@ class WebPanel:
 
     def _build_app(self):
         """Baut die aiohttp-App mit allen Routen (auch von Tests genutzt)."""
-        app = web.Application()
+        app = web.Application(middlewares=[self._protokoll_middleware])
         app.add_routes([
             web.get("/", self._index),
             web.get("/panel", self._index),
@@ -132,8 +149,83 @@ class WebPanel:
             web.get("/api/guildcfg", self._api_guildcfg),
             web.post("/api/guildcfg", self._api_guildcfg_set),
             web.post("/api/update", self._api_update),
+            web.get("/api/log", self._api_log),
+            web.get("/api/backup", self._api_backup),
         ])
         return app
+
+    # --- Protokoll: was hat das Panel eigentlich getan? -------------------
+    @web.middleware
+    async def _protokoll_middleware(self, request, handler):
+        """Schreibt JEDE schreibende Panel-Aktion mit.
+
+        Bewusst als Middleware und nicht in den elf Handlern einzeln: so ist
+        auch der zwoelfte Knopf protokolliert, den irgendwann jemand nachruest.
+        Das hat NICHTS mit Login zu tun (den gibt es hier absichtlich nicht) -
+        es geht um Nachvollziehbarkeit: wer im Nachhinein wissen will, warum
+        ein Konto 5 Mio mehr hat, findet es hier."""
+        antwort = await handler(request)
+        try:
+            if request.method == "POST" and request.path != "/api/login":
+                self._notiere(request, getattr(antwort, "status", 0))
+        except Exception:  # noqa: BLE001 - das Protokoll darf nie stoeren
+            log.debug("Panel-Protokoll fehlgeschlagen", exc_info=True)
+        return antwort
+
+    def _notiere(self, request, status):
+        eintrag = {
+            "t": int(time.time()),
+            "pfad": request.path,
+            "status": int(status or 0),
+            "von": request.remote or "?",
+            # Der Rumpf steht schon geparst im Request (siehe _json_objekt) -
+            # nochmal lesen ginge auch gar nicht, der Strom ist verbraucht.
+            "daten": request.get("_panel_daten") or {},
+        }
+        self._log.append(eintrag)
+        del self._log[:-PANEL_LOG_MAX]
+        if self._log_store is not None:
+            self._log_store.data["eintraege"] = list(self._log)
+            self._spawn_save()
+
+    def _spawn_save(self):
+        """Speichert das Protokoll nebenher - der Knopfdruck soll nicht warten."""
+        try:
+            aufgabe = asyncio.get_running_loop().create_task(self._log_store.save())
+        except RuntimeError:
+            return          # kein Loop (Tests)
+        self._log_tasks.add(aufgabe)
+        aufgabe.add_done_callback(self._log_tasks.discard)
+
+    async def _api_log(self, request):
+        """Die letzten Panel-Aktionen, neueste zuerst."""
+        self._guard(request)
+        return web.json_response({"ok": True, "eintraege": list(reversed(self._log))})
+
+    async def _api_backup(self, request):
+        """Alle data/*.json als ZIP zum Herunterladen.
+
+        Reine LESE-Operation: es wird nichts angefasst, nur gepackt. Wer den
+        Bot umzieht oder vor einem Reset sichergehen will, braucht dafuer sonst
+        einen Shell-Zugang."""
+        self._guard(request)
+        import io
+        import zipfile
+        import store as store_modul
+        puffer = io.BytesIO()
+        dateien = sorted(store_modul.DATA_DIR.glob("*.json"))
+        with zipfile.ZipFile(puffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for pfad in dateien:
+                try:
+                    zf.write(pfad, arcname=pfad.name)
+                except OSError:
+                    log.warning("Backup: %s liess sich nicht lesen", pfad.name)
+        stempel = time.strftime("%Y%m%d-%H%M%S")
+        return web.Response(
+            body=puffer.getvalue(),
+            headers={"Content-Disposition":
+                     f'attachment; filename="flobot-backup-{stempel}.zip"'},
+            content_type="application/zip")
 
     async def start(self, client):
         """Startet den aiohttp-Server im laufenden Loop. Idempotent."""
@@ -487,8 +579,14 @@ class WebPanel:
         try:
             data = await request.json()
         except Exception:  # noqa: BLE001 - kaputtes/leeres JSON
-            return {}
-        return data if isinstance(data, dict) else {}
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        # Fuers Protokoll merken: der Rumpf laesst sich nur EINMAL lesen, die
+        # Middleware kaeme sonst an nichts mehr heran.
+        request["_panel_daten"] = {k: v for k, v in data.items()
+                                   if k not in ("pass", "passwort", "token")}
+        return data
 
     @staticmethod
     def _text(raw, maximum=200):

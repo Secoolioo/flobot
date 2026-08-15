@@ -33,6 +33,7 @@ import time
 import discord
 
 import ai
+from basis import FeatureBasis
 import economy
 import numfmt
 import render
@@ -176,7 +177,7 @@ def _auszahlen(uid, betrag, spiel = "", *, rueckgabe = False):
     return betrag
 
 
-class Casino:
+class Casino(FeatureBasis):
     """Buendelt den kompletten Casino-Zustand (Sitzungen, Bilanz-Store,
     Konfiguration) und alle frueheren Modul-Funktionen als Methoden. Die
     Modul-Aliase unterhalb der Klasse halten die bisherige Modul-API
@@ -184,7 +185,6 @@ class Casino:
 
     def __init__(self):
         self._enabled = False
-        self._bot_name = "Flo"
         self._stats = None   # Casino-Bilanz je Spieler (data/casino.json)
         # Aktive Blackjack-Runden je (channel_id, user_id) -> BlackjackView. Nur im Speicher.
         self._bj_views = {}
@@ -216,7 +216,6 @@ class Casino:
 
     def setup(self):
         """Aktiviert das Casino. Voraussetzung: economy (Flo Coins) ist aktiv."""
-        self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
         if os.getenv("CASINO_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Casino-Feature aus (CASINO_ENABLED=0).")
             return False
@@ -237,8 +236,26 @@ class Casino:
         """Einsatz-Token -> Zahl. 'alles'/'max' = Kontostand; '1k'/'2,5k'/'1m' gehen auch."""
         token = (token or "").strip().lower()
         if token in ("all", "alles", "max", "allin", "all-in"):
-            return min(economy.get_coins(uid), MAX_BET)
+            return min(economy.get_coins(uid), self.max_bet())
         return economy.parse_amount(token)
+
+    @staticmethod
+    def max_bet(gid=None):
+        """Obergrenze je Runde - je Server einstellbar.
+
+        Welcher Server gemeint ist, weiss ai (der Wert wird je Nachricht
+        gesetzt); ausdruecklich geht auch. Ein Server darf STRENGER sein als
+        die .env, nie lockerer: der globale Deckel ist die Notbremse des
+        Besitzers, und die soll kein Server-Admin aufmachen koennen."""
+        gid = ai.aktuelle_guild() if gid is None else gid
+        if not gid:
+            return MAX_BET
+        try:
+            import guildcfg
+            eigen = int(guildcfg.get(int(gid), "casino_max_einsatz") or 0)
+        except Exception:  # noqa: BLE001 - im Zweifel der globale Deckel
+            return MAX_BET
+        return min(MAX_BET, eigen) if eigen > 0 else MAX_BET
 
     def _check_bet(self, uid, bet):
         """Prueft einen Einsatz. Rueckgabe: (gepruefter Einsatz, Fehlertext oder None)."""
@@ -246,8 +263,9 @@ class Casino:
             return 0, "Wie viel setzt du? z. B. `50` oder `alles`."
         if bet < MIN_BET:
             return 0, f"Mindesteinsatz ist {MIN_BET} {economy.COIN}."
-        if bet > MAX_BET:
-            return 0, f"Maximaleinsatz ist {numfmt.fmt(MAX_BET)} {economy.COIN}."
+        deckel = self.max_bet()
+        if bet > deckel:
+            return 0, f"Maximaleinsatz ist {numfmt.fmt(deckel)} {economy.COIN}."
         bal = economy.get_coins(uid)
         if bet > bal:
             return 0, f"Dafür reicht's nicht – du hast {numfmt.fmt(bal)} {economy.COIN}."
