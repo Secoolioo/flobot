@@ -12,6 +12,43 @@ offenen (klar markiert).
 
 ---
 
+## Stand der Umsetzung
+
+Der Bericht bleibt als **Protokoll des Testlaufs** unverändert stehen — er ist
+die Begründung für die Änderungen, nicht ihre Beschreibung. Was daraus geworden
+ist:
+
+| Kapitel | Stand |
+|---|---|
+| 1.1 Musik (M1–M11) | umgesetzt · dazu eine Regression aus dieser Runde gefunden und behoben (der Watchdog stieß die aufgegebene Warteschlange alle 15 s neu an) |
+| 1.2 Kritisch & Hoch (B1–B8) | umgesetzt |
+| 1.3 / 1.4 Mittel & Niedrig | umgesetzt |
+| 1.5 Ungeprüfte Funde | **alle 51 nachgeprüft** (50 bestätigt, 1 widerlegt), alle bestätigten behoben |
+| 2 SoundCloud | umgesetzt (Tracks, Sets, Kurzlinks, direkte Audiodateien) |
+| 3 Schuldbuch 2.0 | umgesetzt — Posten statt Paar-Saldo, Schuld nur mit Zustimmung, anteilige Tilgung, Kreditwürdigkeit, Verfall, Mahnstufen, Insolvenz, Migration |
+| 4a Präfix je Server | umgesetzt (`ai.py` als einzige Autorität, `basis.FeatureBasis`, ContextVar) |
+| 4b Panel | Katalog-Einträge nachgezogen, dazu Backup-Knopf und Panel-Protokoll |
+| 4c Mehr-Server-Härtung | `words.json` je Server (mit Migration), Begrüßung beim Einladen, Grenzen dokumentiert |
+| 4d OOP-Checkliste | gilt weiter — Punkt 1 ist jetzt `basis.FeatureBasis`, ein Test hält es wach |
+
+**Bewusst nicht gebaut** (mit Begründung, statt still zu übergehen):
+
+* *Begrüßung neuer Mitglieder* (`willkommen_channel`/`-text`, Kapitel 4b):
+  braucht `on_member_join`, und das feuert nur mit dem privilegierten
+  Members-Intent, den der Bot absichtlich nicht hat. Ein Schalter, der nichts
+  tut, wäre schlimmer als keiner.
+* *Debounce für `economy._flush()`* (Kapitel 1.5, Performance): mit dem
+  kompakten JSON liegt ein Speichern auch bei 3.000 Nutzern bei ~10 ms statt
+  42 ms. Ein Sammel-Speichern wäre ein Fenster, in dem Coins bei einem Absturz
+  verloren gehen — erst nötig, wenn der Topf wirklich in die Tausende geht.
+* *Go+-Erkennung bei SoundCloud* (Kapitel 2): SoundCloud liefert für solche
+  Titel nur die 30-Sekunden-Vorschau, und es gibt kein Feld, an dem man das
+  vorher sicher erkennt. Steht als Grenze im README.
+* *Status-Weisheiten im Panel bearbeitbar* (Kapitel 4b): reine Kosmetik, im
+  Vergleich zu Backup und Protokoll der geringste Nutzen.
+
+---
+
 ## 1. Bestätigte Fehler
 
 **Verfahren:** 12 unabhängige Prüf-Blickwinkel haben 92 Funde gemeldet, jeder
