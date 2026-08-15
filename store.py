@@ -90,13 +90,20 @@ class JsonStore:
         if loaded is None and self.path.exists():
             # Datei ist da, aber unlesbar -> beiseitelegen, damit sie der
             # naechste save() NICHT ueberschreibt.
-            self._beiseite()
+            self._beiseite(self.path)
             loaded = None
         if loaded is None:
             loaded = self._lies(self._bak)
             if loaded is not None:
                 log.warning("%s: Sicherung .bak eingespielt (%d Eintraege).",
                             self.path.name, len(loaded))
+            elif self._bak.exists():
+                # Beide kaputt. Auch die Sicherung muss beiseite - sonst
+                # ueberschreibt sie der zweite save() unwiederbringlich (der
+                # erste laesst sie liegen, weil die Hauptdatei nach der
+                # Quarantaene gar nicht mehr da ist). Genau das widersprach dem
+                # Versprechen dieser Klasse: NICHTS still wegwerfen.
+                self._beiseite(self._bak)
         if isinstance(loaded, dict):
             self.data.update(loaded)
         self._schablone_pruefen()
@@ -116,18 +123,18 @@ class JsonStore:
             return None
         return inhalt
 
-    def _beiseite(self):
+    def _beiseite(self, pfad):
         """Legt eine kaputte Datei mit Zeitstempel zur Seite, statt sie zu verlieren."""
-        ziel = self.path.with_name(
-            f"{self.path.name}.kaputt-{time.strftime('%Y%m%d-%H%M%S')}")
+        ziel = pfad.with_name(
+            f"{pfad.name}.kaputt-{time.strftime('%Y%m%d-%H%M%S')}")
         try:
-            os.replace(self.path, ziel)
+            os.replace(pfad, ziel)
             log.error("%s war kaputt und liegt jetzt unter %s - der Bot startet "
                       "mit der Sicherung bzw. leer weiter. NICHTS wurde geloescht.",
-                      self.path.name, ziel.name)
+                      pfad.name, ziel.name)
         except OSError as exc:
             log.error("%s ist kaputt und liess sich nicht beiseitelegen: %s",
-                      self.path, exc)
+                      pfad, exc)
 
     async def save(self):
         """Schreibt den aktuellen Stand atomar auf die Platte.
@@ -137,18 +144,29 @@ class JsonStore:
         Task das dict waehrend der Serialisierung aendern. Nur das (langsame)
         Schreiben auf die Platte wandert in einen Thread.
 
+        Weil dumps also echte Blockierzeit ist, wird KOMPAKT geschrieben. Das
+        frueher genutzte indent=2 kostete gemessen das Vierfache: bei 3.000
+        economy-Nutzern 42 ms statt 10 ms je Speichern - und economy wird nach
+        jeder Coin-Bewegung geschrieben. Lesbar bleibt die Datei ueber
+        `python3 -m json.tool`; ein Auslagern in einen Thread hilft hier nicht,
+        weil der C-Encoder die GIL nicht freigibt.
+
         Rueckgabe: True = geschrieben, False = fehlgeschlagen (z. B. Platte
         voll). Frueher gab es hier gar keine Rueckmeldung - ein dauerhaft
         fehlschlagendes Speichern fiel nur im Log auf.
         """
         async with self._lock:
-            payload = json.dumps(self.data, ensure_ascii=False, indent=2)
+            payload = json.dumps(self.data, ensure_ascii=False, separators=(",", ":"))
             return await asyncio.to_thread(self._write_text, payload)
 
     def _write_text(self, payload):
+        tmp = None
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            # Der Zwischenname traegt die Prozess-ID: laeuft der Bot aus Versehen
+            # zweimal (oder greift ein Werkzeug auf dieselbe Datei zu), zogen sich
+            # sonst beide denselben Puffer unter den Fuessen weg.
+            tmp = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
             # Erst vollstaendig auf die Platte zwingen (flush + fsync), DANN atomar
             # umbenennen - sonst kann nach einem Stromausfall das Rename da sein, die
             # Datenbloecke aber nicht (klassische leere/abgeschnittene Datei).
@@ -157,15 +175,32 @@ class JsonStore:
                 f.flush()
                 os.fsync(f.fileno())
             # Den bisherigen Stand als .bak behalten, BEVOR er ueberschrieben
-            # wird. Kostet nur ein Rename (Metadaten), rettet aber genau den
-            # Fall, in dem die Hauptdatei nach einem Stromausfall unlesbar ist.
+            # wird - rettet genau den Fall, in dem die Hauptdatei nach einem
+            # Stromausfall unlesbar ist.
+            #
+            # Per HARDLINK, nicht per Rename: ein Rename hat die Hauptdatei kurz
+            # WEGgenommen. In diesem Fenster gab es economy.json schlicht nicht,
+            # und wer dann las (ein zweiter _load, das Panel, repair_db.sh),
+            # bekam ENOENT oder fiel auf den veralteten .bak-Stand zurueck.
+            # Schlug danach das zweite os.replace fehl, war die Hauptdatei
+            # dauerhaft verschwunden. Der Link kostet nur Metadaten und zeigt
+            # weiter auf den alten Inhalt, wenn tmp gleich darueber gehaengt wird.
             if self.path.exists():
                 try:
-                    os.replace(self.path, self._bak)
+                    if self._bak.exists():
+                        self._bak.unlink()
+                    os.link(self.path, self._bak)
                 except OSError:
                     pass                       # Sicherung ist nice-to-have
             os.replace(tmp, self.path)  # atomar
         except OSError as exc:
-            log.error("Konnte %s nicht speichern: %s", self.path, exc)
+            log.error("Konnte %s nicht speichern: %s", self.path, exc, exc_info=True)
+            # Keine .tmp-Leiche liegen lassen (sonst sammeln sich die bei einer
+            # vollen Platte).
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
             return False
         return True

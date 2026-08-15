@@ -313,15 +313,24 @@ class Schulden:
             return 0
         jetzt = time.time()
         gemahnt = 0
-        ids = set()
-        for key in list(self._pairs()):
-            for teil in str(key).split(":"):
-                try:
-                    ids.add(int(teil))
-                except (TypeError, ValueError):
-                    continue
-        for uid in ids:
-            _haben, soll, _netto = self.summen(uid)
+        # Die Soll-Summen in EINEM Durchlauf ueber die Paare bilden.
+        # Vorher wurde je Nutzer summen() gerufen, und das lief jedes Mal wieder
+        # ueber ALLE Paare: O(P^2). Gemessen waren das bei 2.000 Paaren fast
+        # 5 Sekunden Event-Loop-Stillstand am Stueck - fuer alle Server, jede
+        # Stunde. Jetzt ist es ein einziger Durchlauf.
+        soll_je = {}
+        for key, p in list(self._pairs().items()):
+            try:
+                net = int(p.get("net", 0))
+                a, b = (int(x) for x in str(key).split(":"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if not net:
+                continue
+            # net = "der ZWEITE schuldet dem ERSTEN".
+            schuldner = b if net > 0 else a
+            soll_je[schuldner] = soll_je.get(schuldner, 0) + abs(net)
+        for uid, soll in soll_je.items():
             if soll < MAHN_AB:
                 continue
             st = self._stats(uid)

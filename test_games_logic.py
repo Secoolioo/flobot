@@ -7467,6 +7467,75 @@ def test_speichern_meldet_fehlschlag():
         assert asyncio.run(s.save()) is True
         with mock.patch("os.replace", side_effect=OSError(28, "No space left")):
             assert asyncio.run(s.save()) is False
+        # Und es bleibt keine .tmp-Leiche liegen (sonst sammeln die sich genau
+        # dann an, wenn die Platte ohnehin voll ist).
+        assert not list(store.DATA_DIR.glob("s.json*.tmp"))
+    finally:
+        store.DATA_DIR = alt
+
+
+def test_speichern_laesst_die_datei_nie_verschwinden():
+    """Die Sicherung darf die Hauptdatei nicht kurz WEGnehmen.
+
+    Frueher lief das per Rename: in dem Fenster gab es economy.json schlicht
+    nicht. Wer da las (ein zweiter Store, das Panel, ein Reparatur-Skript),
+    bekam ENOENT oder den veralteten .bak-Stand - und schlug das folgende
+    Rename fehl, war die Hauptdatei dauerhaft weg."""
+    import pathlib
+    import tempfile
+    import unittest.mock as mock
+    import store
+    alt = store.DATA_DIR
+    store.DATA_DIR = pathlib.Path(tempfile.mkdtemp())
+    try:
+        s = store.JsonStore("w.json", default={"n": 0})
+        s.data["n"] = 1
+        assert asyncio.run(s.save()) is True
+        s.data["n"] = 2
+        gesehen = []
+
+        # Mitten im Schreiben nachsehen, ob die Hauptdatei noch da ist.
+        echtes_replace = os.replace
+
+        def spion(a, b):
+            gesehen.append((s.path.exists(), s.path.read_text(encoding="utf-8")
+                            if s.path.exists() else ""))
+            return echtes_replace(a, b)
+
+        with mock.patch("os.replace", side_effect=spion):
+            assert asyncio.run(s.save()) is True
+        assert gesehen and gesehen[0][0] is True, gesehen
+        assert '"n":1' in gesehen[0][1], gesehen[0][1]
+        # Danach steht der neue Stand in der Datei und der alte in der Sicherung.
+        assert '"n":2' in s.path.read_text(encoding="utf-8")
+        assert '"n":1' in s._bak.read_text(encoding="utf-8")
+    finally:
+        store.DATA_DIR = alt
+
+
+def test_beide_dateien_kaputt_wird_nichts_weggeworfen():
+    """Hauptdatei UND Sicherung kaputt: BEIDE muessen beiseite.
+
+    Vorher wurde nur die Hauptdatei quarantaeniert; die kaputte .bak blieb
+    liegen und wurde vom zweiten save() unwiederbringlich ueberschrieben -
+    genau das, was diese Klasse versprochen hat zu verhindern."""
+    import pathlib
+    import tempfile
+    import store
+    alt = store.DATA_DIR
+    d = pathlib.Path(tempfile.mkdtemp())
+    store.DATA_DIR = d
+    try:
+        (d / "k.json").write_text("{kaputt", encoding="utf-8")
+        (d / "k.json.bak").write_text("auch kaputt", encoding="utf-8")
+        s = store.JsonStore("k.json", default={"a": 1})
+        assert s.data == {"a": 1}
+        beiseite = sorted(p.name for p in d.glob("*.kaputt-*"))
+        assert len(beiseite) == 2, beiseite
+        # Zweimal speichern: das hat frueher die kaputte Sicherung gefressen.
+        assert asyncio.run(s.save()) is True
+        assert asyncio.run(s.save()) is True
+        assert sorted(p.name for p in d.glob("*.kaputt-*")) == beiseite
     finally:
         store.DATA_DIR = alt
 
