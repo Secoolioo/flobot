@@ -55,6 +55,15 @@ DEFAULT_VOLUME = 0.5    # 0.0 - 1.0
 # repariert Desyncs/Zombies selbst, solange der Bot in einem Call sein SOLL.
 VOICE_HEAL_SECONDS = 15
 VOICE_ZOMBIE_TICKS = 3        # so viele stille Ticks (=Sek*Ticks) bis "Zombie" -> Neustart
+# So viele Ticks OHNE einen einzigen gesendeten Audio-Block, bis der Watchdog
+# den Song neu anstoesst. Zweite Verteidigungslinie hinter -rw_timeout: greift
+# auch dann, wenn FFmpeg selbst haengt statt der Verbindung (2 x 15 s = 30 s).
+VOICE_STALL_TICKS = 2
+# So viele Songs duerfen beim Weiterschalten HINTEREINANDER scheitern, bevor
+# der Player aufgibt und die Warteschlange stehen laesst. Vorher gab es keine
+# Grenze - ein kurzer Netz-Aussetzer hat so eine ganze Playlist in einem
+# Durchlauf als "nicht ladbar" verbucht und kommentarlos entsorgt.
+ADVANCE_MAX_FEHLER = 2
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
@@ -87,9 +96,21 @@ _YDL_OPTS = {
 #   -reconnect_streamed 1        : auch bei Live-/Nicht-Spulbaren Streams
 #   -reconnect_on_network_error 1: auch bei TCP/TLS-Fehlern (ffmpeg >= 4.3)
 #   -reconnect_delay_max 5       : bis zu 5 s zwischen den Versuchen warten
+#   -rw_timeout 15000000         : nach 15 s OHNE ein einziges Byte abbrechen
+#
+# Das -rw_timeout ist die wichtigste Zeile in dieser Datei. Ohne sie wartet
+# FFmpeg bei einem STILLEN Stall (Verbindung steht, es kommen nur keine Daten
+# mehr - haengendes CDN, NAT-Timeout) UNENDLICH lange. Die -reconnect*-Flags
+# greifen da nicht: die brauchen einen Fehler oder ein EOF, und beides kommt
+# nie. Folge (mit echtem FFmpeg nachgestellt): der discord.py-Player-Thread
+# blockiert dauerhaft in source.read(), der after-Callback feuert NIE,
+# is_playing() bleibt True - und weil music.is_active() dann True meldet,
+# haengt jedes weitere 'Flo spiel X' den Song nur noch an die Warteschlange.
+# Genau das war das gemeldete "die Queue ist voll und er spielt nicht".
+# Mit dem Timeout bricht FFmpeg selbst ab, after feuert, _advance laeuft.
 _FFMPEG_BEFORE = (
     "-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 "
-    "-reconnect_delay_max 5"
+    "-reconnect_delay_max 5 -rw_timeout 15000000"
 )
 _FFMPEG_OPTS = "-vn"
 
@@ -164,13 +185,23 @@ _NEXT_DATA_RE = re.compile(
 _YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)", re.IGNORECASE)
 
 # Steuerbefehle: (Aktion, Regex am Satzanfang). Reihenfolge = Prioritaet.
+# Wichtig: JEDES Muster endet auf \b oder \w*\b. Ohne Wortgrenze reicht das
+# blosse PRAEFIX - und dann kaperten die Steuerbefehle ganz normale Saetze:
+# "verlass dich drauf" wurde zum Voice-Leave, und "rausschmeisen @wer" (die
+# gaengige Ein-s-Schreibweise) liess Flo den Sprachkanal verlassen und die
+# Musik abbrechen, statt die Person zu kicken.
 _CONTROL = [
-    ("skip",   re.compile(r"^(skip|ueberspring|überspring|naechst|nächst|next)", re.I)),
-    ("pause",  re.compile(r"^(pause|pausier)", re.I)),
-    ("resume", re.compile(r"^(resume|weiter|fortsetz|weiterspiel)", re.I)),
-    ("stop",   re.compile(r"^(stop|stopp|halt|aufhoer|aufhör|hoer auf|hör auf)", re.I)),
-    ("leave",  re.compile(r"^(leave|verlass|geh raus|hau ab|raus|disconnect)", re.I)),
-    ("queue",  re.compile(r"^(queue|warteschlange|liste)", re.I)),
+    ("skip",   re.compile(r"^(?:skip|ueberspring\w*|überspring\w*|naechst\w*|nächst\w*|next)\b", re.I)),
+    ("pause",  re.compile(r"^(?:pause|pausier\w*)\b", re.I)),
+    ("resume", re.compile(r"^(?:resume|weiter|fortsetz\w*|weiterspiel\w*)\b", re.I)),
+    ("stop",   re.compile(r"^(?:stop|stopp|halt|aufhoer\w*|aufhör\w*|hoer auf|hör auf)\b", re.I)),
+    # Negative Vorschau gegen die Redewendung: "verlass dich drauf" /
+    # "verlass dich nicht darauf" ist Gerede, kein Befehl zum Rausgehen.
+    ("leave",  re.compile(r"^(?:leave|verlasse?(?!\s+(?:dich|euch|sich|mich|uns))|"
+                          r"geh raus|hau ab|raus|disconnect)\b", re.I)),
+    # 'liste' zaehlt nur, wenn NICHTS dahinter steht: "liste mal auf, was du
+    # kannst" ist eine Frage an die KI, keine Warteschlangen-Abfrage.
+    ("queue",  re.compile(r"^(?:queue\b|warteschlange\b|liste\s*$)", re.I)),
     ("join",   re.compile(r"^(?:join\w*|connect|verbinde\w*|komm)\b", re.I)),
 ]
 # "flo spiel <suchbegriff>" ohne Link -> YouTube-Suche. Nur Imperativ-Formen
@@ -345,7 +376,9 @@ _REPLAY_RE = re.compile(
 _VOLUME_UP_RE = re.compile(r"^(?:lauter|louder|lautr)\b", re.I)
 _VOLUME_DOWN_RE = re.compile(r"^(?:leiser|quieter|leise)\b", re.I)
 # Erstes Wort + optionale Zahl ("auf"/"%"/ohne Leerzeichen alles ok).
-_VOLUME_ARG_RE = re.compile(r"^([A-Za-zÄÖÜäöüß]+)\.?\s*(?:auf\s*)?(\d{1,3})?", re.I)
+# \d+ statt \d{1,3}: bei drei Ziffern wurde aus "ls 1000" ein 100-%-Befehl
+# (die Null fiel einfach weg) statt der erwarteten Klemmung auf 200 %.
+_VOLUME_ARG_RE = re.compile(r"^([A-Za-zÄÖÜäöüß]+)\.?\s*(?:auf\s*)?(\d+)?", re.I)
 # Eindeutige Kurz-/Langformen (Vergleich case-insensitiv ueber .lower()).
 _VOLUME_WORDS = {
     "ls", "lst", "lstk", "lstrk", "lstrke", "vol", "volume", "lautst", "lautstk",
@@ -393,6 +426,20 @@ class GuildPlayer:
     active_channel_id: int | None = None  # in DIESEM Kanal soll der Bot bleiben (None = bewusst raus)
     _advancing: bool = False         # laeuft gerade _advance (Songwechsel)? -> Watchdog haelt sich raus
     _stall_ticks: int = 0            # Zaehler fuer "verbunden, aber still" (Zombie-Erkennung, entprellt)
+    # Fortschritts-Wache gegen den FFmpeg-Stall: discord.py zaehlt in
+    # AudioPlayer.loops jeden gesendeten 20-ms-Block. Steht der Zaehler,
+    # obwohl is_playing() True meldet, fliesst KEIN Ton mehr. position()
+    # taugt dafuer nicht - die rechnet nur mit der Uhr und laeuft im Stall
+    # munter weiter.
+    _last_frames: int = -1           # zuletzt gesehener Block-Zaehler
+    _frozen_ticks: int = 0           # so viele Ticks ohne neuen Block
+    _panel_gen: int = 0              # Generation des zuletzt angeforderten Panels
+    pausiert: bool = False           # hat jemand BEWUSST pausiert? (ueberlebt Reconnects)
+    # Sitzungs-Generation: NUR disconnect() ('Flo stop'/'leave') zaehlt hoch.
+    # Damit laesst sich "die Sitzung wurde beendet" sauber von "jemand hat
+    # einfach etwas anderes gestartet" unterscheiden - _play_gen allein kann
+    # das nicht, die steigt bei jedem Songwechsel.
+    _session_gen: int = 0
     _last_reconnect: float = 0.0     # monotonic des letzten Reconnect-Versuchs (Loop-Bremse)
     _reconnect_fails: int = 0        # aufeinanderfolgende fehlgeschlagene Reconnects (Aufgabe-Schwelle)
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
@@ -444,8 +491,10 @@ class GuildPlayer:
             raise RuntimeError("keine Voice-Verbindung")
         if not keep_speed:
             # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
-            # einzeln gewaehlt.
+            # einzeln gewaehlt. Und er startet spielend: eine alte Pause-Absicht
+            # gilt nur fuer den Song, bei dem sie gesetzt wurde.
             self.speed = 1.0
+            self.pausiert = False
         before = _FFMPEG_BEFORE
         if seek > 0.5:
             # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
@@ -502,6 +551,31 @@ class GuildPlayer:
         if self._seg_start is None:
             self._seg_start = time.monotonic()
 
+    def pausieren(self):
+        """Anhalten: Wiedergabe, Uhr und ABSICHT an einer Stelle.
+
+        Die gemerkte Absicht ist der eigentliche Punkt: der Voice-Client kann
+        zwischendurch sterben (Reconnect, Tempo-Wechsel, Neustart nach Stall),
+        und danach war is_paused() natuerlich False - der Bot spielte dann
+        munter weiter, obwohl jemand pausiert hatte."""
+        if self.voice is not None and self.voice.is_playing():
+            self.voice.pause()
+        self._clock_pause()
+        self.pausiert = True
+
+    def fortsetzen(self):
+        """Weiterspielen: Wiedergabe, Uhr und Absicht an einer Stelle."""
+        if self.voice is not None and self.voice.is_paused():
+            self.voice.resume()
+        self._clock_resume()
+        self.pausiert = False
+
+    def ist_pausiert(self):
+        """True, wenn jemand bewusst pausiert hat ODER der Client pausiert ist."""
+        if self.pausiert:
+            return True
+        return self.voice is not None and self.voice.is_paused()
+
     async def apply_speed(self, new_speed):
         """Setzt die Geschwindigkeit und startet den laufenden Song an der aktuellen
         Stelle mit neuem Tempo neu. True = live umgestellt, False = nur gemerkt
@@ -515,6 +589,10 @@ class GuildPlayer:
                     or not (self.voice.is_playing() or self.voice.is_paused()):
                 self.speed = new_speed   # nichts laeuft -> nur merken, gilt fuer naechsten Song
                 return False
+            # War pausiert? Dann muss es NACH dem Neustart auch wieder pausiert
+            # sein. Vorher hob jeder Tempo-Wechsel die Pause klammheimlich auf,
+            # und der Pause-Knopf im Panel zeigte danach das Falsche an.
+            war_pause = self.ist_pausiert()
             pos = self.position()        # Position noch mit ALTEM Tempo berechnen ...
             self.speed = new_speed       # ... dann erst auf das neue Tempo umstellen
             # Generation hochzaehlen, BEVOR wir stoppen: der after-Callback des jetzt
@@ -528,6 +606,8 @@ class GuildPlayer:
                         break
                     await asyncio.sleep(0.05)
                 self.start(track, seek=pos, keep_speed=True)   # gleiche Stelle, Tempo bleibt
+                if war_pause:
+                    self.pausieren()
             except Exception:
                 log.exception("Tempo-Wechsel fehlgeschlagen")
                 return False
@@ -571,6 +651,8 @@ class GuildPlayer:
         if gen is not None and gen != self._play_gen:
             return
         self._advancing = True
+        sitzung = self._session_gen    # gehoert dieser Lauf noch zur laufenden Sitzung?
+        fehler_serie = 0        # Fehlschlaege DIREKT hintereinander
         try:
             while True:
                 if gen is not None and gen != self._play_gen:
@@ -585,13 +667,37 @@ class GuildPlayer:
                         track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
                         if gen is not None and gen != self._play_gen:
                             # Waehrend des Aufloesens hat jemand selbst gestartet.
-                            # Den Track zurueck in die Schlange, nichts anfassen.
-                            self.queue.insert(0, track)
+                            # Den Track zurueck in die Schlange - ABER nur, wenn
+                            # die Sitzung noch dieselbe ist. Nach 'Flo stop' ist
+                            # die Warteschlange absichtlich leer; ein Track, der
+                            # dort wieder hineinfaellt, spielt beim naechsten
+                            # Play als Geist an ("ich hab doch gestoppt").
+                            if self._session_gen == sitzung:
+                                self.queue.insert(0, track)
                             return
                     self.start(track)
                 except Exception:
+                    fehler_serie += 1
                     log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
+                    # Zwei Fehlschlaege HINTEREINANDER sind kein Zufall mehr,
+                    # sondern fast immer das Netz (kurzer DNS-/yt-dlp-Aussetzer).
+                    # Frueher frass die Schleife dann in einem Rutsch die
+                    # komplette Playlist als "nicht ladbar" - stumm, ohne ein
+                    # Wort im Chat. Jetzt bleibt die Warteschlange stehen.
+                    if fehler_serie >= ADVANCE_MAX_FEHLER:
+                        self.queue.insert(0, track)
+                        self.current = None
+                        await _retire_panel(self)
+                        log.error("Zwei Songs am Stueck nicht ladbar - Warteschlange "
+                                  "(%d) bleibt stehen statt sie wegzuwerfen.",
+                                  len(self.queue))
+                        await self._sag(
+                            f"⚠️ Ich komme gerade an keinen Song ran (Netz?). "
+                            f"Die Warteschlange (**{len(self.queue)}**) bleibt "
+                            f"stehen – `weiter` versucht es nochmal.")
+                        return
                     continue  # naechsten Song versuchen, nicht stoppen
+                fehler_serie = 0
                 # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
                 # aus, darf das den laufenden Song NICHT abbrechen.
                 try:
@@ -609,7 +715,11 @@ class GuildPlayer:
         self._seg_start = None
         self._played = 0.0
         self.active_channel_id = None   # bewusst raus -> Watchdog soll NICHT zurueckholen
+        self._session_gen += 1          # alles, was noch laeuft, gehoert zur ALTEN Sitzung
         self._stall_ticks = 0
+        self._frozen_ticks = 0
+        self._last_frames = -1
+        self.pausiert = False
         self._play_gen += 1             # alte after-Callbacks entwerten
         await _retire_panel(self)
         if self.voice is not None:
@@ -618,6 +728,64 @@ class GuildPlayer:
             except Exception:  # noqa: BLE001
                 pass
             self.voice = None
+
+    async def _sag(self, text):
+        """Kurze Meldung in den Musik-Kanal. Nie fatal - wenn das Reden nicht
+        klappt, laeuft die Musik trotzdem weiter."""
+        kanal = self.text_channel
+        if kanal is None:
+            return
+        try:
+            await kanal.send(text)
+        except Exception:  # noqa: BLE001
+            log.debug("Musik-Meldung konnte nicht gesendet werden", exc_info=True)
+
+    @staticmethod
+    def _frames(vc):
+        """Wie viele 20-ms-Bloecke der Player bisher rausgeschickt hat.
+
+        Der EINZIGE ehrliche Fortschritts-Beweis. discord.py zaehlt sie in
+        AudioPlayer.loops mit; steht der Zaehler bei laufendem is_playing(),
+        kommt kein Ton mehr an. -1 = kein Player da / Zaehler unbekannt (dann
+        wird die Stall-Erkennung einfach uebersprungen, statt zu raten)."""
+        spieler = getattr(vc, "_player", None)
+        if spieler is None:
+            return -1
+        try:
+            return int(getattr(spieler, "loops", -1))
+        except (TypeError, ValueError):
+            return -1
+
+    async def _neustart_an_position(self):
+        """Startet den laufenden Song an der zuletzt GEHOERTEN Stelle neu -
+        ohne die Verbindung anzufassen und ohne die Warteschlange zu opfern.
+
+        Genau das macht der Betreiber heute von Hand mit 'Flo stop' +
+        'Flo nochmal' - nur dass dabei die gesammelte Warteschlange verloren
+        geht. Hier bleibt sie stehen."""
+        track = self.current
+        if track is None or self.voice is None or not self.voice.is_connected():
+            return False
+        async with self._voice_lock:
+            # Die Uhr lief waehrend des Stalls weiter, gehoert hat man das
+            # aber nicht. Die stillen Sekunden also wieder abziehen, damit der
+            # Song nicht mittendrin weiterspringt.
+            verloren = VOICE_STALL_TICKS * VOICE_HEAL_SECONDS * max(0.1, self.speed)
+            pos = max(0.0, self.position() - verloren)
+            self._play_gen += 1        # haengenden after-Callback entwerten
+            try:
+                self.voice.stop()      # killt die haengende FFmpeg-Quelle
+                for _ in range(40):
+                    if not self.voice.is_playing():
+                        break
+                    await asyncio.sleep(0.05)
+                self.start(track, seek=pos, keep_speed=True)
+                if self.pausiert:
+                    self.pausieren()
+            except Exception:  # noqa: BLE001 - Neustart darf den Bot nie mitreissen
+                log.exception("Neustart nach Audio-Stall fehlgeschlagen")
+                return False
+        return True
 
     # --- Selbstheilung: haelt die Voice-Verbindung am Leben ---------------
     async def heal(self, guild):
@@ -638,15 +806,60 @@ class GuildPlayer:
             await self._reconnect(channel)
             return
         self.voice = vc   # echten Client adoptieren (Discord kennt ihn, wir bisher nicht)
-        # Zombie: verbunden, sollte spielen, tut es aber mehrere Ticks lang nicht.
-        if self.current is not None and not vc.is_paused() and not vc.is_playing():
+
+        # Pausiert? Dann ist Stillstand genau richtig - Finger weg von allem.
+        if self.ist_pausiert():
+            self._stall_ticks = 0
+            self._frozen_ticks = 0
+            self._last_frames = self._frames(vc)
+            return
+
+        # Fall 1 - STILLER STALL: is_playing() meldet True, es fliesst aber kein
+        # Ton (FFmpeg haengt im Lesen, der after-Callback feuert nie). Der alte
+        # Watchdog war hier BLIND, weil er nur 'not is_playing()' kannte - und
+        # genau dieser Zustand ist das gemeldete "Queue voll, spielt nicht".
+        if vc.is_playing():
+            self._stall_ticks = 0
+            frames = self._frames(vc)
+            if frames >= 0 and frames == self._last_frames:
+                self._frozen_ticks += 1
+                if self._frozen_ticks >= VOICE_STALL_TICKS:
+                    self._frozen_ticks = 0
+                    self._last_frames = -1
+                    log.warning("Audio-Stall: verbunden und 'spielend', aber seit "
+                                "%d s kein Ton - starte den Song neu.",
+                                VOICE_STALL_TICKS * VOICE_HEAL_SECONDS)
+                    await self._neustart_an_position()
+                    return
+            else:
+                self._frozen_ticks = 0
+            self._last_frames = frames
+            return
+
+        self._frozen_ticks = 0
+        self._last_frames = -1
+
+        # Fall 2 - ZOMBIE: es SOLLTE etwas laufen, tut es aber mehrere Ticks nicht.
+        if self.current is not None:
             self._stall_ticks += 1
             if self._stall_ticks >= VOICE_ZOMBIE_TICKS:
                 self._stall_ticks = 0
                 log.warning("Voice-Zombie: verbunden, aber still - starte neu.")
                 await self._reconnect(channel)
-        else:
-            self._stall_ticks = 0
+            return
+
+        self._stall_ticks = 0
+
+        # Fall 3 - LIEGENGEBLIEBENE WARTESCHLANGE: verbunden, nichts laeuft, aber
+        # es warten noch Songs. Dahin kommt man, wenn ein Song genau waehrend
+        # eines kurzen Voice-Aussetzers endet: _advance sieht die Verbindung weg,
+        # setzt current=None und laesst die Queue liegen. Danach stellt der
+        # Watchdog zwar die Verbindung wieder her - aber angestossen hat die
+        # Warteschlange bisher NIEMAND mehr. Zweiter Dauer-Steckzustand.
+        if self.queue:
+            log.info("Warteschlange lag liegen (%d Songs) - stosse sie an.",
+                     len(self.queue))
+            await self._advance()
 
     async def _reconnect(self, channel):
         """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
@@ -701,6 +914,10 @@ class GuildPlayer:
             if self.current is not None:
                 try:
                     self.start(self.current, seek=self.position(), keep_speed=True)
+                    if self.pausiert:
+                        # Wer pausiert hat, will nach dem Reconnect KEINE Musik.
+                        # Vorher spielte der Watchdog einfach weiter.
+                        self.pausieren()
                 except Exception:  # noqa: BLE001
                     log.exception("Resume nach Reconnect fehlgeschlagen")
             elif self.queue:
@@ -998,12 +1215,10 @@ class PlaybackControlView(discord.ui.View):
         if v is None or not (v.is_playing() or v.is_paused()):
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
             return
-        if v.is_paused():
-            v.resume()
-            self.player._clock_resume()   # Positions-Uhr weiterlaufen lassen
+        if self.player.ist_pausiert():
+            self.player.fortsetzen()
         else:
-            v.pause()
-            self.player._clock_pause()    # Positions-Uhr einfrieren
+            self.player.pausieren()
         self._sync_pause()
         await interaction.response.edit_message(view=self)
 
@@ -2027,6 +2242,14 @@ class Music:
         """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
         Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
         vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
+        # Sende-Generation: zwischen dem Absenden und der Antwort von Discord
+        # koennen Sekunden liegen. Startet in dieser Luecke schon der naechste
+        # Song (Doppel-Skip), speicherte frueher der SPAETER zurueckkehrende,
+        # aeltere Aufruf sein Panel - das neuere blieb als Zombie mit
+        # klickbaren Knoepfen im Kanal stehen und seine View (timeout=None)
+        # leckte im ViewStore.
+        player._panel_gen += 1
+        meine_gen = player._panel_gen
         await self._retire_panel(player)
         emb = self._now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
         view = PlaybackControlView(player)
@@ -2036,11 +2259,22 @@ class Music:
             elif player.text_channel is not None:
                 msg = await player.text_channel.send(embed=emb, view=view)
             else:
+                view.stop()
                 return
         except discord.HTTPException as exc:
             log.error("Now-Playing-Panel fehlgeschlagen: %s", exc)
+            view.stop()
             return
         view.message = msg
+        if meine_gen != player._panel_gen:
+            # Ueberholt worden: das hier ist das ALTE Panel. Selbst wegraeumen,
+            # statt das aktuelle zu ueberschreiben.
+            view.stop()
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+            return
         player.panel_message = msg
         player.panel_view = view      # zum spaeteren Abmelden (_retire_panel)
 
@@ -2136,26 +2370,29 @@ class Music:
             return self._embed(desc, title="⏭️  Skip", color=_COL_CTRL)
 
         if action == "pause":
+            if player.ist_pausiert():
+                # Ehrlich antworten statt "Ich spiele gerade nichts" - das las
+                # sich, als waere die Musik weg, obwohl sie nur pausiert war.
+                return self._embed(
+                    f"Ist schon pausiert. `{self._bot_name} weiter` spielt weiter.",
+                    title="⏸️  Pause", color=_COL_INFO)
             if player.voice is None or not player.voice.is_playing():
                 return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
-            player.voice.pause()
-            player._clock_pause()   # Positions-Uhr einfrieren (wie im Panel-Knopf)
+            player.pausieren()
             return self._embed(f"Pausiert. Sag `{self._bot_name} weiter`, wenn's weitergehen soll.",
                                title="⏸️  Pause", color=_COL_CTRL)
 
         if action == "resume":
-            if player.voice is None or not player.voice.is_paused():
+            if not player.ist_pausiert():
                 return self._embed("Da ist nichts pausiert.", color=_COL_ERR)
-            player.voice.resume()
-            player._clock_resume()  # Uhr weiterlaufen lassen (wie im Panel-Knopf)
+            player.fortsetzen()
             return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
 
         # "mach mal Musik an" ohne konkreten Song: pausiert -> weiter, laeuft schon ->
         # kurzer Hinweis, sonst freundlich nach dem Wunsch-Song fragen.
         if action == "resume_or_hint":
-            if player.voice is not None and player.voice.is_paused():
-                player.voice.resume()
-                player._clock_resume()
+            if player.ist_pausiert():
+                player.fortsetzen()
                 return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
             if player.is_active():
                 return self._embed("Läuft doch schon. 🎶", color=_COL_INFO)

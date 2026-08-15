@@ -42,7 +42,7 @@ class CmdNorm:
         "warn", "verwarn", "warns", "verwarnungen", "warnungen", "warnliste",
         "unwarn", "entwarn", "verzeih", "timeout", "mute", "muten", "stumm",
         "knebel", "auszeit", "untimeout", "enttimeout", "unmute", "unmuten",
-        "entmute", "entstumm", "entknebel", "kick", "rauswerf", "rausschmei",
+        "entmute", "entstumm", "entknebel", "kick", "rauswerf", "rausschmeis",
         "ban", "bann", "banne", "verbann", "sperr", "unban", "entbann", "entsperr",
         # games
         "quiz", "trivia", "zahlenraten", "raten", "errate", "schnickschnack",

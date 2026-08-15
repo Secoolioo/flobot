@@ -7073,6 +7073,303 @@ def test_profil_haelt_muell_und_grenzfaelle_aus():
         zurueck()
 
 
+# --- Musik: Zuverlaessigkeit (der gemeldete Fehler) -------------------------
+class _StallVoice:
+    """Voice-Client-Attrappe mit der Semantik von discord.py 2.7.1.
+
+    Kann den FFMPEG-STALL nachstellen: is_playing() meldet weiter True, der
+    Block-Zaehler des Players (AudioPlayer.loops) steht aber still - genau der
+    Zustand, in dem der Bot 'verbunden und spielend' aussieht, waehrend kein
+    Ton mehr fliesst."""
+
+    def __init__(self):
+        self.spielt = False
+        self.pausiert_ = False
+        self.frames = 0          # wandert normalerweise mit jedem Block hoch
+        self.stall = False       # True = Zaehler steht (kein Ton mehr)
+        self.play_calls = []
+        self.stops = 0
+        self._player = SimpleNamespace(loops=0)
+
+    # -- discord.py-API --
+    def is_connected(self):
+        return True
+
+    def is_playing(self):
+        return self.spielt and not self.pausiert_
+
+    def is_paused(self):
+        return self.pausiert_
+
+    def play(self, _src, after=None):
+        if self.spielt:
+            import discord
+            raise discord.ClientException("Already playing audio.")
+        self.spielt = True
+        self.stall = False
+        self.play_calls.append(after)
+
+    def stop(self):
+        self.spielt = False
+        self.stops += 1
+
+    def pause(self):
+        self.pausiert_ = True
+
+    def resume(self):
+        self.pausiert_ = False
+
+    @property
+    def channel(self):
+        return SimpleNamespace(id=42)
+
+    # -- Test-Steuerung --
+    def takt(self, n=1):
+        """Laesst n Bloecke laufen (oder eben nicht, wenn stall gesetzt ist)."""
+        if self.spielt and not self.pausiert_ and not self.stall:
+            self.frames += n
+            self._player.loops = self.frames
+
+
+def _musik_umgebung():
+    """Patcht FFmpeg/Panels weg. Rueckgabe: (player, voice, aufraeumen)."""
+    import discord
+    import music
+    alt = (discord.FFmpegPCMAudio, discord.PCMVolumeTransformer,
+           music._send_panel, music._retire_panel, music._resolve_track)
+    discord.FFmpegPCMAudio = lambda *a, **k: SimpleNamespace(cleanup=lambda: None)
+    discord.PCMVolumeTransformer = lambda src, volume=1.0: src
+
+    async def nix(*a, **k):
+        return None
+
+    music._send_panel = nix
+    music._retire_panel = nix
+
+    player = music.GuildPlayer(loop=asyncio.get_event_loop_policy().new_event_loop())
+    voice = _StallVoice()
+    player.voice = voice
+    player.active_channel_id = 42
+
+    def aufraeumen():
+        (discord.FFmpegPCMAudio, discord.PCMVolumeTransformer,
+         music._send_panel, music._retire_panel, music._resolve_track) = alt
+        player.loop.close()
+
+    return player, voice, aufraeumen
+
+
+def _track(titel="A", url="http://stream/a"):
+    import music
+    return music.Track(title=titel, stream_url=url, query=f"ytsearch1:{titel}")
+
+
+def _VoiceChannelStub():
+    """Echter discord.VoiceChannel ohne __init__ - heal() prueft per isinstance,
+    ein SimpleNamespace wuerde dort stillschweigend abgewiesen."""
+    import discord
+    ch = object.__new__(discord.VoiceChannel)
+    ch.id = 42
+    ch.name = "Musik"
+    return ch
+
+
+def test_musik_stall_wird_erkannt_und_song_neu_gestartet():
+    """DER gemeldete Fehler: 'paar sachen in der queue und er spielt sie nicht'.
+
+    Bleibt der Audio-Stream still stehen (Verbindung offen, keine Daten mehr),
+    wartet FFmpeg ohne -rw_timeout endlos: der after-Callback feuert nie,
+    is_playing() bleibt True - und weil is_active() dann True meldet, landet
+    jeder weitere 'Flo spiel X' nur noch in der Warteschlange. Der alte
+    Watchdog war dafuer blind, weil er ausschliesslich 'not is_playing()'
+    kannte. Jetzt zaehlt er die tatsaechlich gesendeten Audio-Bloecke."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+    try:
+        player.start(_track("A"))
+        voice.takt(50)                       # laeuft normal
+        player.queue.extend([_track("B"), _track("C")])
+
+        # Solange Bloecke fliessen, fasst der Watchdog nichts an.
+        for _ in range(5):
+            voice.takt(50)
+            asyncio.run(player.heal(guild))
+        assert voice.stops == 0 and player.current.title == "A"
+
+        # Jetzt der Stall: is_playing() bleibt True, es kommt aber nichts mehr.
+        voice.stall = True
+        vorher_stops = voice.stops
+        for _ in range(music.VOICE_STALL_TICKS):
+            voice.takt(50)                   # laeuft ins Leere (stall)
+            asyncio.run(player.heal(guild))
+        assert voice.stops > vorher_stops, "Watchdog hat den Stall nicht bemerkt"
+        assert player.current.title == "A", "falscher Song neu gestartet"
+        assert [t.title for t in player.queue] == ["B", "C"], \
+            "Warteschlange wurde beim Neustart geopfert"
+        assert voice.is_playing(), "nach dem Neustart laeuft nichts"
+    finally:
+        aufraeumen()
+
+
+def test_musik_liegengebliebene_warteschlange_wird_angestossen():
+    """Zweiter Dauer-Steckzustand: endet ein Song genau waehrend eines kurzen
+    Voice-Aussetzers, setzt _advance current=None und laesst die volle
+    Warteschlange liegen. Der Watchdog stellte die Verbindung zwar wieder her -
+    angestossen hat die Schlange danach aber NIEMAND mehr."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+    try:
+        player.current = None
+        player.queue.extend([_track("B"), _track("C")])
+        voice.spielt = False
+
+        asyncio.run(player.heal(guild))
+        assert player.current is not None and player.current.title == "B", \
+            "Watchdog hat die liegengebliebene Warteschlange nicht angestossen"
+        assert [t.title for t in player.queue] == ["C"]
+    finally:
+        aufraeumen()
+
+
+def test_musik_stop_laesst_keinen_geister_track_zurueck():
+    """'Flo stop', waehrend _advance gerade einen Playlist-Track aufloest:
+    der fertig aufgeloeste Track landete danach per insert(0) in der SOEBEN
+    GELEERTEN Warteschlange - und spielte beim naechsten Play ungefragt wieder
+    an ('ich hab doch gestoppt')."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        lazy = music.Track(title="B", stream_url="", query="ytsearch1:B")
+        player.queue.append(lazy)
+        player.current = _track("A")
+
+        async def langsam(track):
+            await asyncio.sleep(0.05)
+            track.stream_url = "http://stream/b"
+            return track
+
+        music._resolve_track = langsam
+
+        async def lauf():
+            gen = player._play_gen
+            aufgabe = asyncio.ensure_future(player._advance(gen))
+            await asyncio.sleep(0.01)      # _advance haengt im Aufloesen
+            await player.disconnect()      # <- 'Flo stop'
+            await aufgabe
+
+        asyncio.run(lauf())
+        assert player.queue == [], f"Geister-Track zurueck in der Queue: {player.queue}"
+        assert player.current is None
+    finally:
+        aufraeumen()
+
+
+def test_musik_netzausfall_frisst_die_warteschlange_nicht():
+    """Ein kurzer Netz-Aussetzer beim Songwechsel hat frueher die KOMPLETTE
+    Playlist in einem Rutsch als 'nicht ladbar' verbucht und stumm entsorgt -
+    jeder Resolve warf, jeder Fehler machte 'continue'. Nach zwei Fehlschlaegen
+    am Stueck bleibt die Warteschlange jetzt stehen."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+    try:
+        for i in range(6):
+            player.queue.append(music.Track(title=f"T{i}", stream_url="",
+                                            query=f"ytsearch1:T{i}"))
+
+        async def kaputt(_track):
+            raise RuntimeError("Netz weg")
+
+        async def sag(text):
+            gesagt.append(text)
+
+        music._resolve_track = kaputt
+        player._sag = sag
+        asyncio.run(player._advance())
+
+        assert len(player.queue) >= 4, \
+            f"Warteschlange wurde weggefressen: nur noch {len(player.queue)}"
+        assert gesagt and "Warteschlange" in gesagt[0], gesagt
+    finally:
+        aufraeumen()
+
+
+def test_musik_pause_ueberlebt_tempo_und_reconnect():
+    """Wer pausiert hat, will keine Musik - auch nicht nach einem
+    Tempo-Wechsel oder einem Watchdog-Reconnect. Beide starteten die
+    Wiedergabe frueher kommentarlos wieder."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        player.start(_track("A"))
+        player.pausieren()
+        assert player.ist_pausiert() and voice.is_paused()
+
+        # Tempo-Wechsel startet den Song neu - die Pause muss bleiben.
+        asyncio.run(player.apply_speed(1.5))
+        assert player.ist_pausiert(), "Tempo-Wechsel hat die Pause aufgehoben"
+        assert voice.is_paused()
+
+        # Und ein neuer Song hebt sie auf (die Absicht galt dem alten).
+        # Wie im echten Ablauf endet der alte Song erst (voice.stop()).
+        voice.stop()
+        voice.pausiert_ = False
+        player.start(_track("B"))
+        assert not player.ist_pausiert()
+    finally:
+        aufraeumen()
+
+
+def test_musik_befehle_kapern_kein_alltagsdeutsch():
+    """Steuerbefehle wurden per PRAEFIX erkannt, ohne Wortgrenze. Damit wurde
+    'verlass dich drauf' zum Voice-Leave und 'rausschmeisen @wer' (die
+    gaengige Ein-s-Schreibweise) liess Flo den Sprachkanal verlassen und die
+    Musik abbrechen, statt die Person zu kicken."""
+    import cmdnorm
+    import moderation
+    import music
+    mi = music.instance
+
+    # Gerede darf KEIN Musik-Befehl sein.
+    for satz in ("verlass dich drauf", "verlass dich nicht darauf",
+                 "liste mal auf was du kannst", "stoppuhr an",
+                 "pausenbrot mitbringen", "weitermachen jetzt"):
+        assert mi.parse_command(satz) is None, satz
+
+    # Echte Befehle muessen weiter gehen.
+    for satz, erwartet in (("leave", "leave"), ("raus", "leave"),
+                           ("verlass den kanal", "leave"), ("liste", "queue"),
+                           ("queue", "queue"), ("skip", "skip"),
+                           ("pause", "pause"), ("weiter", "resume")):
+        got = mi.parse_command(satz)
+        assert got and got[0] == erwartet, (satz, got)
+
+    # Kick in allen Schreibweisen erreicht die Moderation und NICHT die Musik.
+    for satz in ("rausschmeisen <@777>", "rausschmeis <@777>",
+                 "rausschmeissen <@777>", "rausschmeißen <@777>", "kick <@777>"):
+        norm = cmdnorm.normalize(satz) or satz
+        assert moderation.classify(norm) == "kick", satz
+        assert mi.parse_command(satz) is None, satz
+
+    # Lautstaerke ueber 999 wurde auf drei Ziffern geschnitten ('ls 1000' -> 100 %).
+    assert mi.parse_command("ls 1000") == ("volume", "1000")
+    assert mi.parse_command("lautstärke 250") == ("volume", "250")
+
+
+def test_musik_ffmpeg_bricht_bei_datenstille_ab():
+    """Die eine Zeile, an der der gemeldete Fehler haengt: ohne -rw_timeout
+    wartet FFmpeg bei einem stillen Stall unendlich und der after-Callback
+    feuert nie."""
+    import music
+    assert "-rw_timeout" in music._FFMPEG_BEFORE, music._FFMPEG_BEFORE
+    # Wert in Mikrosekunden, plausibel zwischen 5 und 60 Sekunden.
+    import re
+    m = re.search(r"-rw_timeout\s+(\d+)", music._FFMPEG_BEFORE)
+    assert m and 5_000_000 <= int(m.group(1)) <= 60_000_000, music._FFMPEG_BEFORE
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

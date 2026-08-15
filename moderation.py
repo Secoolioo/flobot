@@ -91,8 +91,10 @@ _TIMEOUT_RE = re.compile(
     r"^(?:timeout|time-out|mute|muten|stumm\w*|knebel\w*|auszeit)\b", re.IGNORECASE)
 
 # Kick: bewusst KEIN nacktes "raus" (sonst Kollision mit Musik 'geh raus').
+# 'rausschmeisen' (ein s) ist die gaengige Tippweise - ohne sie fiel der
+# Befehl durch bis zur Musik, die daraufhin den Sprachkanal verliess.
 _KICK_RE = re.compile(
-    r"^(?:kick\w*|rauswerf\w*|rausschmei(?:ß|ss)\w*)\b", re.IGNORECASE)
+    r"^(?:kick\w*|rauswerf\w*|rausschmei(?:ß|ss|s)\w*)\b", re.IGNORECASE)
 
 # Bann (Reihenfolge: unban -> ban).
 _UNBAN_RE = re.compile(
