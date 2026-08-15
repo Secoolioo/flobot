@@ -184,6 +184,21 @@ _NEXT_DATA_RE = re.compile(
 # RD... ist nur ein Auto-Mix/Radio (wird beim Teilen oft angehaengt) -> kein Playlist.
 _YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)", re.IGNORECASE)
 
+# SoundCloud. yt-dlp bringt den Extractor mit - ohne Key, ohne Login fuer
+# oeffentliche Tracks. Es fehlte also nur die ERKENNUNG: ein SC-Link fiel durch
+# die URL-Schleife und wurde als Freitext behandelt, d. h. Flo suchte auf
+# YouTube nach der URL-Zeichenkette.
+# 'on.soundcloud.com' sind die Kurzlinks aus der App - die loesen wir NICHT
+# selbst auf, yt-dlp folgt dem Redirect von allein.
+_SC_RE = re.compile(
+    r"https?://(?:www\.|m\.|on\.)?soundcloud\.com/\S+", re.IGNORECASE)
+# Ein "Set" ist bei SoundCloud die Playlist (…/sets/<name>).
+# Direkte Audio-Dateien: die spielt FFmpeg ohne Umweg.
+_AUDIO_DATEI_RE = re.compile(
+    r"\.(?:mp3|m4a|aac|ogg|oga|opus|wav|flac|webm)(?:\?|#|$)", re.IGNORECASE)
+_SC_SET_RE = re.compile(
+    r"https?://(?:www\.|m\.)?soundcloud\.com/[^/\s]+/sets/\S+", re.IGNORECASE)
+
 # Steuerbefehle: (Aktion, Regex am Satzanfang). Reihenfolge = Prioritaet.
 # Wichtig: JEDES Muster endet auf \b oder \w*\b. Ohne Wortgrenze reicht das
 # blosse PRAEFIX - und dann kaperten die Steuerbefehle ganz normale Saetze:
@@ -1546,15 +1561,20 @@ class Music:
             match_hint=hint,
         )
 
-    async def _youtube_playlist(self, url):
-        """YouTube-Playlist -> Liste (video_url, titel). Schnell via extract_flat;
-        die einzelnen Videos werden erst beim Abspielen aufgeloest."""
+    async def _flache_playlist(self, url, *, quelle="Playlist"):
+        """Playlist/Set -> Liste (track_url, titel), OHNE die einzelnen Tracks
+        schon aufzuloesen (extract_flat) - das passiert erst beim Abspielen.
+
+        Gilt fuer YouTube UND SoundCloud: yt-dlp liefert bei beiden dieselbe
+        flache Struktur. Der einzige Unterschied ist, dass YouTube pro Eintrag
+        manchmal nur die Video-ID mitschickt - daraus bauen wir die volle URL.
+        SoundCloud liefert immer die komplette Track-Adresse."""
         loop = asyncio.get_running_loop()
         opts = dict(_YDL_OPTS)
         opts["noplaylist"] = False
         opts["extract_flat"] = "in_playlist"
         opts["playlistend"] = MAX_QUEUE
-        opts["ignoreerrors"] = True  # einzelne kaputte Videos ueberspringen, nicht crashen
+        opts["ignoreerrors"] = True  # einzelne kaputte Tracks ueberspringen, nicht crashen
 
         def work():
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
@@ -1563,7 +1583,7 @@ class Music:
         try:
             info = await loop.run_in_executor(None, work)
         except Exception as exc:  # noqa: BLE001
-            log.warning("YouTube-Playlist nicht ladbar (%s): %s", url, exc)
+            log.warning("%s nicht ladbar (%s): %s", quelle, url, exc)
             return None
 
         entries = info.get("entries") if info else None
@@ -1577,9 +1597,18 @@ class Music:
             if not vid:
                 continue
             if not str(vid).startswith("http"):
+                # Nur YouTube liefert blosse IDs.
                 vid = f"https://www.youtube.com/watch?v={vid}"
             out.append((vid, e.get("title", "Unbekannter Titel")))
         return out or None
+
+    async def _youtube_playlist(self, url):
+        """YouTube-Playlist -> Liste (video_url, titel)."""
+        return await self._flache_playlist(url, quelle="YouTube-Playlist")
+
+    async def _soundcloud_set(self, url):
+        """SoundCloud-Set -> Liste (track_url, titel)."""
+        return await self._flache_playlist(url, quelle="SoundCloud-Set")
 
     async def _spotify_token(self):
         """Holt (und cached) ein Spotify-App-Token (Client-Credentials-Flow)."""
@@ -1798,6 +1827,7 @@ class Music:
         """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
 
         Aktionen: play, search, spotify_album, spotify_playlist, yt_playlist,
+                  sc_playlist,
                   volume, skip, pause, resume, stop, leave, queue.
         """
         # 1) Link in der Nachricht? (staerkstes Signal)
@@ -1817,6 +1847,19 @@ class Music:
                 return ("play", url)
             if _SPOTIFY_TRACK_RE.search(url):
                 return ("play", url)
+            if _AUDIO_DATEI_RE.search(url):
+                # Direkter Audio-Link (.mp3/.m4a/...) - den kann FFmpeg selbst
+                # abspielen. Vorher landete auch der in der YouTube-TEXTSUCHE,
+                # also in einer Suche nach der URL-Zeichenkette. Bewusst NUR
+                # bei eindeutigen Audio-Endungen: eine beliebige Webseite im
+                # Satz ("was haeltst du von https://…") darf die Musik nicht
+                # an sich reissen.
+                return ("play", url)
+            if _SC_RE.match(url):
+                # Set -> Playlist, alles andere ganz normal als Track. Ein
+                # Kurzlink (on.soundcloud.com) KANN auch ein Set sein - das
+                # sieht man erst nach dem Redirect; das faengt _extract ab.
+                return ("sc_playlist" if _SC_SET_RE.match(url) else "play", url)
 
         cleaned = self._clean_lead(text)
         if not cleaned:
@@ -2514,6 +2557,17 @@ class Music:
                 message.author.display_name, "aus der Playlist", reply_to=message,
             )
 
+        if action == "sc_playlist":
+            entries = await self._soundcloud_set(arg)
+            if not entries:
+                return self._embed("Das SoundCloud-Set konnte ich nicht laden "
+                                   "(leer, privat oder nur fuer Abonnenten?).",
+                                   color=_COL_ERR)
+            return await self._play_many(
+                player, voice_state.channel, entries,
+                message.author.display_name, "aus dem SoundCloud-Set", reply_to=message,
+            )
+
         if len(player.queue) >= MAX_QUEUE:
             return self._embed(f"Die Warteschlange ist voll ({MAX_QUEUE}). Warte kurz.", color=_COL_ERR)
 
@@ -2531,6 +2585,18 @@ class Music:
                     "title": meta["name"], "artist": meta.get("artist", ""),
                 })
             elif action == "play":
+                # Kurzlinks aus der SoundCloud-App (on.soundcloud.com) koennen
+                # auch auf ein SET zeigen - das sieht man erst NACH dem
+                # Redirect. Ohne diese Pruefung haette Flo davon nur den ersten
+                # Track gespielt und den Rest stillschweigend verschluckt.
+                if "on.soundcloud.com" in arg.lower():
+                    eintraege = await self._soundcloud_set(arg)
+                    if eintraege and len(eintraege) > 1:
+                        return await self._play_many(
+                            player, voice_state.channel, eintraege,
+                            message.author.display_name, "aus dem SoundCloud-Set",
+                            reply_to=message,
+                        )
                 track = await self._extract(arg)
             else:  # search
                 track = await self._extract(f"ytsearch1:{arg}")
@@ -2599,6 +2665,8 @@ _norm_match = instance._norm_match
 _pick_best_match = instance._pick_best_match
 _youtube_search_best = instance._youtube_search_best
 _youtube_playlist = instance._youtube_playlist
+_soundcloud_set = instance._soundcloud_set
+_flache_playlist = instance._flache_playlist
 _spotify_token = instance._spotify_token
 _spotify_to_query = instance._spotify_to_query
 _spotify_track_meta = instance._spotify_track_meta

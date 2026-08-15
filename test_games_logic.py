@@ -7781,6 +7781,87 @@ def test_giveaway_schnellstart_lost_nichts_aus():
     assert "self._hat(low, (\"abbrechen\"" not in teil
 
 
+def test_musik_erkennt_soundcloud():
+    """SoundCloud-Links landeten in der YouTube-TEXTSUCHE: parse_command kannte
+    nur Spotify und YouTube, alles andere fiel durch und wurde wie Freitext
+    behandelt - Flo suchte also auf YouTube nach der URL-Zeichenkette. yt-dlp
+    bringt den SoundCloud-Extractor laengst mit; es fehlte nur die Erkennung."""
+    import music
+    mi = music.instance
+
+    # Einzelne Tracks -> ganz normaler play-Pfad.
+    for url in ("https://soundcloud.com/forss/flickermood",
+                "https://www.soundcloud.com/forss/flickermood",
+                "https://m.soundcloud.com/forss/flickermood",
+                "https://on.soundcloud.com/AbCdEf",
+                "https://SoundCloud.COM/a/b"):
+        for text in (url, f"spiel {url}", f"schau mal {url} an"):
+            got = mi.parse_command(text)
+            assert got == ("play", url), (text, got)
+
+    # Sets -> eigener Playlist-Pfad.
+    for url in ("https://soundcloud.com/forss/sets/soulhack",
+                "https://www.soundcloud.com/user/sets/mein-mix"):
+        got = mi.parse_command(f"spiel {url}")
+        assert got == ("sc_playlist", url), got
+
+    # Fremde Links bleiben unveraendert.
+    assert mi.parse_command("spiel https://www.youtube.com/watch?v=x") \
+        == ("play", "https://www.youtube.com/watch?v=x")
+    # Direkte Audio-Dateien spielt FFmpeg selbst - auch die landeten frueher
+    # in der YouTube-Textsuche.
+    assert mi.parse_command("spiel https://example.com/lied.mp3") \
+        == ("play", "https://example.com/lied.mp3")
+    assert mi.parse_command("https://example.com/set.opus?x=1") \
+        == ("play", "https://example.com/set.opus?x=1")
+    # Eine BELIEBIGE Webseite darf die Musik NICHT an sich reissen.
+    assert mi.parse_command("was hältst du von https://example.com/artikel") is None
+
+    # Kein Link -> weiterhin Suche.
+    assert mi.parse_command("spiel Bohemian Rhapsody") == ("search", "Bohemian Rhapsody")
+
+
+def test_musik_playlist_helfer_teilt_sich_youtube_und_soundcloud():
+    """EIN flacher Playlist-Helfer fuer beide Quellen. YouTube liefert pro
+    Eintrag manchmal nur die Video-ID - daraus muss die volle URL werden;
+    SoundCloud liefert immer die komplette Adresse."""
+    import music
+    mi = music.instance
+
+    class FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            if "soundcloud" in url:
+                return {"entries": [
+                    {"url": "https://soundcloud.com/a/eins", "title": "Eins"},
+                    {"url": "https://soundcloud.com/a/zwei", "title": "Zwei"},
+                    None,                       # kaputter Eintrag -> ueberspringen
+                ]}
+            return {"entries": [{"id": "abc123", "title": "Video"}]}
+
+    alt = music.yt_dlp
+    music.yt_dlp = SimpleNamespace(YoutubeDL=FakeYDL)
+    try:
+        sc = asyncio.run(mi._soundcloud_set("https://soundcloud.com/a/sets/x"))
+        assert sc == [("https://soundcloud.com/a/eins", "Eins"),
+                      ("https://soundcloud.com/a/zwei", "Zwei")], sc
+        yt = asyncio.run(mi._youtube_playlist("https://youtube.com/playlist?list=X"))
+        assert yt == [("https://www.youtube.com/watch?v=abc123", "Video")], yt
+        # Die flache Extraktion muss wirklich flach sein (sonst dauert eine
+        # 100-Track-Playlist ewig, weil jeder Track einzeln aufgeloest wird).
+        assert FakeYDL({}).opts is not None
+    finally:
+        music.yt_dlp = alt
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

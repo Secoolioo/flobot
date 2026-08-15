@@ -79,7 +79,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 130 Tests
+python3 test_games_logic.py    # 154 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -96,6 +96,49 @@ python3 tools_aktien_sim.py    # 60 simulierte Tage, 8 Durchläufe
 
 Kein Teil des Bots. Spielt Serverbetrieb mit Wochenenden, unterschiedlich vollen
 Calls und toten Tagen durch und prüft acht Kriterien (siehe unten).
+
+---
+
+## Musik
+
+```
+Flo spiel <suchbegriff>        YouTube-Suche
+Flo spiel <link>              YouTube, Spotify, SoundCloud, direkte Audiodatei
+Flo pause / weiter / skip / stop / leave / queue
+Flo ls 80                     Lautstärke (wird je Server gespeichert)
+```
+
+Dazu die normalen Sätze: „mach mal *X* an", „leg *X* auf", „hau *X* raus",
+„mach die Musik aus". Fragen (*„spielst du …"*) sind bewusst **kein** Befehl.
+
+**SoundCloud** läuft ohne Key und ohne Login — yt-dlp bringt den Extractor mit,
+es fehlte nur die Erkennung. Erkannt werden einzelne Tracks
+(`soundcloud.com/wer/was`), **Sets** (`/sets/…`, kommen als ganze Playlist in die
+Warteschlange, bis `MAX_QUEUE`) und die Kurzlinks aus der App
+(`on.soundcloud.com/…`) — den Redirect löst yt-dlp selbst auf. Ebenso spielt Flo
+eine **direkt verlinkte Audiodatei** (`.mp3`, `.m4a`, `.opus`, `.flac`, …). Nicht
+abspielbar sind Go+-Titel: SoundCloud gibt dafür nur die 30-Sekunden-Vorschau
+heraus, und die spielt Flo dann auch — es gibt kein Signal, an dem man das vorher
+sicher erkennt.
+
+Andere Webseiten-Links fallen **absichtlich** durch: sonst würde jeder geteilte
+Link im Chat einen Abspielversuch auslösen.
+
+**Warum die Warteschlange früher hängenblieb:** FFmpeg wartet bei einem stillen
+Stream ohne Timeout ewig. Dann feuert `after` nie, `is_playing()` bleibt `True`,
+und jedes weitere `Flo spiel …` landet nur noch in der Queue — genau das
+bekannte „Queue voll, spielt aber nicht". Dagegen jetzt zweierlei:
+
+* `-rw_timeout` bricht ab, wenn keine Daten mehr kommen (die `-reconnect`-Flags
+  allein reichen nicht — die brauchen einen Fehler oder EOF, und ein stiller
+  Hänger ist keins von beidem).
+* Ein Wächter zählt die tatsächlich abgespielten Frames
+  (`AudioPlayer.loops` — das einzige ehrliche Signal, `position()` ist nur
+  Wanduhr). Stehen sie zwei Takte still, startet Flo denselben Song an derselben
+  Stelle neu; Warteschlange, Tempo und Pause bleiben erhalten.
+
+Dazu heilt der Wächter zwei weitere Sackgassen: ein Song, der während eines
+Voice-Ausfalls endet, und ein Geister-Track nach `stop`.
 
 ---
 
@@ -281,6 +324,7 @@ erzwingt), Kommentare und Docstrings auf Deutsch, Zustand ausschließlich in
 | `floaktie.py` | die $FLO-Aktie |
 | `casino.py` | Blackjack, Mines, Crash, Roulette, … |
 | `games.py` | Quiz, Anagramm, Mathe, Duelle |
+| `music.py` | Voice, Warteschlange, YouTube/Spotify/SoundCloud |
 | `render.py` | alle Bilder (PIL) |
 | `webpanel.py` / `webpanel.html` | Web-Panel |
 | `store.py` | JSON-Speicher, atomar + Sicherung |
