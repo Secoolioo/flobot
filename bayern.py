@@ -54,6 +54,12 @@ class Bayern:
     _TOGGLE_RE = re.compile(# "bayerisch" (mit e) ist die STANDARD-Schreibweise - ohne sie schaltete
         # ausgerechnet der naheliegendste Befehl ueberhaupt nichts.
         r"^(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*(an|ein|on|aus|off|weg)?", re.I)
+    # "red/sprich (mal) bayerisch" ist die natuerlichste Formulierung ueberhaupt -
+    # ohne diese Variante landete sie bei voicegags in der Sprachausgabe.
+    _TOGGLE_LOSE_RE = re.compile(
+        r"^(?:red|redn|rede|sprich|schreib|schreibe|antworte?)\s+(?:mal\s+|bitte\s+)?"
+        r"(?:auf\s+)?(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*"
+        r"(an|ein|on|aus|off|weg)?", re.I)
 
     # Systemprompt-Zusatz, den ai bei aktivem Dialekt anhaengt.
     DIALECT_PROMPT = (
@@ -92,7 +98,7 @@ class Bayern:
         two = (words[0].strip(".,!?"), words[1].strip(".,!?")) if len(words) >= 2 else None
 
         # Dialekt an/aus?
-        tm = self._TOGGLE_RE.match(cleaned)
+        tm = self._TOGGLE_RE.match(cleaned) or self._TOGGLE_LOSE_RE.match(cleaned)
         if tm:
             off = (tm.group(1) or "").lower() in ("aus", "off", "weg")
             await guildcfg.setzen(message.guild.id, "bayern", "aus" if off else "an")

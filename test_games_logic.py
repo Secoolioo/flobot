@@ -7837,6 +7837,13 @@ def test_bayrisch_versteht_die_standard_schreibweise():
         assert rx.match(schreibweise), schreibweise
     for kein in ("banane", "bayern muenchen", "bay"):
         assert not rx.match(kein), kein
+    # 'sprich/red bayerisch' ist die natuerlichste Formulierung - die landete
+    # frueher bei voicegags in der Sprachausgabe statt beim Dialekt.
+    lose = bayern.instance._TOGGLE_LOSE_RE
+    for satz in ("sprich bayerisch", "red mal boarisch", "schreib auf bayrisch",
+                 "antworte bitte bayerisch", "sprich bayerisch aus"):
+        assert lose.match(satz), satz
+    assert not lose.match("sprich nicht so laut")
 
 
 def test_giveaway_schnellstart_lost_nichts_aus():

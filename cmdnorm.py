@@ -115,7 +115,9 @@ class CmdNorm:
         "weida": "weiter", "weita": "weiter", "weda": "weiter",
         "schleich": "leave", "schleichdi": "leave", "gemma": "leave",
         "lauda": "lauter", "leisa": "leiser",
-        "geld": "coins", "moos": "coins", "kohle": "coins", "koin": "coins",
+        # 'geld' steht schon in KNOWN (ein gueltiger Befehl) - normalize() steigt
+        # dort vorher aus, der Eintrag war also toter Code.
+        "moos": "coins", "kohle": "coins", "koin": "coins",
         "kaffa": "kaufen", "kafn": "kaufen",
         "iberspring": "skip", "übaspring": "skip", "iwaspring": "skip",
         "wiafl": "würfel", "wiaschd": "würfel",
