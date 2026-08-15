@@ -418,30 +418,58 @@ class FloAktie:
         und Tages-Tick. Zeitstempel als Epoch, Liste gedeckelt."""
         st = self._state()
         ticks = st.setdefault("ticks", [])
+        if not isinstance(ticks, list):
+            ticks = st["ticks"] = []
         t = int(now if now is not None else time.time())
         ticks.append({"t": t, "price": self.price()})
         if len(ticks) > HISTORY_TICKS_MAX:
             del ticks[:len(ticks) - HISTORY_TICKS_MAX]
 
     def _holdings(self):
-        return self._state().setdefault("holdings", {})
+        hold = self._state().setdefault("holdings", {})
+        # setdefault rettet nur einen FEHLENDEN Schluessel - ein vorhandenes
+        # "holdings": null kommt daran vorbei.
+        if not isinstance(hold, dict):
+            hold = self._state()["holdings"] = {}
+        return hold
+
+    @staticmethod
+    def _n(wert):
+        """Anteilszahl aus dem Store. Murks zaehlt als 0, statt den Kurs zu
+        sprengen: price() haengt an total_shares, und daran haengen wiederum
+        jeder Handel, das Panel, das Profil und die Vermoegensrechnung."""
+        try:
+            return int(wert)
+        except (TypeError, ValueError):
+            return 0
+
+    def _verlauf(self, feld):
+        """'history' bzw. 'ticks' als Liste echter Dicts.
+
+        Ein einziger Eintrag, der kein dict ist (oder das Feld selbst als null),
+        riss sonst Sparkline, Chart, Kurs-Prozente und das Panel mit."""
+        roh = self._state().get(feld)
+        if not isinstance(roh, list):
+            return []
+        return [e for e in roh if isinstance(e, dict)]
 
     def shares_of(self, uid):
-        return int(self._holdings().get(str(uid), 0))
+        return self._n(self._holdings().get(str(uid), 0))
 
     def total_shares(self):
-        return sum(int(v) for v in self._holdings().values())
+        return sum(self._n(v) for v in self._holdings().values())
 
     def holders_count(self):
-        return sum(1 for v in self._holdings().values() if int(v) > 0)
+        return sum(1 for v in self._holdings().values() if self._n(v) > 0)
 
     def top_holder(self):
         """UID (int) des groessten Aktionaers oder None."""
         hold = self._holdings()
         best, best_n = None, 0
         for uid, n in hold.items():
-            if int(n) > best_n:
-                best, best_n = int(uid), int(n)
+            anteile = self._n(n)
+            if anteile > best_n:
+                best, best_n = self._n(uid), anteile
         return best
 
     def value_of(self, uid):
@@ -1449,7 +1477,9 @@ class FloAktie:
             today = self._today()
             if st.get("day") != today:
                 st["day"] = today
-                st.setdefault("history", []).append({"day": today, "price": self.price()})
+                if not isinstance(st.get("history"), list):
+                    st["history"] = []
+                st["history"].append({"day": today, "price": self.price()})
                 st["history"] = st["history"][-HISTORY_MAX:]
             await self._save()
             # Aendert sich der Kurs (und damit der Boersenwert), Panel UND Chart
@@ -1518,13 +1548,16 @@ class FloAktie:
     # --- Leaderboard ------------------------------------------------------
     def leaderboard(self, limit=10):
         """[(uid_int, shares), ...] absteigend, nur echte Halter."""
-        hold = [(int(u), int(n)) for u, n in self._holdings().items() if int(n) > 0]
+        hold = [(self._n(u), self._n(n)) for u, n in self._holdings().items()
+                if self._n(n) > 0]
         hold.sort(key=lambda x: x[1], reverse=True)
         return hold[:limit]
 
     # --- Anzeige ----------------------------------------------------------
     def _sparkline(self):
-        hist = [h.get("price", 0) for h in self._state().get("history", [])][-16:]
+        # Nur echte Dicts: ein einzelner Murks-Eintrag in der Historie (null, Zahl,
+        # Text) nahm sonst den ganzen Kurs-Chart und das Panel mit.
+        hist = [self._n(h.get("price", 0)) for h in self._verlauf("history")][-16:]
         hist = hist + [self.price()]
         if len(hist) < 2:
             return ""
@@ -1562,8 +1595,8 @@ class FloAktie:
         st = self._state()
         now = time.time()
         cutoff = now - max(0.0, float(days)) * 86400
-        ticks = [t for t in st.get("ticks", []) if t.get("t", 0) >= cutoff]
-        pts = [int(t.get("price", 0)) for t in ticks]
+        ticks = [t for t in self._verlauf("ticks") if self._n(t.get("t", 0)) >= cutoff]
+        pts = [self._n(t.get("price", 0)) for t in ticks]
         # Die Tages-Schlusskurse ergaenzen NUR den Teil des Fensters, den die
         # Ticks nicht abdecken - ausgewaehlt ueber das DATUM, nicht ueber eine
         # Anzahl. Vorher wurden schlicht die n neuesten Tageskurse davorgeklebt;
@@ -1571,15 +1604,15 @@ class FloAktie:
         # der letzten 3 Tage: alle 4 vorangestellten Tage waren doppelt, der
         # Kurs von vor 7 Tagen kam gar nicht vor, und die angezeigte Veraenderung
         # war +67 % statt +290 %.
-        aeltester = min((t.get("t", now) for t in ticks), default=now)
+        aeltester = min((self._n(t.get("t", now)) or now for t in ticks), default=now)
         ab_tag = datetime.fromtimestamp(aeltester, TIMEZONE).strftime("%Y-%m-%d")
         von_tag = datetime.fromtimestamp(cutoff, TIMEZONE).strftime("%Y-%m-%d")
-        hist_roh = st.get("history", [])
-        davor = [int(h.get("price", 0)) for h in hist_roh
+        hist_roh = self._verlauf("history")
+        davor = [self._n(h.get("price", 0)) for h in hist_roh
                  if von_tag <= str(h.get("day", "")) < ab_tag]
         if not davor and hist_roh and not any(h.get("day") for h in hist_roh):
             # Uralter Stand ohne Datum: lieber die alte Naeherung als gar nichts.
-            davor = [int(h.get("price", 0)) for h in hist_roh][-max(2, int(float(days))):]
+            davor = [self._n(h.get("price", 0)) for h in hist_roh][-max(2, int(float(days))):]
         pts = davor + pts
         pts = [p for p in pts if p] or [self.price()]
         # Der letzte Punkt ist IMMER der aktuelle Kurs - sonst endet die Linie auf

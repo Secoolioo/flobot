@@ -1342,7 +1342,10 @@ class Render:
             img.paste(circ, (ax, ay), circ)
         else:
             d.ellipse([ax, ay, ax + AD, ay + AD], fill=(34, 38, 48))
-            ini = (name[:1] or "?").upper()
+            # Der gesaeuberte Name statt des rohen: name=None warf hier sonst
+            # TypeError, statt den Platzhalter zu zeichnen, und ein reiner
+            # Emoji-Name ergab ein leeres Kaestchen.
+            ini = ((self._clean_text(name) or "?")[:1]).upper()
             iw = d.textlength(ini, font=self._font(84))
             d.text((ax + AD / 2 - iw / 2, ay + AD / 2 - 52), ini, font=self._font(84),
                    fill=(120, 126, 140))
@@ -2207,12 +2210,22 @@ class Render:
         from zoneinfo import ZoneInfo
         import os as _os
 
-        def _tsd(n):
-            return f"{n:,}".replace(",", ".")
+        def _z(w):
+            # Handelsbuch-Zahl. Die Karte bekommt mit copy.deepcopy(u) die ROHEN
+            # Store-Daten ohne jede Pruefung - ein einziges None-Feld liess hier
+            # sonst Bild UND Text-Fallback gemeinsam platzen.
+            try:
+                return int(w or 0)
+            except (TypeError, ValueError):
+                return 0
 
-        by = dict(stats.get("by") or {})
-        srcs = sorted(by.items(), key=lambda kv: kv[1].get("n", 0), reverse=True)[:8]
-        letzte = list(stats.get("last") or [])[-6:][::-1]
+        def _tsd(n):
+            return f"{_z(n):,}".replace(",", ".")
+
+        stats = stats if isinstance(stats, dict) else {}
+        by = {k: v for k, v in (stats.get("by") or {}).items() if isinstance(v, dict)}
+        srcs = sorted(by.items(), key=lambda kv: _z(kv[1].get("n")), reverse=True)[:8]
+        letzte = [e for e in (stats.get("last") or []) if isinstance(e, dict)][-6:][::-1]
 
         W = 900
         head = 176
@@ -2248,11 +2261,11 @@ class Render:
                fill=(150, 155, 168))
         d.text((W - 34, ay + 8), "KONTOSTAND", font=self._font(15),
                fill=(120, 126, 140), anchor="ra")
-        d.text((W - 34, ay + 30), _tsd(int(balance)), font=self._font(28),
+        d.text((W - 34, ay + 30), _tsd(balance), font=self._font(28),
                fill=self._GOLD, anchor="ra")
 
         # Kennzahlen-Zeile
-        ein, aus = int(stats.get("in", 0)), int(stats.get("out", 0))
+        ein, aus = _z(stats.get("in")), _z(stats.get("out"))
         net = ein - aus
         net_col = self._GREEN if net >= 0 else self._RED_HOT
         kennz = [
@@ -2277,7 +2290,7 @@ class Render:
         for i in range(13, -1, -1):
             tag = heute - timedelta(days=i)
             e = days.get(tag.strftime("%Y-%m-%d")) or {}
-            reihe.append((tag, int(e.get("in", 0)) - int(e.get("out", 0))))
+            reihe.append((tag, _z(e.get("in")) - _z(e.get("out"))))
         peak = max((abs(v) for _t, v in reihe), default=0) or 1
         cy = head + 34 + 66                      # Nulllinie
         half = 62                                # max. Balkenhoehe je Richtung
@@ -2304,7 +2317,7 @@ class Render:
         if srcs:
             src_peak = max(v.get("n", 0) for _s, v in srcs) or 1
             for src, v in srcs:
-                snet = int(v.get("in", 0)) - int(v.get("out", 0))
+                snet = _z(v.get("in")) - _z(v.get("out"))
                 col = self._GREEN if snet >= 0 else self._RED_HOT
                 d.text((34, y + 2), src.upper()[:14], font=self._font(18),
                        fill=(200, 205, 218))
@@ -2322,7 +2335,7 @@ class Render:
                    fill=(120, 126, 140))
             y += 30
             for e in letzte:
-                amt = int(e.get("amt", 0))
+                amt = _z(e.get("amt"))
                 col = self._GREEN if amt >= 0 else self._RED_HOT
                 d.text((34, y + 2), str(e.get("t", "")), font=self._font(16),
                        fill=(150, 155, 168))
@@ -2330,7 +2343,7 @@ class Render:
                        fill=(200, 205, 218))
                 d.text((W - 214, y + 2), f"{'+' if amt >= 0 else ''}{_tsd(amt)}",
                        font=self._font(16), fill=col, anchor="ra")
-                d.text((W - 34, y + 2), f"Konto: {_tsd(int(e.get('bal', 0)))}",
+                d.text((W - 34, y + 2), f"Konto: {_tsd(e.get('bal'))}",
                        font=self._font(16), fill=(120, 126, 140), anchor="ra")
                 y += 30
         return self._png(img)

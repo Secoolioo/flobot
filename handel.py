@@ -34,6 +34,17 @@ log = logging.getLogger("dcbot.handel")
 SAVE_DEBOUNCE = float(os.getenv("HANDEL_SAVE_DEBOUNCE", "3") or "3")
 
 
+def _zahl(wert):
+    """Zahl aus dem Buch. Murks (None, Text) zaehlt als 0.
+
+    Steht bewusst auf Modulebene: der Text-Fallback in _karte() braucht sie
+    genauso wie die Auskunft an den Profil-Lookup."""
+    try:
+        return int(wert)
+    except (TypeError, ValueError):
+        return 0
+
+
 class Handel:
     """Kapselt das Handelsbuch: Buchungs-Erfassung, Speicher und den Befehl."""
 
@@ -127,7 +138,9 @@ class Handel:
             u = (self._store.data.get("users") or {}).get(str(int(uid))) or {}
         except (TypeError, ValueError):
             return 0, 0, 0
-        return int(u.get("in", 0)), int(u.get("out", 0)), int(u.get("n", 0))
+        # Das int() lag frueher AUSSERHALB des try - ein None-Feld im Buch riss
+        # damit den Profil-Lookup mit, der diese Funktion aufruft.
+        return _zahl(u.get("in")), _zahl(u.get("out")), _zahl(u.get("n"))
 
     def _save_soon(self):
         """Speichern SAMMELN statt bei jeder Buchung neu zu schreiben.
@@ -192,9 +205,14 @@ class Handel:
             return discord.File(buf, filename=f"handel_{target.id}.png")
         except Exception:  # noqa: BLE001 - Karte ist nice-to-have, Text geht immer
             log.exception("Handels-Karte fehlgeschlagen - Text-Fallback")
-            netto = u.get("in", 0) - u.get("out", 0)
-            return (f"📒 **{target.display_name}** – {u.get('n', 0)} Transaktionen, "
-                    f"eingenommen +{numfmt.fmt(u.get('in', 0))}, ausgegeben -{numfmt.fmt(u.get('out', 0))}, "
+            # Der Fallback rechnete frueher EXAKT so ungeschuetzt wie die Karte,
+            # die er auffangen soll: bei "in": null starb er in seiner eigenen
+            # ersten Zeile an derselben Ursache. Der Nutzer bekam dann weder Bild
+            # noch Text, sondern nur die Notbremse aus bot.py.
+            ein, aus, anz = _zahl(u.get("in")), _zahl(u.get("out")), _zahl(u.get("n"))
+            netto = ein - aus
+            return (f"📒 **{target.display_name}** – {anz} Transaktionen, "
+                    f"eingenommen +{numfmt.fmt(ein)}, ausgegeben -{numfmt.fmt(aus)}, "
                     f"Netto {'+' if netto >= 0 else ''}{numfmt.fmt(netto)} {economy.COIN}.")
 
 

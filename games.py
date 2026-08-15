@@ -1300,14 +1300,24 @@ class Games:
         if not kanal or message.channel.id != kanal:
             return False
         assert self._store is not None
-        state = self._store.data.setdefault("counting", {}).setdefault(
-            str(message.channel.id), {"count": 0, "last": ""})
+        # setdefault rettet nur FEHLENDE Schluessel. Ein kaputter Stand (null,
+        # Liste, Text) kam daran vorbei und liess das Zaehlspiel bei JEDER Zahl
+        # sterben - also dauerhaft, nicht nur einmal.
+        counting = self._store.data.get("counting")
+        if not isinstance(counting, dict):
+            counting = self._store.data["counting"] = {}
+        state = counting.get(str(message.channel.id))
+        if not isinstance(state, dict):
+            state = counting[str(message.channel.id)] = {"count": 0, "last": ""}
         text = (message.content or "").strip()
         m = re.match(r"^(\d{1,6})", text)
         if not m:
             return False  # keine Zahl -> ignorieren
         num = int(m.group(1))
-        expected = state["count"] + 1
+        try:
+            expected = int(state.get("count", 0)) + 1
+        except (TypeError, ValueError):
+            expected = 1
         if num == expected and state.get("last") != str(message.author.id):
             state["count"] = expected
             state["last"] = str(message.author.id)

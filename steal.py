@@ -145,7 +145,12 @@ class Steal:
         """Liefert das Cooldown-Dict (uid-str -> letzter Raub-Timestamp)."""
         if self._store is None:
             return {}
-        return self._store.data.setdefault("cooldowns", {})
+        cd = self._store.data.setdefault("cooldowns", {})
+        # setdefault rettet nur einen FEHLENDEN Schluessel - ein vorhandenes
+        # "cooldowns": null liess sonst jeden Raub-Versuch in _remaining() sterben.
+        if not isinstance(cd, dict):
+            cd = self._store.data["cooldowns"] = {}
+        return cd
 
     def _remaining(self, uid):
         """Restliche Cooldown-Sekunden fuer uid (0 = frei)."""

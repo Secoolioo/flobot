@@ -342,7 +342,13 @@ class Moderation:
 
     # --- Verwarnungen --------------------------------------------------------
     def _warns_for(self, guild_id):
-        return self._store.data.setdefault("warns", {}).setdefault(str(guild_id), {})
+        warns = self._store.data.setdefault("warns", {})
+        if not isinstance(warns, dict):
+            warns = self._store.data["warns"] = {}
+        je_server = warns.get(str(guild_id))
+        if not isinstance(je_server, dict):
+            je_server = warns[str(guild_id)] = {}
+        return je_server
 
     def warns_of(self, guild_id, uid):
         """Wie viele OFFENE Verwarnungen jemand auf diesem Server hat.
@@ -351,12 +357,15 @@ class Moderation:
         Rechte - die Zahl steht ohnehin unter 'warns'."""
         if not self._enabled or self._store is None:
             return 0
+        # Alle drei Tiefen koennen kaputt sein (warns/Server/Nutzer), und das
+        # len() lag frueher AUSSERHALB des try - ein "warns": null nahm damit
+        # den ganzen Profil-Lookup mit, der diese Zahl abfragt.
         try:
-            lst = (self._store.data.get("warns", {})
-                   .get(str(int(guild_id)), {}).get(str(int(uid)), []))
-        except (TypeError, ValueError):
+            gw = self._store.data.get("warns") or {}
+            lst = (gw.get(str(int(guild_id))) or {}).get(str(int(uid))) or []
+            return len(lst)
+        except (TypeError, ValueError, AttributeError):
             return 0
-        return len(lst or [])
 
     async def _do_warn(self, message, rest):
         guild = message.guild

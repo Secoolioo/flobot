@@ -7862,6 +7862,132 @@ def test_musik_playlist_helfer_teilt_sich_youtube_und_soundcloud():
         music.yt_dlp = alt
 
 
+def test_kaputte_daten_toeten_kein_feature_zur_laufzeit():
+    """Kaputte Werte im Store duerfen nicht erst BEIM BENUTZEN sterben.
+
+    Die Typ-Schablone des JsonStore prueft nur die oberste Ebene: '"coins":
+    null' oder '"xp": "viel"' TIEF IM Profil kommt daran vorbei. Vorher starb
+    daran nicht nur die eine Anzeige - economy.on_message laeuft ohne
+    Auffangnetz, also erreichte danach der ganze Rest dieser Nachricht die
+    Platte nicht mehr, und EIN kaputtes Fremdprofil kippte 'top' und
+    'reichste' fuer alle."""
+    import casino
+    import economy
+    import floaktie
+    import handel
+    import luxus
+    import moderation
+    import steal
+    import words
+
+    # --- economy: Profil-Weg und die drei Ranglisten --------------------
+    alt = (economy.instance._store, economy.instance._enabled)
+    economy.instance._enabled = True
+    economy.instance._store = _FakeStore({"users": {
+        "1": {"xp": "viel", "coins": None, "owned": {"a": 1}, "name": "A"},
+        "2": None,
+        "3": {"xp": 500, "coins": 100, "owned": [], "name": "C"},
+    }})
+    try:
+        economy.instance.add_coins(1, 10, reason="test")
+        assert economy.instance.get_coins(1) == 10
+        assert economy.instance._profile(1)["owned"] == []
+        assert economy.instance._level_only(economy.instance._profile(1)["xp"]) == 0
+        # Die Ranglisten lesen den Store ROH - genau dort lag der Fehler.
+        assert len(economy.instance.leaderboard_data(10)) == 3
+        assert len(economy.instance.money_leaderboard_data(10)) == 3
+        assert economy.instance._rank_of(3)[1] == 3
+        economy.instance._leaderboard_embed()
+    finally:
+        (economy.instance._store, economy.instance._enabled) = alt
+
+    # --- floaktie: Anteile und Kurs-Verlauf ------------------------------
+    alt_f = floaktie.instance._store
+    floaktie.instance._store = _FakeStore({
+        "holdings": {"1": "viel", "2": None, "3": 4},
+        "history": [{"day": "2026-01-01", "price": 10}, None, "murks"],
+        "ticks": None,
+        "price": 100, "base": 100, "day": "2026-01-01",
+    })
+    try:
+        assert floaktie.instance.shares_of(1) == 0
+        assert floaktie.instance.total_shares() == 4
+        assert floaktie.instance.holders_count() == 1
+        assert floaktie.instance.top_holder() == 3
+        floaktie.instance._sparkline()
+        floaktie.instance._series(7)
+        assert isinstance(floaktie.instance.leaderboard(), list)
+    finally:
+        floaktie.instance._store = alt_f
+
+    # --- die uebrigen Auskuenfte, die der Profil-Lookup mitzieht ---------
+    faelle = [
+        (handel.instance, "_store", {"users": {"7": {"in": None, "out": "x", "n": None}}},
+         lambda m: m.summe_von(7) == (0, 0, 0)),
+        (moderation.instance, "_store", {"warns": None},
+         lambda m: m.warns_of(1, 7) == 0),
+        (moderation.instance, "_store", {"warns": {"1": {"7": None}}},
+         lambda m: m.warns_of(1, 7) == 0),
+        (steal.instance, "_store", {"cooldowns": None},
+         lambda m: m._remaining(7) == 0),
+        (luxus.instance, "_store", {"users": {"7": None}, "throne": None},
+         lambda m: m.owns(7, "krone") is False and m.throne_preis() == luxus.THRONE_START),
+        (casino.instance, "_stats", {"stats": None},
+         lambda m: m._stats_profile(7)["games"] == 0),
+        (words.instance, "_store", {"words": {"hallo": 5}, "total": "viel"},
+         lambda m: m.statistik_von(7) == (0, 0, [])),
+    ]
+    for modul, feld, daten, pruefung in faelle:
+        vorher_store = getattr(modul, feld)
+        vorher_an = modul._enabled
+        setattr(modul, feld, _FakeStore(daten))
+        modul._enabled = True
+        try:
+            assert pruefung(modul), (type(modul).__name__, daten)
+        finally:
+            setattr(modul, feld, vorher_store)
+            modul._enabled = vorher_an
+
+    # words zaehlt trotz kaputtem Index weiter (das lief bei JEDER Nachricht).
+    alt_w = (words.instance._store, words.instance._enabled)
+    words.instance._enabled = True
+    words.instance._store = _FakeStore({"words": None, "total": None, "msgs": "x"})
+    try:
+        words.instance._count_text("hallo welt hallo", "7")
+        words.instance._count_text("hallo welt", "7")
+        assert words.instance._store.data["words"]["hallo"]["n"] == 3
+        assert words.instance._store.data["total"] == 5
+        assert words.instance._store.data["msgs"] == 2
+    finally:
+        (words.instance._store, words.instance._enabled) = alt_w
+
+
+def test_wort_index_hat_einen_deckel():
+    """Ohne Deckel konnte eine Person die Datei beliebig aufblasen.
+
+    Jedes Speichern serialisiert den ganzen Index im Event-Loop (json.dumps
+    gibt die GIL auch im Thread nicht frei) - 100.000 Woerter kosteten
+    gemessen rund 200 ms Stillstand fuer ALLE."""
+    import words
+
+    alt = (words.instance._store, words.instance._enabled, words.MAX_WORDS)
+    words.instance._enabled = True
+    words.MAX_WORDS = 50
+    words.instance._store = _FakeStore({"words": {}, "total": 0, "msgs": 0})
+    try:
+        # Ein haeufiges Wort und viel Einmal-Spam.
+        for _ in range(5):
+            words.instance._count_text("wichtig", "7")
+        for i in range(300):
+            words.instance._count_text(f"spamwort{i:04d}", "7")
+        index = words.instance._store.data["words"]
+        assert len(index) <= words.MAX_WORDS, len(index)
+        # Gekuerzt wird nach Haeufigkeit: das oft gesagte Wort bleibt.
+        assert "wichtig" in index
+    finally:
+        (words.instance._store, words.instance._enabled, words.MAX_WORDS) = alt
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

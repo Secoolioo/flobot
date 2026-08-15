@@ -158,7 +158,16 @@ class Luxus:
     def _owned(self, uid):
         if self._store is None:
             return []
-        return self._store.data.setdefault("users", {}).setdefault(str(uid), [])
+        users = self._store.data.setdefault("users", {})
+        if not isinstance(users, dict):
+            users = self._store.data["users"] = {}
+        besitz = users.get(str(uid))
+        # setdefault rettet nur einen FEHLENDEN Schluessel - ein vorhandenes
+        # null/String kommt daran vorbei und nimmt owns(), has_crown(),
+        # get_frame() und damit die ganze Level-Karte mit.
+        if not isinstance(besitz, list):
+            besitz = users[str(uid)] = []
+        return besitz
 
     # Stufen, die "alles darunter" mitbringen - und zwar nur das, was WIRKLICH
     # darunter liegt. Vorher galt 'imperium' als alles inklusive; mit den neuen
@@ -200,8 +209,29 @@ class Luxus:
 
     def throne_state(self):
         assert self._store is not None
-        return self._store.data.setdefault(
+        st = self._store.data.setdefault(
             "throne", {"owner": "", "preis": THRONE_START, "n": 0})
+        # Ein vorhandenes "throne": null kommt an setdefault vorbei. Ohne diese
+        # Zeile stirbt JEDER Thron-Weg - auch get_tone_extra(), das im
+        # ungeschuetzten KI-Pfad von bot.py haengt.
+        if not isinstance(st, dict):
+            st = self._store.data["throne"] = {"owner": "", "preis": THRONE_START,
+                                               "n": 0}
+        return st
+
+    def throne_preis(self):
+        """Aktueller Thronpreis. Murks im Store faellt auf den Startpreis zurueck."""
+        try:
+            return int(self.throne_state().get("preis", THRONE_START))
+        except (TypeError, ValueError):
+            return THRONE_START
+
+    def throne_n(self):
+        """Wie oft der Thron schon den Besitzer gewechselt hat."""
+        try:
+            return int(self.throne_state().get("n", 0))
+        except (TypeError, ValueError):
+            return 0
 
     def throne_owner(self):
         if not self._enabled or self._store is None:
@@ -307,7 +337,7 @@ class Luxus:
         st = self.throne_state()
         if st.get("owner") == str(uid):
             return "Du sitzt schon auf dem Thron. Genieß die Aussicht. 👑", False
-        preis = int(st.get("preis", THRONE_START))
+        preis = self.throne_preis()
         if economy.get_coins(uid) < preis:
             fehlt = preis - economy.get_coins(uid)
             return (f"Der Thron kostet gerade **{self.fmt_coins(preis)}** {economy.COIN} - "
@@ -316,7 +346,7 @@ class Luxus:
         economy.add_coins(uid, -preis)
         st["owner"] = str(uid)
         st["preis"] = int(preis * THRONE_FACTOR)
-        st["n"] = int(st.get("n", 0)) + 1
+        st["n"] = self.throne_n() + 1
         await self._flush_all()
         gestuerzt = f" <@{alter}> ist **gestürzt**!" if alter else ""
         return (f"⚔️ **{member.display_name}** erobert **DEN THRON** für "
@@ -422,7 +452,7 @@ class Luxus:
         thron_wert = (f"Besitzer: <@{king}> · Stürzen kostet "
                       if king else "**UNBESETZT** · Eroberung kostet ")
         emb.add_field(name="⚔️ DER THRON (Unikat)",
-                      value=(f"{thron_wert}**{self.fmt_coins(int(st.get('preis', THRONE_START)))}** "
+                      value=(f"{thron_wert}**{self.fmt_coins(self.throne_preis())}** "
                              f"{economy.COIN} · `{self._bot_name} thron`"),
                       inline=False)
         emb.set_footer(text=(f"Kontostand: {self.fmt_coins(guthaben)} {economy.COIN} · "
@@ -445,10 +475,10 @@ class Luxus:
         king = self.throne_owner()
         if king:
             desc = (f"Aktueller Herrscher: <@{king}> 👑\n"
-                    f"Stürzen kostet **{self.fmt_coins(int(st['preis']))}** {economy.COIN}.")
+                    f"Stürzen kostet **{self.fmt_coins(self.throne_preis())}** {economy.COIN}.")
         else:
             desc = (f"Der Thron ist **UNBESETZT**! Erster Preis: "
-                    f"**{self.fmt_coins(int(st.get('preis', THRONE_START)))}** {economy.COIN}.")
+                    f"**{self.fmt_coins(self.throne_preis())}** {economy.COIN}.")
         emb = discord.Embed(
             title="⚔️ DER THRON",
             description=(f"{desc}\n\nEs gibt nur **einen**. Jede Eroberung macht ihn "
@@ -574,7 +604,7 @@ class _ThroneView(discord.ui.View):
     @discord.ui.button(label="Erobern", emoji="⚔️", style=discord.ButtonStyle.danger)
     async def _seize(self, interaction, _b):
         st = instance.throne_state()
-        preis = int(st.get("preis", THRONE_START))
+        preis = instance.throne_preis()
         await interaction.response.send_message(
             f"Den Thron für **{instance.fmt_coins(preis)}** {economy.COIN} erobern?",
             view=_ThroneConfirm(interaction.user.id, self), ephemeral=True)

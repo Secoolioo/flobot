@@ -314,17 +314,34 @@ class Casino:
         return discord.Embed(description=text, color=_C_BJ)
 
     # --- Casino-Bilanz (Stats) ------------------------------------------------
+    @staticmethod
+    def _zahl(wert):
+        """Zahl aus der Bilanz. Murks zaehlt als 0, damit der Text-Fallback
+        nicht an derselben Ursache stirbt wie die Karte, die er auffangen soll."""
+        try:
+            return int(wert)
+        except (TypeError, ValueError):
+            return 0
+
     def _stats_profile(self, uid):
         assert self._stats is not None
-        prof = self._stats.data.setdefault("stats", {}).setdefault(
-            str(uid), {"games": 0, "wagered": 0, "payout": 0, "best_win": 0,
-                       "won": 0, "lost": 0, "per": {}})
+        leer = {"games": 0, "wagered": 0, "payout": 0, "best_win": 0,
+                "won": 0, "lost": 0, "per": {}}
+        # setdefault rettet nur FEHLENDE Schluessel. Ein vorhandenes "stats": null
+        # liess _stats_profile sterben - und record() schluckt das, also ging
+        # danach JEDE Casino-Runde still verloren, ohne dass es jemand merkt.
+        stats = self._stats.data.get("stats")
+        if not isinstance(stats, dict):
+            stats = self._stats.data["stats"] = {}
+        prof = stats.get(str(uid))
+        if not isinstance(prof, dict):
+            prof = stats[str(uid)] = dict(leer)
         # Migration: Alt-Profile (vor der Gewonnen/Verloren-Zaehlung) bekommen die
         # neuen Brutto-Felder aus dem Netto geseedet, damit die Rechnung
         # 'Gewonnen - Verloren = Netto' von Anfang an aufgeht. Ab jetzt zaehlen
         # die echten Rundensummen weiter.
         if "won" not in prof or "lost" not in prof:
-            net = prof.get("payout", 0) - prof.get("wagered", 0)
+            net = self._zahl(prof.get("payout")) - self._zahl(prof.get("wagered"))
             prof.setdefault("won", max(net, 0))
             prof.setdefault("lost", max(-net, 0))
         return prof
@@ -981,7 +998,9 @@ class Casino:
         target = next((m for m in message.mentions if not m.bot), None) or message.author
         prof = ((self._stats.data.get("stats") or {}).get(str(target.id))
                 if self._stats is not None else None)
-        if not prof or not prof.get("games"):
+        # Kein dict (Text/Zahl aus einer kaputten Datei) zaehlt wie
+        # "noch nichts gespielt" - sonst stirbt schon die Leer-Pruefung.
+        if not isinstance(prof, dict) or not prof.get("games"):
             await self._send(message, embed=self._info(
                 f"**{target.display_name}** hat noch keine Casino-Runde gespielt. "
                 f"`{self._bot_name} casino` wartet. 🎰"))
@@ -994,7 +1013,7 @@ class Casino:
                                           target.display_name, avatar, prof)
         except Exception:
             log.exception("Stats-Karte fehlgeschlagen - Text-Fallback")
-            net = prof.get("payout", 0) - prof.get("wagered", 0)
+            net = self._zahl(prof.get("payout")) - self._zahl(prof.get("wagered"))
             emb = self._info(f"**{target.display_name}** – {numfmt.fmt(prof.get('games', 0))} Runden, "
                         f"gewonnen +{numfmt.fmt(prof.get('won', 0))}, verloren -{numfmt.fmt(prof.get('lost', 0))}, "
                         f"Netto {'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}.")
@@ -2632,7 +2651,9 @@ class CasinoHubView(discord.ui.View):
         uid = interaction.user.id
         prof = ((instance._stats.data.get("stats") or {}).get(str(uid))
                 if instance._stats is not None else None)
-        if not prof or not prof.get("games"):
+        # Kein dict (Text/Zahl aus einer kaputten Datei) zaehlt wie
+        # "noch nichts gespielt" - sonst stirbt schon die Leer-Pruefung.
+        if not isinstance(prof, dict) or not prof.get("games"):
             await interaction.response.send_message(
                 "Du hast noch keine Runde gespielt – such dir oben ein Spiel aus. 🎰",
                 ephemeral=True)
@@ -2645,9 +2666,9 @@ class CasinoHubView(discord.ui.View):
                                           interaction.user.display_name, avatar, prof)
         except Exception:
             log.exception("Bilanz-Karte fehlgeschlagen")
-            net = prof.get("payout", 0) - prof.get("wagered", 0)
+            net = instance._zahl(prof.get("payout")) - instance._zahl(prof.get("wagered"))
             await interaction.followup.send(
-                f"{numfmt.fmt(prof.get('games', 0))} Runden, Netto "
+                f"{numfmt.fmt(instance._zahl(prof.get('games')))} Runden, Netto "
                 f"{'+' if net >= 0 else ''}{numfmt.fmt(net)} {economy.COIN}.", ephemeral=True)
             return
         await interaction.followup.send(

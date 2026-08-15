@@ -41,6 +41,19 @@ FLUSH_SECONDS = float(os.getenv("WORDS_FLUSH_SECONDS", "60"))
 BACKFILL = os.getenv("WORDS_BACKFILL", "1").strip().lower() not in ("0", "false", "no", "off")
 # Nach so vielen eingelesenen Nachrichten: Checkpoint speichern + kurz Luft holen.
 _BACKFILL_BATCH = 2000
+# Deckel fuer den Wort-Index. Gemessen: 100.000 Woerter kosten je Speichern rund
+# 200 ms Event-Loop-Stillstand (json.dumps gibt die GIL nicht frei, ein Thread
+# hilft also nichts) - bei 50.000 sind es ~19 ms und damit unauffaellig.
+MAX_WORDS = int(os.getenv("WORDS_MAX", "50000") or "50000")
+
+
+def _zahl(wert):
+    """Zaehlerwert aus dem Store. Murks faengt wieder bei 0 an, statt den
+    Wort-Zaehler bei jeder Nachricht sterben zu lassen."""
+    try:
+        return int(wert)
+    except (TypeError, ValueError):
+        return 0
 
 _ALIASES = ("wörter", "woerter", "wort", "worte", "wortzähler", "wortzaehler",
             "words", "word", "wordcount")
@@ -122,16 +135,49 @@ class Words:
         tokens = self._tokenize(text)
         if not tokens:
             return 0
-        words = self._store.data.setdefault("words", {})
+        # setdefault rettet nur einen FEHLENDEN Schluessel - ein vorhandenes
+        # "words": null kam daran vorbei und liess den Zaehler bei JEDER
+        # Nachricht sterben, also dauerhaft.
+        words = self._store.data.get("words")
+        if not isinstance(words, dict):
+            words = self._store.data["words"] = {}
         for tok in tokens:
             entry = words.get(tok)
-            if entry is None:
+            # 'is None' reichte nicht: ein Eintrag, der eine Zahl oder ein Text
+            # ist, kam bis zum entry["n"] += 1 durch.
+            if not isinstance(entry, dict):
                 entry = words[tok] = {"n": 0, "u": {}}
-            entry["n"] += 1
-            entry["u"][uid] = entry["u"].get(uid, 0) + 1
-        self._store.data["total"] = self._store.data.get("total", 0) + len(tokens)
-        self._store.data["msgs"] = self._store.data.get("msgs", 0) + 1
+            if not isinstance(entry.get("u"), dict):
+                entry["u"] = {}
+            entry["n"] = _zahl(entry.get("n")) + 1
+            entry["u"][uid] = _zahl(entry["u"].get(uid)) + 1
+        self._store.data["total"] = _zahl(self._store.data.get("total")) + len(tokens)
+        self._store.data["msgs"] = _zahl(self._store.data.get("msgs")) + 1
+        if len(words) > MAX_WORDS * 1.2:
+            # Hysterese: nicht bei jeder Nachricht kuerzen, sondern erst, wenn
+            # der Index deutlich ueber dem Deckel liegt.
+            self._prune(words)
         return len(tokens)
+
+    @staticmethod
+    def _prune(words):
+        """Haelt den Index klein: wirft die seltensten Woerter raus, bis wieder
+        MAX_WORDS uebrig sind.
+
+        Ohne Deckel wuchs die Datei ungebremst - eine 4000-Zeichen-Nachricht
+        legt rund 500 neue Woerter an, und JEDES Speichern serialisiert den
+        ganzen Index im Event-Loop. Wer spammt, brachte damit alle zum Ruckeln."""
+        if len(words) <= MAX_WORDS:
+            return
+        # Die haeufigsten MAX_WORDS behalten; der Rest ist ohnehin Einmal-Kram
+        # und taucht in keiner Auswertung auf.
+        behalten = heapq.nlargest(MAX_WORDS, words.items(),
+                                  key=lambda kv: _zahl((kv[1] or {}).get("n")))
+        raus = len(words) - len(behalten)
+        words.clear()
+        words.update(behalten)
+        log.info("Wort-Index gekuerzt: %d seltene Woerter entfernt (Deckel %d).",
+                 raus, MAX_WORDS)
 
     def _count_guarded(self, text, uid):
         """Zaehlt sofort - oder puffert, falls gerade gespeichert wird."""
@@ -159,10 +205,16 @@ class Words:
                 pass  # kein laufender Event-Loop (Tests) - naechster Aufruf probiert's neu
 
     async def _save_store(self):
-        """Speichert words.json, OHNE den Event-Loop zu blockieren: json.dumps
-        laeuft (anders als beim Standard-JsonStore) im Thread - das lohnt sich,
-        weil der Wort-Index mit dem Server waechst. Waehrenddessen setzt _saving
-        neue Zaehlungen auf den _backlog; sie werden danach nachgeholt."""
+        """Speichert words.json. json.dumps laeuft im Thread, waehrenddessen
+        setzt _saving neue Zaehlungen auf den _backlog; sie werden danach
+        nachgeholt.
+
+        WICHTIG und gemessen: der Thread macht den Loop NICHT frei. Der
+        C-Encoder gibt die GIL waehrend der Serialisierung nicht her - bei
+        100.000 Woertern steht der Bot rund 200 ms am Stueck. Der Loop bleibt
+        also nur deshalb fluessig, weil MAX_WORDS den Index klein haelt
+        (50.000 -> ~19 ms). Der Deckel ist hier kein Aufraeumen, sondern die
+        eigentliche Massnahme."""
         assert self._store is not None
         async with self._store._lock:
             self._saving = True
@@ -229,8 +281,11 @@ class Words:
         key = str(uid)
         gesamt = 0
         eigene = []
-        for wort, eintrag in (self._store.data.get("words") or {}).items():
-            n = int((eintrag.get("u") or {}).get(key, 0) or 0)
+        roh = self._store.data.get("words")
+        for wort, eintrag in (roh if isinstance(roh, dict) else {}).items():
+            if not isinstance(eintrag, dict):
+                continue          # kaputter Eintrag zaehlt nicht mit, statt zu crashen
+            n = _zahl((eintrag.get("u") or {}).get(key, 0))
             if n:
                 gesamt += n
                 if wort not in _FUELLWOERTER:

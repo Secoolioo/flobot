@@ -239,8 +239,23 @@ class Economy:
 
     def _migrate_profile(self, prof):
         """Bringt ein Profil auf das v1.2-Schema (owned = Liste von Dicts mit
-        text/label/rarity, plus title_rarity). Idempotent."""
-        prof.setdefault("owned", [])
+        text/label/rarity, plus title_rarity). Idempotent.
+
+        Raeumt ausserdem kaputte Werte weg. setdefault() rettet nur FEHLENDE
+        Schluessel - ein vorhandenes "coins": null oder "xp": "viel" (halb
+        geschriebene Datei, von Hand editiert) kommt daran vorbei und toetet
+        dann erst zur Laufzeit: add_coins stirbt an None + int, add_xp am
+        Vergleich str < int, und weil economy.on_message ohne Auffangnetz
+        laeuft, erreicht der ganze Rest dieser Nachricht die Platte nicht mehr.
+        """
+        # Zahlenfelder auf int zwingen, BEVOR irgendwer damit rechnet.
+        for feld in ("xp", "coins", "msgs", "voice_secs", "streak", "earned"):
+            if feld in prof:
+                prof[feld] = self._zahl(prof[feld])
+        # Das Inventar MUSS eine Liste sein - ein dict laesst owned[0] unten
+        # mit KeyError sterben, und dann ist JEDER Profilzugriff tot.
+        if not isinstance(prof.get("owned"), list):
+            prof["owned"] = []
         prof.setdefault("msgs", 0)
         prof.setdefault("title", "")
         prof.setdefault("title_rarity", "")
@@ -267,7 +282,9 @@ class Economy:
         users = self._users()
         key = str(user_id)
         prof = users.get(key)
-        if prof is None:
+        # Nicht nur 'None': ein Eintrag, der kein dict ist (Liste, Zahl, Text aus
+        # einer von Hand editierten Datei), kommt sonst bis in _migrate_profile.
+        if not isinstance(prof, dict):
             prof = {"xp": 0, "coins": 0, "last_daily": "", "streak": 0,
                     "voice_secs": 0, "msgs": 0, "title": "", "title_rarity": "",
                     "owned": [], "name": ""}
@@ -308,11 +325,33 @@ class Economy:
         await self._flush()
 
     # --- Level-Mathematik ----------------------------------------------------
+    @staticmethod
+    def _zahl(wert, standard=0):
+        """Zahl aus dem Store. Murks ('viel', None, {}) zaehlt als 'standard'.
+
+        Die Ranglisten lesen den Store ROH, ohne den Weg ueber _profile - ein
+        einziges kaputtes FREMDprofil kippte damit 'top', 'reichste' und die
+        Level-Karte fuer alle."""
+        try:
+            return int(wert)
+        except (TypeError, ValueError):
+            return standard
+
+    @classmethod
+    def _nach_xp(cls, kv):
+        """Sortierschluessel der Ranglisten. sorted() vergleicht die Werte
+        untereinander - ein einziges "xp": "viel" wirft dort str < int und
+        nimmt alle anderen mit."""
+        return cls._zahl((kv[1] or {}).get("xp", 0))
+
     def _level_for_xp(self, xp):
         """Rechnet Gesamt-XP in (Level, XP-im-Level, XP-bis-naechstes-Level) um.
 
         Stufe L -> L+1 kostet 100 + L*55 XP (wird mit jedem Level teurer).
         """
+        # Einmal normalisieren deckt beide Karten-Wege ab: _card_image rechnet
+        # das Level VOR seinem try/except aus, dort greift kein Fallback mehr.
+        xp = self._zahl(xp)
         level = 0
         needed = 0
         while True:
@@ -1033,7 +1072,7 @@ class Economy:
 
     def _rank_of(self, user_id):
         """Platz (1-basiert) nach XP und Gesamtzahl der Profile."""
-        ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
+        ranking = sorted(self._users().items(), key=self._nach_xp, reverse=True)
         total = len(ranking)
         for i, (key, _prof) in enumerate(ranking, start=1):
             if key == str(user_id):
@@ -1165,9 +1204,10 @@ class Economy:
         """Geld-Rangliste als Rows: id/name/coins/earned, sortiert nach Kontostand."""
         rows = []
         for uid, prof in self._users().items():
-            coins = int(prof.get("coins", 0))
+            prof = prof or {}
+            coins = self._zahl(prof.get("coins", 0))
             # 'insgesamt' nie kleiner als der aktuelle Kontostand (Counter ist neu).
-            earned = max(int(prof.get("earned", 0)), coins, 0)
+            earned = max(self._zahl(prof.get("earned", 0)), coins, 0)
             try:
                 uid_int = int(uid)
             except (TypeError, ValueError):
@@ -1282,9 +1322,10 @@ class Economy:
     def leaderboard_data(self, limit = 10):
         """Aufbereitete Bestenliste fuers Leaderboard-Bild (sortiert nach XP).
         'id' = Discord-User-ID (fuers Laden des Profilbilds)."""
-        ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
+        ranking = sorted(self._users().items(), key=self._nach_xp, reverse=True)
         out = []
         for key, prof in ranking[:limit]:
+            prof = prof or {}
             try:
                 uid = int(key)
             except (TypeError, ValueError):
@@ -1293,10 +1334,10 @@ class Economy:
                 "id": uid,
                 "name": prof.get("name") or "Unbekannt",
                 "level": self._level_only(prof.get("xp", 0)),
-                "xp": prof.get("xp", 0),
-                "coins": prof.get("coins", 0),
-                "voice_secs": prof.get("voice_secs", 0),
-                "msgs": prof.get("msgs", 0),
+                "xp": self._zahl(prof.get("xp", 0)),
+                "coins": self._zahl(prof.get("coins", 0)),
+                "voice_secs": self._zahl(prof.get("voice_secs", 0)),
+                "msgs": self._zahl(prof.get("msgs", 0)),
                 "title": prof.get("title") or "",
                 # Stufe mitgeben, damit das Leaderboard den Titel in SEINER Farbe
                 # zeichnen kann - vorher stand er farblos in der grauen Meta-Zeile,
@@ -1379,7 +1420,7 @@ class Economy:
         return self._leaderboard_embed()
 
     def _leaderboard_embed(self):
-        ranking = sorted(self._users().items(), key=lambda kv: kv[1].get("xp", 0), reverse=True)
+        ranking = sorted(self._users().items(), key=self._nach_xp, reverse=True)
         emb = discord.Embed(title="🏆 Bestenliste (XP)", color=discord.Color.gold())
         if not ranking:
             emb.description = "Noch keine Daten - schreibt was, dann sammelt ihr XP! 😄"
@@ -1387,12 +1428,14 @@ class Economy:
         medals = ["🥇", "🥈", "🥉"]
         lines = []
         for i, (_key, prof) in enumerate(ranking[:10]):
+            prof = prof or {}
             marker = medals[i] if i < 3 else f"`{i + 1}.`"
             name = prof.get("name") or "Unbekannt"
             title = prof.get("title")
             suffix = f"  ·  {title}" if title else ""
+            xp = self._zahl(prof.get("xp", 0))
             lines.append(
-                f"{marker} **{name}** — Lvl {self._level_only(prof['xp'])} ({prof['xp']} XP){suffix}"
+                f"{marker} **{name}** — Lvl {self._level_only(xp)} ({xp} XP){suffix}"
             )
         emb.description = "\n".join(lines)
         emb.set_footer(text=f"Schreiben & Voice bringt XP   ·   {self._bot_name} level für deine Karte")
