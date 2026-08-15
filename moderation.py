@@ -136,8 +136,13 @@ class Moderation:
         self._enabled = False
         self._bot_name = "Flo"
         self._store = None
-        # Offene Rueckfragen vor einem kompletten Channel-Wipe: kanal_id -> ablauf.
-        # Nur im Speicher - eine Rueckfrage soll keinen Neustart ueberleben.
+        # Offene Rueckfragen vor einem kompletten Channel-Wipe:
+        # kanal_id -> (nutzer_id, ablauf). Die Nutzer-ID gehoert unbedingt dazu:
+        # ohne sie war die Rueckfrage nur an den KANAL gebunden, und ein
+        # anderer Mod, der danach 'loesch alle' schrieb, loeste mit seinem
+        # ERSTEN Befehl den kompletten Wipe aus - ohne die Warnung je gesehen
+        # zu haben. Nur im Speicher: eine Rueckfrage soll keinen Neustart
+        # ueberleben.
         self._wipe_offen = {}
 
         # Label -> Handler (Purge laeuft gesondert, da es den ganzen Befehl braucht).
@@ -616,13 +621,15 @@ class Moderation:
 
         if want_all:
             # Ein ganzer Channel ist nicht wiederherstellbar - einmal nachfragen.
-            offen = self._wipe_offen.get(channel.id)
             jetzt = time.time()
-            for cid, ablauf in list(self._wipe_offen.items()):
-                if ablauf <= jetzt:
+            for cid, eintrag in list(self._wipe_offen.items()):
+                if not isinstance(eintrag, tuple) or eintrag[1] <= jetzt:
                     self._wipe_offen.pop(cid, None)
-            if not (offen and offen > jetzt):
-                self._wipe_offen[channel.id] = jetzt + 60.0
+            offen = self._wipe_offen.get(channel.id)
+            wer = getattr(message.author, "id", 0)
+            # Bestaetigen darf NUR, wer selbst gefragt wurde.
+            if not (offen and offen[0] == wer and offen[1] > jetzt):
+                self._wipe_offen[channel.id] = (wer, jetzt + 60.0)
                 return ("⚠️ Das löscht **den kompletten Verlauf** dieses Channels – "
                         "das lässt sich nicht rückgängig machen.\nSchick den Befehl "
                         "noch einmal, wenn du sicher bist (gilt eine Minute).")

@@ -856,8 +856,20 @@ class FloAktie:
             hold.pop(uid, None)
         if keep_price:
             # Kurs festhalten -> Basiskurs an die neue Anteilsmenge anpassen.
+            # DURCH _clamp_base schicken: bei sehr grossen Anteilsmengen ergibt
+            # die Rechnung einen winzigen Basiskurs (bei 1 Mrd Anteilen 0,0009),
+            # den jeder LESEZUGRIFF anschliessend auf den Boden hochklemmt.
+            # Der "festgehaltene" Kurs sprang dadurch um das 11.111-fache nach
+            # oben, und ein unbeteiligter Halter konnte seine 150 Anteile fuer
+            # Milliarden aus dem Nichts verkaufen. Wenn sich der Kurs nicht
+            # halten laesst, ist es ehrlicher, das zu sagen als zu tun als ob.
             st = self._state()
-            st["base"] = vorher_kurs / (1.0 + self.total_shares() / LIQUIDITY)
+            gewuenscht = vorher_kurs / (1.0 + self.total_shares() / LIQUIDITY)
+            st["base"] = self._clamp_base(gewuenscht)
+            if abs(st["base"] - gewuenscht) > 1e-9:
+                log.warning("Panel: Kurs liess sich bei %d Anteilen NICHT halten "
+                            "(Basiskurs %.6f -> %.6f geklemmt).",
+                            self.total_shares(), gewuenscht, st["base"])
         kurs = self._sync_price()
         self._record_tick()
         await self._save()

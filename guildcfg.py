@@ -179,8 +179,18 @@ def _pruefe(defn, roh, guild=None):
         return True, cid, ""
 
     if defn.typ == "channels":
+        # Eine LISTE muss hier nativ ankommen duerfen. get() schickt den
+        # gespeicherten Wert zur Sicherheit nochmal durch diese Pruefung -
+        # und str([123, 456]) ergab die Tokens '[123,' und '456]', die an der
+        # Kanal-Erkennung scheiterten. Folge: get() lieferte IMMER den
+        # Standard, die Aufraeum-Kanaele waren faktisch nicht einstellbar.
+        if isinstance(roh, (list, tuple, set)):
+            teile = [str(t) for t in roh]
+        else:
+            teile = re.split(r"[,\s]+", str(roh).strip())
         raus = []
-        for teil in re.split(r"[,\s]+", str(roh).strip()):
+        for teil in teile:
+            teil = teil.strip()
             if not teil:
                 continue
             if teil.lower() in _NEIN:

@@ -1227,6 +1227,41 @@ class Casino:
 instance = Casino()
 
 _protect = instance._protect
+
+
+async def _start_per_edit(interaction, uid, bet, view, emb, file=None):
+    """Ersetzt das Menue durch die laufende Runde - und gibt den Einsatz
+    ZURUECK, wenn das Bearbeiten scheitert.
+
+    Ohne diese Klammer stand der Spieler ohne Runde UND ohne Geld da: der
+    Einsatz war abgezogen, die neue View aber nie an eine Nachricht gebunden.
+    Damit startet auch ihr Timeout nie - und genau dort haengt das
+    Rueckgabe-Netz (on_timeout). Bei HiLo, Tower und D.O.N. war das still;
+    man hat nur gemerkt, dass die Coins fehlen. Mines machte es an derselben
+    Stelle schon richtig, die anderen Startpfade nicht."""
+    try:
+        await interaction.response.edit_message(
+            embed=emb, view=view, attachments=[file] if file else [])
+    except Exception:  # noqa: BLE001 - jeder Fehler MUSS zur Rueckgabe fuehren
+        log.exception("Casino: Rundenstart nicht anzeigbar - %s Coins an %s zurueck.",
+                      bet, uid)
+        try:
+            view.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        if bet > 0:
+            economy.add_coins(uid, bet, reason="casino-rueckgabe")
+            await economy.flush()
+        try:
+            await interaction.followup.send(
+                f"⚠️ Die Runde ließ sich nicht starten – dein Einsatz von "
+                f"**{numfmt.fmt(bet)}** {economy.COIN} ist zurück.", ephemeral=True)
+        except Exception:  # noqa: BLE001 - Hinweis ist nice-to-have
+            pass
+        return False
+    view.message = interaction.message
+    _protect(interaction.message)
+    return True
 _release = instance._release
 setup = instance.setup
 is_enabled = instance.is_enabled
@@ -1959,10 +1994,7 @@ class _SerienRestart(discord.ui.Button):
         v.stop()                                     # vor dem Abzug: Doppelklick-Schutz
         economy.add_coins(interaction.user.id, -bet)
         neu, emb, file = await self.factory(interaction.user.id, bet)
-        await interaction.response.edit_message(
-            embed=emb, view=neu, attachments=[file] if file else [])
-        neu.message = interaction.message
-        _protect(interaction.message)
+        await _start_per_edit(interaction, interaction.user.id, bet, neu, emb, file)
 
 
 class HiloView(_SerienView):
@@ -3172,7 +3204,7 @@ class _MinesSetup(_Setup):
             view.settled = True
             view.stop()
             _mines_views.pop((ch, self.uid), None)
-            economy.add_coins(self.uid, bet)
+            economy.add_coins(self.uid, bet, reason="casino-rueckgabe")
             await economy.flush()
             return
         _protect(interaction.message)
@@ -3278,10 +3310,7 @@ class _SerienSetup(_Setup):
         self.stop()   # synchron VOR dem Abzug: schliesst das Doppelklick-Fenster
         economy.add_coins(self.uid, -bet)
         view, emb, file = await type(self).factory(self.uid, bet)
-        await interaction.response.edit_message(
-            embed=emb, view=view, attachments=[file] if file else [])
-        view.message = interaction.message
-        _protect(interaction.message)
+        await _start_per_edit(interaction, self.uid, bet, view, emb, file)
 
 
 class _HiloSetup(_SerienSetup):

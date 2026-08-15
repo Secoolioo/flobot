@@ -726,3 +726,6 @@ buy = instance.buy
 trade = instance.trade
 is_present = instance.is_present
 appear_time_str = instance.appear_time_str
+# bot.py baut fuer JEDEN Server ein eigenes Kauf-Panel - ohne diesen Alias
+# flog dort ein AttributeError, und der Haendler-Loop war fuer immer tot.
+build_view = instance.build_view

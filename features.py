@@ -68,12 +68,18 @@ class Features:
         self._disabled = set(self._store.data.get("disabled", []) or [])
         self._per_guild = {}
         for gid, keys in (self._store.data.get("guilds", {}) or {}).items():
+            # Der Schluessel MUSS eine Zahl sein. Steht dort Text (von Hand
+            # editiert), warf int() frueher hier - und weil setup() auf
+            # Modulebene laeuft, kam der ganze Bot nicht mehr hoch.
             try:
+                gid_zahl = int(gid)
                 aus = {k for k in (keys or []) if k in _KEYS}
-            except TypeError:
+            except (TypeError, ValueError):
+                log.error("features.json: Server-Eintrag %r ist unbrauchbar - "
+                          "wird uebersprungen.", gid)
                 continue
             if aus:
-                self._per_guild[int(gid)] = aus
+                self._per_guild[gid_zahl] = aus
         if self._disabled:
             log.info("Laufzeit-Schalter: %d Funktion(en) global aus (%s).",
                      len(self._disabled), ", ".join(sorted(self._disabled)))

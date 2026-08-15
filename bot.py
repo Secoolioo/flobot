@@ -1002,9 +1002,13 @@ class FloBot(discord.Client):
                     self.protect_message(msg)
                 else:
                     await channel.send(embed=res.embed)
-            except discord.HTTPException:
-                log.warning("Haendler-Ansage konnte in #%s nicht gesendet werden",
-                            getattr(channel, "name", "?"))
+            except Exception:
+                # BEWUSST breit: hier lief frueher nur 'except HTTPException',
+                # und ein AttributeError (fehlender merchant-Alias) hat den
+                # ganzen tasks.loop DAUERHAFT gestoppt - die Ankunft wurde nie
+                # angesagt, auch nach einem Neustart nicht mehr.
+                log.exception("Haendler-Ansage konnte in #%s nicht gesendet werden",
+                              getattr(channel, "name", "?"))
 
     @tasks.loop(seconds=LOTTO_TICK_SECONDS)
     async def lotto_loop(self):
@@ -1021,9 +1025,9 @@ class FloBot(discord.Client):
         for channel in self._ansage_channels("lotto"):
             try:
                 await channel.send(content=content, embed=res.embed)
-            except discord.HTTPException:
-                log.warning("Lotto-Ansage konnte in #%s nicht gesendet werden",
-                            getattr(channel, "name", "?"))
+            except Exception:
+                log.exception("Lotto-Ansage konnte in #%s nicht gesendet werden",
+                              getattr(channel, "name", "?"))
 
     @tasks.loop(seconds=SCHULDEN_MAHN_SECONDS)
     async def schulden_mahn_loop(self):
@@ -1127,9 +1131,9 @@ class FloBot(discord.Client):
         for channel in channels:
             try:
                 await channel.send(embed=emb)
-            except discord.HTTPException:
-                log.warning("Legendary-Ansage konnte in #%s nicht gesendet werden",
-                            getattr(channel, "name", "?"))
+            except Exception:
+                log.exception("Legendary-Ansage konnte in #%s nicht gesendet werden",
+                              getattr(channel, "name", "?"))
 
     def _keep_bot_msg(self, m):
         """True = diese Bot-Nachricht ist vom Auto-Loeschen ausgenommen: Level-Up-

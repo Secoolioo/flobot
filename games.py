@@ -394,7 +394,7 @@ class _ReaktionView(discord.ui.View):
         if not self.settled:
             self.settled = True
             if self.armed_at is None:      # nie scharf geworden -> Einsatz zurueck
-                economy.add_coins(self.uid, self.bet)
+                economy.add_coins(self.uid, self.bet, reason="spiele-rueck")
                 await economy.flush()
             else:
                 await economy.flush()
@@ -465,8 +465,13 @@ class _QDuelChallenge(discord.ui.View):
         ok = (vor_a - economy.get_coins(self.a.id) == self.bet
               and vor_b - economy.get_coins(self.b.id) == self.bet)
         if not ok:
-            economy.add_coins(self.a.id, vor_a - economy.get_coins(self.a.id))
-            economy.add_coins(self.b.id, vor_b - economy.get_coins(self.b.id))
+            # Ruecknahme einer nicht vollstaendig gelungenen Abbuchung - das ist
+            # eine Rueckgabe, keine Einnahme, und darf die Schulden-Tilgung
+            # deshalb nicht ausloesen.
+            economy.add_coins(self.a.id, vor_a - economy.get_coins(self.a.id),
+                              reason="spiele-rueck")
+            economy.add_coins(self.b.id, vor_b - economy.get_coins(self.b.id),
+                              reason="spiele-rueck")
             await economy.flush()
             instance._slot_frei("qduel", cid)
             await interaction.response.edit_message(
@@ -484,8 +489,8 @@ class _QDuelChallenge(discord.ui.View):
             frage, antwort = await _gen_quiz_frage()
         except Exception:  # noqa: BLE001 - KI-Fehler darf keine Einsaetze fressen
             log.exception("Quiz-Duell: Frage fehlgeschlagen - Einsaetze zurueck")
-            economy.add_coins(self.a.id, self.bet)
-            economy.add_coins(self.b.id, self.bet)
+            economy.add_coins(self.a.id, self.bet, reason="spiele-rueck")
+            economy.add_coins(self.b.id, self.bet, reason="spiele-rueck")
             await economy.flush()
             instance._slot_frei("qduel", cid)
             try:
@@ -648,8 +653,8 @@ class _SSPDuel(discord.ui.View):
         if not self.done:
             self.done = True
             if self.paid:                  # halbe Runde -> beide zurueck
-                economy.add_coins(self.a.id, self.bet)
-                economy.add_coins(self.b.id, self.bet)
+                economy.add_coins(self.a.id, self.bet, reason="spiele-rueck")
+                economy.add_coins(self.b.id, self.bet, reason="spiele-rueck")
                 await economy.flush()
             if self.message is not None:
                 try:
@@ -1541,7 +1546,7 @@ class Games:
             try:
                 msg = await message.reply(embed=emb, mention_author=False)
             except discord.HTTPException:
-                economy.add_coins(uid, bet)   # nichts gesendet -> Einsatz zurueck
+                economy.add_coins(uid, bet, reason="spiele-rueck")  # nichts gesendet
                 await economy.flush()
                 return HANDLED
             self._mathe[cid] = {"uid": uid, "loesung": loesung, "bet": bet, "msg": msg,
@@ -1650,7 +1655,7 @@ class Games:
         try:
             msg = await message.reply(embed=emb, mention_author=False)
         except discord.HTTPException:
-            economy.add_coins(uid, bet)
+            economy.add_coins(uid, bet, reason="spiele-rueck")
             await economy.flush()
             return HANDLED
         self._ana[cid] = {"uid": uid, "wort": wort, "bet": bet, "msg": msg,
@@ -1729,7 +1734,7 @@ class Games:
         try:
             msg = await message.reply(embed=emb, view=view, mention_author=False)
         except discord.HTTPException:
-            economy.add_coins(uid, bet)
+            economy.add_coins(uid, bet, reason="spiele-rueck")
             await economy.flush()
             return HANDLED
         view.message = msg
@@ -1746,7 +1751,7 @@ class Games:
         self._qduel.pop(channel.id, None)
         self._release(runde.get("msg"))
         for uid in runde["players"]:           # niemand wusste es -> Einsatz zurueck
-            economy.add_coins(uid, runde["bet"])
+            economy.add_coins(uid, runde["bet"], reason="spiele-rueck")
         await economy.flush()
         try:
             await channel.send(f"⏰ Keiner wusste es – es war **{runde['answer']}**. "

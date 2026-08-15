@@ -268,10 +268,7 @@ class WebPanel:
                                   "bot_name": self._bot_name})
 
     async def _api_login(self, request):
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         ip = str(getattr(request, "remote", "") or "?")
         wart = self._login_blocked(ip)
         if wart:
@@ -480,6 +477,20 @@ class WebPanel:
         return v
 
     @staticmethod
+    async def _json_objekt(request):
+        """Body als dict - oder {}.
+
+        request.json() wirft NUR bei kaputtem JSON. Bei GUELTIGEM, aber
+        nicht-objektem JSON ([1,2,3], null, 42, "x") liefert es die Liste bzw.
+        None zurueck - und das anschliessende data.get(...) warf dann einen
+        AttributeError, also HTTP 500 auf JEDEM der elf POST-Endpunkte."""
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001 - kaputtes/leeres JSON
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
     def _text(raw, maximum=200):
         """Nur echte Textwerte annehmen (None -> 400) und auf Laenge kuerzen.
         Vorher landete ein versehentlich gesendetes dict als Python-repr im Chat."""
@@ -650,10 +661,7 @@ class WebPanel:
     # --- API: Coins geben/nehmen/setzen -----------------------------------
     async def _api_coins(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
         uid_int = self._uid(data.get("id"))
@@ -689,10 +697,7 @@ class WebPanel:
 
     async def _api_xp(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
         uid_int = self._uid(data.get("id"))
@@ -724,10 +729,7 @@ class WebPanel:
 
     async def _api_title(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         if not economy.is_enabled():
             return web.json_response({"ok": False, "error": "economy aus"}, status=400)
         uid_int = self._uid(data.get("id"))
@@ -779,10 +781,7 @@ class WebPanel:
     async def _api_shares(self, request):
         """Anteile eines Nutzers geben/nehmen/setzen (z. B. Exploit-Anteile weg)."""
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         try:
             import floaktie
         except Exception:  # noqa: BLE001
@@ -853,10 +852,7 @@ class WebPanel:
     async def _api_stock_price(self, request):
         """Setzt den Aktienkurs direkt (Korrektur nach einem Exploit)."""
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         try:
             import floaktie
         except Exception:  # noqa: BLE001
@@ -931,10 +927,7 @@ class WebPanel:
 
     async def _update_lauf(self, request):
         """Der eigentliche Update-Ablauf (siehe _api_update)."""
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         neustart = self._flag(data.get("restart"), True)
         verzeichnis = str(Path(__file__).resolve().parent)
 
@@ -1004,10 +997,7 @@ class WebPanel:
 
     async def _api_sendepause(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         on = self._flag(data.get("on"), True)
         try:
             import admin
@@ -1021,10 +1011,7 @@ class WebPanel:
 
     async def _api_announce(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         # Discord-Limit ist 2000 Zeichen - laenger schickt man gar nicht erst los.
         # Und nur echte Texte: ein versehentlich gesendetes Objekt landete vorher
         # als Python-repr ("{'a': 1}") im Chat.
@@ -1146,10 +1133,7 @@ class WebPanel:
 
     async def _api_feature(self, request):
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         key = str(data.get("key", "")).strip()
         on = self._flag(data.get("on"), True)
         try:
@@ -1233,10 +1217,7 @@ class WebPanel:
     async def _api_guildcfg_set(self, request):
         """Eine Einstellung eines Servers setzen (oder mit 'standard' zuruecksetzen)."""
         self._guard(request)
-        try:
-            data = await request.json()
-        except Exception:  # noqa: BLE001
-            data = {}
+        data = await self._json_objekt(request)
         gid = self._as_int(data.get("guild"), 0)
         key = str(data.get("key", "")).strip()
         wert = data.get("value")

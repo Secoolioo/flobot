@@ -12,6 +12,7 @@ Jedes Feature legt sich einen eigenen JsonStore an (z. B. 'economy.json',
 """
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -33,8 +34,48 @@ class JsonStore:
         # Rettung, wenn die Hauptdatei unlesbar wird.
         self._bak = self.path.with_name(self.path.name + ".bak")
         self._lock = asyncio.Lock()
-        self.data = dict(default or {})
+        # Der Standard ist zugleich die TYP-SCHABLONE (siehe _schablone_pruefen).
+        self._default = copy.deepcopy(default or {})
+        self.data = copy.deepcopy(self._default)
         self._load()
+
+    def _schablone_pruefen(self):
+        """Jeder Schluessel aus dem Standard muss auch dessen TYP haben.
+
+        Sonst kippt der Bot beim START: eine von Hand editierte oder halb
+        geschriebene Datei mit "users": null hat in economy.setup() ein
+        TypeError geworfen, und weil die setup()-Kette in bot.py auf
+        Modulebene laeuft, kam der GANZE Bot nicht mehr hoch - nicht nur das
+        eine Feature. Nachgemessen galt das fuer economy, words, features,
+        lotto, giveaway und schulden.
+
+        Repariert wird nur der betroffene Schluessel, alles andere bleibt
+        stehen - und es wird laut geloggt, damit es niemand uebersieht."""
+        for key, muster in self._default.items():
+            wert = self.data.get(key, None)
+            if self._passt(wert, muster):
+                continue
+            log.error("%s: '%s' hat den falschen Typ (%s statt %s) - "
+                      "setze diesen Schluessel auf den Standard zurueck.",
+                      self.path.name, key, type(wert).__name__, type(muster).__name__)
+            self.data[key] = copy.deepcopy(muster)
+
+    @staticmethod
+    def _passt(wert, muster):
+        """Passt der geladene Wert zum Typ des Standards?"""
+        if isinstance(muster, bool):
+            return isinstance(wert, bool)
+        if isinstance(muster, (int, float)):
+            # Zahl bleibt Zahl - int und float duerfen sich mischen (JSON macht
+            # aus 0 gern 0.0), ein bool ist hier aber keine Zahl.
+            return isinstance(wert, (int, float)) and not isinstance(wert, bool)
+        if isinstance(muster, dict):
+            return isinstance(wert, dict)
+        if isinstance(muster, list):
+            return isinstance(wert, list)
+        if isinstance(muster, str):
+            return isinstance(wert, str)
+        return True          # exotischer Standard -> nicht hineinreden
 
     def _load(self):
         """Laedt den Stand. Bei kaputter Datei: NICHTS still wegwerfen.
@@ -58,6 +99,7 @@ class JsonStore:
                             self.path.name, len(loaded))
         if isinstance(loaded, dict):
             self.data.update(loaded)
+        self._schablone_pruefen()
 
     def _lies(self, pfad):
         """Liest EINE Datei. Rueckgabe: dict, oder None wenn nicht nutzbar."""
@@ -94,10 +136,14 @@ class JsonStore:
         einen in sich konsistenten Schnappschuss gibt - sonst koennte ein anderer
         Task das dict waehrend der Serialisierung aendern. Nur das (langsame)
         Schreiben auf die Platte wandert in einen Thread.
+
+        Rueckgabe: True = geschrieben, False = fehlgeschlagen (z. B. Platte
+        voll). Frueher gab es hier gar keine Rueckmeldung - ein dauerhaft
+        fehlschlagendes Speichern fiel nur im Log auf.
         """
         async with self._lock:
             payload = json.dumps(self.data, ensure_ascii=False, indent=2)
-            await asyncio.to_thread(self._write_text, payload)
+            return await asyncio.to_thread(self._write_text, payload)
 
     def _write_text(self, payload):
         try:
@@ -121,3 +167,5 @@ class JsonStore:
             os.replace(tmp, self.path)  # atomar
         except OSError as exc:
             log.error("Konnte %s nicht speichern: %s", self.path, exc)
+            return False
+        return True

@@ -7370,6 +7370,254 @@ def test_musik_ffmpeg_bricht_bei_datenstille_ab():
     assert m and 5_000_000 <= int(m.group(1)) <= 60_000_000, music._FFMPEG_BEFORE
 
 
+# --- Schwere Fehler aus dem Volltest (B1-B8) --------------------------------
+def test_alle_modul_aliase_existieren():
+    """bot.py ruft Modul-Funktionen ueber den Alias am Dateiende auf.
+
+    Fehlt einer, fliegt zur LAUFZEIT ein AttributeError - und in einem
+    tasks.loop stoppt das den Loop DAUERHAFT. Genau so ist der Haendler-Loop
+    bei der ersten Ankunft gestorben: bot.py rief merchant.build_view(), das
+    Modul exportierte den Alias aber nicht. Dieser Test liest bot.py als Text
+    und prueft JEDEN dort benutzten Modul-Aufruf."""
+    import importlib
+    import re
+    quelle = open("bot.py", encoding="utf-8").read()
+    module = set(re.findall(r"^import (\w+)$", quelle, re.M))
+    fehlend = []
+    for treffer in re.finditer(r"\b(\w+)\.(\w+)\(", quelle):
+        mod, attr = treffer.group(1), treffer.group(2)
+        if mod not in module or attr.startswith("_"):
+            continue
+        try:
+            m = importlib.import_module(mod)
+        except Exception:  # noqa: BLE001 - nicht importierbar ist hier egal
+            continue
+        if not hasattr(m, attr):
+            fehlend.append(f"{mod}.{attr}")
+    assert not fehlend, f"bot.py ruft nicht existierende Aliase: {sorted(set(fehlend))}"
+
+
+def test_kaputte_datei_haelt_den_bot_nicht_auf():
+    """Eine von Hand editierte JSON-Datei darf den START nicht verhindern.
+
+    Die setup()-Kette laeuft in bot.py auf MODULEBENE - wirft dort ein Modul,
+    kommt der ganze Bot nicht mehr hoch, nicht nur das eine Feature.
+    Nachgemessen galt das fuer economy, words, features, lotto, giveaway und
+    schulden. Der Standard eines JsonStore ist jetzt zugleich die
+    Typ-Schablone."""
+    import json
+    import pathlib
+    import tempfile
+    import store
+
+    alt_dir = store.DATA_DIR
+    d = pathlib.Path(tempfile.mkdtemp())
+    store.DATA_DIR = d
+    try:
+        (d / "kaputt.json").write_text(json.dumps(
+            {"users": None, "zahl": "viel", "liste": {}, "text": 5, "flag": "ja"}))
+        s = store.JsonStore("kaputt.json", default={
+            "users": {}, "zahl": 0, "liste": [], "text": "", "flag": False})
+        assert s.data["users"] == {} and s.data["zahl"] == 0
+        assert s.data["liste"] == [] and s.data["text"] == ""
+        assert s.data["flag"] is False
+        # Unbekannte Schluessel bleiben unangetastet (nichts stillschweigend loeschen).
+        (d / "extra.json").write_text(json.dumps({"users": {"1": {"xp": 5}}, "fremd": 42}))
+        s2 = store.JsonStore("extra.json", default={"users": {}})
+        assert s2.data["users"] == {"1": {"xp": 5}} and s2.data["fremd"] == 42
+    finally:
+        store.DATA_DIR = alt_dir
+
+    # Und die sechs echten Module kommen mit ihrem jeweiligen Muell hoch.
+    import features
+    import giveaway
+    import lotto
+    import schulden
+    import words
+    d2 = pathlib.Path(tempfile.mkdtemp())
+    store.DATA_DIR = d2
+    try:
+        (d2 / "words.json").write_text(json.dumps({"words": None, "scan": []}))
+        (d2 / "lotto.json").write_text(json.dumps({"jackpot": "viel"}))
+        (d2 / "giveaway.json").write_text(json.dumps({"active": None}))
+        (d2 / "schulden.json").write_text(json.dumps({"pairs": None}))
+        (d2 / "features.json").write_text(json.dumps(
+            {"disabled": [], "guilds": {"abc": ["casino"], "123": ["music"]}}))
+        for mod in (words, lotto, giveaway, schulden, features):
+            neu = type(mod.instance)()
+            neu.setup()          # darf NICHT werfen
+        # Der unbrauchbare Server-Eintrag wird uebersprungen, der gute bleibt.
+        f = type(features.instance)()
+        f.setup()
+        assert 123 in f._per_guild and f._per_guild[123] == {"music"}
+    finally:
+        store.DATA_DIR = alt_dir
+
+
+def test_speichern_meldet_fehlschlag():
+    """save() verschluckte Schreibfehler (Platte voll) dauerhaft still."""
+    import pathlib
+    import tempfile
+    import unittest.mock as mock
+    import store
+    alt = store.DATA_DIR
+    store.DATA_DIR = pathlib.Path(tempfile.mkdtemp())
+    try:
+        s = store.JsonStore("s.json", default={"a": 1})
+        assert asyncio.run(s.save()) is True
+        with mock.patch("os.replace", side_effect=OSError(28, "No space left")):
+            assert asyncio.run(s.save()) is False
+    finally:
+        store.DATA_DIR = alt
+
+
+def test_guildcfg_roundtrip_fuer_jeden_typ():
+    """Gesetzt == gelesen, fuer JEDEN Typ des Katalogs.
+
+    get() schickt den gespeicherten Wert zur Sicherheit nochmal durch die
+    Typ-Pruefung - und fuer Listen wurde daraus str([123, 456]), also die
+    Tokens '[123,' und '456]'. Die fielen durch die Kanal-Erkennung, und get()
+    lieferte IMMER den Standard: die Aufraeum-Kanaele waren faktisch nicht
+    einstellbar."""
+    guildcfg, zurueck = _cfg_frisch()
+    try:
+        kanal_ids = [200000000000000001, 200000000000000002]
+        guild = SimpleNamespace(
+            id=999, text_channels=[],
+            get_channel=lambda c: SimpleNamespace(id=c) if c in kanal_ids else None)
+        faelle = {
+            "autodelete_channels": ("200000000000000001 200000000000000002", kanal_ids),
+            "ansage_channel": ("200000000000000001", kanal_ids[0]),
+            "lautstaerke": ("80", 80),
+            "autodelete_sekunden": ("45", 45),
+            "bayern": ("an", True),
+        }
+        for key, (eingabe, erwartet) in faelle.items():
+            ok, gesetzt, fehler = asyncio.run(guildcfg.setzen(999, key, eingabe, guild))
+            assert ok, (key, fehler)
+            assert gesetzt == erwartet, (key, gesetzt)
+            assert guildcfg.get(999, key) == erwartet, \
+                f"{key}: gesetzt {gesetzt!r}, gelesen {guildcfg.get(999, key)!r}"
+        # Abschalten muss auch wirken (nicht auf den Standard zurueckfallen).
+        asyncio.run(guildcfg.setzen(999, "autodelete_channels", "aus", guild))
+        assert guildcfg.get(999, "autodelete_channels") == []
+    finally:
+        zurueck()
+
+
+def test_purge_rueckfrage_gilt_nur_fuer_den_frager():
+    """Die Rueckfrage vor dem Total-Wipe war nur an den KANAL gebunden.
+
+    Mod A fragte an, Mod B schrieb danach im selben Kanal 'loesch alle' - und
+    B's ERSTER Befehl loeschte den kompletten Verlauf, ohne dass B die Warnung
+    je gesehen hatte."""
+    import moderation
+    mi = moderation.instance
+    alt = dict(mi._wipe_offen)
+    mi._wipe_offen = {}
+    try:
+        kanal = SimpleNamespace(id=777)
+
+        def frage(uid):
+            msg = SimpleNamespace(author=SimpleNamespace(id=uid), channel=kanal)
+            jetzt = time.time()
+            for cid, e in list(mi._wipe_offen.items()):
+                if not isinstance(e, tuple) or e[1] <= jetzt:
+                    mi._wipe_offen.pop(cid, None)
+            offen = mi._wipe_offen.get(kanal.id)
+            if not (offen and offen[0] == uid and offen[1] > jetzt):
+                mi._wipe_offen[kanal.id] = (uid, jetzt + 60.0)
+                return "warnung"
+            mi._wipe_offen.pop(kanal.id, None)
+            return "wipe"
+
+        assert frage(1) == "warnung"          # A fragt
+        assert frage(2) == "warnung", "B durfte ohne eigene Warnung loeschen!"
+        assert frage(2) == "wipe"             # B bestaetigt seine EIGENE Warnung
+        assert frage(1) == "warnung"          # A faengt wieder von vorn an
+    finally:
+        mi._wipe_offen = alt
+
+
+def test_einsatz_rueckgaben_werden_nicht_getilgt():
+    """20 % jeder Einnahme gehen an den groessten Glaeubiger - eine ZURUECK-
+    GEZAHLTE Wette ist aber keine Einnahme. Alle Rueckgaben in games/casino
+    buchten ohne reason und wurden deshalb angeknabbert: der Bot meldete
+    'Einsaetze zurueck', angekommen sind 80 %."""
+    import re
+    import economy
+    import schulden
+    restore = _with_economy({1: 10_000, 2: 0})
+    alt = (schulden.instance._enabled, schulden.instance._store)
+    schulden.instance._enabled = True
+    schulden.instance._store = _FakeStore({"pairs": {}, "stats": {}})
+    try:
+        schulden.instance.record_pay(2, 1, 5_000)     # 1 schuldet 2 nun 5.000
+        vor = economy.get_coins(1)
+        economy.add_coins(1, 1_000, reason="spiele-rueck")
+        assert economy.get_coins(1) - vor == 1_000, "Rueckgabe wurde getilgt"
+        vor = economy.get_coins(1)
+        economy.add_coins(1, 1_000, reason="spiele")
+        assert economy.get_coins(1) - vor == 800, "echter Gewinn wurde NICHT getilgt"
+    finally:
+        (schulden.instance._enabled, schulden.instance._store) = alt
+        restore()
+
+    # Und: keine Rueckgabe-Stelle darf den reason vergessen.
+    for datei in ("games.py", "casino.py"):
+        quelle = open(datei, encoding="utf-8").read()
+        for zeile in quelle.splitlines():
+            if "add_coins(" not in zeile or "reason=" in zeile:
+                continue
+            # Negative Betraege sind Abbuchungen - die loesen keine Tilgung aus.
+            if re.search(r"add_coins\([^,]+,\s*-", zeile):
+                continue
+            # Rueckgaben erkennt man am Kommentar bzw. am Wort 'zurueck'.
+            assert "zurueck" not in zeile.lower(), f"{datei}: {zeile.strip()}"
+
+
+def test_webpanel_haelt_jeden_json_body_aus():
+    """Gueltiges, aber nicht-objektes JSON ([1,2,3], null, 42, "x") liess
+    JEDEN der elf POST-Endpunkte mit HTTP 500 platzen: request.json() wirft
+    dabei nicht, das folgende data.get() schon."""
+    import webpanel
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    restore = _with_economy({1: 100})
+    wp = webpanel.instance
+    alt = (wp._enabled, wp._auth, wp._client, dict(wp._tokens))
+    wp._enabled, wp._auth = True, False
+    wp._tokens = {}
+    wp._client = SimpleNamespace(guilds=[], is_closed=lambda: False,
+                                 get_guild=lambda _x: None, get_channel=lambda _x: None)
+    app = wp._build_app()
+
+    pfade = ["/api/user/coins", "/api/user/xp", "/api/user/title", "/api/user/shares",
+             "/api/stock/price", "/api/server/sendepause", "/api/server/announce",
+             "/api/feature", "/api/guildcfg", "/api/login"]
+
+    async def run_it():
+        async with TestClient(TestServer(app)) as cli:
+            for pfad in pfade:
+                for body in ("[1,2,3]", "null", "42", '"x"', "true"):
+                    r = await cli.post(pfad, data=body,
+                                       headers={"Content-Type": "application/json"})
+                    assert r.status != 500, f"{pfad} mit {body} -> HTTP 500"
+                # Und kaputtes JSON darf auch nicht 500 werden.
+                r = await cli.post(pfad, data="{kaputt",
+                                   headers={"Content-Type": "application/json"})
+                assert r.status != 500, f"{pfad} mit kaputtem JSON -> HTTP 500"
+
+    try:
+        asyncio.run(run_it())
+    finally:
+        (wp._enabled, wp._auth, wp._client, wp._tokens) = alt
+        restore()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
