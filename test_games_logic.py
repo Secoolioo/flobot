@@ -9250,6 +9250,177 @@ def test_botsicht_live_strom_haelt_die_reihenfolge():
     wp._sicht_push({"nr": 1})
 
 
+def test_botsicht_dm_gedaechtnis():
+    """Discord verraet einem Bot seine DM-Kanaele nicht - Flo fuehrt die Liste
+    selbst. Hier: merken, doppelt zaehlen, Deckel, und wer bei einer DM
+    eigentlich der Partner ist (bei Flos eigener Nachricht der Empfaenger,
+    sonst der Absender)."""
+    import unittest.mock as mock
+    import discord
+    wp, _g, _o, _l = _botsicht_umgebung()
+    wp._dm_store = _FakeStore({"partner": {}})
+    wp._dm_partner = {}
+
+    def person(uid, name):
+        u = mock.MagicMock(spec=discord.User)
+        u.id, u.name, u.display_name, u.bot = uid, name, name, False
+        u.display_avatar = SimpleNamespace(url=f"https://cdn.test/{uid}.png")
+        return u
+
+    marvin = person(222333444555666777, "Marvin")
+    assert wp._dm_merken(marvin, ts=1000) is True, "erster Kontakt ist neu"
+    assert wp._dm_merken(marvin, ts=2000) is False, "zweiter Kontakt ist nicht neu"
+    e = wp._dm_partner["222333444555666777"]
+    assert e["anzahl"] == 2 and e["zuerst"] == 1000 and e["zuletzt"] == 2000, e
+    assert e["name"] == "Marvin"
+
+    # Flo selbst ist nie sein eigener DM-Partner.
+    ich = person(99, "Flo")
+    assert wp._dm_merken(ich) is False and "99" not in wp._dm_partner
+
+    # Eine DM VON jemandem: Partner ist der Absender.
+    kanal = mock.MagicMock(spec=discord.DMChannel)
+    kanal.id, kanal.recipient = 700, marvin
+    rein = mock.MagicMock(spec=discord.Message)
+    rein.author, rein.channel, rein.guild = marvin, kanal, None
+    rein.created_at = SimpleNamespace(timestamp=lambda: 3000)
+    wp._dm_aus_nachricht(rein)
+    assert wp._dm_partner["222333444555666777"]["zuletzt"] == 3000
+
+    # Eine DM VON FLO: Partner ist der Empfaenger des Kanals, nicht Flo.
+    raus = mock.MagicMock(spec=discord.Message)
+    raus.author, raus.channel, raus.guild = ich, kanal, None
+    raus.created_at = SimpleNamespace(timestamp=lambda: 4000)
+    wp._dm_aus_nachricht(raus)
+    assert wp._dm_partner["222333444555666777"]["zuletzt"] == 4000
+    assert "99" not in wp._dm_partner, "Flo hat sich selbst eingetragen"
+
+    # Deckel: die aelteste Bekanntschaft faellt raus, nicht die neueste.
+    import webpanel
+    alt = webpanel.BOTSICHT_DM_MAX
+    try:
+        webpanel.BOTSICHT_DM_MAX = 3
+        for i, uid in enumerate([10**17 + n for n in range(4)]):
+            wp._dm_merken(person(uid, f"P{i}"), ts=5000 + i)
+        assert len(wp._dm_partner) == 3, len(wp._dm_partner)
+        assert str(10**17) not in wp._dm_partner, "aeltester blieb stehen"
+        assert str(10**17 + 3) in wp._dm_partner, "neuester fehlt"
+    finally:
+        webpanel.BOTSICHT_DM_MAX = alt
+
+
+def test_botsicht_dm_suche_kennt_die_echten_formate():
+    """Die Wiederherstellung alter DMs haengt an zwei Mustern - und die muessen
+    WOERTLICH zu dem passen, was der Bot schreibt bzw. der Besitzer tippt.
+    Deshalb wird das Vergleichsmaterial hier aus bot.py gebaut, nicht von Hand
+    abgetippt: aendert dort jemand den Text, faellt es hier auf und nicht erst,
+    wenn die Suche nichts mehr findet."""
+    import webpanel
+    quelle = open("bot.py", encoding="utf-8").read()
+    # Der Weiterleitungs-Text steht so in _forward_dm_to_owner:
+    assert 'f"📥 **DM von {message.author.display_name}** "' in quelle, \
+        "Format der DM-Weiterleitung hat sich geaendert - Regex nachziehen!"
+    assert 'f"(`{message.author.id}`):' in quelle, \
+        "Format der DM-Weiterleitung hat sich geaendert - Regex nachziehen!"
+
+    name, uid = "Marvin", 222333444555666777
+    echt = f"📥 **DM von {name}** (`{uid}`):\nhallo, bist du da?"
+    treffer = webpanel.WebPanel._DM_RELAY_RE.findall(echt)
+    assert treffer == [(name, str(uid))], treffer
+
+    # Auch mit Leerzeichen/Emoji im Anzeigenamen.
+    echt2 = f"📥 **DM von Lena ✨ (sie)** (`{uid}`):\ntext"
+    assert webpanel.WebPanel._DM_RELAY_RE.findall(echt2) == [("Lena ✨ (sie)", str(uid))]
+
+    # Und die 'dm'-Befehle des Besitzers, beide Schreibweisen.
+    b = webpanel.WebPanel._DM_BEFEHL_RE
+    assert b.findall(f"flo dm {uid} sag mal") == [str(uid)]
+    assert b.findall(f"Flo dm <@{uid}> sag mal") == [str(uid)]
+    assert b.findall(f"flo dm <@!{uid}> sag mal") == [str(uid)]
+    # Kein Fehlalarm bei normalen Saetzen.
+    assert b.findall("ich hab dm 42 gesagt") == [], "zu kurze Zahl wurde genommen"
+
+
+def test_botsicht_dm_verlauf_und_liste():
+    """Der DM-Verlauf wird ueber die Nutzer-ID geholt - create_dm() macht den
+    Kanal notfalls auf, und Discord liefert dann den KOMPLETTEN Verlauf, auch
+    von vor dem letzten Neustart. Genau das ist der Weg zurueck."""
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    import unittest.mock as mock
+    import discord
+    wp, _g, _o, _l = _botsicht_umgebung()
+    wp._dm_store = _FakeStore({"partner": {}})
+    wp._dm_partner = {}
+
+    marvin = mock.MagicMock(spec=discord.User)
+    marvin.id, marvin.name, marvin.display_name, marvin.bot = \
+        222333444555666777, "Marvin", "Marvin", False
+    marvin.display_avatar = SimpleNamespace(url="https://cdn.test/m.png")
+
+    dmk = mock.MagicMock(spec=discord.DMChannel)
+    dmk.id, dmk.recipient = 700, marvin
+
+    def dmnachricht(mid, text, autor, t):
+        m = mock.MagicMock(spec=discord.Message)
+        m.id, m.content, m.author, m.channel, m.guild = mid, text, autor, dmk, None
+        m.created_at = SimpleNamespace(timestamp=lambda t=t: t)
+        m.edited_at, m.pinned = None, False
+        m.attachments, m.embeds, m.reactions, m.reference = [], [], [], None
+        m.type = discord.MessageType.default
+        return m
+
+    flo = wp._client.user
+    alt = [dmnachricht(2, "und? kommst du?", marvin, 1600000100.0),
+           dmnachricht(1, "Nein.", flo, 1600000000.0)]
+
+    async def hist(**kw):
+        for m in alt[:kw.get("limit", 50)]:
+            yield m
+    dmk.history = lambda **kw: hist(**kw)
+    gesendet = []
+
+    async def send(text, **kw):
+        gesendet.append((text, kw))
+        return dmnachricht(3, text, flo, 1600000200.0)
+    dmk.send = send
+    marvin.dm_channel = dmk
+    wp._client.get_user = lambda uid: marvin if uid == marvin.id else None
+
+    app = wp._build_app()
+
+    async def lauf():
+        async with TestClient(TestServer(app)) as cli:
+            # Von Hand hinzufuegen - der Notausgang, wenn man die ID kennt.
+            j = await (await cli.post("/api/sicht/dm",
+                       json={"id": str(marvin.id)})).json()
+            assert j["ok"] and j["leer"] is False and j["name"] == "Marvin", j
+
+            j = await (await cli.get("/api/sicht/dms")).json()
+            assert len(j["partner"]) == 1, j
+            assert j["partner"][0]["quelle"] == "hand", j["partner"][0]
+
+            # Verlauf ueber die ID - aeltest zuerst, wie ueberall.
+            j = await (await cli.get(f"/api/sicht/messages?dm={marvin.id}")).json()
+            assert [m["text"] for m in j["messages"]] == ["Nein.", "und? kommst du?"], j
+            # Der Kanalname nennt die Person, nicht nur "Direktnachricht".
+            assert j["messages"][0]["kanal_name"] == "DM · Marvin", j["messages"][0]
+            assert j["messages"][0]["dm_mit"] == str(marvin.id)
+
+            # Privat antworten.
+            j = await (await cli.post("/api/sicht/send",
+                       json={"dm": str(marvin.id), "text": "doch"})).json()
+            assert j["ok"] and gesendet[0][0] == "doch", j
+            assert gesendet[0][1]["allowed_mentions"].everyone is False
+
+            # Unsinnige ID -> 400, nicht 500.
+            assert (await cli.post("/api/sicht/dm", json={"id": "abc"})).status == 400
+    asyncio.run(lauf())
+
+
 def test_botsicht_haengt_im_bot_ganz_oben():
     """Der Aufruf in bot.py muss VOR dem Bot-Check stehen.
 

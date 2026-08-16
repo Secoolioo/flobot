@@ -466,6 +466,21 @@ body{
   border:1px solid rgba(16,185,129,.3);transition:border-radius .22s var(--ease),box-shadow .25s var(--ease)}
 .bs-live-b svg{width:22px;height:22px;stroke:var(--emerald-2)}
 .bs-live-b.on{border-radius:13px;box-shadow:0 0 0 1px rgba(16,185,129,.5),0 8px 30px -8px rgba(16,185,129,.5)}
+.bs-dm-b{position:relative;width:48px;height:48px;border-radius:16px;display:grid;place-items:center;
+  cursor:pointer;flex:none;background:linear-gradient(150deg,rgba(124,166,255,.2),rgba(124,166,255,.05));
+  border:1px solid rgba(124,166,255,.28);transition:border-radius .22s var(--ease),box-shadow .25s var(--ease)}
+.bs-dm-b svg{width:22px;height:22px;stroke:var(--blue)}
+.bs-dm-b.on{border-radius:13px;box-shadow:0 0 0 1px rgba(124,166,255,.5),0 8px 30px -8px rgba(124,166,255,.5)}
+.bs-dm-b b{position:absolute;bottom:-3px;right:-3px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;
+  background:var(--blue);color:#0b0d12;font-size:10px;font-weight:800;display:grid;place-items:center;
+  border:2px solid var(--bg)}
+.btn-mini{font:inherit;font-size:11.5px;font-weight:600;padding:6px 11px;border-radius:9px;cursor:pointer;
+  color:var(--text);background:var(--surface-2);border:1px solid var(--border-2);transition:background .15s}
+.btn-mini:hover{background:var(--surface-3)}
+.bs-fort{margin-top:11px;padding-top:10px;border-top:1px solid var(--hair);font-size:11px;color:var(--dim)}
+.bs-fort .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:6px;overflow:hidden}
+.bs-fort .bar i{display:block;height:100%;border-radius:3px;transition:width .5s var(--ease);
+  background:linear-gradient(90deg,var(--gold-3),var(--gold-2))}
 
 /* --- Kanalliste --- */
 .bs-side{display:flex;flex-direction:column;background:rgba(0,0,0,.19);border-right:1px solid var(--hair)}
@@ -1635,11 +1650,13 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
 var BS={ guilds:[], ich:null, intents:{}, gid:null, cid:null, kanal:null,
          text:[], voice:[], msgs:[], rechte:null, ws:null, poll:null, nr:0,
          antwort:null, alles:false, feed:[], zuKat:{}, namen:{}, emojiZu:0,
-         mehr:false, laedt:false, tipp:0, wsAn:false };
+         mehr:false, laedt:false, tipp:0, wsAn:false,
+         dm:null, dmListe:[], dmSuche:null, dmPoll:null };
 
 function bsStop(){
   if(BS.ws){ try{ BS.ws.onclose=null; BS.ws.close(); }catch(e){} BS.ws=null; }
   if(BS.poll){ clearInterval(BS.poll); BS.poll=null; }
+  if(BS.dmPoll){ clearInterval(BS.dmPoll); BS.dmPoll=null; }
   BS.wsAn=false;
 }
 
@@ -1660,6 +1677,7 @@ function viewBotSicht(){
     BS.guilds=d.guilds||[]; BS.ich=d.ich||null; BS.intents=d.intents||{};
     bsRail();
     bsFeedStart();
+    bsDmLaden();          // Zahl am Briefumschlag stimmt dann von Anfang an
     /* Zuletzt offener Kanal - der Blick soll nach dem Neuladen dort weitergehen,
        wo man aufgehoert hat. */
     var letzt=null; try{ letzt=JSON.parse(localStorage.getItem("flo_bs")||"null"); }catch(e){}
@@ -1682,6 +1700,12 @@ function bsRail(){
   live.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h6"/></svg>';
   live.addEventListener("click",bsAllesAn);
   r.appendChild(live);
+  var dm=ce("div","bs-dm-b"+(BS.dmAn?" on":""));
+  dm.title="Direktnachrichten – alles, was Flo privat geschrieben und bekommen hat";
+  dm.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 7l10 6 10-6"/></svg>'+
+    (BS.dmListe.length?'<b>'+BS.dmListe.length+'</b>':"");
+  dm.addEventListener("click",function(){ bsDmAn(); });
+  r.appendChild(dm);
   r.appendChild(ce("hr"));
   BS.guilds.forEach(function(g){
     var d=ce("div","bs-g"+(!BS.alles&&g.id===BS.gid?" on":"")); d.title=g.name;
@@ -1693,7 +1717,7 @@ function bsRail(){
 }
 
 function bsAllesAn(){
-  BS.alles=true; BS.cid=null; BS.antwort=null; bsRail();
+  BS.alles=true; BS.dmAn=false; BS.dm=null; BS.cid=null; BS.antwort=null; bsRail();
   $("#bsSrvName").textContent="Alles, was Flo sieht";
   /* Die Kanalliste bleibt stehen. Sie durch einen Hinweistext zu ersetzen war
      der erste Entwurf - dann kam man aus dem Strom aber nur ueber den Umweg
@@ -1702,12 +1726,176 @@ function bsAllesAn(){
   l.innerHTML='<div class="bs-note">Hier laufen die Nachrichten <b>aller</b> Server durch, '+
     'in der Reihenfolge, in der Flo sie bekommt – auch die von anderen Bots und seine eigenen.</div>';
   if(BS.text.length){ var rest=ce("div"); l.appendChild(rest); bsChans(rest); }
+  $("#bsMem").innerHTML='<h4>Alles-Strom</h4>'+
+    '<div class="bs-note">Gefüttert direkt aus <code>on_message</code>, und dort '+
+    '<b>vor</b> der Bot-Prüfung – sonst fehlten hier Flos eigene Antworten und die '+
+    'anderer Bots.<br><br>Der Puffer liegt nur im Arbeitsspeicher und hält die letzten '+
+    'paar hundert Nachrichten. Nach einem Neustart fängt er leer an – was Flo sieht, '+
+    'ist flüchtig.</div>';
   bsKopf(null); bsComposer();
   bsFeedRender();
 }
 
+/* ---- Direktnachrichten ------------------------------------------------
+   Discord gibt einem Bot KEINE Liste seiner DM-Kanäle – Flo führt sie selbst.
+   Alles, was vor dieser Funktion lief, holen die zwei Knöpfe unten zurück. */
+function bsDmAn(){
+  BS.alles=false; BS.dmAn=true; BS.cid=null; BS.antwort=null; bsRail();
+  $("#bsSrvName").textContent="Direktnachrichten";
+  $("#bsMem").innerHTML='<h4>Warum diese Liste kurz sein kann</h4>'+
+    '<div class="bs-note">Discord hat für Bots <b>keinen</b> Weg, die eigenen '+
+    'DM-Kanäle aufzulisten – es gibt schlicht keinen solchen Endpunkt. '+
+    'Flo schreibt deshalb selbst mit, mit wem er privat geschrieben hat.<br><br>'+
+    'Kennt er eine Person aber einmal, liefert Discord den <b>kompletten</b> Verlauf – '+
+    'auch von lange vor dieser Funktion.<br><br>'+
+    '<b>Suchen</b> geht die DM-Weiterleitungen an dich und die <code>dm</code>-Befehle '+
+    'in den Servern durch. <b>Gründlich</b> klopft zusätzlich jede Nutzer-ID ab, die '+
+    'Flo kennt – das findet alles, dauert aber.</div>';
+  bsKopf(null); bsComposer();
+  if(!BS.dm) bsLeer("Links eine Person auswählen.","✉️");
+  bsDmLaden();
+}
+
+function bsDmLaden(){
+  api("/api/sicht/dms",{quiet:true}).then(function(d){
+    if(!d.ok) return;
+    BS.dmListe=d.partner||[]; BS.dmSuche=d.suche||null;
+    if(BS.dmAn) bsDmListe();
+    bsRail();
+  }).catch(function(){});
+}
+
+function bsDmListe(){
+  var l=$("#bsChans"); if(!l||!BS.dmAn) return;
+  var s=BS.dmSuche;
+  var kopf='<div class="bs-cat">Bekannte Gespräche – '+BS.dmListe.length+'</div>';
+  l.innerHTML=kopf;
+  if(!BS.dmListe.length){
+    l.innerHTML=kopf+'<div class="bs-note">Flo hat noch niemanden vermerkt. '+
+      'Das heißt <b>nicht</b>, dass es keine DMs gibt – Discord verrät einem Bot '+
+      'seine privaten Kanäle einfach nicht. Mit den Knöpfen unten holt er sie zurück.</div>';
+  }
+  BS.dmListe.forEach(function(p){
+    var e=ce("div","bs-c"+(BS.dm===p.id?" on":""));
+    e.innerHTML='<div class="av avatar" style="width:22px;height:22px;border-radius:50%;font-size:9px;background:'+avColor(p.id)+'">'+
+      esc(initials(p.name))+(p.avatar?'<img src="'+esc(p.avatar)+'" alt="" loading="lazy" onerror="this.remove()">':"")+'</div>'+
+      '<span class="n">'+esc(p.name)+'</span>'+
+      (p.zuletzt?'<span style="font-size:10px;color:var(--faint)">'+esc(bsKurzDatum(p.zuletzt))+'</span>':"");
+    e.title=p.name+" · ID "+p.id+" · gefunden über: "+bsQuelle(p.quelle);
+    e.addEventListener("click",function(){ bsDmOeffnen(p); });
+    l.appendChild(e);
+  });
+  var box=ce("div","bs-note");
+  box.innerHTML='<b>Ältere DMs zurückholen</b><br>'+
+    'Discord führt für Bots kein Verzeichnis privater Kanäle. Kennt Flo eine '+
+    'Person aber einmal, liefert Discord den <b>kompletten</b> Verlauf – auch von früher.'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">'+
+    '<button class="btn-mini" id="bsDmSuch">Suchen</button>'+
+    '<button class="btn-mini" id="bsDmSuchTief">Gründlich</button>'+
+    '<button class="btn-mini" id="bsDmHinzu">ID eingeben</button></div>'+
+    (s?('<div class="bs-fort"><div>'+esc(s.schritt||"")+
+        (s.gesamt?" · "+fmt(s.geprueft)+"/"+fmt(s.gesamt):(s.geprueft?" · "+fmt(s.geprueft):""))+
+        '</div><div class="bar"><i style="width:'+(s.gesamt?Math.round(100*s.geprueft/s.gesamt):(s.laeuft?30:100))+'%"></i></div>'+
+        '<div style="margin-top:5px;color:var(--emerald-2)">'+fmt(s.gefunden||0)+' gefunden'+
+        (s.neu&&s.neu.length?': '+esc(s.neu.slice(-6).join(", ")):"")+'</div>'+
+        (s.fehler?'<div style="color:var(--red);margin-top:4px">'+esc(s.fehler)+'</div>':"")+
+        '</div>'):"");
+  l.appendChild(box);
+  $("#bsDmSuch").addEventListener("click",function(){ bsDmSuche(false); });
+  $("#bsDmSuchTief").addEventListener("click",function(){ bsDmSuche(true); });
+  $("#bsDmHinzu").addEventListener("click",bsDmHinzu);
+}
+
+function bsQuelle(q){
+  return {chat:"im Chat gesehen",relay:"Weiterleitung an dich",befehl:"'dm'-Befehl",
+          gesendet:"Flo hat geschrieben",abgeklopft:"beim Abklopfen gefunden",
+          hand:"von Hand eingetragen"}[q]||q||"?";
+}
+function bsKurzDatum(ts){
+  if(!ts) return "";
+  var d=new Date(ts*1000), heute=new Date();
+  if(d.toDateString()===heute.toDateString()) return bsUhr(ts);
+  return d.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit"});
+}
+
+function bsDmSuche(gruendlich){
+  if(gruendlich&&!confirm("Gründlich heißt: Flo klopft JEDE Nutzer-ID ab, die er "+
+     "kennt, und sieht nach, ob dort eine DM liegt. Das sind zwei Discord-Anfragen "+
+     "pro Person – bei ein paar hundert Leuten dauert es einige Minuten. Der Bot "+
+     "läuft normal weiter. Starten?")) return;
+  api("/api/sicht/dmsuche",{method:"POST",body:{gruendlich:!!gruendlich}}).then(function(){
+    toast(gruendlich?"Gründliche Suche läuft…":"Suche läuft…","info");
+    if(BS.dmPoll) clearInterval(BS.dmPoll);
+    BS.dmPoll=setInterval(function(){
+      if(S.view!=="botsicht"){ clearInterval(BS.dmPoll); BS.dmPoll=null; return; }
+      api("/api/sicht/dmsuche",{quiet:true}).then(function(d){
+        BS.dmSuche=d.suche||null;
+        if(BS.dmAn) bsDmListe();
+        if(!d.suche||!d.suche.laeuft){
+          clearInterval(BS.dmPoll); BS.dmPoll=null;
+          bsDmLaden();
+          toast("Suche fertig – "+fmt((d.suche&&d.suche.gefunden)||0)+" Gespräche gefunden","ok");
+        }
+      }).catch(function(){});
+    },1500);
+  }).catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Suche nicht gestartet","err"); });
+}
+
+function bsDmHinzu(){
+  var id=prompt("Nutzer-ID der Person (in Discord: Rechtsklick → ID kopieren).\n\n"+
+                "Flo öffnet damit den privaten Kanal und holt den kompletten Verlauf.");
+  if(!id) return;
+  api("/api/sicht/dm",{method:"POST",body:{id:String(id).trim()}}).then(function(d){
+    toast(d.leer?("Mit "+d.name+" wurde nie geschrieben"):(d.name+" hinzugefügt"),
+          d.leer?"info":"ok");
+    bsDmLaden();
+  }).catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Ging nicht","err"); });
+}
+
+/* Die rechte Spalte in der DM-Ansicht: dort steht keine Mitgliederliste (in
+   einer DM sind es immer zwei), sondern was Flo ueber dieses Gespraech weiss. */
+function bsDmInfo(p){
+  var m=$("#bsMem"); if(!m) return;
+  function zeile(k,v){ return '<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--hair)"><span style="color:var(--faint)">'+esc(k)+'</span><b style="font-weight:600">'+esc(v)+'</b></div>'; }
+  m.innerHTML='<h4>Gespräch</h4>'+
+    '<div style="display:grid;place-items:center;padding:10px 0 14px">'+
+      '<div class="avatar" style="width:64px;height:64px;border-radius:50%;font-size:22px;background:'+avColor(p.id)+'">'+
+      esc(initials(p.name))+(p.avatar?'<img src="'+esc(p.avatar)+'" alt="" onerror="this.remove()">':"")+'</div>'+
+      '<div style="margin-top:9px;font-size:15px;font-weight:650">'+esc(p.name)+'</div></div>'+
+    '<div style="font-size:12px;padding:0 8px">'+
+      zeile("Nutzer-ID",p.id)+
+      zeile("Zuletzt",p.zuletzt?bsKurzDatum(p.zuletzt):"—")+
+      zeile("Zuerst gesehen",p.zuerst?bsKurzDatum(p.zuerst):"—")+
+      zeile("Von Flo vermerkt",fmt(p.anzahl)+"×")+
+      zeile("Gefunden über",bsQuelle(p.quelle))+'</div>'+
+    '<div class="bs-note">Der Verlauf oben kommt <b>frisch von Discord</b>, nicht aus '+
+    'Flos Gedächtnis – er reicht deshalb so weit zurück wie das Gespräch selbst, '+
+    'auch über Neustarts und Updates hinweg.</div>';
+}
+
+function bsDmOeffnen(p){
+  BS.dm=p.id; BS.alles=false; BS.antwort=null; BS.msgs=[]; BS.mehr=false;
+  BS.kanal={name:p.name,thema:"Direktnachricht · ID "+p.id,dm:true};
+  BS.rechte={verlauf:true,senden:true,reagieren:true,verwalten:false};
+  var w=$("#bsRoot"); if(w) w.classList.remove("zeig-kanaele");
+  bsDmListe(); bsKopf(BS.kanal); bsComposer(); bsDmInfo(p);
+  bsLeer("Hole den Verlauf bei Discord…","⏳");
+  api("/api/sicht/messages?limit=50&dm="+encodeURIComponent(p.id)).then(function(d){
+    if(!d.ok) throw d;
+    if(BS.dm!==p.id) return;
+    BS.msgs=d.messages||[]; BS.mehr=!!d.mehr;
+    /* Die Kanal-ID mitnehmen, sonst erkennt der Live-Strom eine hereinkommende
+       DM nicht als "gehört zu diesem offenen Gespräch". */
+    BS.cid=(d.kanal&&d.kanal.id)||null;
+    if(!BS.msgs.length) bsLeer("Mit "+esc(p.name)+" wurde noch nie privat geschrieben.","🫙");
+    else bsRender(true);
+  }).catch(function(e){ if(e&&e.auth)return;
+    bsLeer(esc((e&&e.error)||"Verlauf nicht ladbar"),"⚠️"); });
+}
+
 function bsGuildWahl(gid,cid){
-  BS.alles=false; BS.gid=String(gid); BS.cid=null; BS.antwort=null; bsRail(); bsMerke();
+  BS.alles=false; BS.dmAn=false; BS.dm=null;
+  BS.gid=String(gid); BS.cid=null; BS.antwort=null; bsRail(); bsMerke();
   var g=bsGuild(gid);
   $("#bsSrvName").textContent=g?g.name:"Server";
   $("#bsChans").innerHTML='<div class="bs-note">Lade Kanäle…</div>';
@@ -1783,8 +1971,16 @@ function bsKopf(c){
   var zurueck='<div class="bs-kbtn" id="bsKbtn" title="Kanäle">'+
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></div>';
   if(!c){
-    h.innerHTML=zurueck+'<div class="t">'+(BS.alles?'<span>⚡ Alles-Strom</span>':'<span>Kein Kanal</span>')+'</div>'+
-      '<div class="sub">'+(BS.alles?"Jede Nachricht, die Flo gerade bekommt":"Links einen Kanal wählen")+'</div>';
+    h.innerHTML=zurueck+'<div class="t">'+(BS.alles?'<span>⚡ Alles-Strom</span>':
+        (BS.dmAn?'<span>✉️ Direktnachrichten</span>':'<span>Kein Kanal</span>'))+'</div>'+
+      '<div class="sub">'+(BS.alles?"Jede Nachricht, die Flo gerade bekommt":
+        (BS.dmAn?"Links eine Person wählen":"Links einen Kanal wählen"))+'</div>';
+  } else if(c.dm){
+    /* In einer DM gibt es keine Rechteverwaltung - Berechtigungs-Marken waeren
+       dort schlicht gelogen. Stattdessen steht da, mit wem man schreibt. */
+    h.innerHTML=zurueck+'<div class="t"><span>✉️ '+esc(c.name)+'</span></div>'+
+      '<div class="sub">'+esc(c.thema||"Direktnachricht")+'</div>'+
+      '<div class="bs-perms"><span class="bs-perm ja">PRIVAT</span></div>';
   } else {
     var r=BS.rechte||c.rechte||{};
     function p(t,ok){ return '<span class="bs-perm '+(ok?"ja":"nein")+'" title="'+esc(t)+(ok?": ja":": nein")+'">'+esc(t)+'</span>'; }
@@ -1798,7 +1994,8 @@ function bsKopf(c){
 
 /* --- Kanal oeffnen --- */
 function bsOeffne(c){
-  BS.alles=false; BS.cid=c.id; BS.kanal=c; BS.antwort=null; BS.msgs=[]; BS.mehr=false;
+  BS.alles=false; BS.dmAn=false; BS.dm=null;
+  BS.cid=c.id; BS.kanal=c; BS.antwort=null; BS.msgs=[]; BS.mehr=false;
   var w=$("#bsRoot"); if(w) w.classList.remove("zeig-kanaele");   // schmales Fenster: zurueck zum Chat
   bsMerke(); bsRail(); bsChans(); bsKopf(c);
   bsLeer("Lade Verlauf…","⏳");
@@ -1818,11 +2015,12 @@ function bsOeffne(c){
 function bsMehr(){
   if(BS.laedt||!BS.msgs.length) return;
   BS.laedt=true;
-  var cid=BS.cid, m=$("#bsMsgs"), hoehe=m?m.scrollHeight:0;
-  api("/api/sicht/messages?limit=50&channel="+encodeURIComponent(cid)+
+  var cid=BS.cid, dm=BS.dm, m=$("#bsMsgs"), hoehe=m?m.scrollHeight:0;
+  api("/api/sicht/messages?limit=50&"+(dm?"dm="+encodeURIComponent(dm)
+                                          :"channel="+encodeURIComponent(cid))+
       "&before="+encodeURIComponent(BS.msgs[0].id)).then(function(d){
     BS.laedt=false;
-    if(!d.ok||BS.cid!==cid) return;      // inzwischen Kanal gewechselt
+    if(!d.ok||BS.cid!==cid||BS.dm!==dm) return;   // inzwischen woanders
     BS.msgs=(d.messages||[]).concat(BS.msgs); BS.mehr=!!d.mehr;
     bsRender(false);
     /* Beim Nachladen nach oben soll der Blick auf derselben Nachricht bleiben -
@@ -2022,9 +2220,10 @@ function bsMarkup(t){
 /* --- Eingabe --- */
 function bsComposer(){
   var c=$("#bsComp"); if(!c) return;
-  if(BS.alles||!BS.cid){
+  if(BS.alles||(!BS.cid&&!BS.dm)){
     c.innerHTML='<div class="bs-gesperrt" style="color:var(--faint);background:rgba(255,255,255,.03);border-color:var(--hair)">'+
-      (BS.alles?"Im Alles-Strom wird nicht geschrieben – dafür links einen Kanal wählen.":"Kein Kanal ausgewählt.")+'</div>';
+      (BS.alles?"Im Alles-Strom wird nicht geschrieben – dafür links einen Kanal wählen.":
+       (BS.dmAn?"Keine Person ausgewählt.":"Kein Kanal ausgewählt."))+'</div>';
     return;
   }
   var r=BS.rechte||{};
@@ -2037,7 +2236,8 @@ function bsComposer(){
       '</b><span style="opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px">'+esc((a.text||"").slice(0,90))+'</span>'+
       '<span class="x" id="bsAntwortWeg">✕</span></div>':"")+
     '<div class="bs-box'+(a?" mit-antwort":"")+'">'+
-      '<textarea id="bsText" rows="1" placeholder="Nachricht an #'+esc((BS.kanal&&BS.kanal.name)||"kanal")+' – als '+esc(S.bot)+'"></textarea>'+
+      '<textarea id="bsText" rows="1" placeholder="'+(BS.dm?"Private Nachricht an ":"Nachricht an #")+
+        esc((BS.kanal&&BS.kanal.name)||"kanal")+' – als '+esc(S.bot)+'"></textarea>'+
       '<button class="bs-send" id="bsSend" disabled title="Senden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>'+
     '</div>'+
     '<div class="bs-hint"><span><kbd>Enter</kbd> senden · <kbd>Shift</kbd>+<kbd>Enter</kbd> neue Zeile</span>'+
@@ -2067,7 +2267,7 @@ function bsSenden(){
   var t=$("#bsText"); if(!t) return;
   var text=t.value.trim(); if(!text) return;
   var b=$("#bsSend"); b.disabled=true;
-  var koerper={channel:BS.cid,text:text};
+  var koerper=BS.dm?{dm:BS.dm,text:text}:{channel:BS.cid,text:text};
   if(BS.antwort) koerper.reply_to=BS.antwort.id;
   api("/api/sicht/send",{method:"POST",body:koerper}).then(function(d){
     t.value=""; t.style.height="auto"; BS.antwort=null; bsComposer();

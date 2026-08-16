@@ -32,6 +32,7 @@ Host/Port: WEBPANEL_HOST / WEBPANEL_PORT (Standard 0.0.0.0:9123).
 import asyncio
 import logging
 import os
+import re
 import secrets
 import time
 import unicodedata
@@ -61,6 +62,10 @@ PANEL_LOG_MAX = int(os.getenv("PANEL_LOG_MAX", "200") or "200")
 BOTSICHT_PUFFER = int(os.getenv("BOTSICHT_PUFFER", "400") or "400")
 # So viele Nachrichten holt die Verlaufs-Ansicht hoechstens auf einmal.
 BOTSICHT_VERLAUF_MAX = 100
+# So viele DM-Bekanntschaften merkt sich Flo (aelteste fliegen raus).
+BOTSICHT_DM_MAX = int(os.getenv("BOTSICHT_DM_MAX", "500") or "500")
+# So weit blaettert die Suche nach alten DMs hoechstens in die Owner-DM zurueck.
+BOTSICHT_DM_SUCHE_MAX = 5000
 
 _HTML_PATH = Path(__file__).resolve().parent / "webpanel.html"
 
@@ -95,6 +100,11 @@ class WebPanel(FeatureBasis):
         self._sicht_ws = {}         # offene WebSocket-Verbindung -> ihre Warteschlange
         self._sicht_tasks = set()   # laufende Sende-Tasks (sonst sammelt der GC sie ein)
         self._sicht_nr = 0          # laufende Nummer, damit der Browser Luecken merkt
+        # Mit wem hat Flo je privat geschrieben? Discord verraet das nicht -
+        # er muss es selbst mitschreiben (siehe _dm_merken).
+        self._dm_store = None
+        self._dm_partner = {}
+        self._dm_suche = None       # Stand der Suche nach alten DMs
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -114,6 +124,16 @@ class WebPanel(FeatureBasis):
         except Exception:  # noqa: BLE001 - ein Protokoll ist nie start-kritisch
             log.exception("Panel-Protokoll konnte nicht geladen werden")
             self._log_store, self._log = None, []
+        # DM-Gedaechtnis laden (mit wem hat Flo je privat geschrieben).
+        try:
+            from store import JsonStore
+            self._dm_store = JsonStore("botsicht_dms.json", default={"partner": {}})
+            roh = self._dm_store.data.get("partner")
+            self._dm_partner = {str(k): v for k, v in (roh or {}).items()
+                                if isinstance(v, dict)}
+        except Exception:  # noqa: BLE001
+            log.exception("DM-Gedaechtnis konnte nicht geladen werden")
+            self._dm_store, self._dm_partner = None, {}
         self._host = os.getenv("WEBPANEL_HOST", "0.0.0.0").strip() or "0.0.0.0"
         try:
             self._port = int(os.getenv("WEBPANEL_PORT", "9123") or "9123")
@@ -179,6 +199,10 @@ class WebPanel(FeatureBasis):
             web.post("/api/sicht/typing", self._api_sicht_typing),
             web.post("/api/sicht/react", self._api_sicht_react),
             web.post("/api/sicht/delete", self._api_sicht_delete),
+            web.get("/api/sicht/dms", self._api_sicht_dms),
+            web.post("/api/sicht/dm", self._api_sicht_dm_merken),
+            web.post("/api/sicht/dmsuche", self._api_sicht_dm_suche_start),
+            web.get("/api/sicht/dmsuche", self._api_sicht_dm_suche),
         ])
         return app
 
@@ -222,10 +246,13 @@ class WebPanel(FeatureBasis):
             self._log_store.data["eintraege"] = list(self._log)
             self._spawn_save()
 
-    def _spawn_save(self):
-        """Speichert das Protokoll nebenher - der Knopfdruck soll nicht warten."""
+    def _spawn_save(self, topf=None):
+        """Speichert nebenher - der Knopfdruck soll nicht auf die Platte warten."""
+        topf = topf if topf is not None else self._log_store
+        if topf is None:
+            return
         try:
-            aufgabe = asyncio.get_running_loop().create_task(self._log_store.save())
+            aufgabe = asyncio.get_running_loop().create_task(topf.save())
         except RuntimeError:
             return          # kein Loop (Tests)
         self._log_tasks.add(aufgabe)
@@ -1405,10 +1432,19 @@ class WebPanel(FeatureBasis):
                 "autor": self._safe(lambda: str(geloest.author.display_name), None),
                 "text": self._safe(lambda: str(geloest.content)[:200], None),
             }
+        # Ein DM-Kanal hat keinen Namen - dort ist der Gegenueber der Name.
+        # Schreibt Flo selbst, ist das 'recipient'; schreibt der andere, ist es
+        # der Autor. Ohne diese Unterscheidung heisst jede DM nur "DM".
+        dm_name = None
+        if guild is None:
+            dm_name = (self._safe(lambda: str(kanal.recipient.display_name), None)
+                       or self._safe(lambda: str(message.author.display_name), None))
         return {
             "id": str(self._safe(lambda: message.id, "") or ""),
             "kanal": str(self._safe(lambda: kanal.id, "") or ""),
-            "kanal_name": self._safe(lambda: str(kanal.name), None) or "Direktnachricht",
+            "kanal_name": (self._safe(lambda: str(kanal.name), None)
+                           or (f"DM · {dm_name}" if dm_name else "Direktnachricht")),
+            "dm_mit": str(self._safe(lambda: kanal.recipient.id, "") or "") if guild is None else "",
             "guild": str(self._safe(lambda: guild.id, "") or ""),
             "guild_name": self._safe(lambda: str(guild.name), None) or "Direktnachricht",
             "t": int(self._safe(lambda: message.created_at.timestamp(), 0) or 0),
@@ -1442,6 +1478,10 @@ class WebPanel(FeatureBasis):
             self._sicht_nr += 1
             self._sicht.append(ereignis)
             self._sicht_push(ereignis)
+            # Ist das eine DM, den Gespraechspartner ins Verzeichnis eintragen -
+            # Discord fuehrt keins, siehe Kommentar am DM-Abschnitt.
+            if getattr(message, "guild", None) is None:
+                self._dm_aus_nachricht(message)
         except Exception:  # noqa: BLE001
             log.debug("BotSicht: Nachricht liess sich nicht aufbereiten", exc_info=True)
 
@@ -1521,6 +1561,283 @@ class WebPanel(FeatureBasis):
         neu = [e for e in list(self._sicht) if e.get("nr", 0) > seit]
         return web.json_response({"ok": True, "nr": self._sicht_nr,
                                   "ereignisse": neu[-BOTSICHT_VERLAUF_MAX:]})
+
+    # =====================================================================
+    # Direktnachrichten
+    # =====================================================================
+    # Harte Tatsache vorweg: Discord gibt einem Bot KEINE Moeglichkeit, seine
+    # DM-Kanaele aufzulisten. client.private_channels bleibt bei Bots leer, im
+    # READY stehen keine privaten Kanaele. Es gibt keinen Endpunkt "zeig mir
+    # alle DMs dieses Bots".
+    #
+    # Was es sehr wohl gibt: kennt man die Nutzer-ID, liefert create_dm() +
+    # history() den KOMPLETTEN Verlauf, auch von vor Jahren - Discord hebt ihn
+    # auf, nur das Verzeichnis fehlt.
+    #
+    # Also fuehrt Flo das Verzeichnis selbst (data/botsicht_dms.json, gefuettert
+    # aus sicht_notiere und den Sende-Stellen). Fuer alles, was VOR dieser
+    # Aenderung passiert ist, gibt es drei Wege zurueck - siehe _dm_suche_lauf.
+
+    def _dm_merken(self, user, ts=None, quelle="chat"):
+        """Haelt fest, dass Flo mit dieser Person privat geschrieben hat."""
+        uid = self._safe(lambda: int(user.id), 0) if not isinstance(user, int) else int(user)
+        if not uid:
+            return False
+        ich = self._safe(lambda: int(self._client.user.id), 0)
+        if uid == ich:
+            return False                    # mit sich selbst schreibt niemand
+        schluessel = str(uid)
+        eintrag = self._dm_partner.get(schluessel) or {
+            "zuerst": int(ts or time.time()), "anzahl": 0, "quelle": quelle}
+        name = self._safe(lambda: str(user.display_name), None) \
+            or self._safe(lambda: str(user.name), None)
+        if name:
+            eintrag["name"] = name
+        avatar = self._safe(lambda: user.display_avatar.url, None)
+        if avatar:
+            eintrag["avatar"] = avatar
+        eintrag["zuletzt"] = int(ts or time.time())
+        eintrag["anzahl"] = int(eintrag.get("anzahl", 0)) + 1
+        neu = schluessel not in self._dm_partner
+        self._dm_partner[schluessel] = eintrag
+        if len(self._dm_partner) > BOTSICHT_DM_MAX:
+            # Aelteste Bekanntschaft faellt raus. Der Verlauf bei Discord
+            # bleibt - man kann sie ueber die ID jederzeit zurueckholen.
+            aeltest = sorted(self._dm_partner.items(),
+                             key=lambda kv: kv[1].get("zuletzt", 0))
+            for k, _v in aeltest[:len(self._dm_partner) - BOTSICHT_DM_MAX]:
+                self._dm_partner.pop(k, None)
+        if self._dm_store is not None:
+            self._dm_store.data["partner"] = dict(self._dm_partner)
+            self._spawn_save(self._dm_store)
+        return neu
+
+    def _dm_aus_nachricht(self, message):
+        """Aus einer DM den Gespraechspartner heraussuchen und merken.
+
+        Schreibt FLO die Nachricht, ist der Partner der Empfaenger des Kanals;
+        schreibt jemand anders, ist er es selbst."""
+        kanal = getattr(message, "channel", None)
+        autor = getattr(message, "author", None)
+        ich = self._safe(lambda: int(self._client.user.id), 0)
+        wer = autor
+        if self._safe(lambda: int(autor.id), 0) == ich:
+            wer = self._safe(lambda: kanal.recipient, None)
+        if wer is None:
+            return
+        ts = self._safe(lambda: message.created_at.timestamp(), None)
+        self._dm_merken(wer, ts)
+
+    async def _dm_kanal(self, uid):
+        """DM-Kanal zu einer Nutzer-ID - notfalls neu geoeffnet.
+
+        create_dm() legt den Kanal an bzw. holt ihn; der Verlauf ist danach
+        vollstaendig da, auch wenn Flo die Person nie im Cache hatte."""
+        if self._client is None:
+            return None, None
+        user = self._safe(lambda: self._client.get_user(uid), None)
+        if user is None:
+            user = await self._client.fetch_user(uid)
+        kanal = getattr(user, "dm_channel", None)
+        if kanal is None:
+            kanal = await user.create_dm()
+        return kanal, user
+
+    async def _api_sicht_dms(self, request):
+        """Alle DM-Bekanntschaften, die Flo kennt - neueste zuerst."""
+        self._guard(request)
+        out = []
+        for uid, e in self._dm_partner.items():
+            out.append({
+                "id": uid,
+                "name": e.get("name") or f"Unbekannt ({uid})",
+                "avatar": e.get("avatar"),
+                "zuletzt": int(e.get("zuletzt", 0) or 0),
+                "zuerst": int(e.get("zuerst", 0) or 0),
+                "anzahl": int(e.get("anzahl", 0) or 0),
+                "quelle": e.get("quelle", "chat"),
+            })
+        out.sort(key=lambda e: -e["zuletzt"])
+        lauf = getattr(self, "_dm_suche", None)
+        return web.json_response({
+            "ok": True, "partner": out,
+            "suche": lauf if lauf else None,
+            # Damit die Oberflaeche ehrlich erklaeren kann, warum die Liste
+            # eventuell kurz ist.
+            "hinweis": "Discord verraet einem Bot seine DM-Kanaele nicht - "
+                       "Flo fuehrt die Liste selbst.",
+        })
+
+    async def _api_sicht_dm_merken(self, request):
+        """Eine Nutzer-ID von Hand hinzufuegen.
+
+        Der Notausgang: wer weiss, mit wem Flo mal geschrieben hat, holt das
+        Gespraech ueber die ID zurueck - Discord hat es noch."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        uid = self._uid(data.get("id"))
+        if uid is None:
+            return web.json_response({"ok": False, "error": "Das ist keine Nutzer-ID."},
+                                     status=400)
+        try:
+            kanal, user = await self._dm_kanal(uid)
+        except discord.NotFound:
+            return web.json_response({"ok": False, "error": "Diesen Nutzer gibt es nicht."},
+                                     status=404)
+        except Exception:  # noqa: BLE001
+            log.exception("BotSicht: DM-Kanal konnte nicht geoeffnet werden")
+            return web.json_response({"ok": False, "error": "Kanal nicht zu oeffnen"},
+                                     status=500)
+        # Nachsehen, ob dort ueberhaupt je etwas stand - sonst legt man sich
+        # eine Liste voller leerer Gespraeche an.
+        leer = True
+        try:
+            async for _m in kanal.history(limit=1):
+                leer = False
+        except Exception:  # noqa: BLE001
+            leer = False        # im Zweifel behalten
+        self._dm_merken(user, quelle="hand")
+        return web.json_response({"ok": True, "leer": leer,
+                                  "name": self._safe(lambda: str(user.display_name), str(uid))})
+
+    # Genau das Format, das _forward_dm_to_owner in bot.py schreibt:
+    #   📥 **DM von Name** (`123456789`):
+    _DM_RELAY_RE = re.compile(r"DM von\s+(.+?)\*\*\s*\(`?(\d{5,25})`?\)")
+    # Und das, was der Besitzer selbst tippt: 'flo dm 123 text' / 'flo dm <@123> text'
+    _DM_BEFEHL_RE = re.compile(r"\bdm\s+<?@?!?(\d{5,25})>?", re.IGNORECASE)
+
+    async def _api_sicht_dm_suche_start(self, request):
+        """Startet die Suche nach alten DMs (laeuft nebenher, Fortschritt via GET)."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        lauf = getattr(self, "_dm_suche", None)
+        if lauf and lauf.get("laeuft"):
+            return web.json_response({"ok": False, "error": "Die Suche laeuft schon."},
+                                     status=409)
+        gruendlich = self._flag(data.get("gruendlich"), False)
+        self._dm_suche = {"laeuft": True, "schritt": "Start", "geprueft": 0,
+                          "gesamt": 0, "gefunden": 0, "neu": [], "fehler": ""}
+        aufgabe = asyncio.get_running_loop().create_task(self._dm_suche_lauf(gruendlich))
+        self._sicht_tasks.add(aufgabe)
+        aufgabe.add_done_callback(self._sicht_tasks.discard)
+        return web.json_response({"ok": True, "gruendlich": gruendlich})
+
+    async def _api_sicht_dm_suche(self, request):
+        """Fortschritt der laufenden Suche."""
+        self._guard(request)
+        return web.json_response({"ok": True,
+                                  "suche": getattr(self, "_dm_suche", None)})
+
+    async def _dm_suche_lauf(self, gruendlich):
+        """Alte DM-Bekanntschaften zurueckholen. Drei Wege, absteigend billig:
+
+        1. DIE WEITERLEITUNGEN. bot.py schickt jede Fremd-DM an den Besitzer
+           weiter - MIT Absender-ID im Text. Flos eigene DM mit dem Besitzer
+           ist damit ein Verzeichnis aller, die ihm je geschrieben haben.
+        2. DIE BEFEHLE. 'flo dm <id> <text>' steht in dem Kanal, in dem es
+           getippt wurde. Das findet die Leute, denen Flo geschrieben hat.
+        3. DAS ABKLOPFEN. Fuer jede Nutzer-ID, die Flo ueberhaupt kennt
+           (Server-Caches, Wirtschaftsprofile, Namensverlauf), einmal den
+           DM-Kanal oeffnen und nachsehen, ob dort etwas steht. Das ist der
+           einzige VOLLSTAENDIGE Weg, kostet aber zwei Anfragen je Person -
+           deshalb nur auf ausdruecklichen Wunsch ('gruendlich')."""
+        stand = self._dm_suche
+        try:
+            owner_id = self._as_int(os.getenv("OWNER_ID", "0") or "0", 0)
+
+            # --- Weg 1: die Weiterleitungen in der Owner-DM -----------------
+            stand["schritt"] = "Weiterleitungen in deiner DM durchsehen"
+            if owner_id:
+                try:
+                    kanal, _u = await self._dm_kanal(owner_id)
+                    gesehen = 0
+                    async for m in kanal.history(limit=BOTSICHT_DM_SUCHE_MAX):
+                        gesehen += 1
+                        stand["geprueft"] = gesehen
+                        for name, uid in self._DM_RELAY_RE.findall(m.content or ""):
+                            if self._dm_merken(int(uid), quelle="relay"):
+                                self._dm_partner[str(int(uid))].setdefault(
+                                    "name", name.strip())
+                                stand["neu"].append(name.strip() or uid)
+                                stand["gefunden"] += 1
+                except Exception:  # noqa: BLE001
+                    log.info("DM-Suche: Owner-Verlauf nicht lesbar", exc_info=True)
+
+            # --- Weg 2: 'flo dm <id>' in den Serverkanaelen -----------------
+            stand["schritt"] = "Server nach 'dm'-Befehlen durchsehen"
+            for g in (getattr(self._client, "guilds", []) or []):
+                for c in (self._safe(lambda: list(g.text_channels), []) or []):
+                    r = self._sicht_rechte(c, g)
+                    if not r.get("verlauf"):
+                        continue
+                    try:
+                        async for m in c.history(limit=400):
+                            text = (m.content or "")
+                            if " dm " not in f" {text.lower()} ":
+                                continue
+                            for uid in self._DM_BEFEHL_RE.findall(text):
+                                if self._dm_merken(int(uid), quelle="befehl"):
+                                    stand["neu"].append(str(uid))
+                                    stand["gefunden"] += 1
+                    except Exception:  # noqa: BLE001
+                        continue
+
+            # --- Weg 3: jede bekannte ID abklopfen --------------------------
+            if gruendlich:
+                kandidaten = self._dm_kandidaten()
+                stand["gesamt"] = len(kandidaten)
+                stand["geprueft"] = 0
+                stand["schritt"] = f"{len(kandidaten)} bekannte Leute abklopfen"
+                for i, uid in enumerate(kandidaten, 1):
+                    stand["geprueft"] = i
+                    if str(uid) in self._dm_partner:
+                        continue
+                    try:
+                        kanal, user = await self._dm_kanal(uid)
+                        async for _m in kanal.history(limit=1):
+                            self._dm_merken(user, quelle="abgeklopft")
+                            stand["neu"].append(
+                                self._safe(lambda: str(user.display_name), str(uid)))
+                            stand["gefunden"] += 1
+                            break
+                    except Exception:  # noqa: BLE001
+                        continue
+                    # Freundlich zum Rate-Limit bleiben: das sind zwei Anfragen
+                    # je Person, und der Bot soll waehrenddessen weiterlaufen.
+                    await asyncio.sleep(0.25)
+            stand["schritt"] = "fertig"
+        except Exception as exc:  # noqa: BLE001
+            log.exception("DM-Suche fehlgeschlagen")
+            stand["fehler"] = str(exc)[:200]
+            stand["schritt"] = "abgebrochen"
+        finally:
+            stand["laeuft"] = False
+            del stand["neu"][40:]        # die Liste ist nur zum Anzeigen da
+
+    def _dm_kandidaten(self):
+        """Jede Nutzer-ID, die Flo irgendwoher kennt - Grundlage fuers
+        Abklopfen. Bots fliegen raus, die lesen keine DMs."""
+        ids = set()
+        ich = self._safe(lambda: int(self._client.user.id), 0)
+        for u in (self._safe(lambda: list(self._client.users), []) or []):
+            if not self._safe(lambda: u.bot, False):
+                ids.add(self._safe(lambda: int(u.id), 0))
+        for g in (getattr(self._client, "guilds", []) or []):
+            for m in (self._safe(lambda: list(g.members), []) or []):
+                if not self._safe(lambda: m.bot, False):
+                    ids.add(self._safe(lambda: int(m.id), 0))
+        # Wer je Coins bekommen hat, hat auch je geschrieben.
+        for uid in (self._users_dict() or {}):
+            ids.add(self._as_int(uid, 0))
+        try:
+            import profil
+            for uid in (profil.instance._store.data.get("users", {}) or {}):
+                ids.add(self._as_int(uid, 0))
+        except Exception:  # noqa: BLE001
+            pass
+        ids.discard(0)
+        ids.discard(ich)
+        return sorted(ids)
 
     # --- Struktur: Server, Kanaele, Mitglieder ----------------------------
     async def _api_sicht_guilds(self, request):
@@ -1689,7 +2006,23 @@ class WebPanel(FeatureBasis):
         Absage statt einer leeren Liste - sonst sieht es aus, als sei der
         Kanal still."""
         self._guard(request)
-        kanal = self._sicht_kanal(request.query.get("channel"))
+        # ?dm=<uid> statt ?channel=<cid>: den privaten Verlauf mit einer Person.
+        # Der Kanal wird dabei notfalls neu geoeffnet - der Verlauf ist danach
+        # vollstaendig da, auch wenn Flo diese DM seit dem Neustart nie sah.
+        dm_id = self._uid(request.query.get("dm"))
+        if dm_id is not None:
+            try:
+                kanal, user = await self._dm_kanal(dm_id)
+            except discord.NotFound:
+                return web.json_response({"ok": False, "error": "Nutzer gibt es nicht"},
+                                         status=404)
+            except Exception:  # noqa: BLE001
+                log.exception("BotSicht: DM-Kanal nicht zu oeffnen")
+                return web.json_response({"ok": False, "error": "DM nicht zu oeffnen"},
+                                         status=500)
+            self._dm_partner.setdefault(str(dm_id), {})
+        else:
+            kanal = self._sicht_kanal(request.query.get("channel"))
         if kanal is None:
             return web.json_response({"ok": False, "error": "Kanal nicht gefunden"},
                                      status=404)
@@ -1747,7 +2080,15 @@ class WebPanel(FeatureBasis):
         """Als Flo in einen Kanal schreiben - optional als Antwort."""
         self._guard(request)
         data = await self._json_objekt(request)
-        kanal = self._sicht_kanal(data.get("channel"))
+        dm_id = self._uid(data.get("dm"))
+        if dm_id is not None:
+            try:
+                kanal, _user = await self._dm_kanal(dm_id)
+            except Exception:  # noqa: BLE001
+                return web.json_response({"ok": False, "error": "DM nicht zu oeffnen"},
+                                         status=404)
+        else:
+            kanal = self._sicht_kanal(data.get("channel"))
         if kanal is None:
             return web.json_response({"ok": False, "error": "Kanal nicht gefunden"},
                                      status=404)
@@ -1771,7 +2112,9 @@ class WebPanel(FeatureBasis):
             msg = await kanal.send(text, **kwargs)
         except discord.Forbidden:
             return web.json_response(
-                {"ok": False, "error": "Flo darf hier nicht schreiben."}, status=403)
+                {"ok": False, "error": ("Die Person hat DMs zu oder blockiert Flo."
+                                        if dm_id is not None
+                                        else "Flo darf hier nicht schreiben.")}, status=403)
         except Exception:  # noqa: BLE001
             log.exception("BotSicht: Senden fehlgeschlagen")
             return web.json_response({"ok": False, "error": "senden fehlgeschlagen"},
@@ -1948,3 +2291,6 @@ start = instance.start
 stop = instance.stop
 # BotSicht: bot.py meldet hier JEDE gesehene Nachricht (heisser Pfad, siehe dort).
 sicht_notiere = instance.sicht_notiere
+# Und hier die Stellen, an denen Flo von sich aus eine DM verschickt - Discord
+# fuehrt kein Verzeichnis der DM-Kanaele, also fuehrt Flo es selbst.
+sicht_dm_merken = instance._dm_merken

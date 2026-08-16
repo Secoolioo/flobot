@@ -103,7 +103,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 188 Tests
+python3 test_games_logic.py    # 191 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -415,9 +415,39 @@ Abfrage alle 2,5 s zurück (`/api/sicht/feed?seit=…`). Der Puffer im Bot fasst
 sieht, ist flüchtig, ein Mitschnitt des Servers auf der Platte soll das nicht
 werden.
 
+### Direktnachrichten
+
+Der ✉️-Knopf zeigt jedes private Gespräch, das Flo je geführt hat — lesen und
+antworten inklusive. Dabei gibt es **eine harte Grenze von Discord**, die man
+kennen muss:
+
+> Discord hat für Bots **keinen** Weg, die eigenen DM-Kanäle aufzulisten.
+> `private_channels` bleibt leer, im READY stehen keine privaten Kanäle, es gibt
+> schlicht keinen solchen Endpunkt.
+
+Was es sehr wohl gibt: **kennt man die Nutzer-ID, liefert Discord den kompletten
+Verlauf** — auch von vor Jahren. Es fehlt nur das Verzeichnis, nicht der Inhalt.
+
+Also führt Flo das Verzeichnis selbst (`data/botsicht_dms.json`), gefüttert aus
+jeder DM, die durch `on_message` läuft, und aus `flo dm …`. Für alles, was
+**vorher** passiert ist, gibt es drei Wege zurück:
+
+| Knopf | Was er tut | Findet |
+|---|---|---|
+| **Suchen** | Liest deine Owner-DM durch. `_forward_dm_to_owner` hat jede Fremd-DM mit **Absender-ID** an dich weitergeleitet — dein Postfach ist damit ein Verzeichnis aller, die Flo je geschrieben haben. Dazu die `flo dm <id>`-Befehle in den Serverkanälen. | Fast alles, in Sekunden |
+| **Gründlich** | Klopft zusätzlich **jede** Nutzer-ID ab, die Flo kennt (Server-Caches, Wirtschaftsprofile, Namensverlauf): DM-Kanal öffnen, nachsehen, ob dort etwas steht. | Alles — zwei Anfragen pro Person, dauert Minuten |
+| **ID eingeben** | Der Notausgang: du kennst die Person, Flo nicht. | Genau dieses Gespräch |
+
+Die Suche läuft nebenher mit Fortschrittsanzeige; der Bot arbeitet normal
+weiter, und zwischen den Abfragen liegt eine Pause, damit das Rate-Limit ruhig
+bleibt. Der Verlauf selbst kommt immer **frisch von Discord**, nie aus Flos
+Gedächtnis — er reicht deshalb so weit zurück wie das Gespräch, über Neustarts
+und Updates hinweg.
+
 > ⚠️ Das Panel läuft standardmäßig ohne Login. Mit BotSicht heißt „wer den Port
-> erreicht" jetzt auch: kann den kompletten Chat mitlesen und im Namen des Bots
-> schreiben. Der Port gehört ins eigene Netz — sonst `WEBPANEL_AUTH=1`.
+> erreicht" jetzt auch: kann den kompletten Chat **und alle Direktnachrichten**
+> mitlesen und im Namen des Bots schreiben. Der Port gehört ins eigene Netz —
+> sonst `WEBPANEL_AUTH=1`.
 
 ---
 
@@ -502,6 +532,7 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `WEBPANEL_AUTH` | `0` | Login fürs Panel |
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
+| `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
 | `FLOAKTIE_IDLE_30MIN` | `0.11` | Verfall je halber Stunde |
 | `FLOAKTIE_CEIL` | `2` | wie weit über den Zielkurs |
 | `FLOAKTIE_GRUND_FAKTOR` | `4` | wie stark der Grundwert trägt |

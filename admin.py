@@ -335,6 +335,14 @@ class Admin(FeatureBasis):
             return "Bots lesen keine DMs. 🤖"
         try:
             await user.send(text)
+            # Fuers DM-Verzeichnis der BotSicht merken: Discord verraet einem
+            # Bot seine DM-Kanaele nicht, also schreibt Flo selbst mit, mit wem
+            # er je privat geschrieben hat.
+            try:
+                import webpanel
+                webpanel.sicht_dm_merken(user, quelle="gesendet")
+            except Exception:  # noqa: BLE001 - reine Buchfuehrung, nie kritisch
+                log.debug("DM-Verzeichnis nicht erreichbar", exc_info=True)
         except discord.Forbidden:
             return (f"**{user.display_name}** hat DMs zu (oder blockiert mich) - "
                     "Zustellung nicht möglich. 📪")
