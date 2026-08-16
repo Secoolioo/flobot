@@ -90,6 +90,15 @@ ADVANCE_MAX_FEHLER = 2
 # aber nichts; 'Flo spiel X' reihte nur ein, weil is_active() die ganze Zeit
 # True blieb. Nur 'Flo stop' kam da raus.
 NEUSTART_MAX_VERSUCHE = 2
+# So viele Sekunden darf am Ende eines Songs fehlen, ohne dass es als ABBRUCH
+# gilt. Alles darueber heisst: FFmpeg ist gestorben, der Song war nicht zu Ende.
+#
+# Das ist noetig, weil discord.py beides GLEICH meldet: stirbt der FFmpeg-Prozess,
+# liefert read() einfach b"" - genau wie am Songende. Der after-Callback bekommt
+# dabei KEINEN Fehler. Flo hielt einen nach 40 Sekunden abgestuerzten Song also
+# fuer fertig und schaltete brav weiter. Fuer den Zuhoerer sieht das aus wie
+# "spielt nur halb und springt dann zum naechsten".
+ABBRUCH_TOLERANZ = 10
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
@@ -741,6 +750,11 @@ class GuildPlayer:
         sitzung = self._session_gen    # gehoert dieser Lauf noch zur laufenden Sitzung?
         fehler_serie = 0        # Fehlschlaege DIREKT hintereinander
         try:
+            # Kam der Callback, weil der Song ZU ENDE ist - oder weil FFmpeg
+            # gestorben ist? Nur beim echten Ende wird weitergeschaltet.
+            # (Bei gen=None hat ein Mensch 'skip' gedrueckt - der will weiter.)
+            if gen is not None and await self._nach_abbruch_fortsetzen():
+                return
             while True:
                 if gen is not None and gen != self._play_gen:
                     return          # jemand hat inzwischen selbst gestartet
@@ -883,7 +897,37 @@ class GuildPlayer:
             await self._warte_bis_still()
         await self._advance()            # ohne gen -> laeuft IMMER
 
-    async def _neustart_an_position(self):
+    async def _nach_abbruch_fortsetzen(self):
+        """War der Song ABGEBROCHEN statt zu Ende? Dann dort weitermachen.
+
+        discord.py meldet beides gleich: stirbt FFmpeg, liefert read() b"" -
+        genau wie am Songende, und der after-Callback bekommt keinen Fehler.
+        Ohne diese Pruefung schaltete Flo nach einem Absturz einfach zum
+        naechsten Song; fuer den Zuhoerer bricht die Musik dann staendig
+        mittendrin ab und springt weiter.
+
+        Rueckgabe True = uebernommen (der Aufrufer darf NICHT weiterschalten)."""
+        track = self.current
+        if track is None or not track.duration:
+            return False                 # ohne bekannte Laenge nicht zu beurteilen
+        gehoert = self.position()
+        fehlt = track.duration - gehoert
+        if fehlt <= ABBRUCH_TOLERANZ:
+            return False                 # normal zu Ende gelaufen
+        if self._neustart_versuche >= NEUSTART_MAX_VERSUCHE:
+            log.error("'%s' bricht immer wieder ab (%.0f von %d s) - gebe auf.",
+                      track.title, gehoert, track.duration)
+            await self._sag(f"⏭️ **{track.title}** bricht immer wieder ab – "
+                            f"ich gehe zum nächsten.")
+            return False                 # aufgeben -> normal weiterschalten
+        self._neustart_versuche += 1
+        log.warning("Song '%s' brach nach %.0f von %d s ab - setze fort "
+                    "(Versuch %d/%d).", track.title, gehoert, track.duration,
+                    self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
+        # Zwei Sekunden Ueberlappung: bis zum Abbruch war ja Ton da.
+        return await self._neustart_an_position(verlust=2.0)
+
+    async def _neustart_an_position(self, *, verlust=None):
         """Startet den laufenden Song an der zuletzt GEHOERTEN Stelle neu -
         ohne die Verbindung anzufassen und ohne die Warteschlange zu opfern.
 
@@ -910,9 +954,12 @@ class GuildPlayer:
         async with self._voice_lock:
             # Die Uhr lief waehrend des Stalls weiter, gehoert hat man das
             # aber nicht. Die stillen Sekunden also wieder abziehen, damit der
-            # Song nicht mittendrin weiterspringt.
-            verloren = VOICE_STALL_TICKS * VOICE_HEAL_SECONDS * max(0.1, self.speed)
-            pos = max(0.0, self.position() - verloren)
+            # Song nicht mittendrin weiterspringt. Bei einem ABBRUCH (FFmpeg
+            # gestorben) war dagegen bis zuletzt Ton da - dort genuegen ein
+            # paar Sekunden Ueberlappung.
+            if verlust is None:
+                verlust = VOICE_STALL_TICKS * VOICE_HEAL_SECONDS * max(0.1, self.speed)
+            pos = max(0.0, self.position() - verlust)
             self._play_gen += 1        # haengenden after-Callback entwerten
             try:
                 self.voice.stop()      # killt die haengende FFmpeg-Quelle

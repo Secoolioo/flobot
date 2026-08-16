@@ -8690,6 +8690,59 @@ def test_musik_versteht_die_links_aus_den_apps():
     assert p("schau mal https://spotify.link/aBc") == ("spotify_kurz", "https://spotify.link/aBc")
 
 
+def test_musik_abgebrochener_song_gilt_nicht_als_fertig():
+    """Stirbt FFmpeg mitten im Song, darf Flo nicht einfach weiterschalten.
+
+    discord.py meldet beides GLEICH: liefert read() b"", ist der Song 'zu
+    Ende' - egal ob er wirklich durch ist oder der Prozess abgestuerzt ist.
+    Der after-Callback bekommt dabei KEINEN Fehler. Flo hielt einen nach 40
+    von 200 Sekunden abgestuerzten Song also fuer fertig und ging zum
+    naechsten; fuer den Zuhoerer bricht die Musik staendig ab und springt
+    weiter - genau das gemeldete 'funktioniert nur halbwegs'."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        lang = music.Track(title="Lang", stream_url="http://stream/lang",
+                           query="ytsearch1:Lang", duration=200)
+        naechster = _track("Naechster")
+        player.start(lang)
+        player.queue.append(naechster)
+
+        def stirbt_bei(sekunde):
+            """FFmpeg ist weg: der Player spielt nicht mehr, after feuert -
+            und zwar OHNE Fehler, genau wie am echten Songende."""
+            player._played = sekunde
+            player._seg_start = None
+            voice.spielt = False
+            asyncio.run(player._advance(player._play_gen))
+
+        # 40 von 200 Sekunden gehoert - dann stirbt FFmpeg.
+        stirbt_bei(40.0)
+
+        # Der Song laeuft weiter (an der Stelle), die Warteschlange bleibt.
+        assert player.current is lang, player.current
+        assert player.queue == [naechster], player.queue
+        assert player._neustart_versuche == 1
+
+        # Beim zweiten Mal nochmal - beim dritten gibt Flo auf und schaltet weiter.
+        stirbt_bei(40.0)
+        assert player.current is lang and player._neustart_versuche == 2
+        stirbt_bei(40.0)
+        assert player.current is naechster, player.current
+
+        # Und ein Song, der WIRKLICH durch ist, schaltet ganz normal weiter.
+        kurz = music.Track(title="Kurz", stream_url="http://stream/kurz",
+                           query="", duration=100)
+        letzter = _track("Letzter")
+        voice.spielt = False
+        player.start(kurz)
+        player.queue.append(letzter)
+        stirbt_bei(100.0)          # hier ist er wirklich durch
+        assert player.current is letzter, player.current
+    finally:
+        aufraeumen()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
