@@ -433,6 +433,206 @@ body{
 .sw.on i{left:24px}
 .sw.dis{opacity:.4;cursor:not-allowed}
 .sw.busy{opacity:.6;pointer-events:none}
+
+/* ============ BOTSICHT ============
+   Discord-Aufbau (Server-Leiste | Kanalliste | Chat | Mitglieder), aber im
+   Haus-Look statt in Discord-Blau. Der Bereich scrollt NICHT als Ganzes -
+   es scrollen nur die drei Spalten fuer sich, sonst laeuft einem beim Lesen
+   die Eingabezeile weg. */
+.content.bs-mode{padding:0;overflow:hidden}
+.bs{display:grid;grid-template-columns:76px 250px minmax(0,1fr) 236px;height:100%;
+  background:rgba(8,10,14,.55);border-top:1px solid var(--hair)}
+.bs>*{min-width:0;min-height:0}
+
+/* --- Server-Leiste --- */
+.bs-rail{display:flex;flex-direction:column;align-items:center;gap:9px;padding:14px 0 30px;
+  overflow-y:auto;background:rgba(0,0,0,.3);border-right:1px solid var(--hair);scrollbar-width:none}
+.bs-rail::-webkit-scrollbar{display:none}
+.bs-g{position:relative;width:48px;height:48px;border-radius:16px;cursor:pointer;flex:none;
+  display:grid;place-items:center;overflow:hidden;font-weight:750;font-size:15px;color:#fff;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.07);
+  transition:border-radius .22s var(--ease),transform .22s var(--ease),box-shadow .25s var(--ease)}
+.bs-g img{width:100%;height:100%;object-fit:cover}
+.bs-g:hover{border-radius:14px;transform:translateY(-1px)}
+.bs-g.on{border-radius:13px;box-shadow:var(--glow-gold)}
+/* Der Balken links, den Discord bei aktivem Server zeigt. */
+.bs-g::before{content:"";position:absolute;left:-14px;top:50%;transform:translateY(-50%);
+  width:4px;height:0;border-radius:0 4px 4px 0;background:var(--gold-2);transition:height .22s var(--ease)}
+.bs-g:hover::before{height:18px}
+.bs-g.on::before{height:30px}
+.bs-rail hr{width:30px;border:0;border-top:1px solid rgba(255,255,255,.1);margin:5px 0}
+.bs-live-b{width:48px;height:48px;border-radius:16px;display:grid;place-items:center;cursor:pointer;flex:none;
+  background:linear-gradient(150deg,rgba(16,185,129,.22),rgba(16,185,129,.06));
+  border:1px solid rgba(16,185,129,.3);transition:border-radius .22s var(--ease),box-shadow .25s var(--ease)}
+.bs-live-b svg{width:22px;height:22px;stroke:var(--emerald-2)}
+.bs-live-b.on{border-radius:13px;box-shadow:0 0 0 1px rgba(16,185,129,.5),0 8px 30px -8px rgba(16,185,129,.5)}
+
+/* --- Kanalliste --- */
+.bs-side{display:flex;flex-direction:column;background:rgba(0,0,0,.19);border-right:1px solid var(--hair)}
+.bs-side-h{padding:15px 16px;border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:10px;flex:none}
+.bs-side-h b{font-size:14.5px;font-weight:700;letter-spacing:-.2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bs-side-l{flex:1;overflow-y:auto;padding:10px 8px 24px}
+.bs-cat{display:flex;align-items:center;gap:5px;padding:13px 8px 5px;color:var(--mute);
+  font-size:10.5px;font-weight:750;letter-spacing:1.1px;text-transform:uppercase;cursor:pointer;user-select:none}
+.bs-cat svg{width:11px;height:11px;transition:transform .2s var(--ease)}
+.bs-cat.zu svg{transform:rotate(-90deg)}
+.bs-c{display:flex;align-items:center;gap:7px;padding:7px 9px;border-radius:9px;cursor:pointer;
+  color:var(--dim);font-size:14px;transition:background .16s,color .16s}
+.bs-c:hover{background:rgba(255,255,255,.045);color:var(--text)}
+.bs-c.on{background:rgba(212,175,55,.13);color:#fff;font-weight:600}
+.bs-c .h{color:var(--faint);font-weight:700;flex:none;font-size:16px;line-height:1}
+.bs-c .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.bs-c.zu{opacity:.42;cursor:not-allowed}
+.bs-c.zu:hover{background:transparent;color:var(--dim)}
+.bs-c .lock{width:12px;height:12px;stroke:var(--red);flex:none;opacity:.85}
+.bs-vm{display:flex;align-items:center;gap:7px;padding:4px 9px 4px 26px;color:var(--mute);font-size:12.5px}
+.bs-vm .av{width:19px;height:19px;border-radius:50%;font-size:8px}
+.bs-here{margin-left:auto;font-size:9.5px;letter-spacing:.6px;color:var(--emerald-2);
+  background:rgba(16,185,129,.14);border:1px solid rgba(16,185,129,.28);padding:1px 6px;border-radius:999px}
+
+/* --- Chat --- */
+.bs-chat{display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(255,255,255,.012),transparent 120px)}
+.bs-head{flex:none;display:flex;align-items:center;gap:11px;padding:14px 20px;border-bottom:1px solid var(--hair);
+  background:rgba(10,12,17,.5);backdrop-filter:blur(10px)}
+.bs-head .t{font-size:15.5px;font-weight:700;display:flex;align-items:center;gap:6px;min-width:0}
+.bs-head .t span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bs-head .sub{color:var(--faint);font-size:12px;border-left:1px solid var(--border-2);padding-left:11px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.bs-perms{display:flex;gap:5px;flex:none}
+.bs-perm{font-size:9.5px;letter-spacing:.5px;padding:3px 7px;border-radius:7px;font-weight:700;
+  background:rgba(255,255,255,.05);color:var(--mute);border:1px solid var(--hair)}
+.bs-perm.ja{color:var(--emerald-2);background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.22)}
+.bs-perm.nein{color:var(--red);background:rgba(240,99,91,.09);border-color:rgba(240,99,91,.22)}
+.bs-msgs{flex:1;overflow-y:auto;padding:20px 8px 14px 0;display:flex;flex-direction:column;gap:0}
+.bs-more{align-self:center;margin:2px 0 16px;font-size:12px;color:var(--dim);cursor:pointer;
+  padding:6px 16px;border-radius:999px;border:1px solid var(--border);background:var(--surface)}
+.bs-more:hover{background:var(--surface-2);color:var(--text)}
+.bs-day{display:flex;align-items:center;gap:12px;margin:16px 22px 10px;color:var(--faint);font-size:11px;letter-spacing:.8px}
+.bs-day::before,.bs-day::after{content:"";flex:1;height:1px;background:var(--hair)}
+
+.bs-m{position:relative;display:grid;grid-template-columns:56px minmax(0,1fr);padding:2px 20px 2px 0;
+  animation:bsIn .28s var(--ease-2) both}
+@keyframes bsIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.bs-m:hover{background:rgba(255,255,255,.022)}
+.bs-m.head{margin-top:14px}
+.bs-m .av{justify-self:center;width:38px;height:38px;border-radius:50%;margin-top:3px;font-size:13px}
+.bs-m .meta{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;line-height:1.3}
+.bs-m .nm{font-weight:650;font-size:14.5px;color:var(--plat)}
+.bs-m .ts{font-size:10.5px;color:var(--faint)}
+.bs-m .bd{font-size:9px;letter-spacing:.6px;font-weight:750;padding:1px 5px;border-radius:5px;
+  background:rgba(124,166,255,.16);color:#a9c4ff;border:1px solid rgba(124,166,255,.25)}
+.bs-m .bd.flo{background:rgba(212,175,55,.17);color:var(--gold-2);border-color:rgba(212,175,55,.3)}
+.bs-tx{font-size:14.5px;line-height:1.52;color:var(--text);white-space:pre-wrap;word-wrap:break-word;
+  overflow-wrap:anywhere}
+.bs-tx .men{background:rgba(124,166,255,.16);color:#b6ccff;border-radius:4px;padding:0 3px;font-weight:600}
+.bs-tx a{color:var(--blue);text-decoration:none}
+.bs-tx a:hover{text-decoration:underline}
+.bs-tx code{font-family:var(--mono);font-size:12.5px;background:rgba(0,0,0,.4);padding:1.5px 5px;border-radius:5px;
+  border:1px solid var(--hair)}
+.bs-tx pre{font-family:var(--mono);font-size:12.5px;background:rgba(0,0,0,.42);padding:10px 13px;border-radius:9px;
+  border:1px solid var(--hair);margin:5px 0;overflow-x:auto;white-space:pre}
+.bs-edit{font-size:10px;color:var(--faint);margin-left:5px}
+.bs-sys{color:var(--mute);font-style:italic;font-size:13px}
+/* Antwort-Vorschau ueber der Nachricht - Discord zieht dazu eine Ecke nach
+   links oben, das braucht hier eine eigene Spalte und lohnt den Aufwand nicht.
+   Ein Pfeil vorn sagt dasselbe. */
+.bs-rep{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mute);margin-bottom:3px;
+  padding-left:2px;overflow:hidden}
+.bs-rep::before{content:"↰";color:var(--border-2);font-size:14px;flex:none;line-height:1}
+.bs-rep b{color:var(--dim);font-weight:600;flex:none}
+.bs-rep i{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.75}
+.bs-att{margin-top:6px;display:flex;flex-wrap:wrap;gap:8px}
+.bs-att img{max-width:min(400px,100%);max-height:300px;border-radius:11px;border:1px solid var(--hair);display:block}
+.bs-file{display:flex;align-items:center;gap:9px;padding:9px 13px;border-radius:10px;background:var(--surface);
+  border:1px solid var(--border);font-size:13px;color:var(--blue);text-decoration:none}
+.bs-file:hover{background:var(--surface-2)}
+.bs-emb{margin-top:6px;max-width:520px;border-radius:6px;background:rgba(0,0,0,.32);border:1px solid var(--hair);
+  border-left:4px solid var(--mute);padding:11px 14px 13px}
+.bs-emb .et{font-weight:700;font-size:14px;margin-bottom:4px;color:var(--text)}
+.bs-emb .ea{font-size:12px;color:var(--dim);margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bs-emb .ed{font-size:13.5px;color:var(--dim);line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.bs-emb .ef{display:grid;gap:8px;margin-top:9px;grid-template-columns:1fr}
+.bs-emb .ef.zwei{grid-template-columns:1fr 1fr}
+.bs-emb .efi b{display:block;font-size:12.5px;margin-bottom:2px}
+.bs-emb .efi span{font-size:12.5px;color:var(--dim);white-space:pre-wrap}
+.bs-emb img.eimg{margin-top:9px;max-width:100%;border-radius:8px;display:block}
+.bs-emb .efo{margin-top:9px;font-size:11px;color:var(--faint)}
+.bs-rx{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.bs-r{display:flex;align-items:center;gap:5px;padding:2px 8px;border-radius:9px;font-size:13px;cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid var(--hair);transition:background .15s,border-color .15s}
+.bs-r:hover{background:rgba(255,255,255,.09)}
+.bs-r.mein{background:rgba(212,175,55,.15);border-color:rgba(212,175,55,.35)}
+.bs-r b{font-size:11.5px;font-family:var(--mono);color:var(--dim)}
+.bs-r img{width:16px;height:16px}
+/* Werkzeugleiste, die beim Ueberfahren rechts oben an der Nachricht klebt. */
+.bs-tools{position:absolute;top:-12px;right:16px;display:none;gap:2px;padding:3px;border-radius:9px;
+  background:var(--glass);border:1px solid var(--border-2);box-shadow:var(--sh-sm);backdrop-filter:blur(12px);z-index:3}
+.bs-m:hover .bs-tools{display:flex}
+.bs-tools button{width:28px;height:28px;border:0;background:transparent;color:var(--dim);cursor:pointer;
+  border-radius:7px;display:grid;place-items:center;font-size:14px}
+.bs-tools button:hover{background:rgba(255,255,255,.09);color:var(--text)}
+.bs-tools button.del:hover{color:var(--red)}
+
+/* --- Eingabe --- */
+.bs-comp{flex:none;padding:0 20px 18px}
+.bs-reply{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--dim);padding:7px 14px;
+  background:rgba(255,255,255,.045);border:1px solid var(--border);border-bottom:0;border-radius:12px 12px 0 0}
+.bs-reply b{color:var(--gold-2)}
+.bs-reply .x{margin-left:auto;cursor:pointer;color:var(--mute);font-size:15px;line-height:1}
+.bs-reply .x:hover{color:var(--red)}
+.bs-box{display:flex;align-items:flex-end;gap:10px;padding:11px 14px;border-radius:14px;
+  background:rgba(255,255,255,.045);border:1px solid var(--border);transition:border-color .2s}
+.bs-box:focus-within{border-color:rgba(212,175,55,.4)}
+.bs-box.mit-antwort{border-radius:0 0 12px 12px}
+.bs-box textarea{flex:1;background:transparent;border:0;outline:0;color:var(--text);font-family:var(--sans);
+  font-size:14.5px;line-height:1.5;resize:none;max-height:180px;min-height:22px}
+.bs-box textarea::placeholder{color:var(--faint)}
+.bs-send{width:34px;height:34px;flex:none;border:0;border-radius:10px;cursor:pointer;display:grid;place-items:center;
+  background:linear-gradient(145deg,var(--gold),var(--gold-3));color:#1a1408;transition:opacity .2s,transform .15s}
+.bs-send:hover{transform:translateY(-1px)}
+.bs-send:disabled{opacity:.3;cursor:not-allowed;transform:none}
+.bs-send svg{width:17px;height:17px}
+.bs-hint{margin-top:7px;font-size:11px;color:var(--faint);display:flex;gap:14px;flex-wrap:wrap}
+.bs-hint kbd{font-family:var(--mono);background:rgba(255,255,255,.07);border:1px solid var(--hair);
+  border-radius:4px;padding:0 4px;font-size:10px}
+.bs-gesperrt{padding:14px;border-radius:13px;text-align:center;font-size:13px;color:var(--red);
+  background:rgba(240,99,91,.07);border:1px solid rgba(240,99,91,.2)}
+
+/* --- Mitglieder --- */
+.bs-mem{background:rgba(0,0,0,.19);border-left:1px solid var(--hair);overflow-y:auto;padding:14px 10px 30px}
+.bs-mem h4{color:var(--mute);font-size:10.5px;font-weight:750;letter-spacing:1.1px;text-transform:uppercase;
+  padding:10px 8px 6px}
+.bs-mm{display:flex;align-items:center;gap:9px;padding:5px 8px;border-radius:9px;font-size:13.5px;color:var(--dim)}
+.bs-mm:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.bs-mm .av{width:30px;height:30px;border-radius:50%;font-size:11px;flex:none;position:relative}
+.bs-mm .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bs-mm .dot{width:9px;height:9px;border-radius:50%;flex:none;margin-left:auto;background:var(--faint)}
+.bs-mm .dot.on{background:var(--emerald)}
+.bs-note{margin:10px 6px 0;padding:11px 12px;border-radius:11px;font-size:11.5px;line-height:1.5;
+  color:var(--mute);background:rgba(255,255,255,.03);border:1px solid var(--hair)}
+.bs-note b{color:var(--dim)}
+
+/* --- Live-Anzeige --- */
+.bs-live{display:flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.6px;font-weight:700;
+  padding:4px 9px;border-radius:999px;flex:none;
+  background:rgba(16,185,129,.1);color:var(--emerald-2);border:1px solid rgba(16,185,129,.25)}
+.bs-live.aus{background:rgba(240,99,91,.08);color:var(--red);border-color:rgba(240,99,91,.22)}
+.bs-live i{width:7px;height:7px;border-radius:50%;background:currentColor;animation:puls 2s infinite}
+@keyframes puls{0%,100%{opacity:1}50%{opacity:.25}}
+.bs-leer{margin:auto;text-align:center;color:var(--faint);font-size:13px;padding:40px;max-width:420px;line-height:1.6}
+.bs-leer .gr{font-size:34px;margin-bottom:12px;opacity:.5}
+/* Im Alles-Strom steht ueber jeder Nachricht, wo sie herkommt. */
+.bs-woher{font-size:10.5px;color:var(--faint);letter-spacing:.4px;margin-bottom:2px}
+.bs-woher b{color:var(--mute);font-weight:600}
+
+.bs-kbtn{display:none;width:32px;height:32px;border-radius:9px;place-items:center;cursor:pointer;flex:none;
+  color:var(--dim);background:var(--surface);border:1px solid var(--border)}
+.bs-kbtn svg{width:16px;height:16px}
+.bs-kbtn:hover{color:var(--text);background:var(--surface-2)}
+@media(max-width:1250px){ .bs{grid-template-columns:76px 230px minmax(0,1fr)} .bs-mem{display:none} }
+@media(max-width:900px){ .bs{grid-template-columns:64px minmax(0,1fr)} .bs-side{display:none}
+  .bs.zeig-kanaele .bs-side{display:flex} .bs.zeig-kanaele .bs-chat{display:none}
+  .bs-kbtn{display:grid} .bs-head .sub{display:none} .bs-perms{display:none} }
 </style>
 </head>
 <body>
@@ -544,12 +744,15 @@ function toast(msg,type){ type=type||"ok"; var t=ce("div","toast "+type); t.inne
 function api(path,opts){ opts=opts||{}; opts.headers=opts.headers||{};
   if(S.token) opts.headers["Authorization"]="Bearer "+S.token;
   if(opts.body){ opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(opts.body); }
-  pgStart();
+  /* quiet: ohne Fortschrittsbalken. Die BotSicht fragt im Sekundentakt nach -
+     der Balken oben wuerde sonst dauerhaft blinken. */
+  var leise=!!opts.quiet; if(!leise) pgStart();
+  function fertig(){ if(!leise) pgDone(); }
   return fetch(path,opts).then(function(r){
-    if(r.status===401){ pgDone(); doLogout(true); return Promise.reject({auth:true}); }
-    return r.json().then(function(j){ pgDone(); if(!r.ok) return Promise.reject(j||{error:"Fehler "+r.status}); return j; },
-      function(){ pgDone(); return Promise.reject({error:"Ungültige Antwort"}); });
-  },function(e){ pgDone(); return Promise.reject({error:"Netzwerkfehler"}); }); }
+    if(r.status===401){ fertig(); doLogout(true); return Promise.reject({auth:true}); }
+    return r.json().then(function(j){ fertig(); if(!r.ok) return Promise.reject(j||{error:"Fehler "+r.status}); return j; },
+      function(){ fertig(); return Promise.reject({error:"Ungültige Antwort"}); });
+  },function(e){ fertig(); return Promise.reject({error:"Netzwerkfehler"}); }); }
 
 /* Doppelklick-Schutz fuer Knoepfe, die etwas BUCHEN (Coins, Anteile, XP, Titel,
    Schalter). Ohne den hat ein zweiter Klick waehrend der laufenden Anfrage die
@@ -599,7 +802,8 @@ var NAV=[
   {id:"users",label:"Nutzer",icon:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'},
   {id:"servers",label:"Server",icon:'<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>'},
   {id:"coins",label:"Coins & Aktien",icon:'<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1-2 2.5-2s2.5 1 2.5 2-1 1.6-2.5 2-2.5 1-2.5 2 1 2 2.5 2 2.5-1 2.5-2"/>'},
-  {id:"features",label:"Funktionen",icon:'<path d="M12 2l2.09 6.26L20 9l-5 3.5L16.5 20 12 16.5 7.5 20 9 12.5 4 9l5.91-.74z"/>'}
+  {id:"features",label:"Funktionen",icon:'<path d="M12 2l2.09 6.26L20 9l-5 3.5L16.5 20 12 16.5 7.5 20 9 12.5 4 9l5.91-.74z"/>'},
+  {id:"botsicht",label:"BotSicht",icon:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1.1"/><circle cx="15" cy="10" r="1.1"/>'}
 ];
 function buildNav(){ var n=$("#nav"); n.innerHTML=""; NAV.forEach(function(it){
   var d=ce("div","nav-i"+(it.id===S.view?" active":"")); d.dataset.view=it.id;
@@ -607,16 +811,22 @@ function buildNav(){ var n=$("#nav"); n.innerHTML=""; NAV.forEach(function(it){
   d.addEventListener("click",function(){ navigate(it.id); $("#side").classList.remove("open"); });
   n.appendChild(d); }); }
 
-var TITLES={overview:["Übersicht","Echtzeit-Kennzahlen"],users:["Nutzer","Verwaltung & Aktionen"],servers:["Server","Guilds & Broadcast"],coins:["Coins & Aktien","Coins · Anteile · XP verwalten"],features:["Funktionen","Module an- & abschalten"]};
+var TITLES={overview:["Übersicht","Echtzeit-Kennzahlen"],users:["Nutzer","Verwaltung & Aktionen"],servers:["Server","Guilds & Broadcast"],coins:["Coins & Aktien","Coins · Anteile · XP verwalten"],features:["Funktionen","Module an- & abschalten"],botsicht:["BotSicht","Discord aus "+"Flos"+" Blickwinkel"]};
 function navigate(v){ S.view=v; if(S.refresh){clearInterval(S.refresh);S.refresh=null;}
+  /* Beim VERLASSEN der BotSicht die Live-Leitung kappen: sonst laeuft der
+     WebSocket samt Nachrichtenstrom im Hintergrund weiter und schreibt in
+     eine Ansicht, die es nicht mehr gibt. */
+  if(v!=="botsicht") bsStop();
   document.querySelectorAll(".nav-i").forEach(function(el){el.classList.toggle("active",el.dataset.view===v);});
-  $("#pageTitle").textContent=TITLES[v][0]; $("#pageCrumb").textContent=S.bot+" · "+TITLES[v][1];
-  var c=$("#content"); c.scrollTop=0;
+  $("#pageTitle").textContent=TITLES[v][0];
+  $("#pageCrumb").textContent=(v==="botsicht"?"Discord aus "+S.bot+"s Blickwinkel":S.bot+" · "+TITLES[v][1]);
+  var c=$("#content"); c.scrollTop=0; c.classList.toggle("bs-mode",v==="botsicht");
   if(v==="overview") viewOverview();
   else if(v==="users") viewUsers();
   else if(v==="servers") viewServers();
   else if(v==="coins") viewCoins();
-  else if(v==="features") viewFeatures(); }
+  else if(v==="features") viewFeatures();
+  else if(v==="botsicht") viewBotSicht(); }
 
 $("#menuBtn").addEventListener("click",function(){$("#side").classList.toggle("open");});
 $("#logoutBtn").addEventListener("click",function(){doLogout();});
@@ -1415,6 +1625,592 @@ function viewCoins(){ var c=$("#content"); var v=ce("div","view");
     }).catch(function(e){ if(e&&e.auth)return; toast(e&&e.error?e.error:"Fehlgeschlagen","err"); }); });
 
   observeReveals(v); }
+
+/* ============ BOTSICHT ============
+   Discord, wie der Bot es sieht. Der Unterschied zu "Discord im Browser" ist
+   der Punkt der ganzen Ansicht: Kanaele ohne Leserecht stehen gesperrt da
+   statt zu fehlen, die Mitgliederliste ist so kurz wie Flos Cache, und oben
+   steht, was er in DIESEM Kanal darf. Wer sich fragt "warum antwortet er da
+   nicht?", sieht die Antwort hier, statt sie im Journal zu suchen. */
+var BS={ guilds:[], ich:null, intents:{}, gid:null, cid:null, kanal:null,
+         text:[], voice:[], msgs:[], rechte:null, ws:null, poll:null, nr:0,
+         antwort:null, alles:false, feed:[], zuKat:{}, namen:{}, emojiZu:0,
+         mehr:false, laedt:false, tipp:0, wsAn:false };
+
+function bsStop(){
+  if(BS.ws){ try{ BS.ws.onclose=null; BS.ws.close(); }catch(e){} BS.ws=null; }
+  if(BS.poll){ clearInterval(BS.poll); BS.poll=null; }
+  BS.wsAn=false;
+}
+
+function viewBotSicht(){
+  var c=$("#content");
+  c.innerHTML='<div class="bs" id="bsRoot">'+
+    '<div class="bs-rail" id="bsRail"></div>'+
+    '<div class="bs-side"><div class="bs-side-h"><b id="bsSrvName">Lade…</b>'+
+      '<span class="bs-live aus" id="bsLive" style="margin-left:auto"><i></i>OFFLINE</span></div>'+
+      '<div class="bs-side-l" id="bsChans"></div></div>'+
+    '<div class="bs-chat"><div class="bs-head" id="bsHead"></div>'+
+      '<div class="bs-msgs" id="bsMsgs"></div>'+
+      '<div class="bs-comp" id="bsComp"></div></div>'+
+    '<div class="bs-mem" id="bsMem"></div></div>';
+  bsLeer("Verbinde mit "+esc(S.bot)+"…","🛰️");
+  api("/api/sicht/guilds").then(function(d){
+    if(!d.ok) throw d;
+    BS.guilds=d.guilds||[]; BS.ich=d.ich||null; BS.intents=d.intents||{};
+    bsRail();
+    bsFeedStart();
+    /* Zuletzt offener Kanal - der Blick soll nach dem Neuladen dort weitergehen,
+       wo man aufgehoert hat. */
+    var letzt=null; try{ letzt=JSON.parse(localStorage.getItem("flo_bs")||"null"); }catch(e){}
+    if(letzt&&letzt.gid&&bsGuild(letzt.gid)){ bsGuildWahl(letzt.gid,letzt.cid); }
+    else if(BS.guilds.length){ bsGuildWahl(BS.guilds[0].id,null); }
+    else bsLeer("Flo ist auf keinem Server.","🕳️");
+  }).catch(function(e){ if(e&&e.auth)return;
+    bsLeer("BotSicht konnte nicht laden: "+esc((e&&e.error)||"unbekannt"),"⚠️"); });
+}
+
+function bsGuild(gid){ for(var i=0;i<BS.guilds.length;i++) if(BS.guilds[i].id===String(gid)) return BS.guilds[i]; return null; }
+function bsLeer(html,gr){ var m=$("#bsMsgs"); if(m) m.innerHTML='<div class="bs-leer"><div class="gr">'+(gr||"👀")+'</div>'+html+'</div>'; }
+function bsMerke(){ try{ localStorage.setItem("flo_bs",JSON.stringify({gid:BS.gid,cid:BS.cid})); }catch(e){} }
+
+/* --- Server-Leiste --- */
+function bsRail(){
+  var r=$("#bsRail"); if(!r) return; r.innerHTML="";
+  var live=ce("div","bs-live-b"+(BS.alles?" on":""));
+  live.title="Alles-Strom: jede Nachricht, die Flo gerade sieht – über alle Server";
+  live.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3 8 4-16 3 8h6"/></svg>';
+  live.addEventListener("click",bsAllesAn);
+  r.appendChild(live);
+  r.appendChild(ce("hr"));
+  BS.guilds.forEach(function(g){
+    var d=ce("div","bs-g"+(!BS.alles&&g.id===BS.gid?" on":"")); d.title=g.name;
+    d.innerHTML=g.icon?'<img src="'+esc(g.icon)+'" alt="" onerror="this.remove()">':esc(initials(g.name));
+    if(!g.icon) d.style.background=avColor(g.id);
+    d.addEventListener("click",function(){ bsGuildWahl(g.id,null); });
+    r.appendChild(d);
+  });
+}
+
+function bsAllesAn(){
+  BS.alles=true; BS.cid=null; BS.antwort=null; bsRail();
+  $("#bsSrvName").textContent="Alles, was Flo sieht";
+  /* Die Kanalliste bleibt stehen. Sie durch einen Hinweistext zu ersetzen war
+     der erste Entwurf - dann kam man aus dem Strom aber nur ueber den Umweg
+     "Server anklicken" zurueck in einen Kanal. */
+  var l=$("#bsChans");
+  l.innerHTML='<div class="bs-note">Hier laufen die Nachrichten <b>aller</b> Server durch, '+
+    'in der Reihenfolge, in der Flo sie bekommt – auch die von anderen Bots und seine eigenen.</div>';
+  if(BS.text.length){ var rest=ce("div"); l.appendChild(rest); bsChans(rest); }
+  bsKopf(null); bsComposer();
+  bsFeedRender();
+}
+
+function bsGuildWahl(gid,cid){
+  BS.alles=false; BS.gid=String(gid); BS.cid=null; BS.antwort=null; bsRail(); bsMerke();
+  var g=bsGuild(gid);
+  $("#bsSrvName").textContent=g?g.name:"Server";
+  $("#bsChans").innerHTML='<div class="bs-note">Lade Kanäle…</div>';
+  bsLeer("Kanal links auswählen.","💬"); bsKopf(null); bsComposer();
+  bsMembers(gid);
+  api("/api/sicht/channels?guild="+encodeURIComponent(gid)).then(function(d){
+    if(!d.ok) throw d;
+    if(String(gid)!==BS.gid) return;      // inzwischen woanders hingeklickt
+    BS.text=d.text||[]; BS.voice=d.voice||[]; BS.meinVoice=d.mein_voice||"";
+    bsChans();
+    var ziel=null;
+    if(cid) for(var i=0;i<BS.text.length;i++) if(BS.text[i].id===String(cid)) ziel=BS.text[i];
+    if(!ziel) for(var j=0;j<BS.text.length;j++) if(BS.text[j].rechte&&BS.text[j].rechte.verlauf){ ziel=BS.text[j]; break; }
+    if(ziel) bsOeffne(ziel);
+    else bsLeer("Flo darf in keinem Kanal dieses Servers den Verlauf lesen.","🔒");
+  }).catch(function(e){ if(e&&e.auth)return;
+    $("#bsChans").innerHTML='<div class="bs-note">Kanäle nicht ladbar.</div>'; });
+}
+
+/* --- Kanalliste --- */
+/* 'ziel' erlaubt es, die Liste in einen Unterbereich zu zeichnen, statt
+   #bsChans komplett zu leeren - im Alles-Strom steht darueber ein Hinweis. */
+function bsChans(ziel){
+  var l=ziel||$("#bsChans"); if(!l) return; l.innerHTML="";
+  var gruppen=[], nach={};
+  BS.text.forEach(function(c){
+    var k=c.kategorie||"";
+    if(!nach[k]){ nach[k]={name:k,items:[]}; gruppen.push(nach[k]); }
+    nach[k].items.push(c);
+  });
+  gruppen.forEach(function(gr){
+    if(gr.name){
+      var zu=!!BS.zuKat[gr.name];
+      var h=ce("div","bs-cat"+(zu?" zu":""));
+      h.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'+esc(gr.name);
+      h.addEventListener("click",function(){ BS.zuKat[gr.name]=!BS.zuKat[gr.name]; bsChans(); });
+      l.appendChild(h);
+      if(zu) return;
+    }
+    gr.items.forEach(function(c){ l.appendChild(bsChanEl(c)); });
+  });
+  if(BS.voice.length){
+    var vh=ce("div","bs-cat"); vh.textContent="Sprachkanäle"; l.appendChild(vh);
+    BS.voice.forEach(function(c){
+      var e=ce("div","bs-c"+(c.rechte&&!c.rechte.lesen?" zu":""));
+      e.innerHTML='<span class="h">🔊</span><span class="n">'+esc(c.name)+'</span>'+
+        (BS.meinVoice===c.id?'<span class="bs-here">FLO</span>':"");
+      l.appendChild(e);
+      (c.drin||[]).forEach(function(m){
+        var mm=ce("div","bs-vm");
+        mm.innerHTML=avatarHtml({id:m.id,name:m.name},"avatar av")+'<span class="n">'+esc(m.name)+'</span>';
+        l.appendChild(mm);
+      });
+    });
+  }
+}
+
+function bsChanEl(c){
+  var darf=c.rechte&&c.rechte.verlauf;
+  var e=ce("div","bs-c"+(darf?"":" zu")+(c.id===BS.cid?" on":""));
+  e.innerHTML='<span class="h">'+(c.thread?"🧵":"#")+'</span><span class="n">'+esc(c.name)+'</span>'+
+    (darf?"":'<svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>');
+  if(darf) e.addEventListener("click",function(){ bsOeffne(c); });
+  else e.title="Flo fehlt hier das Recht, den Verlauf zu lesen.";
+  return e;
+}
+
+/* --- Kopfzeile mit Flos Rechten --- */
+function bsKopf(c){
+  var h=$("#bsHead"); if(!h) return;
+  /* Auf schmalen Fenstern liegen Kanalliste und Chat uebereinander - dieser
+     Knopf schaltet um. Auf breiten Fenstern blendet die CSS ihn aus. */
+  var zurueck='<div class="bs-kbtn" id="bsKbtn" title="Kanäle">'+
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></div>';
+  if(!c){
+    h.innerHTML=zurueck+'<div class="t">'+(BS.alles?'<span>⚡ Alles-Strom</span>':'<span>Kein Kanal</span>')+'</div>'+
+      '<div class="sub">'+(BS.alles?"Jede Nachricht, die Flo gerade bekommt":"Links einen Kanal wählen")+'</div>';
+  } else {
+    var r=BS.rechte||c.rechte||{};
+    function p(t,ok){ return '<span class="bs-perm '+(ok?"ja":"nein")+'" title="'+esc(t)+(ok?": ja":": nein")+'">'+esc(t)+'</span>'; }
+    h.innerHTML=zurueck+'<div class="t"><span>'+(c.thread?"🧵":"#")+' '+esc(c.name)+'</span></div>'+
+      '<div class="sub">'+esc(c.thema||"Kein Kanalthema")+'</div>'+
+      '<div class="bs-perms">'+p("LESEN",r.verlauf)+p("SCHREIBEN",r.senden)+p("REAGIEREN",r.reagieren)+p("LÖSCHEN",r.verwalten)+'</div>';
+  }
+  var kb=$("#bsKbtn");
+  if(kb) kb.addEventListener("click",function(){ var w=$("#bsRoot"); if(w) w.classList.add("zeig-kanaele"); });
+}
+
+/* --- Kanal oeffnen --- */
+function bsOeffne(c){
+  BS.alles=false; BS.cid=c.id; BS.kanal=c; BS.antwort=null; BS.msgs=[]; BS.mehr=false;
+  var w=$("#bsRoot"); if(w) w.classList.remove("zeig-kanaele");   // schmales Fenster: zurueck zum Chat
+  bsMerke(); bsRail(); bsChans(); bsKopf(c);
+  bsLeer("Lade Verlauf…","⏳");
+  bsComposer();
+  api("/api/sicht/messages?limit=50&channel="+encodeURIComponent(c.id)).then(function(d){
+    if(!d.ok) throw d;
+    if(BS.cid!==c.id) return;
+    BS.msgs=d.messages||[]; BS.rechte=d.rechte||c.rechte; BS.mehr=!!d.mehr;
+    if(d.kanal){ BS.kanal=Object.assign({},c,{name:d.kanal.name,thema:d.kanal.thema}); }
+    bsKopf(BS.kanal); bsComposer(); bsRender(true);
+  }).catch(function(e){ if(e&&e.auth)return;
+    if(BS.cid!==c.id) return;
+    if(e&&e.rechte){ BS.rechte=e.rechte; bsKopf(c); bsComposer(); }
+    bsLeer(esc((e&&e.error)||"Verlauf nicht ladbar"),"🔒"); });
+}
+
+function bsMehr(){
+  if(BS.laedt||!BS.msgs.length) return;
+  BS.laedt=true;
+  var cid=BS.cid, m=$("#bsMsgs"), hoehe=m?m.scrollHeight:0;
+  api("/api/sicht/messages?limit=50&channel="+encodeURIComponent(cid)+
+      "&before="+encodeURIComponent(BS.msgs[0].id)).then(function(d){
+    BS.laedt=false;
+    if(!d.ok||BS.cid!==cid) return;      // inzwischen Kanal gewechselt
+    BS.msgs=(d.messages||[]).concat(BS.msgs); BS.mehr=!!d.mehr;
+    bsRender(false);
+    /* Beim Nachladen nach oben soll der Blick auf derselben Nachricht bleiben -
+       also genau um das dazugekommene Stueck zurueckspringen. */
+    if(m) m.scrollTop=m.scrollHeight-hoehe;
+  }).catch(function(){ BS.laedt=false; });
+}
+
+/* --- Nachrichten zeichnen --- */
+function bsRender(anEnde){
+  var m=$("#bsMsgs"); if(!m) return;
+  var warUnten=(m.scrollHeight-m.scrollTop-m.clientHeight)<80;
+  m.innerHTML="";
+  if(!BS.msgs.length){ bsLeer("Hier hat noch niemand etwas geschrieben.","🌵"); return; }
+  if(BS.mehr){
+    var b=ce("div","bs-more","Ältere Nachrichten laden");
+    b.addEventListener("click",bsMehr); m.appendChild(b);
+  }
+  var tagVor="", vorher=null;
+  BS.msgs.forEach(function(msg){
+    var tag=bsTag(msg.t);
+    if(tag!==tagVor){ tagVor=tag; vorher=null; m.appendChild(ce("div","bs-day",esc(tag))); }
+    m.appendChild(bsMsgEl(msg,vorher));
+    vorher=msg;
+  });
+  if(anEnde||warUnten) m.scrollTop=m.scrollHeight;
+}
+
+function bsTag(ts){
+  var d=new Date(ts*1000), h=new Date(), g=new Date(Date.now()-864e5);
+  function gleich(a,b){ return a.toDateString()===b.toDateString(); }
+  if(gleich(d,h)) return "Heute";
+  if(gleich(d,g)) return "Gestern";
+  return d.toLocaleDateString("de-DE",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
+}
+function bsUhr(ts){ return new Date(ts*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}); }
+
+/* Zwei aufeinanderfolgende Nachrichten derselben Person werden zusammengefasst -
+   wie in Discord. Nicht bei Antworten, System-Meldungen oder mehr als 7 Minuten
+   Abstand, sonst klebt Zusammengehoerendes aneinander, was es nicht ist. */
+function bsFortsetzung(msg,vor){
+  return !!vor && !BS.alles && vor.autor && msg.autor && vor.autor.id===msg.autor.id
+         && !msg.antwort_auf && !msg.system && !vor.system && (msg.t-vor.t)<420;
+}
+
+function bsMsgEl(msg,vor){
+  var cont=bsFortsetzung(msg,vor);
+  var el=ce("div","bs-m"+(cont?" cont":" head")); el.dataset.id=msg.id;
+  var a=msg.autor||{};
+  var kopf="";
+  if(!cont){
+    kopf='<div class="meta"><span class="nm"'+(a.farbe?' style="color:'+esc(a.farbe)+'"':"")+'>'+esc(a.display||a.name||"?")+'</span>'+
+      (a.eigen?'<span class="bd flo">'+esc(S.bot.toUpperCase())+'</span>':(a.bot?'<span class="bd">BOT</span>':""))+
+      '<span class="ts">'+esc(bsUhr(msg.t))+'</span></div>';
+  }
+  var woher=BS.alles?'<div class="bs-woher"><b>'+esc(msg.guild_name||"DM")+'</b> · #'+esc(msg.kanal_name||"?")+'</div>':"";
+  var antw="";
+  if(msg.antwort_auf){
+    var r=msg.antwort_auf;
+    antw='<div class="bs-rep"><b>'+esc(r.autor||"Unbekannt")+'</b><i>'+
+         esc(r.text||"Nachricht nicht mehr im Cache")+'</i></div>';
+  }
+  var koerper="";
+  if(msg.system) koerper='<div class="bs-tx bs-sys">'+esc(msg.text||"(System-Nachricht)")+'</div>';
+  else if(msg.text) koerper='<div class="bs-tx">'+bsMarkup(msg.text)+
+    (msg.bearbeitet?'<span class="bs-edit">(bearbeitet)</span>':"")+'</div>';
+  else if(!(msg.anhaenge||[]).length&&!(msg.embeds||[]).length)
+    koerper='<div class="bs-tx bs-sys">'+(BS.intents.inhalt===false
+      ? "(kein Text – das Inhalts-Intent ist aus, "+esc(S.bot)+" liest fremde Nachrichten gar nicht)"
+      : "(leere Nachricht)")+'</div>';
+
+  el.innerHTML=(cont?'<div class="av-slot"></div>':bsAvatar(a))+
+    '<div>'+woher+antw+kopf+koerper+bsAnhaenge(msg)+bsEmbeds(msg)+bsReaktionen(msg)+'</div>'+
+    bsTools(msg);
+  bsToolsBinden(el,msg);
+  (msg.reaktionen||[]).forEach(function(r,i){
+    var k=el.querySelectorAll(".bs-r")[i];
+    if(k) k.addEventListener("click",function(){ bsReagieren(msg,r.emoji,r.eigen); });
+  });
+  return el;
+}
+
+/* Dasselbe Muster wie avatarHtml(): Initialen-Kaestchen, echtes Bild liegt
+   darueber. Laedt das Bild nicht, raeumt onerror es weg und die Initialen
+   bleiben stehen - es gibt also nie ein kaputtes Bild-Symbol. */
+function bsAvatar(a){
+  return '<div class="av avatar" style="background:'+avColor(a.id||a.name)+'">'+
+    esc(initials(a.display||a.name))+
+    (a.avatar?'<img src="'+esc(a.avatar)+'" alt="" loading="lazy" onerror="this.remove()">':"")+
+    '</div>';
+}
+
+function bsAnhaenge(msg){
+  if(!msg.anhaenge||!msg.anhaenge.length) return "";
+  var h='<div class="bs-att">';
+  msg.anhaenge.forEach(function(a){
+    var bild=(a.typ&&a.typ.indexOf("image/")===0);
+    if(bild) h+='<a href="'+esc(a.url)+'" target="_blank" rel="noopener"><img src="'+esc(a.url)+'" alt="'+esc(a.name)+'" loading="lazy"></a>';
+    else h+='<a class="bs-file" href="'+esc(a.url)+'" target="_blank" rel="noopener">📎 '+esc(a.name)+
+      ' <span style="color:var(--faint)">'+bsGroesse(a.groesse)+'</span></a>';
+  });
+  return h+'</div>';
+}
+function bsGroesse(b){ b=Number(b)||0; if(b<1024) return b+" B"; if(b<1048576) return (b/1024).toFixed(0)+" KB"; return (b/1048576).toFixed(1)+" MB"; }
+
+function bsEmbeds(msg){
+  if(!msg.embeds||!msg.embeds.length) return "";
+  var h="";
+  msg.embeds.forEach(function(e){
+    var felder="";
+    if(e.felder&&e.felder.length){
+      var alleInline=e.felder.every(function(f){return f.inline;});
+      felder='<div class="ef'+(alleInline&&e.felder.length>1?" zwei":"")+'">';
+      e.felder.forEach(function(f){ felder+='<div class="efi"><b>'+esc(f.name)+'</b><span>'+bsMarkup(f.wert)+'</span></div>'; });
+      felder+='</div>';
+    }
+    h+='<div class="bs-emb"'+(e.farbe?' style="border-left-color:'+esc(e.farbe)+'"':"")+'>'+
+      (e.autor?'<div class="ea">'+(e.autor_bild?'<img src="'+esc(e.autor_bild)+'" style="width:18px;height:18px;border-radius:50%" alt="">':"")+esc(e.autor)+'</div>':"")+
+      (e.titel?'<div class="et">'+(e.url?'<a href="'+esc(e.url)+'" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">'+esc(e.titel)+'</a>':esc(e.titel))+'</div>':"")+
+      (e.text?'<div class="ed">'+bsMarkup(e.text)+'</div>':"")+felder+
+      (e.bild?'<img class="eimg" src="'+esc(e.bild)+'" alt="" loading="lazy">':"")+
+      (e.fuss?'<div class="efo">'+esc(e.fuss)+'</div>':"")+'</div>';
+  });
+  return h;
+}
+
+function bsReaktionen(msg){
+  if(!msg.reaktionen||!msg.reaktionen.length) return "";
+  var h='<div class="bs-rx">';
+  msg.reaktionen.forEach(function(r){
+    h+='<span class="bs-r'+(r.eigen?" mein":"")+'" title="'+(r.eigen?"Flos Reaktion – klicken zum Zurücknehmen":"Klicken, damit Flo mitreagiert")+'">'+
+      (r.bild?'<img src="'+esc(r.bild)+'" alt="">':esc(r.emoji))+'<b>'+fmt(r.anzahl)+'</b></span>';
+  });
+  return h+'</div>';
+}
+
+var BS_SCHNELL=["👍","😂","🔥","💀","👀"];
+function bsTools(msg){
+  var r=BS.rechte||{};
+  var h='<div class="bs-tools">';
+  BS_SCHNELL.forEach(function(e){ h+='<button data-rx="'+esc(e)+'" title="Als '+esc(S.bot)+' mit '+esc(e)+' reagieren">'+e+'</button>'; });
+  if(!BS.alles&&r.senden!==false) h+='<button data-act="antwort" title="Antworten">↩︎</button>';
+  /* Im Alles-Strom gehoert BS.rechte zum zuletzt geoeffneten Kanal und sagt
+     ueber eine fremde Nachricht gar nichts - also gibt es dort keinen
+     Loeschen-Knopf, statt einen anzubieten, der in ein 403 laeuft. */
+  if(!BS.alles&&r.verwalten) h+='<button class="del" data-act="weg" title="Nachricht löschen">🗑</button>';
+  return h+'</div>';
+}
+function bsToolsBinden(el,msg){
+  el.querySelectorAll(".bs-tools button").forEach(function(b){
+    b.addEventListener("click",function(ev){
+      ev.stopPropagation();
+      if(b.dataset.rx) bsReagieren(msg,b.dataset.rx,false);
+      else if(b.dataset.act==="antwort") bsAntwortAuf(msg);
+      else if(b.dataset.act==="weg") bsLoeschen(msg);
+    });
+  });
+}
+
+/* --- Discord-Auszeichnungen: erst escapen, dann formatieren ---------------
+   Reihenfolge ist wichtig: Codebloecke werden zuerst herausgeschnitten und
+   durch Platzhalter ersetzt, sonst frisst die Fett/Kursiv-Ersetzung den Code
+   ("**" in einem Bash-Schnipsel). */
+function bsMarkup(t){
+  var code=[];
+  var s=esc(String(t==null?"":t));
+  /* Der Platzhalter fuer herausgeschnittenen Code MUSS etwas sein, das in
+     echtem Chat-Text nicht vorkommt - deshalb ein NUL-Zeichen. Eine blosse Zahl als
+     Marke waere fatal gewesen: aus "ich hab 3 Bier" haette die Ruecksetzung
+     am Ende code[3] eingesetzt (also nichts) und die 3 verschluckt. */
+  /* Alles, was schon FERTIGES HTML ist, wird beiseitegelegt und erst ganz am
+     Ende wieder eingesetzt. Sonst laufen die spaeteren Ersetzungen darueber:
+     die Link-Erkennung hat die URL im src="" eines Emoji-Bildes ein zweites
+     Mal zu einem <a> umgebaut - heraus kam Zeichensalat statt eines Emojis. */
+  function halte(html){ code.push(html); return "\u0000"+(code.length-1)+"\u0000"; }
+  s=s.replace(/```(?:[a-zA-Z0-9+#-]*\n)?([\s\S]*?)```/g,function(_m,c){
+    return halte('<pre>'+c.replace(/^\n+|\n+$/g,"")+'</pre>'); });
+  s=s.replace(/`([^`\n]+)`/g,function(_m,c){ return halte('<code>'+c+'</code>'); });
+  s=s.replace(/&lt;a?:([a-zA-Z0-9_]+):(\d+)&gt;/g,function(_m,n,id){
+    return halte('<img src="https://cdn.discordapp.com/emojis/'+id+'.webp?size=44" alt=":'+
+      n+':" title=":'+n+':" style="width:20px;height:20px;vertical-align:-4px">'); });
+  s=s.replace(/&lt;@!?(\d+)&gt;/g,function(_m,id){
+    return halte('<span class="men">@'+esc(BS.namen[id]||id)+'</span>'); });
+  s=s.replace(/&lt;#(\d+)&gt;/g,function(_m,id){
+    return halte('<span class="men">#'+esc(BS.namen["c"+id]||id)+'</span>'); });
+  s=s.replace(/&lt;@&amp;(\d+)&gt;/g,function(){ return halte('<span class="men">@Rolle</span>'); });
+  s=s.replace(/@(everyone|here)\b/g,function(_m,w){ return halte('<span class="men">@'+w+'</span>'); });
+  s=s.replace(/(https?:\/\/[^\s<]+)/g,function(u){
+    return halte('<a href="'+u+'" target="_blank" rel="noopener">'+u+'</a>'); });
+  s=s.replace(/\*\*\*([^*]+)\*\*\*/g,"<b><i>$1</i></b>").replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>")
+     .replace(/(^|[^*])\*([^*\n]+)\*/g,"$1<i>$2</i>")
+     .replace(/__([^_]+)__/g,"<u>$1</u>").replace(/~~([^~]+)~~/g,"<s>$1</s>");
+  s=s.replace(/\u0000(\d+)\u0000/g,function(_m,i){ return code[Number(i)]||""; });
+  return s;
+}
+
+/* --- Eingabe --- */
+function bsComposer(){
+  var c=$("#bsComp"); if(!c) return;
+  if(BS.alles||!BS.cid){
+    c.innerHTML='<div class="bs-gesperrt" style="color:var(--faint);background:rgba(255,255,255,.03);border-color:var(--hair)">'+
+      (BS.alles?"Im Alles-Strom wird nicht geschrieben – dafür links einen Kanal wählen.":"Kein Kanal ausgewählt.")+'</div>';
+    return;
+  }
+  var r=BS.rechte||{};
+  if(r.senden===false){
+    c.innerHTML='<div class="bs-gesperrt">🔒 '+esc(S.bot)+' darf in diesem Kanal nicht schreiben.</div>';
+    return;
+  }
+  var a=BS.antwort;
+  c.innerHTML=(a?'<div class="bs-reply">↩︎ Antwort an <b>'+esc(a.autor&&(a.autor.display||a.autor.name)||"?")+
+      '</b><span style="opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px">'+esc((a.text||"").slice(0,90))+'</span>'+
+      '<span class="x" id="bsAntwortWeg">✕</span></div>':"")+
+    '<div class="bs-box'+(a?" mit-antwort":"")+'">'+
+      '<textarea id="bsText" rows="1" placeholder="Nachricht an #'+esc((BS.kanal&&BS.kanal.name)||"kanal")+' – als '+esc(S.bot)+'"></textarea>'+
+      '<button class="bs-send" id="bsSend" disabled title="Senden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>'+
+    '</div>'+
+    '<div class="bs-hint"><span><kbd>Enter</kbd> senden · <kbd>Shift</kbd>+<kbd>Enter</kbd> neue Zeile</span>'+
+      '<span>Schreibt als <b style="color:var(--gold-2)">'+esc(S.bot)+'</b> – @everyone und Rollen sind gesperrt</span></div>';
+  var t=$("#bsText"), b=$("#bsSend");
+  if($("#bsAntwortWeg")) $("#bsAntwortWeg").addEventListener("click",function(){ BS.antwort=null; bsComposer(); });
+  t.addEventListener("input",function(){
+    b.disabled=!t.value.trim();
+    t.style.height="auto"; t.style.height=Math.min(180,t.scrollHeight)+"px";
+    /* Tipp-Zeichen im echten Kanal - aber hoechstens alle 8 Sekunden, sonst
+       feuert jeder Tastendruck eine Anfrage an Discord. */
+    var jetzt=Date.now();
+    if(t.value.trim()&&jetzt-BS.tipp>8000){ BS.tipp=jetzt;
+      api("/api/sicht/typing",{method:"POST",quiet:true,body:{channel:BS.cid}}).catch(function(){}); }
+  });
+  t.addEventListener("keydown",function(ev){
+    if(ev.key==="Enter"&&!ev.shiftKey){ ev.preventDefault(); bsSenden(); }
+    if(ev.key==="Escape"&&BS.antwort){ BS.antwort=null; bsComposer(); $("#bsText").focus(); }
+  });
+  b.addEventListener("click",bsSenden);
+  t.focus();
+}
+
+function bsAntwortAuf(msg){ BS.antwort=msg; bsComposer(); var t=$("#bsText"); if(t) t.focus(); }
+
+function bsSenden(){
+  var t=$("#bsText"); if(!t) return;
+  var text=t.value.trim(); if(!text) return;
+  var b=$("#bsSend"); b.disabled=true;
+  var koerper={channel:BS.cid,text:text};
+  if(BS.antwort) koerper.reply_to=BS.antwort.id;
+  api("/api/sicht/send",{method:"POST",body:koerper}).then(function(d){
+    t.value=""; t.style.height="auto"; BS.antwort=null; bsComposer();
+    if(d&&d.msg) bsEingang({art:"neu",msg:d.msg});
+  }).catch(function(e){ if(e&&e.auth)return;
+    b.disabled=false; toast((e&&e.error)||"Senden fehlgeschlagen","err"); });
+}
+
+function bsReagieren(msg,emoji,weg){
+  api("/api/sicht/react",{method:"POST",quiet:true,
+    body:{channel:msg.kanal||BS.cid,message:msg.id,emoji:emoji,weg:!!weg}})
+    .then(function(){ toast(weg?"Reaktion zurückgenommen":(S.bot+" hat mit "+emoji+" reagiert"),"ok"); })
+    .catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Reaktion fehlgeschlagen","err"); });
+}
+
+function bsLoeschen(msg){
+  if(!confirm("Diese Nachricht wirklich löschen? Das lässt sich nicht rückgängig machen.")) return;
+  api("/api/sicht/delete",{method:"POST",body:{channel:msg.kanal||BS.cid,message:msg.id}})
+    .then(function(){ toast("Nachricht gelöscht","ok"); })
+    .catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Löschen fehlgeschlagen","err"); });
+}
+
+/* --- Mitglieder --- */
+function bsMembers(gid){
+  var m=$("#bsMem"); if(!m) return;
+  m.innerHTML='<h4>Lade…</h4>';
+  api("/api/sicht/members?guild="+encodeURIComponent(gid),{quiet:true}).then(function(d){
+    if(!d.ok||String(gid)!==BS.gid) return;
+    var on=[],off=[];
+    (d.mitglieder||[]).forEach(function(u){
+      BS.namen[u.id]=u.name;
+      (u.status&&u.status!=="offline"?on:off).push(u);
+    });
+    function block(titel,liste){
+      if(!liste.length) return "";
+      var h='<h4>'+esc(titel)+' – '+liste.length+'</h4>';
+      liste.forEach(function(u){
+        h+='<div class="bs-mm"><div class="av avatar" style="background:'+avColor(u.id)+'">'+
+          esc(initials(u.name))+(u.avatar?'<img src="'+esc(u.avatar)+'" alt="" loading="lazy" onerror="this.remove()" style="width:100%;height:100%;border-radius:50%;object-fit:cover">':"")+'</div>'+
+          '<span class="n"'+(u.farbe?' style="color:'+esc(u.farbe)+'"':"")+'>'+esc(u.name)+'</span>'+
+          (u.bot?'<span class="bd" style="font-size:8.5px;padding:1px 4px;border-radius:4px;background:rgba(124,166,255,.16);color:#a9c4ff">BOT</span>':"")+
+          '<span class="dot'+(u.status&&u.status!=="offline"?" on":"")+'"></span></div>';
+      });
+      return h;
+    }
+    var luecke=Math.max(0,(d.gesamt||0)-(d.mitglieder||[]).length);
+    m.innerHTML=block("Online",on)+block("Bekannt",off)+
+      '<div class="bs-note"><b>Flos Blick ist unvollständig.</b> Er kennt hier '+
+      fmt((d.mitglieder||[]).length)+' von '+fmt(d.gesamt||0)+' Mitgliedern'+
+      (luecke?' – die anderen '+fmt(luecke)+' hat er nie gesehen':"")+'.<br>'+
+      'Grund: das Mitglieder-Intent ist <b>'+((d.intents||{}).mitglieder?"an":"aus")+'</b>. '+
+      'Ohne das kennt ein Bot nur die Leute, die im Chat oder im Sprachkanal aufgetaucht sind.</div>';
+  }).catch(function(){ m.innerHTML='<div class="bs-note">Mitglieder nicht ladbar.</div>'; });
+}
+
+/* --- Live-Strom: erst WebSocket, sonst Abfrage --------------------------- */
+function bsLiveAnzeige(an,text){
+  var l=$("#bsLive"); if(!l) return;
+  l.className="bs-live"+(an?"":" aus");
+  l.innerHTML='<i></i>'+esc(text||(an?"LIVE":"OFFLINE"));
+}
+
+function bsFeedStart(){
+  bsStop();
+  var proto=(location.protocol==="https:"?"wss://":"ws://");
+  try{
+    var ws=new WebSocket(proto+location.host+"/api/sicht/ws");
+    BS.ws=ws;
+    ws.onopen=function(){ BS.wsAn=true; bsLiveAnzeige(true,"LIVE"); };
+    ws.onmessage=function(ev){
+      var d=null; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+      if(!d) return;
+      if(d.art==="hallo"){ BS.nr=d.nr||0; return; }
+      BS.nr=d.nr||BS.nr; bsEingang(d);
+    };
+    ws.onclose=function(){
+      BS.wsAn=false;
+      if(S.view!=="botsicht") return;
+      bsLiveAnzeige(false,"ABFRAGE");
+      bsPollStart();                   /* Rueckfallweg, z. B. hinter Proxys */
+    };
+    ws.onerror=function(){ /* onclose kommt gleich hinterher */ };
+  }catch(e){ bsLiveAnzeige(false,"ABFRAGE"); bsPollStart(); }
+}
+
+function bsPollStart(){
+  if(BS.poll) return;
+  BS.poll=setInterval(function(){
+    if(S.view!=="botsicht"){ bsStop(); return; }
+    api("/api/sicht/feed?seit="+BS.nr,{quiet:true}).then(function(d){
+      if(!d.ok) return;
+      BS.nr=d.nr||BS.nr;
+      (d.ereignisse||[]).forEach(bsEingang);
+    }).catch(function(){});
+  },2500);
+}
+
+/* Eine frisch eingetroffene Nachricht einsortieren. */
+function bsEingang(ev){
+  if(!ev||!ev.msg) return;
+  if(ev.art==="weg"){ bsEntfernen(ev.msg.id); return; }
+  var msg=ev.msg;
+  if(msg.autor&&msg.autor.id) BS.namen[msg.autor.id]=msg.autor.display||msg.autor.name;
+  BS.feed.push(msg); if(BS.feed.length>300) BS.feed.shift();
+  if(BS.alles){ bsFeedRender(); return; }
+  if(!BS.cid||String(msg.kanal)!==String(BS.cid)) return;
+  /* Doppelte wegwerfen: die selbst gesendete Nachricht kommt einmal direkt aus
+     der Antwort und gleich nochmal ueber das Gateway. */
+  for(var i=BS.msgs.length-1;i>=0&&i>BS.msgs.length-12;i--)
+    if(BS.msgs[i].id===msg.id) return;
+  var m=$("#bsMsgs");
+  var warUnten=!m||(m.scrollHeight-m.scrollTop-m.clientHeight)<120;
+  var vor=BS.msgs.length?BS.msgs[BS.msgs.length-1]:null;
+  BS.msgs.push(msg);
+  if(BS.msgs.length>400) BS.msgs.shift();
+  if(m&&!m.querySelector(".bs-leer")){
+    if(bsTag(msg.t)!==(vor?bsTag(vor.t):"")) m.appendChild(ce("div","bs-day",esc(bsTag(msg.t))));
+    m.appendChild(bsMsgEl(msg,vor));
+    if(warUnten) m.scrollTop=m.scrollHeight;
+  } else bsRender(true);
+}
+
+function bsEntfernen(id){
+  BS.msgs=BS.msgs.filter(function(m){ return m.id!==String(id); });
+  BS.feed=BS.feed.filter(function(m){ return m.id!==String(id); });
+  var el=$('#bsMsgs .bs-m[data-id="'+String(id).replace(/"/g,"")+'"]');
+  if(el){ el.style.transition="opacity .3s"; el.style.opacity="0";
+          setTimeout(function(){ if(BS.alles) bsFeedRender(); else bsRender(false); },300); }
+}
+
+function bsFeedRender(){
+  var m=$("#bsMsgs"); if(!m) return;
+  var warUnten=(m.scrollHeight-m.scrollTop-m.clientHeight)<120;
+  if(!BS.feed.length){
+    bsLeer("Noch nichts gesehen.<br><br>Sobald irgendwo auf einem von "+esc(S.bot)+
+           "s Servern jemand schreibt, läuft es hier durch.","📡");
+    return;
+  }
+  m.innerHTML="";
+  var vor=null;
+  BS.feed.forEach(function(msg){ m.appendChild(bsMsgEl(msg,vor)); vor=msg; });
+  if(warUnten) m.scrollTop=m.scrollHeight;
+}
 
 /* ============ SKELETONS / STATES ============ */
 function skeletonOverview(){ var k=""; for(var i=0;i<6;i++)k+='<div class="sk sk-kpi"></div>';

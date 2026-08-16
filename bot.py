@@ -1485,6 +1485,14 @@ class FloBot(discord.Client):
         # nach. discord.py bearbeitet jedes Ereignis in einem eigenen Task, der
         # ContextVar gilt also genau hier und faerbt keinen anderen Server ein.
         ai.setze_guild(getattr(message.guild, "id", 0))
+        # BotSicht (Web-Panel): den Live-Strom fuettern. BEWUSST ganz oben -
+        # vor dem Bot-Check, vor dem Auto-Loeschen, vor allem anderen. Die
+        # Ansicht heisst "was Flo sieht", und Flo sieht diese Nachricht genau
+        # hier: die eigenen Antworten, die anderer Bots und die, auf die er
+        # gleich gar nicht reagiert. Wuerde der Aufruf weiter unten stehen,
+        # zeigte das Panel eine gefilterte Wahrheit.
+        if WEBPANEL_ENABLED:
+            webpanel.sicht_notiere(message)
         # Auto-Loeschen: in konfigurierten Channels ALLE Nachrichten nach kurzer Zeit
         # entfernen. Bewusst GANZ oben (vor dem Bot-Check), damit auch die eigenen
         # Antworten des Bots dort wieder verschwinden. AUSNAHME: Level-Up-Ansagen des

@@ -8965,6 +8965,304 @@ def test_musik_neustart_behaelt_den_gewuenschten_song():
         mi._resolve_input = alt
 
 
+# ---------------------------------------------------------------------------
+# BotSicht: Discord aus Flos Blickwinkel (Web-Panel)
+# ---------------------------------------------------------------------------
+def _botsicht_umgebung():
+    """Baut eine komplette Flo-Welt aus Attrappen: ein Server, ein offener und
+    ein gesperrter Textkanal, ein Sprachkanal, zwei Leute, zwei Nachrichten.
+
+    Die Kanaele sind MagicMock MIT spec - das ist hier kein Selbstzweck:
+    _api_sicht_channels entscheidet per isinstance, was Text- und was
+    Sprachkanal ist, und nur ein spec-Mock besteht diese Pruefung."""
+    import unittest.mock as mock
+    import discord
+    import webpanel
+
+    def rechte(**kw):
+        p = mock.MagicMock(spec=discord.Permissions)
+        for k in ("read_messages", "read_message_history", "send_messages",
+                  "attach_files", "embed_links", "manage_messages", "add_reactions"):
+            setattr(p, k, kw.get(k, True))
+        return p
+
+    def person(uid, name, bot=False):
+        u = mock.MagicMock(spec=discord.Member)
+        u.id, u.name, u.display_name, u.bot = uid, name, name, bot
+        u.display_avatar = SimpleNamespace(url=f"https://cdn.test/{uid}.png")
+        u.color = discord.Colour(0x7CA6FF)
+        u.roles, u.status, u.voice = [], "online", None
+        return u
+
+    def nachricht(mid, text, autor, kanal, guild, t):
+        m = mock.MagicMock(spec=discord.Message)
+        m.id, m.content, m.author = mid, text, autor
+        m.channel, m.guild = kanal, guild
+        m.created_at = SimpleNamespace(timestamp=lambda t=t: t)
+        m.edited_at, m.pinned = None, False
+        m.attachments, m.embeds, m.reactions, m.reference = [], [], [], None
+        m.type = discord.MessageType.default
+        return m
+
+    guild = mock.MagicMock(spec=discord.Guild)
+    guild.id, guild.name, guild.icon = 10, "Testserver", None
+    guild.member_count, guild.voice_client = 120, None
+    alice, flo = person(1, "Alice"), person(99, "Flo", bot=True)
+    guild.members, guild.me = [alice, flo], flo
+
+    offen = mock.MagicMock(spec=discord.TextChannel)
+    offen.id, offen.name, offen.topic, offen.position = 100, "allgemein", "Alles", 0
+    offen.category, offen.guild = None, guild
+    offen.is_nsfw = lambda: False
+    offen.permissions_for = lambda _m: rechte()
+
+    zu = mock.MagicMock(spec=discord.TextChannel)
+    zu.id, zu.name, zu.topic, zu.position = 101, "geheim", None, 1
+    zu.category, zu.guild = None, guild
+    zu.is_nsfw = lambda: False
+    zu.permissions_for = lambda _m: rechte(read_messages=False, read_message_history=False)
+
+    voice = mock.MagicMock(spec=discord.VoiceChannel)
+    voice.id, voice.name, voice.position = 102, "Lounge", 0
+    voice.category, voice.guild, voice.members = None, guild, [alice]
+    voice.permissions_for = lambda _m: rechte()
+    guild.channels = [offen, zu, voice]
+
+    # history() liefert NEUESTE zuerst - genau wie das Original.
+    verlauf = [nachricht(9002, "zweite <@1> hi", alice, offen, guild, 1700000100.0),
+               nachricht(9001, "erste `code`", flo, offen, guild, 1700000000.0)]
+
+    async def hist(**kw):
+        for m in verlauf[:kw.get("limit", 50)]:
+            yield m
+    offen.history = lambda **kw: hist(**kw)
+
+    gesendet = []
+
+    async def send(text, **kw):
+        gesendet.append((text, kw))
+        return nachricht(9100, text, flo, offen, guild, 1700000200.0)
+    offen.send = send
+
+    wp = webpanel.WebPanel()
+    wp._enabled, wp._auth = True, False
+    wp._client = SimpleNamespace(
+        guilds=[guild], user=flo, latency=0.042,
+        intents=SimpleNamespace(members=False, message_content=True,
+                                presences=False, voice_states=True),
+        get_guild=lambda gid: guild if gid == 10 else None,
+        get_channel=lambda cid: {100: offen, 101: zu, 102: voice}.get(cid),
+        is_closed=lambda: False)
+    return wp, gesendet, offen, nachricht(9500, "live", alice, offen, guild, 1700000300.0)
+
+
+def test_botsicht_zeigt_was_flo_sieht():
+    """BotSicht liefert Server, Kanalbaum, Verlauf und Mitglieder - und zwar
+    aus Flos Blickwinkel:
+
+    * Ein Kanal ohne Leserecht wird MITGELIEFERT und als gesperrt markiert
+      (weglassen waere bequemer und genau falsch - die Frage 'warum sagt Flo
+      da nichts?' beantwortet sich nur, wenn man den Kanal sieht).
+    * Der Verlauf kommt aeltest-zuerst, nicht so, wie Discord ihn liefert.
+    * Flos eigene Nachricht ist als solche markiert.
+    * Die Luecke zwischen 'Mitglieder laut Server' und 'Flo kennt' bleibt
+      sichtbar, statt kaschiert zu werden."""
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    wp, _gesendet, _offen, _live = _botsicht_umgebung()
+    app = wp._build_app()
+
+    async def lauf():
+        async with TestClient(TestServer(app)) as cli:
+            j = await (await cli.get("/api/sicht/guilds")).json()
+            assert j["ok"] and j["ich"]["name"] == "Flo", j
+            g = j["guilds"][0]
+            assert g["mitglieder"] == 120 and g["bekannt"] == 2, g
+            assert j["intents"]["mitglieder"] is False, j["intents"]
+
+            j = await (await cli.get("/api/sicht/channels?guild=10")).json()
+            assert [c["name"] for c in j["text"]] == ["allgemein", "geheim"], j["text"]
+            assert j["text"][0]["rechte"]["verlauf"] is True
+            assert j["text"][1]["rechte"]["verlauf"] is False, "gesperrter Kanal fehlt"
+            assert j["voice"][0]["drin"][0]["name"] == "Alice", j["voice"]
+
+            j = await (await cli.get("/api/sicht/messages?channel=100")).json()
+            assert [m["text"] for m in j["messages"]] == \
+                ["erste `code`", "zweite <@1> hi"], j["messages"]
+            assert j["messages"][0]["autor"]["eigen"] is True, j["messages"][0]["autor"]
+
+            # Gesperrter Kanal: 403 mit Begruendung, NICHT eine leere Liste.
+            r = await cli.get("/api/sicht/messages?channel=101")
+            assert r.status == 403, r.status
+            j = await r.json()
+            assert j["gesperrt"] and "Verlauf" in j["error"], j
+
+            j = await (await cli.get("/api/sicht/members?guild=10")).json()
+            assert j["gesamt"] == 120 and len(j["mitglieder"]) == 2, j
+
+            assert (await cli.get("/api/sicht/messages?channel=999")).status == 404
+            assert (await cli.get("/api/sicht/channels?guild=77")).status == 404
+    asyncio.run(lauf())
+
+
+def test_botsicht_schreibt_aber_pingt_nie_alle():
+    """Aus dem Panel als Flo schreiben - mit fest zugenagelten Erwaehnungen.
+
+    @everyone aus dem Eingabefeld laesst sich nicht zurueckholen; ein
+    Tippfehler soll nicht den halben Server aufwecken. Einzelne Leute duerfen
+    sehr wohl gepingt werden, sonst kann man hier nicht mitreden."""
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    wp, gesendet, _offen, _live = _botsicht_umgebung()
+    app = wp._build_app()
+
+    async def lauf():
+        async with TestClient(TestServer(app)) as cli:
+            j = await (await cli.post("/api/sicht/send",
+                       json={"channel": "100", "text": "@everyone Achtung"})).json()
+            assert j["ok"], j
+            text, kw = gesendet[0]
+            assert text == "@everyone Achtung"
+            am = kw["allowed_mentions"]
+            assert am.everyone is False and am.roles is False, "Massen-Ping moeglich!"
+            assert am.users is True and am.replied_user is True
+
+            # Antwort setzt eine Referenz.
+            await cli.post("/api/sicht/send",
+                           json={"channel": "100", "text": "dazu", "reply_to": "9001"})
+            assert gesendet[1][1]["reference"].id == 9001, gesendet[1][1]
+
+            # Leerer Text und unbekannter Kanal werden abgewiesen.
+            assert (await cli.post("/api/sicht/send",
+                    json={"channel": "100", "text": "   "})).status == 400
+            assert (await cli.post("/api/sicht/send",
+                    json={"channel": "999", "text": "x"})).status == 404
+    asyncio.run(lauf())
+
+
+def test_botsicht_live_strom_und_protokoll():
+    """Der Live-Strom sammelt, was Flo sieht, und 'seit' liefert nur Neues.
+
+    Ausserdem: das Panel-Protokoll haelt das Senden fest (jemand hat im Namen
+    des Bots geschrieben - das gehoert nachvollziehbar), aber NICHT das
+    Tipp-Zeichen. Das feuert bei jedem Tastendruck und wuerde das Protokoll
+    in zwei Minuten vollschreiben."""
+    try:
+        from aiohttp.test_utils import TestClient, TestServer
+    except Exception:  # noqa: BLE001
+        print("   (aiohttp test utils fehlen - uebersprungen)")
+        return
+    wp, _gesendet, _offen, live = _botsicht_umgebung()
+    app = wp._build_app()
+
+    async def lauf():
+        async with TestClient(TestServer(app)) as cli:
+            wp.sicht_notiere(live)
+            j = await (await cli.get("/api/sicht/feed")).json()
+            assert len(j["ereignisse"]) == 1 and j["nr"] == 1, j
+            assert j["ereignisse"][0]["msg"]["text"] == "live", j
+
+            # 'seit' filtert das schon Gesehene weg.
+            j2 = await (await cli.get(f"/api/sicht/feed?seit={j['nr']}")).json()
+            assert j2["ereignisse"] == [], j2
+
+            await cli.post("/api/sicht/send", json={"channel": "100", "text": "hi"})
+            await cli.post("/api/sicht/typing", json={"channel": "100"})
+            j3 = await (await cli.get(f"/api/sicht/feed?seit={j['nr']}")).json()
+            assert len(j3["ereignisse"]) == 1, j3
+            assert j3["ereignisse"][0]["msg"]["text"] == "hi", j3
+    asyncio.run(lauf())
+
+    pfade = [e["pfad"] for e in wp._log]
+    assert "/api/sicht/send" in pfade, pfade
+    assert "/api/sicht/typing" not in pfade, "Tipp-Zeichen flutet das Protokoll"
+
+
+def test_botsicht_ueberlebt_kaputte_nachrichten():
+    """Eine Nachricht mit kaputtem Anhang darf nicht den ganzen Verlauf
+    mitreissen - und sicht_notiere laeuft im heissen Pfad von on_message,
+    darf also unter keinen Umstaenden nach oben durchschlagen."""
+    import unittest.mock as mock
+    import discord
+    wp, _g, _o, _l = _botsicht_umgebung()
+
+    kaputt = mock.MagicMock(spec=discord.Message)
+    kaputt.id = 1
+    # Jeder Zugriff auf .author fliegt - schlimmer geht es kaum.
+    type(kaputt).author = property(lambda _s: (_ for _ in ()).throw(RuntimeError("weg")))
+    wp.sicht_notiere(kaputt)          # darf NICHT werfen
+    assert wp._sicht_nr == 0, "kaputte Nachricht wurde trotzdem gezaehlt"
+
+    # Auch ohne laufenden Loop (Tests, Shell) bleibt es lautlos.
+    wp.sicht_notiere(_l)
+    assert wp._sicht_nr == 1 and len(wp._sicht) == 1
+
+    # Ist das Panel aus, wird gar nichts aufbereitet.
+    wp._enabled = False
+    wp.sicht_notiere(_l)
+    assert wp._sicht_nr == 1, "abgeschaltetes Panel sammelt trotzdem"
+
+
+def test_botsicht_live_strom_haelt_die_reihenfolge():
+    """Jede offene Leitung hat eine eigene Warteschlange und EINEN Schreiber.
+
+    Der erste Entwurf hat pro Nachricht ein create_task(ws.send_json(...))
+    abgesetzt. Zwei kurz hintereinander erzeugte Tasks koennen sich beim
+    Schreiben aber ueberholen - dann steht im Panel die Antwort vor der Frage.
+    Ausserdem konnte ein langsamer Browser den Bot mit beliebig vielen Tasks
+    zumuellen; jetzt ist bei _SICHT_STAU Schluss und das AELTESTE faellt raus."""
+    import webpanel
+    wp, _g, _o, _l = _botsicht_umgebung()
+
+    # SimpleNamespace geht hier NICHT: es definiert __eq__ und ist damit
+    # unhashbar - als Schluessel im Verbindungs-Dict also unbrauchbar.
+    class Leitung:
+        def __init__(self):
+            self.closed = False
+
+    async def lauf():
+        ws = Leitung()
+        schlange = asyncio.Queue(maxsize=5)
+        wp._sicht_ws = {ws: schlange}
+        for i in range(5):
+            wp._sicht_push({"nr": i})
+        assert schlange.qsize() == 5
+        # Voll: die naechsten drei verdraengen die aeltesten drei.
+        for i in range(5, 8):
+            wp._sicht_push({"nr": i})
+        raus = [schlange.get_nowait()["nr"] for _ in range(5)]
+        assert raus == [3, 4, 5, 6, 7], raus
+
+        # Geschlossene Leitungen fliegen beim naechsten Schub raus.
+        ws.closed = True
+        wp._sicht_push({"nr": 99})
+        assert wp._sicht_ws == {}, wp._sicht_ws
+    asyncio.run(lauf())
+
+    # Und ohne jede Leitung tut _sicht_push schlicht nichts (heisser Pfad).
+    wp._sicht_ws = {}
+    wp._sicht_push({"nr": 1})
+
+
+def test_botsicht_haengt_im_bot_ganz_oben():
+    """Der Aufruf in bot.py muss VOR dem Bot-Check stehen.
+
+    Sonst zeigt die Ansicht eine gefilterte Wahrheit: Flos eigene Antworten
+    und die anderer Bots fehlten, obwohl er sie sehr wohl sieht."""
+    quelle = open("bot.py", encoding="utf-8").read()
+    start = quelle.index("async def on_message(self, message)")
+    rumpf = quelle[start:start + 4000]
+    hook = rumpf.index("webpanel.sicht_notiere(message)")
+    botcheck = rumpf.index("if message.author.bot:")
+    assert hook < botcheck, "sicht_notiere steht hinter dem Bot-Check"
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

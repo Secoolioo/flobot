@@ -14,9 +14,13 @@ Features (JSON-API + schicke Single-Page-Oberflaeche webpanel.html):
 SICHERHEIT - bitte lesen:
 Das Panel laeuft standardmaessig OHNE LOGIN (WEBPANEL_AUTH=0, so gewuenscht). Wer
 die Adresse erreicht, kann damit alles: Coins vergeben, Ansagen im Namen des Bots
-posten, den Kurs setzen, den Bot aktualisieren und neu starten. Betreibe es
-deshalb NUR im eigenen Netz bzw. hinter der Firewall und haenge den Port nicht
-offen ins Internet.
+posten, den Kurs setzen, den Bot aktualisieren und neu starten.
+
+Seit der BotSicht kommt dazu: den kompletten Chat MITLESEN (Verlauf und live),
+im Namen des Bots in jeden Kanal schreiben, reagieren und Nachrichten loeschen.
+Das ist Absicht - genau dafuer ist die Ansicht da -, hebt aber den Einsatz: der
+Port gehoert NUR ins eigene Netz bzw. hinter die Firewall, niemals offen ins
+Internet. Wer das nicht sicherstellen kann, setzt WEBPANEL_AUTH=1.
 
     WEBPANEL_AUTH=1      Login wieder verlangen (WEBPANEL_USER/WEBPANEL_PASS)
     WEBPANEL_HOST=127.0.0.1   nur lokal erreichbar
@@ -31,6 +35,7 @@ import os
 import secrets
 import time
 import unicodedata
+from collections import deque
 from pathlib import Path
 
 import discord
@@ -49,6 +54,13 @@ log = logging.getLogger("dcbot.webpanel")
 
 # So viele Panel-Aktionen bleiben im Protokoll stehen.
 PANEL_LOG_MAX = int(os.getenv("PANEL_LOG_MAX", "200") or "200")
+
+# BotSicht: so viele zuletzt gesehene Nachrichten haelt der Live-Strom vor.
+# Das ist ein RAM-Puffer, keine Datei - was Flo sieht, ist fluechtig, und ein
+# Mitschnitt des ganzen Servers auf der Platte will hier niemand.
+BOTSICHT_PUFFER = int(os.getenv("BOTSICHT_PUFFER", "400") or "400")
+# So viele Nachrichten holt die Verlaufs-Ansicht hoechstens auf einmal.
+BOTSICHT_VERLAUF_MAX = 100
 
 _HTML_PATH = Path(__file__).resolve().parent / "webpanel.html"
 
@@ -78,6 +90,11 @@ class WebPanel(FeatureBasis):
         self._log = []
         self._log_store = None
         self._log_tasks = set()
+        # --- BotSicht: der Live-Strom dessen, was Flo mitbekommt ----------
+        self._sicht = deque(maxlen=max(20, BOTSICHT_PUFFER))
+        self._sicht_ws = {}         # offene WebSocket-Verbindung -> ihre Warteschlange
+        self._sicht_tasks = set()   # laufende Sende-Tasks (sonst sammelt der GC sie ein)
+        self._sicht_nr = 0          # laufende Nummer, damit der Browser Luecken merkt
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -151,10 +168,27 @@ class WebPanel(FeatureBasis):
             web.post("/api/update", self._api_update),
             web.get("/api/log", self._api_log),
             web.get("/api/backup", self._api_backup),
+            # BotSicht: Discord aus Flos Blickwinkel
+            web.get("/api/sicht/guilds", self._api_sicht_guilds),
+            web.get("/api/sicht/channels", self._api_sicht_channels),
+            web.get("/api/sicht/messages", self._api_sicht_messages),
+            web.get("/api/sicht/members", self._api_sicht_members),
+            web.get("/api/sicht/feed", self._api_sicht_feed),
+            web.get("/api/sicht/ws", self._api_sicht_ws),
+            web.post("/api/sicht/send", self._api_sicht_send),
+            web.post("/api/sicht/typing", self._api_sicht_typing),
+            web.post("/api/sicht/react", self._api_sicht_react),
+            web.post("/api/sicht/delete", self._api_sicht_delete),
         ])
         return app
 
     # --- Protokoll: was hat das Panel eigentlich getan? -------------------
+    # /api/login: da stuende das Passwort drin.
+    # /api/sicht/typing: das feuert bei jedem Tastendruck - nach zwei Minuten
+    # Tippen waere das ganze Protokoll damit vollgeschrieben und alles andere
+    # herausgerollt.
+    _NICHT_NOTIEREN = ("/api/login", "/api/sicht/typing")
+
     @web.middleware
     async def _protokoll_middleware(self, request, handler):
         """Schreibt JEDE schreibende Panel-Aktion mit.
@@ -166,7 +200,7 @@ class WebPanel(FeatureBasis):
         ein Konto 5 Mio mehr hat, findet es hier."""
         antwort = await handler(request)
         try:
-            if request.method == "POST" and request.path != "/api/login":
+            if request.method == "POST" and request.path not in self._NICHT_NOTIEREN:
                 self._notiere(request, getattr(antwort, "status", 0))
         except Exception:  # noqa: BLE001 - das Protokoll darf nie stoeren
             log.debug("Panel-Protokoll fehlgeschlagen", exc_info=True)
@@ -1253,6 +1287,574 @@ class WebPanel(FeatureBasis):
             return web.json_response({"ok": False, "error": "fehler"}, status=500)
         return web.json_response({"ok": True, "key": key, "on": res})
 
+    # =====================================================================
+    # BotSicht - Discord aus Flos Blickwinkel
+    # =====================================================================
+    # Der Reiz dieser Ansicht ist nicht "Discord im Browser" (dafuer gibt es
+    # Discord), sondern: was sieht der BOT eigentlich? Und da ist Flos Bild
+    # LOECHRIG, und zwar mit Absicht:
+    #
+    #   * Kanaele, in denen ihm 'Nachrichten lesen' fehlt, existieren fuer ihn
+    #     praktisch nicht - hier stehen sie trotzdem, aber gesperrt.
+    #   * Das Members-Intent ist aus (bot.py:290 ff.), Flo kennt also nur die
+    #     Leute, die er im Chat oder im Voice gesehen hat. Die Mitgliederliste
+    #     ist deshalb kurz - das ist kein Fehler, das ist der Blickwinkel.
+    #   * Ohne message_content-Intent waeren Texte fremder Nachrichten leer.
+    #
+    # Genau das wird hier ehrlich mitgeliefert statt kaschiert. Wer einen
+    # Fehler sucht ("warum antwortet er da nicht?"), sieht die Antwort sofort,
+    # statt sie im Journal zu suchen.
+
+    _SICHT_TEXT_MAX = 4000        # ein Discord-Text ist nie laenger
+    _SICHT_EMBED_MAX = 6          # mehr Embeds haengt Discord selbst nicht an
+
+    @staticmethod
+    def _sicht_farbe(wert):
+        """Discord-Farbe als '#rrggbb' - oder None bei 'keine Farbe' (0)."""
+        try:
+            zahl = int(getattr(wert, "value", wert) or 0)
+        except (TypeError, ValueError):
+            return None
+        return f"#{zahl:06x}" if zahl else None
+
+    def _sicht_autor(self, autor):
+        """Ein Nachrichten-Autor so, wie Flo ihn kennt."""
+        uid = self._safe(lambda: int(autor.id), 0)
+        eigen = bool(self._client is not None
+                     and getattr(self._client, "user", None) is not None
+                     and uid == self._safe(lambda: int(self._client.user.id), -1))
+        return {
+            "id": str(uid),
+            "name": self._safe(lambda: str(autor.name), "?") or "?",
+            "display": self._safe(lambda: str(autor.display_name), None)
+                       or self._safe(lambda: str(autor.name), "?") or "?",
+            "avatar": self._safe(lambda: autor.display_avatar.url, None),
+            "bot": bool(self._safe(lambda: autor.bot, False)),
+            # color gibt es nur auf Member (nicht auf User) - im DM ist das None.
+            "farbe": self._safe(lambda: self._sicht_farbe(autor.color), None),
+            "eigen": eigen,
+        }
+
+    def _sicht_embed(self, embed):
+        """Embed auf das reduzieren, was die Oberflaeche zeichnet.
+
+        to_dict() liefert alles, aber auch Felder, die niemand rendert - und bei
+        einem Embed mit 25 langen Feldern waere die Antwort groesser als der
+        ganze restliche Verlauf."""
+        d = self._safe(lambda: embed.to_dict(), None) or {}
+        felder = []
+        for f in (d.get("fields") or [])[:25]:
+            felder.append({"name": str(f.get("name", ""))[:256],
+                           "wert": str(f.get("value", ""))[:1024],
+                           "inline": bool(f.get("inline"))})
+        bild = (d.get("image") or {}).get("url")
+        thumb = (d.get("thumbnail") or {}).get("url")
+        autor = d.get("author") or {}
+        fuss = d.get("footer") or {}
+        return {
+            "titel": str(d.get("title") or "")[:256],
+            "text": str(d.get("description") or "")[:2048],
+            "url": d.get("url") or None,
+            "farbe": self._sicht_farbe(d.get("color")),
+            "autor": str(autor.get("name") or "")[:256],
+            "autor_bild": autor.get("icon_url") or None,
+            "fuss": str(fuss.get("text") or "")[:2048],
+            "fuss_bild": fuss.get("icon_url") or None,
+            "bild": bild, "thumb": thumb,
+            "felder": felder,
+        }
+
+    def _sicht_msg(self, message):
+        """Eine Discord-Nachricht als JSON fuer die Oberflaeche.
+
+        Alles einzeln in _safe: eine Nachricht mit einem kaputten Anhang darf
+        nicht den ganzen Verlauf zum 500er machen."""
+        kanal = getattr(message, "channel", None)
+        guild = getattr(message, "guild", None)
+        anhaenge = []
+        for a in (self._safe(lambda: list(message.attachments), []) or [])[:10]:
+            anhaenge.append({
+                "name": self._safe(lambda: str(a.filename), "datei") or "datei",
+                "url": self._safe(lambda: str(a.url), "") or "",
+                "typ": self._safe(lambda: a.content_type, None),
+                "groesse": self._safe(lambda: int(a.size), 0) or 0,
+                "breite": self._safe(lambda: a.width, None),
+                "hoehe": self._safe(lambda: a.height, None),
+            })
+        embeds = [self._sicht_embed(e)
+                  for e in (self._safe(lambda: list(message.embeds), []) or []
+                            )[:self._SICHT_EMBED_MAX]]
+        reaktionen = []
+        for r in (self._safe(lambda: list(message.reactions), []) or [])[:20]:
+            emoji = self._safe(lambda: r.emoji, None)
+            reaktionen.append({
+                "emoji": self._safe(lambda: str(emoji), "?") or "?",
+                # Eigene Server-Emojis haben ein Bild, Unicode-Emojis nicht.
+                "bild": self._safe(lambda: emoji.url, None),
+                "anzahl": self._safe(lambda: int(r.count), 0) or 0,
+                "eigen": bool(self._safe(lambda: r.me, False)),
+            })
+        antwort = None
+        bezug = self._safe(lambda: message.reference, None)
+        if bezug is not None:
+            geloest = self._safe(lambda: bezug.resolved, None)
+            antwort = {
+                "id": str(self._safe(lambda: bezug.message_id, "") or ""),
+                # Steckt die Ursprungsnachricht nicht mehr im Cache, kennt Flo
+                # sie nicht mehr - dann bleibt es bei der nackten ID.
+                "autor": self._safe(lambda: str(geloest.author.display_name), None),
+                "text": self._safe(lambda: str(geloest.content)[:200], None),
+            }
+        return {
+            "id": str(self._safe(lambda: message.id, "") or ""),
+            "kanal": str(self._safe(lambda: kanal.id, "") or ""),
+            "kanal_name": self._safe(lambda: str(kanal.name), None) or "Direktnachricht",
+            "guild": str(self._safe(lambda: guild.id, "") or ""),
+            "guild_name": self._safe(lambda: str(guild.name), None) or "Direktnachricht",
+            "t": int(self._safe(lambda: message.created_at.timestamp(), 0) or 0),
+            "bearbeitet": int(self._safe(
+                lambda: message.edited_at.timestamp(), 0) or 0) or None,
+            "autor": self._sicht_autor(message.author),
+            "text": (self._safe(lambda: str(message.content), "") or "")[:self._SICHT_TEXT_MAX],
+            "anhaenge": anhaenge,
+            "embeds": embeds,
+            "reaktionen": reaktionen,
+            "antwort_auf": antwort,
+            "angeheftet": bool(self._safe(lambda: message.pinned, False)),
+            "system": bool(self._safe(
+                lambda: message.type is not discord.MessageType.default
+                and message.type is not discord.MessageType.reply, False)),
+        }
+
+    # --- Live-Strom -------------------------------------------------------
+    def sicht_notiere(self, message, art="neu"):
+        """Von bot.py fuer JEDE gesehene Nachricht aufgerufen (auch fuer Flos
+        eigene und die anderer Bots) - genau darum geht es ja.
+
+        Muss billig und absolut lautlos sein: das haengt im heissen Pfad von
+        on_message. Faellt hier etwas um, darf davon nichts nach oben
+        durchschlagen, sonst kostet eine Panel-Spielerei die Nachricht."""
+        if not self._enabled:
+            return
+        try:
+            ereignis = {"art": art, "nr": self._sicht_nr + 1,
+                        "msg": self._sicht_msg(message)}
+            self._sicht_nr += 1
+            self._sicht.append(ereignis)
+            self._sicht_push(ereignis)
+        except Exception:  # noqa: BLE001
+            log.debug("BotSicht: Nachricht liess sich nicht aufbereiten", exc_info=True)
+
+    # So viele Ereignisse darf ein langsamer Browser hinterherhinken.
+    _SICHT_STAU = 200
+
+    def _sicht_push(self, ereignis):
+        """Legt ein Ereignis in die Warteschlange JEDER offenen Verbindung.
+
+        Bewusst eine Schlange je Verbindung und ein Sende-Task dahinter, statt
+        pro Nachricht ein create_task(ws.send_json(...)): zwei kurz
+        hintereinander erzeugte Tasks koennen sich beim Schreiben ueberholen,
+        und dann steht die Antwort im Panel VOR der Frage. Nebenbei kann so
+        kein Browser den Bot mit unbegrenzt vielen Tasks zumuellen.
+
+        Diese Methode laeuft im heissen Pfad von on_message - sie wartet auf
+        nichts und wirft nichts."""
+        for ws, schlange in list(self._sicht_ws.items()):
+            if getattr(ws, "closed", False):
+                self._sicht_ws.pop(ws, None)
+                continue
+            try:
+                schlange.put_nowait(ereignis)
+            except asyncio.QueueFull:
+                # Der Browser kommt nicht hinterher. Dann faellt das AELTESTE
+                # raus - im Live-Strom ist das Neueste das Interessante.
+                try:
+                    schlange.get_nowait()
+                    schlange.put_nowait(ereignis)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    async def _sicht_sender(self, ws, schlange):
+        """Schreibt die Schlange einer Verbindung ab - in Reihenfolge."""
+        try:
+            while True:
+                ereignis = await schlange.get()
+                await ws.send_json(ereignis)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - Browser weg, Leitung tot, egal
+            self._sicht_ws.pop(ws, None)
+
+    async def _api_sicht_ws(self, request):
+        """Live-Leitung: der Browser bekommt jede Nachricht, die Flo sieht.
+
+        Der Browser schickt hier nichts - Senden laeuft ueber /api/sicht/send.
+        Wir lesen die Leitung trotzdem, sonst merkt aiohttp nie, dass der Tab
+        zu ist, und die Verbindung bleibt bis zum Neustart stehen."""
+        self._guard(request)
+        ws = web.WebSocketResponse(heartbeat=30.0)
+        await ws.prepare(request)
+        schlange = asyncio.Queue(maxsize=self._SICHT_STAU)
+        # Der Gruss geht durch dieselbe Schlange wie alles andere - zwei
+        # Schreiber auf einem WebSocket vertragen sich nicht.
+        schlange.put_nowait({"art": "hallo", "nr": self._sicht_nr})
+        self._sicht_ws[ws] = schlange
+        sender = asyncio.get_running_loop().create_task(self._sicht_sender(ws, schlange))
+        self._sicht_tasks.add(sender)
+        sender.add_done_callback(self._sicht_tasks.discard)
+        try:
+            async for _nachricht in ws:
+                pass
+        except Exception:  # noqa: BLE001
+            log.debug("BotSicht-Leitung beendet", exc_info=True)
+        finally:
+            self._sicht_ws.pop(ws, None)
+            sender.cancel()
+        return ws
+
+    async def _api_sicht_feed(self, request):
+        """Der Live-Strom als normaler Abruf - Rueckfallweg, wenn die
+        WebSocket-Leitung nicht zustande kommt (Reverse-Proxy o. ae.).
+        'seit' ist die zuletzt gesehene laufende Nummer."""
+        self._guard(request)
+        seit = self._as_int(request.query.get("seit"), 0)
+        neu = [e for e in list(self._sicht) if e.get("nr", 0) > seit]
+        return web.json_response({"ok": True, "nr": self._sicht_nr,
+                                  "ereignisse": neu[-BOTSICHT_VERLAUF_MAX:]})
+
+    # --- Struktur: Server, Kanaele, Mitglieder ----------------------------
+    async def _api_sicht_guilds(self, request):
+        """Wer ist Flo, und auf welchen Servern ist er?"""
+        self._guard(request)
+        ich = getattr(self._client, "user", None)
+        out = []
+        for g in (getattr(self._client, "guilds", []) or []):
+            out.append({
+                "id": str(self._safe(lambda: g.id, 0) or 0),
+                "name": self._safe(lambda: str(g.name), "?") or "?",
+                "icon": self._safe(lambda: g.icon.url if g.icon else None, None),
+                # 'mitglieder' ist die echte Zahl vom Server, 'bekannt' die, die
+                # Flo tatsaechlich im Cache hat. Die Luecke ist die Aussage.
+                "mitglieder": self._safe(lambda: int(g.member_count or 0), 0) or 0,
+                "bekannt": len(self._safe(lambda: list(g.members), []) or []),
+            })
+        out.sort(key=lambda e: self._fold(e["name"]))
+        return web.json_response({
+            "ok": True,
+            "ich": {
+                "id": str(self._safe(lambda: ich.id, "") or ""),
+                "name": self._safe(lambda: str(ich.name), None) or self._bot_name,
+                "avatar": self._safe(lambda: ich.display_avatar.url, None),
+                "latenz": round(self._safe(lambda: float(self._client.latency) * 1000, 0.0) or 0.0),
+            },
+            "guilds": out,
+            # Ehrlichkeit ueber den Blickwinkel: was Flo strukturell NICHT sieht.
+            "intents": self._sicht_intents(),
+        })
+
+    def _sicht_intents(self):
+        """Welche Intents an sind - daraus erklaeren sich die Luecken in Flos Bild."""
+        i = self._safe(lambda: self._client.intents, None)
+        if i is None:
+            return {}
+        return {
+            "mitglieder": bool(self._safe(lambda: i.members, False)),
+            "inhalt": bool(self._safe(lambda: i.message_content, False)),
+            "praesenz": bool(self._safe(lambda: i.presences, False)),
+            "voice": bool(self._safe(lambda: i.voice_states, False)),
+        }
+
+    def _sicht_rechte(self, kanal, guild):
+        """Was Flo in diesem Kanal DARF - der Kern der ganzen Ansicht."""
+        ich = self._safe(lambda: guild.me, None)
+        if ich is None or not hasattr(kanal, "permissions_for"):
+            # Direktnachricht: keine Rechteverwaltung, Flo darf alles.
+            return {"lesen": True, "verlauf": True, "senden": True,
+                    "dateien": True, "embeds": True, "verwalten": False,
+                    "reagieren": True}
+        p = self._safe(lambda: kanal.permissions_for(ich), None)
+        if p is None:
+            return {"lesen": False, "verlauf": False, "senden": False,
+                    "dateien": False, "embeds": False, "verwalten": False,
+                    "reagieren": False}
+        return {
+            "lesen": bool(p.read_messages),
+            "verlauf": bool(p.read_message_history),
+            "senden": bool(p.send_messages),
+            "dateien": bool(p.attach_files),
+            "embeds": bool(p.embed_links),
+            "verwalten": bool(p.manage_messages),
+            "reagieren": bool(p.add_reactions),
+        }
+
+    async def _api_sicht_channels(self, request):
+        """Der Kanalbaum eines Servers - mit Flos Rechten an jedem Kanal.
+
+        Kanaele ohne Leserecht kommen MIT, nur gesperrt markiert. Sie
+        wegzulassen waere bequemer und genau falsch: die Frage 'warum sagt Flo
+        da nichts?' beantwortet sich nur, wenn man den Kanal sieht."""
+        self._guard(request)
+        gid = self._as_int(request.query.get("guild"), 0)
+        guild = self._guild_by_id(gid)
+        if guild is None:
+            return web.json_response({"ok": False, "error": "Server nicht gefunden"},
+                                     status=404)
+        text_k, voice_k = [], []
+        for c in (self._safe(lambda: list(guild.channels), []) or []):
+            ist_text = isinstance(c, (discord.TextChannel, discord.Thread))
+            ist_voice = isinstance(c, (discord.VoiceChannel, discord.StageChannel))
+            if not (ist_text or ist_voice):
+                continue
+            kat = self._safe(lambda: c.category, None)
+            eintrag = {
+                "id": str(self._safe(lambda: c.id, 0) or 0),
+                "name": self._safe(lambda: str(c.name), "?") or "?",
+                "thema": (self._safe(lambda: str(c.topic or ""), "") or "")[:200],
+                "nsfw": bool(self._safe(lambda: c.is_nsfw(), False)),
+                "thread": isinstance(c, discord.Thread),
+                "position": self._safe(lambda: int(c.position), 0) or 0,
+                "kategorie": self._safe(lambda: str(kat.name), None),
+                "kategorie_id": str(self._safe(lambda: kat.id, 0) or 0),
+                "rechte": self._sicht_rechte(c, guild),
+            }
+            if ist_voice:
+                # Wer sitzt gerade drin? Das sieht Flo wirklich (voice_states).
+                eintrag["drin"] = [
+                    {"id": str(m.id), "name": self._safe(lambda: str(m.display_name), "?"),
+                     "avatar": self._safe(lambda: m.display_avatar.url, None)}
+                    for m in (self._safe(lambda: list(c.members), []) or [])[:25]
+                ]
+                voice_k.append(eintrag)
+            else:
+                text_k.append(eintrag)
+        text_k.sort(key=lambda e: (e["position"], self._fold(e["name"])))
+        voice_k.sort(key=lambda e: (e["position"], self._fold(e["name"])))
+        # In welchem Voice haengt Flo gerade selbst?
+        vc = self._safe(lambda: guild.voice_client, None)
+        return web.json_response({
+            "ok": True,
+            "guild": {"id": str(guild.id), "name": guild.name,
+                      "icon": self._safe(lambda: guild.icon.url if guild.icon else None, None)},
+            "text": text_k, "voice": voice_k,
+            "mein_voice": str(self._safe(lambda: vc.channel.id, "") or ""),
+        })
+
+    async def _api_sicht_members(self, request):
+        """Die Mitglieder, die Flo KENNT. Ohne Members-Intent sind das nur die,
+        die er im Chat oder Voice gesehen hat - genau das steht auch dran."""
+        self._guard(request)
+        gid = self._as_int(request.query.get("guild"), 0)
+        guild = self._guild_by_id(gid)
+        if guild is None:
+            return web.json_response({"ok": False, "error": "Server nicht gefunden"},
+                                     status=404)
+        out = []
+        for m in (self._safe(lambda: list(guild.members), []) or [])[:500]:
+            rolle = None
+            try:
+                # Die oberste Rolle mit Farbe - dieselbe, die Discord anzeigt.
+                farbige = [r for r in reversed(m.roles) if r.color and r.color.value]
+                rolle = farbige[0].name if farbige else None
+            except Exception:  # noqa: BLE001
+                rolle = None
+            out.append({
+                "id": str(self._safe(lambda: m.id, 0) or 0),
+                "name": self._safe(lambda: str(m.display_name), "?") or "?",
+                "avatar": self._safe(lambda: m.display_avatar.url, None),
+                "bot": bool(self._safe(lambda: m.bot, False)),
+                "farbe": self._safe(lambda: self._sicht_farbe(m.color), None),
+                "rolle": rolle,
+                "status": self._safe(lambda: str(m.status), "offline") or "offline",
+                "voice": bool(self._safe(lambda: m.voice is not None, False)),
+            })
+        out.sort(key=lambda e: (e["bot"], self._fold(e["name"])))
+        return web.json_response({
+            "ok": True, "mitglieder": out,
+            "gesamt": self._safe(lambda: int(guild.member_count or 0), 0) or 0,
+            "intents": self._sicht_intents(),
+        })
+
+    # --- Verlauf und Eingreifen -------------------------------------------
+    def _sicht_kanal(self, cid):
+        """Kanal-Objekt zu einer ID - oder None."""
+        kid = self._uid(cid)
+        if kid is None or self._client is None:
+            return None
+        return self._safe(lambda: self._client.get_channel(kid), None)
+
+    async def _api_sicht_messages(self, request):
+        """Der Verlauf eines Kanals, so wie Flo ihn abrufen darf.
+
+        Fehlt das Recht 'Nachrichtenverlauf lesen', kommt hier ehrlich eine
+        Absage statt einer leeren Liste - sonst sieht es aus, als sei der
+        Kanal still."""
+        self._guard(request)
+        kanal = self._sicht_kanal(request.query.get("channel"))
+        if kanal is None:
+            return web.json_response({"ok": False, "error": "Kanal nicht gefunden"},
+                                     status=404)
+        if not hasattr(kanal, "history"):
+            return web.json_response({"ok": False, "error": "Kanal hat keinen Verlauf"},
+                                     status=400)
+        guild = getattr(kanal, "guild", None)
+        rechte = self._sicht_rechte(kanal, guild) if guild is not None else \
+            {"lesen": True, "verlauf": True, "senden": True, "dateien": True,
+             "embeds": True, "verwalten": False, "reagieren": True}
+        if not rechte.get("verlauf"):
+            return web.json_response(
+                {"ok": False, "gesperrt": True, "rechte": rechte,
+                 "error": "Flo darf den Verlauf dieses Kanals nicht lesen."},
+                status=403)
+        anzahl = max(1, min(BOTSICHT_VERLAUF_MAX,
+                            self._as_int(request.query.get("limit"), 50)))
+        vor = self._uid(request.query.get("before"))
+        try:
+            kwargs = {"limit": anzahl}
+            if vor is not None:
+                kwargs["before"] = discord.Object(id=vor)
+            roh = [m async for m in kanal.history(**kwargs)]
+        except discord.Forbidden:
+            return web.json_response(
+                {"ok": False, "gesperrt": True, "rechte": rechte,
+                 "error": "Discord verweigert den Verlauf (Rechte gerade geaendert?)."},
+                status=403)
+        except Exception:  # noqa: BLE001
+            log.exception("BotSicht: Verlauf konnte nicht geladen werden")
+            return web.json_response({"ok": False, "error": "Verlauf nicht ladbar"},
+                                     status=500)
+        # history() liefert neueste zuerst - die Oberflaeche liest von oben.
+        msgs = [self._sicht_msg(m) for m in reversed(roh)]
+        return web.json_response({
+            "ok": True, "messages": msgs, "rechte": rechte,
+            "kanal": {"id": str(kanal.id),
+                      "name": self._safe(lambda: str(kanal.name), None) or "Direktnachricht",
+                      "thema": (self._safe(lambda: str(kanal.topic or ""), "") or "")[:200]},
+            # Weniger als angefragt -> wir sind am Anfang des Kanals.
+            "mehr": len(roh) >= anzahl,
+        })
+
+    @staticmethod
+    def _sicht_pings():
+        """Aus dem Panel wird NIE @everyone/@here ausgeloest und keine Rolle
+        angepingt: das laesst sich nicht zurueckholen, und ein Tippfehler im
+        Eingabefeld soll nicht den halben Server aufwecken. Einzelne Leute und
+        die Person, auf die man antwortet, duerfen sehr wohl gepingt werden -
+        sonst kann man aus dieser Ansicht nicht sinnvoll mitreden."""
+        return discord.AllowedMentions(everyone=False, roles=False,
+                                       users=True, replied_user=True)
+
+    async def _api_sicht_send(self, request):
+        """Als Flo in einen Kanal schreiben - optional als Antwort."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        kanal = self._sicht_kanal(data.get("channel"))
+        if kanal is None:
+            return web.json_response({"ok": False, "error": "Kanal nicht gefunden"},
+                                     status=404)
+        text = self._text(data.get("text"), 1900)
+        if text is None:
+            return web.json_response({"ok": False, "error": "text?"}, status=400)
+        if not text:
+            return web.json_response({"ok": False, "error": "kein text"}, status=400)
+        if not hasattr(kanal, "send"):
+            return web.json_response({"ok": False, "error": "Kanal kann keine Nachrichten"},
+                                     status=400)
+        kwargs = {"allowed_mentions": self._sicht_pings()}
+        antwort_auf = self._uid(data.get("reply_to"))
+        if antwort_auf is not None:
+            # Nicht erst holen: discord.Object reicht zum Antworten und spart
+            # einen API-Aufruf. Ist die Nachricht weg, faellt Discord selbst
+            # auf eine normale Nachricht zurueck.
+            kwargs["reference"] = discord.Object(id=antwort_auf)
+            kwargs["mention_author"] = True
+        try:
+            msg = await kanal.send(text, **kwargs)
+        except discord.Forbidden:
+            return web.json_response(
+                {"ok": False, "error": "Flo darf hier nicht schreiben."}, status=403)
+        except Exception:  # noqa: BLE001
+            log.exception("BotSicht: Senden fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "senden fehlgeschlagen"},
+                                     status=500)
+        # Sofort in den Strom legen, damit die eigene Nachricht ohne Verzoegerung
+        # im Panel steht. Normalerweise kommt sie gleich NOCHMAL ueber das
+        # Gateway (on_message feuert auch fuer Flos eigene Nachrichten) - die
+        # Oberflaeche wirft Doppelte anhand der Nachrichten-ID weg. Ohne diesen
+        # Aufruf haengt das Feld nach dem Abschicken kurz leer da, und auf einem
+        # Bot ohne Nachrichten-Intent kaeme die Nachricht nie an.
+        self.sicht_notiere(msg)
+        return web.json_response({"ok": True, "msg": self._sicht_msg(msg)})
+
+    async def _api_sicht_typing(self, request):
+        """Das Tipp-Zeichen im Kanal ausloesen - wirkt fuer die Leute im Chat
+        so, als wuerde Flo gerade schreiben. Genau das tut er ja auch."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        kanal = self._sicht_kanal(data.get("channel"))
+        if kanal is None or not hasattr(kanal, "typing"):
+            return web.json_response({"ok": False, "error": "Kanal nicht gefunden"},
+                                     status=404)
+        try:
+            await kanal.typing()
+        except Exception:  # noqa: BLE001 - reine Kosmetik, nie ein Fehler
+            log.debug("BotSicht: Tipp-Zeichen fehlgeschlagen", exc_info=True)
+        return web.json_response({"ok": True})
+
+    async def _api_sicht_react(self, request):
+        """Als Flo auf eine Nachricht reagieren (oder die Reaktion zuruecknehmen)."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        kanal = self._sicht_kanal(data.get("channel"))
+        mid = self._uid(data.get("message"))
+        emoji = self._text(data.get("emoji"), 64)
+        if kanal is None or mid is None:
+            return web.json_response({"ok": False, "error": "Kanal/Nachricht?"}, status=400)
+        if not emoji:
+            return web.json_response({"ok": False, "error": "emoji?"}, status=400)
+        weg = self._flag(data.get("weg"), False)
+        try:
+            msg = await kanal.fetch_message(mid)
+            if weg:
+                await msg.remove_reaction(emoji, self._client.user)
+            else:
+                await msg.add_reaction(emoji)
+        except discord.Forbidden:
+            return web.json_response({"ok": False, "error": "Flo darf hier nicht reagieren."},
+                                     status=403)
+        except Exception:  # noqa: BLE001
+            log.info("BotSicht: Reaktion fehlgeschlagen", exc_info=True)
+            return web.json_response({"ok": False, "error": "Reaktion abgelehnt "
+                                      "(unbekanntes Emoji?)"}, status=400)
+        return web.json_response({"ok": True})
+
+    async def _api_sicht_delete(self, request):
+        """Eine Nachricht loeschen - so weit Flos Rechte reichen."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        kanal = self._sicht_kanal(data.get("channel"))
+        mid = self._uid(data.get("message"))
+        if kanal is None or mid is None:
+            return web.json_response({"ok": False, "error": "Kanal/Nachricht?"}, status=400)
+        try:
+            msg = await kanal.fetch_message(mid)
+            await msg.delete()
+        except discord.Forbidden:
+            return web.json_response(
+                {"ok": False, "error": "Flo fehlt 'Nachrichten verwalten'."}, status=403)
+        except discord.NotFound:
+            return web.json_response({"ok": False, "error": "Nachricht ist schon weg."},
+                                     status=404)
+        except Exception:  # noqa: BLE001
+            log.exception("BotSicht: Loeschen fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "loeschen fehlgeschlagen"},
+                                     status=500)
+        self._sicht_nr += 1
+        ereignis = {"art": "weg", "nr": self._sicht_nr,
+                    "msg": {"id": str(mid), "kanal": str(kanal.id)}}
+        self._sicht.append(ereignis)
+        self._sicht_push(ereignis)
+        return web.json_response({"ok": True})
+
     # --- Einstellungen je Server -----------------------------------------
     def _guild_by_id(self, gid):
         """Server-Objekt zu einer ID (None, wenn Flo dort nicht ist)."""
@@ -1344,3 +1946,5 @@ setup = instance.setup
 is_enabled = instance.is_enabled
 start = instance.start
 stop = instance.stop
+# BotSicht: bot.py meldet hier JEDE gesehene Nachricht (heisser Pfad, siehe dort).
+sicht_notiere = instance.sicht_notiere

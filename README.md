@@ -103,7 +103,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 182 Tests
+python3 test_games_logic.py    # 188 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -379,6 +379,48 @@ doppelt bucht; `/api/update` lässt nur einen `git pull` gleichzeitig zu.
 
 ---
 
+## BotSicht
+
+Der Reiter **BotSicht** ist Discord im Aufbau eines Discord-Clients — Server-
+Leiste, Kanalliste, Chat, Mitglieder —, aber gezeigt wird darin **Flos**
+Blickwinkel, nicht deiner. Der Unterschied ist der ganze Punkt:
+
+| Was du siehst | Warum es so gezeigt wird |
+|---|---|
+| Kanäle **ohne** Leserecht stehen gesperrt in der Liste | Sie wegzulassen wäre bequemer und genau falsch — die Frage „warum sagt Flo da nichts?" beantwortet sich nur, wenn man den Kanal sieht |
+| Oben je Kanal: **LESEN · SCHREIBEN · REAGIEREN · LÖSCHEN** | Flos echte Rechte in genau diesem Kanal, aus `permissions_for(guild.me)` |
+| Die Mitgliederliste ist kurz, mit Hinweis „kennt hier 5 von 47" | Das Mitglieder-Intent ist aus — Flo kennt nur, wer im Chat oder Voice aufgetaucht ist. Das ist der Blickwinkel, kein Fehler |
+| Wer gerade in welchem Sprachkanal sitzt, und wo Flo selbst hängt | `voice_states` sieht er wirklich |
+| Nachrichten ohne Text mit Hinweis aufs Inhalts-Intent | Ohne `message_content` liest ein Bot fremde Nachrichten gar nicht |
+
+**Eingreifen** geht auch: schreiben (als Flo, mit Antwort-Bezug), auf Nachrichten
+reagieren, löschen soweit die Rechte reichen. Das Tipp-Zeichen im echten Kanal
+läuft mit, während du schreibst — höchstens alle 8 Sekunden eine Anfrage.
+
+**@everyone, @here und Rollen sind fest zugenagelt.** Ein Massen-Ping aus einem
+Tippfehler im Eingabefeld lässt sich nicht zurückholen. Einzelne Leute und die
+Person, auf die man antwortet, dürfen sehr wohl gepingt werden.
+
+Der ⚡-Knopf ganz oben in der Server-Leiste öffnet den **Alles-Strom**: jede
+Nachricht, die Flo gerade bekommt, über alle Server, in seiner Reihenfolge —
+auch die von anderen Bots und seine eigenen. Gefüttert wird das aus `on_message`,
+und zwar **vor** dem Bot-Check, sonst zeigte die Ansicht eine gefilterte Wahrheit.
+
+Technisch: ein WebSocket auf `/api/sicht/ws` schiebt die Ereignisse, jede
+Verbindung hat eine eigene Warteschlange mit genau einem Schreiber (sonst
+überholen sich zwei Sende-Tasks und die Antwort steht vor der Frage). Kommt die
+Leitung nicht zustande — Reverse-Proxy o. ä. —, fällt die Oberfläche sichtbar auf
+Abfrage alle 2,5 s zurück (`/api/sicht/feed?seit=…`). Der Puffer im Bot fasst
+`BOTSICHT_PUFFER` Nachrichten (Standard 400) und liegt **nur im RAM**: was Flo
+sieht, ist flüchtig, ein Mitschnitt des Servers auf der Platte soll das nicht
+werden.
+
+> ⚠️ Das Panel läuft standardmäßig ohne Login. Mit BotSicht heißt „wer den Port
+> erreicht" jetzt auch: kann den kompletten Chat mitlesen und im Namen des Bots
+> schreiben. Der Port gehört ins eigene Netz — sonst `WEBPANEL_AUTH=1`.
+
+---
+
 ## Aufbau
 
 Ein Modul je Feature, immer nach demselben Muster:
@@ -459,6 +501,7 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `BOT_NAME` | `Flo` | Ansprache |
 | `WEBPANEL_AUTH` | `0` | Login fürs Panel |
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
+| `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `FLOAKTIE_IDLE_30MIN` | `0.11` | Verfall je halber Stunde |
 | `FLOAKTIE_CEIL` | `2` | wie weit über den Zielkurs |
 | `FLOAKTIE_GRUND_FAKTOR` | `4` | wie stark der Grundwert trägt |
