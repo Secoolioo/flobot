@@ -8853,6 +8853,118 @@ def test_musik_playlist_ueberlebt_kaputten_ersten_song():
         aufraeumen()
 
 
+def test_musik_geteilter_song_schlaegt_die_playlist():
+    """Wer einen Song AUS einer Playlist teilt, will DEN Song.
+
+    Der Haupt-Grund fuer 'YouTube-Links gehen nur halb': geteilt wird
+    watch?v=DERSONG&list=PL...&index=17 - und Flo spielte Track 1 der Playlist,
+    also einen voellig anderen Song. Bei list=WL ('Später ansehen') oder
+    list=LL ('Mag ich') kam sogar gar nichts: an diese Listen kommt der Bot
+    nicht heran, und der Fehler beendete den ganzen Befehl."""
+    import music
+    p = music.instance.parse_command
+    # Ein Video im Link -> das Video, egal welche Liste danebensteht.
+    fuer_video = [
+        "https://www.youtube.com/watch?v=sharedVid11&list=PLbig&index=17",
+        "https://www.youtube.com/watch?v=abc12345678&list=WL&index=3",
+        "https://www.youtube.com/watch?v=abc12345678&list=LL",
+        "https://youtu.be/abc12345678?list=PLbig",
+        "https://www.youtube.com/shorts/abc12345678?list=PLbig",
+        "https://www.youtube.com/watch?v=abc12345678&list=RDabc",   # Auto-Mix
+    ]
+    for u in fuer_video:
+        assert p(f"spiel {u}") == ("play", u), (u, p(f"spiel {u}"))
+    # Eine reine Playlist-Adresse benennt kein Video - die bleibt Playlist.
+    rein = "https://www.youtube.com/playlist?list=PLbig"
+    assert p(f"spiel {rein}") == ("yt_playlist", rein)
+
+
+def test_musik_spotify_landet_nie_in_der_textsuche():
+    """Podcast, Show, Kuenstler-Seite: Flo hat woertlich nach der URL gesucht.
+
+    Was kein Song, Album oder keine Playlist ist, fiel durch alle Zweige und
+    landete in der YouTube-TEXTSUCHE - Flo spielte dann irgendein fremdes
+    Video, das zufaellig auf die Zeichenkette passte."""
+    import music
+    p = music.instance.parse_command
+    for u in ("https://open.spotify.com/episode/512ojhOuo1ktJprKbVcKyQ",
+              "https://open.spotify.com/artist/0TnOYISbd1XYRBk9myaseg",
+              "https://open.spotify.com/show/4rOoJ6Egrf8K2IrywzwOMk",
+              "spotify:episode:512ojhOuo1ktJprKbVcKyQ",
+              "https://open.spotify.com/collection/tracks"):
+        aktion, _arg = p(f"spiel {u}")
+        assert aktion == "spotify_unbekannt", (u, aktion)
+    # Die alte /user/<name>/playlist/-Form ist eine ganz normale Playlist.
+    alt = "https://open.spotify.com/user/spotify/playlist/37i9dQZF1DXcBWIGoYBM5M"
+    assert p(f"spiel {alt}") == ("spotify_playlist", alt)
+    # Und die bekannten Formen bleiben, wie sie waren.
+    for u, erwartet in (
+            ("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT", "play"),
+            ("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3", "spotify_album")):
+        assert p(f"spiel {u}")[0] == erwartet, u
+
+
+def test_musik_weiter_holt_die_liegengebliebene_queue():
+    """Flo empfiehlt nach zwei Fehlschlaegen selbst 'weiter' - dann muss
+    'weiter' auch etwas tun.
+
+    Vorher kam dort "Da ist nichts pausiert", und die stehengebliebene
+    Warteschlange blieb stehen: eine Sackgasse, aus der nur 'stop' herausfuehrte."""
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    alt_state = (mi._enabled, dict(mi._players))
+    mi._enabled = True
+    mi._players[4242] = player          # unseren Stub-Player unterschieben
+    try:
+        player.queue.append(_track("Wartet"))
+        player.current = None
+        player._advance_aufgegeben = True
+        voice.spielt = False
+
+        msg = SimpleNamespace(
+            content="flo weiter", guild=SimpleNamespace(id=4242),
+            channel=SimpleNamespace(id=1), author=_fake_person(uid=7),
+            mentions=[])
+        antwort = asyncio.run(mi.handle(msg))
+        assert antwort is music.HANDLED, _embed_text(antwort)
+        assert player.current is not None and player.current.title == "Wartet"
+        assert player._advance_aufgegeben is False
+    finally:
+        (mi._enabled, mi._players) = alt_state
+        aufraeumen()
+
+
+def test_musik_neustart_behaelt_den_gewuenschten_song():
+    """Nach einem Neustart darf nicht ploetzlich ein anderer Song laufen.
+
+    _resolve_track gab den Match-Hint (Spotify-Titel/Kuenstler/Dauer) nicht
+    weiter - beim naechsten Aufloesen waehlte Flo also wieder blind den ersten
+    YouTube-Treffer, und das ist bei Spotify-Songs oft ein Sped-Up-Remix."""
+    import music
+    mi = music.instance
+    gesehen = []
+
+    async def resolve_input(inp, hint):
+        gesehen.append(hint)
+        return music.Track(title="X", stream_url="http://stream/x", duration=100)
+
+    alt = mi._resolve_input
+    mi._resolve_input = resolve_input
+    try:
+        hint = {"query": "Alan Walker Faded", "dur": 212, "title": "Faded",
+                "artist": "Alan Walker"}
+        t = music.Track(title="Faded", stream_url="", query="ytsearch1:Faded",
+                        match_hint=hint)
+        erst = asyncio.run(mi._resolve_track(t))
+        assert erst.match_hint == hint, erst.match_hint
+        # Und beim ZWEITEN Mal ist er immer noch da (das war der Fehler).
+        asyncio.run(mi._resolve_track(erst))
+        assert gesehen == [hint, hint], gesehen
+    finally:
+        mi._resolve_input = alt
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

@@ -273,7 +273,9 @@ _YT_BAD_VARIANTS = (
 )
 
 _SPOTIFY_LIST_RE = re.compile(
-    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?(playlist|album)/"
+    # Die alte Form open.spotify.com/user/<name>/playlist/<id> ist eine ganz
+    # normale Playlist und kommt aus aelteren geteilten Links immer noch vor.
+    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?(?:user/[^/\s]+/)?(playlist|album)/"
     r"|spotify:(playlist|album):)([A-Za-z0-9]+)",
     re.IGNORECASE,
 )
@@ -286,6 +288,12 @@ _NEXT_DATA_RE = re.compile(
 # YouTube-Playlist-ID aus dem Link ziehen. Echte Playlists: PL.../UU.../OLAK5uy_...;
 # RD... ist nur ein Auto-Mix/Radio (wird beim Teilen oft angehaengt) -> kein Playlist.
 _YT_LIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)", re.IGNORECASE)
+# Benennt die Adresse ein einzelnes VIDEO? Alle drei Schreibweisen, in denen
+# YouTube das tut - watch?v=, der Kurzlink youtu.be/ und /shorts/. Steht eines
+# davon drin, ist dieses Video gemeint, egal was fuer eine Liste danebensteht.
+_YT_VIDEO_RE = re.compile(
+    r"[?&]v=[A-Za-z0-9_-]{6,}|youtu\.be/[A-Za-z0-9_-]{6,}|"
+    r"/shorts/[A-Za-z0-9_-]{6,}|/live/[A-Za-z0-9_-]{6,}", re.IGNORECASE)
 
 # SoundCloud. yt-dlp bringt den Extractor mit - ohne Key, ohne Login fuer
 # oeffentliche Tracks. Es fehlte also nur die ERKENNUNG: ein SC-Link fiel durch
@@ -1477,13 +1485,15 @@ class PlaybackControlView(discord.ui.View):
 
     @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary)
     async def _skip(self, interaction, _b):
-        if not self.player.is_active():
+        # Genau derselbe Weg wie der Textbefehl. Der Knopf hing noch am alten
+        # voice.stop(), und das ist der unzuverlaessige Weg: haengt ein Song
+        # (Watchdog zaehlt die Generation hoch), verpufft der Callback - der
+        # Knopf tat dann nichts oder startete denselben Song neu.
+        if self.player.current is None and not self.player.queue:
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
             return
-        # stop() loest _after -> _advance aus; _advance postet ein frisches Panel
-        # und entschaerft dabei dieses hier. Darum nur kurz bestaetigen.
-        self.player.voice.stop()  # type: ignore[union-attr]
         await interaction.response.defer()
+        await self.player.skip()
 
     @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
     async def _stop(self, interaction, _b):
@@ -1778,7 +1788,14 @@ class Music(FeatureBasis):
                 log.exception("Best-Match fehlgeschlagen - nutze ersten Treffer")
                 vid = None
             if vid:
-                return await self._extract(vid)
+                try:
+                    return await self._extract(vid)
+                except Exception:  # noqa: BLE001
+                    # Der Docstring verspricht den Rueckfall - der fehlte hier:
+                    # war das beste Video nicht ladbar (gesperrt, geloescht),
+                    # flog der ganze Song raus, statt den Ersttreffer zu nehmen.
+                    log.warning("Best-Match-Video nicht ladbar, nehme den "
+                                "normalen Treffer: %s", vid)
         return await self._extract(extract_input)
 
     async def _resolve_track(self, track):
@@ -1788,6 +1805,11 @@ class Music(FeatureBasis):
         resolved = await self._resolve_input(track.query, track.match_hint)
         resolved.requested_by = track.requested_by
         resolved.query = track.query
+        # Den Hint MITNEHMEN. Ohne ihn waehlt das naechste Aufloesen desselben
+        # Tracks (Watchdog-Neustart, Auffrischung) wieder blind den ersten
+        # YouTube-Treffer - und dann laeuft ploetzlich ein Sped-Up-Remix statt
+        # des Songs, den jemand angefragt hat.
+        resolved.match_hint = track.match_hint
         return resolved
 
     @staticmethod
@@ -2108,11 +2130,22 @@ class Music(FeatureBasis):
                 kind = (m.group(1) or m.group(2) or "").lower()
                 return ("spotify_album" if kind == "album" else "spotify_playlist", url)
             if "youtube.com" in low or "youtu.be" in low:
-                # Echte Playlist abspielen - auch wenn ein einzelnes Video dabei steht
-                # (Teilen aus einer Playlist liefert watch?v=...&list=...). Nur Auto-Mixe
-                # (list=RD...) ignorieren wir und spielen das einzelne Video.
+                # Benennt der Link ein VIDEO, ist das Video gemeint - auch wenn
+                # eine Playlist danebensteht.
+                #
+                # Vorher lief das andersherum, und das war der Hauptgrund fuer
+                # "YouTube-Links gehen nur halb": wer einen Song AUS einer
+                # Playlist teilt, schickt watch?v=DERSONG&list=PL...&index=17 -
+                # und Flo spielte dann Track 1 der Playlist, also einen ganz
+                # anderen Song. Bei list=WL (Spaeter ansehen) oder list=LL
+                # (Mag ich) kam sogar gar nichts: an diese Listen kommt der Bot
+                # nicht heran, und der Fehler beendete den ganzen Befehl.
+                #
+                # Eine reine Playlist-Adresse (youtube.com/playlist?list=...)
+                # benennt kein Video und wird weiterhin als Liste gespielt.
                 lm = _YT_LIST_RE.search(url)
-                if lm and not lm.group(1).upper().startswith("RD"):
+                if (lm and not lm.group(1).upper().startswith("RD")
+                        and not _YT_VIDEO_RE.search(url)):
                     return ("yt_playlist", url)
                 return ("play", url)
             if _SPOTIFY_TRACK_RE.search(url):
@@ -2125,6 +2158,14 @@ class Music(FeatureBasis):
                 # Satz ("was haeltst du von https://…") darf die Musik nicht
                 # an sich reissen.
                 return ("play", url)
+            if "spotify.com" in low or low.startswith("spotify:"):
+                # Auffangnetz: JEDE Spotify-Adresse, die keiner der Zweige
+                # oben kennt (Podcast-Episode, Show, Kuenstler-Seite, die alte
+                # /user/<name>/playlist/-Form), landete bisher in der
+                # YouTube-TEXTSUCHE - Flo suchte woertlich nach der URL und
+                # spielte irgendein fremdes Video. Lieber ehrlich sagen, dass
+                # es nicht geht.
+                return ("spotify_unbekannt", url)
             if _SC_RE.match(url):
                 # Set -> Playlist, alles andere ganz normal als Track. Ein
                 # Kurzlink (on.soundcloud.com) KANN auch ein Set sein - das
@@ -2721,6 +2762,18 @@ class Music(FeatureBasis):
 
         if action == "resume":
             if not player.ist_pausiert():
+                # Flo empfiehlt nach zwei Fehlschlaegen selbst "weiter" - dann
+                # muss "weiter" auch etwas tun. Vorher kam hier "Da ist nichts
+                # pausiert", und die stehengebliebene Warteschlange blieb
+                # stehen: eine Sackgasse, aus der nur 'stop' herausfuehrte.
+                if player.queue and not player.is_active():
+                    await player._advance()          # setzt das Aufgeben zurueck
+                    if player.current is not None:
+                        return HANDLED               # _advance postet das Panel
+                    return self._embed(
+                        "Ich komme an die Songs gerade nicht ran – probier's "
+                        "gleich nochmal oder wirf einen anderen Link rein.",
+                        color=_COL_ERR)
                 return self._embed("Da ist nichts pausiert.", color=_COL_ERR)
             player.fortsetzen()
             return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
@@ -2733,6 +2786,11 @@ class Music(FeatureBasis):
                 return self._embed("Weiter geht's.", title="▶️  Fortgesetzt", color=_COL_PLAY)
             if player.is_active():
                 return self._embed("Läuft doch schon. 🎶", color=_COL_INFO)
+            if player.queue:
+                # Es warten Songs, es laeuft aber nichts - anstossen statt fragen.
+                await player._advance()
+                if player.current is not None:
+                    return HANDLED
             return self._embed(
                 f"Klar – was soll ich spielen? Sag z. B. `{self._bot_name} mach mal "
                 f"Bohemian Rhapsody an` oder `{self._bot_name} spiel <Song/Link>`.",
@@ -2809,6 +2867,15 @@ class Music(FeatureBasis):
         if voice_state is None or voice_state.channel is None:
             return self._embed("Geh erst in einen Sprachkanal, dann spiele ich dort.", color=_COL_ERR)
 
+        if action == "spotify_unbekannt":
+            return self._embed(
+                "Von diesem Spotify-Link kann ich nichts abspielen – ich kann "
+                "**Songs**, **Alben** und **Playlists**, aber keine Podcasts, "
+                "Shows oder Künstler-Seiten.\n"
+                f"Sag mir einfach, was du hören willst: `{self._bot_name} spiel "
+                f"Künstler Titel`.",
+                title="🎧  Damit kann ich nichts anfangen", color=_COL_ERR)
+
         # --- Kurzlink der Spotify-App: erst aufloesen, dann normal weiter ---
         if action == "spotify_kurz":
             ziel = await self._spotify_kurzlink(arg)
@@ -2818,7 +2885,10 @@ class Music(FeatureBasis):
                     "den langen Link (`open.spotify.com/...`) oder such direkt: "
                     f"`{self._bot_name} spiel Künstler Titel`.", color=_COL_ERR)
             neu = self.parse_command(f"spiel {ziel}")
-            if neu is None or neu[0] == "spotify_kurz":
+            # 'spotify_unbekannt' MUSS hier mit rein: sonst faellt ein Kurzlink
+            # auf eine Podcast-/Kuenstler-Seite genau in das Loch zurueck, das
+            # der Auffangzweig gerade geschlossen hat.
+            if neu is None or neu[0] in ("spotify_kurz", "spotify_unbekannt"):
                 return self._embed(
                     "Dieser Spotify-Link zeigt auf etwas, das ich nicht abspielen "
                     "kann (Podcast, Künstler-Seite?).", color=_COL_ERR)
