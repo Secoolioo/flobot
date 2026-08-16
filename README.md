@@ -103,7 +103,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 172 Tests
+python3 test_games_logic.py    # 182 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -468,3 +468,12 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 
 Alle weiteren stehen als `os.getenv(...)` bei den Konstanten im jeweiligen Modul,
 jeweils mit Kommentar, warum der Wert so gewählt ist.
+
+---
+
+## Weitere Dokumente
+
+| Datei | Inhalt |
+|---|---|
+| `TESTBERICHT.md` | Vollständiger Testdurchlauf mit allen Funden und deren Stand |
+| `IDEEN.md` | Ausbau-Ideen, durchnummeriert, mit Aufwand und betroffenen Dateien |
