@@ -8,3 +8,5 @@ data/
 # Backups des Wirtschafts-Resets (economy_reset.sh) - nur lokal:
 backups/
 .pytest_cache/
+# Messprotokolle/Logs aus Testlaeufen - nicht committen:
+*.log
