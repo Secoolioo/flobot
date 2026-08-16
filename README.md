@@ -34,6 +34,7 @@ Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unte
 | `bayern` | Flo redet hier boarisch |
 | `schulden_pranger` | überfällige Posten (ohne Beträge) im Ansage-Kanal |
 | `musik_max_queue`, `casino_max_einsatz` | Obergrenzen je Server |
+| `wordle_channel`, `wordle_min_voice` | wohin das Wort des Tages geht und ab wie vielen Leuten im Voice |
 | `levelup_ansagen`, `daily_erinnerung` | Level-Karten, Tagesbonus-Erinnerung |
 | `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
 | `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
@@ -103,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 191 Tests
+python3 test_games_logic.py    # 204 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -272,7 +273,7 @@ ein Cooldown von 4 s pro Person.
 
 **Quellen:** Nachrichten (8–16, mit Cooldown), Voice (30/Minute, gedeckelt auf
 14.400 am Tag ≙ 8 Stunden), Daily-Bonus mit Streak, Level-Ups, Aktien-Dividende,
-Spiele und Casino.
+Spiele, Casino und **Arbeit** (siehe unten).
 
 **Senken:** Shop-Titel, Luxus, Thron, Händler, Lotto, Verkaufssteuer und die
 tägliche **Vermögenssteuer** (Freibetrag 5 Mio, darüber 2 %, ab 400 Mio nur noch
@@ -284,6 +285,76 @@ voll zurück.
 Titel ab 1 Mio (`KAUF_RUECKFRAGE_AB`) fragen einmal nach: über `Flo kaufen <n>`
 kostet ein Tippfehler in einer Ziffer sonst bis zu 90 Mio. Bestätigt wird durch
 nochmal denselben Befehl.
+
+---
+
+## Arbeit
+
+Casino ist Glück, die Aktie ist Timing — **Arbeit** ist der dritte Weg, und hier
+zählt Können.
+
+```
+Flo work              Schicht antreten (zufällige Aufgabe)
+Flo work wordle       gezielt eine bestimmte Schicht
+Flo work liste        was es gibt
+Flo lohnzettel        eigene Bilanz: Schichten, Serie, Verdienst
+```
+
+| Schicht | Aufgabe | Grundlohn |
+|---|---|---|
+| `wordle` | Fünf Buchstaben, sechs Versuche | 9.000 |
+| `safe` | Zahlenschloss, Hinweise nach jedem Versuch | 7.500 |
+| `salat` | Buchstabensalat entwirren, drei Versuche | 7.000 |
+| `rechnen` | Fünf Aufgaben, eine falsche beendet die Schicht | 6.500 |
+| `sortieren` | Zahlen in die richtige Reihenfolge klicken | 6.000 |
+
+Dazu kommt die **Leistung** (wie schnell/sauber) und die **Serie**: jede
+geschaffte Schicht in Folge legt 5 % drauf, gedeckelt bei +50 %. Ein Reinfall
+setzt sie zurück — deshalb lohnt es sich, eine schwere Schicht zu Ende zu
+bringen statt sie wegzuklicken. Gut gespielt liegen 15.000–20.000 pro Schicht
+drin.
+
+**Cooldown 15 Minuten**, **Tagesdeckel 250.000**. Ohne den Deckel wäre die
+Schicht die beste Geldquelle im Spiel — sie ist ja risikofrei.
+
+### Wort des Tages
+
+Einmal am Tag legt Flo ein Wordle in den dafür eingestellten Kanal. Das ist ein
+**Wettrennen**: wer es als Erster knackt, nimmt den ganzen Topf, danach ist die
+Runde durch und das Wort wird aufgelöst. Jeder rät für sich — die eigenen
+Versuche sieht nur man selbst.
+
+Der Topf hängt an der **Wortlänge**, und die wächst zum Wochenende:
+
+| Tag | Buchstaben | Grundtopf | auf Anhieb |
+|---|---|---|---|
+| Mo–Do | 5 | 50.000 | 100.000 |
+| Fr | 6 | 60.000 | 120.000 |
+| Sa | 7 | 70.000 | 140.000 |
+| So | 8 | **80.000** | **160.000** |
+
+Der Faktor sinkt mit jedem Versuch (1× → ×2,0 … 6× → ×1,0), unter den Grundtopf
+geht es nie. Die Wordle-**Schicht** aus `Flo work` zahlt bewusst nur einen
+Bruchteil — das Wort des Tages soll der Höhepunkt bleiben.
+
+**Wann es fällt, entscheidet nicht die Uhr, sondern der Server:** Flo wartet, bis
+mindestens `wordle_min_voice` Leute (Standard **3**, Bots zählen nicht) in einem
+Sprachkanal sitzen. Ist an einem Tag nie was los, fällt das Wort aus — ein
+Rätsel um 4 Uhr morgens in einen leeren Server zu werfen wäre verschenkt.
+
+**Kanal einstellen** (sonst sucht Flo einen, der `gigachat` oder `wordle` heißt,
+und nimmt notfalls den Ansagen-Kanal):
+
+```
+Flo einstellung wordle_channel <Kanal-ID>
+Flo einstellung wordle_min_voice 3
+```
+
+Das Wort ist **berechnet**, nicht gewürfelt: derselbe Server bekommt an demselben
+Tag immer dasselbe Wort — auch nach einem Neustart mitten im Raten — und zwei
+Server bekommen verschiedene, damit man sich die Lösung nicht von nebenan holt.
+Die Wortlisten enthalten bewusst **keine Umlaute und kein ß**: bei einem
+Buchstabenspiel muss jeder Buchstabe eindeutig eintippbar sein.
 
 ---
 
@@ -533,6 +604,10 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
+| `WORDLE_CHANNEL_ID` | — | Standard-Kanal fürs Wort des Tages (je Server überschreibbar) |
+| `ARBEIT_COOLDOWN` | `900` | Sekunden zwischen zwei Schichten |
+| `ARBEIT_TAGESDECKEL` | `250000` | wie viel Arbeit am Tag höchstens einbringt |
+| `WORDLE_PRO_BUCHSTABE` | `10000` | Grundtopf je Buchstabe im Wort des Tages |
 | `FLOAKTIE_IDLE_30MIN` | `0.11` | Verfall je halber Stunde |
 | `FLOAKTIE_CEIL` | `2` | wie weit über den Zielkurs |
 | `FLOAKTIE_GRUND_FAKTOR` | `4` | wie stark der Grundwert trägt |

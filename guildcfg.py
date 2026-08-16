@@ -127,6 +127,18 @@ KATALOG = [
                 "So viele Songs dürfen hier gleichzeitig warten.", "Musik",
                 minimum=1, maximum=500),
 
+    # --- Arbeit & Wort des Tages -----------------------------------------
+    Einstellung("wordle_channel", "Wort-des-Tages-Kanal", "channel", 0,
+                "WORDLE_CHANNEL_ID",
+                "Wohin das tägliche Wordle geht. Aus = Flo sucht sich einen "
+                "Kanal, der 'gigachat' oder 'wordle' heißt, sonst den "
+                "Ansagen-Kanal.", "Arbeit"),
+    Einstellung("wordle_min_voice", "Wordle ab … Leuten im Voice", "zahl", 3, "",
+                "Flo legt das Wort des Tages erst raus, wenn so viele Leute in "
+                "einem Sprachkanal sitzen — nicht nach der Uhr. Ist an einem "
+                "Tag nie was los, fällt es aus.", "Arbeit",
+                minimum=1, maximum=50),
+
     # --- Spiel & Wirtschaft ----------------------------------------------
     Einstellung("casino_max_einsatz", "Maximaleinsatz", "zahl", 0, "",
                 "Obergrenze je Casino-Runde auf DIESEM Server. 0 = die globale "

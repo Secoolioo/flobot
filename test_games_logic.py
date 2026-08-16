@@ -9434,6 +9434,382 @@ def test_botsicht_haengt_im_bot_ganz_oben():
     assert hook < botcheck, "sicht_notiere steht hinter dem Bot-Check"
 
 
+# ---------------------------------------------------------------------------
+# Arbeit: Schichten, Wordle und das Wort des Tages
+# ---------------------------------------------------------------------------
+def _arbeit_frisch(coins=None):
+    """arbeit mit leerem Store und aktiver Economy. Gibt (modul, restore)."""
+    import arbeit
+    restore_eco = _with_economy(coins or {1: 0, 2: 0})
+    alt = (arbeit.instance._store, arbeit.instance._enabled)
+    arbeit.instance._store = _FakeStore({"nutzer": {}, "tag": {}})
+    arbeit.instance._enabled = True
+
+    def restore():
+        arbeit.instance._store, arbeit.instance._enabled = alt
+        restore_eco()
+    return arbeit, restore
+
+
+def test_arbeit_woerter_sind_sauber():
+    """Jedes Wort muss GENAU so lang sein, wie sein Fach sagt, und darf nur
+    A-Z enthalten.
+
+    Das ist kein Pedanterie-Test: ein 8-Buchstaben-Wort im 7er-Fach macht das
+    Eingabefeld unbedienbar (min_length/max_length kommen aus der Fachlaenge),
+    und ein Umlaut ist bei einem Buchstabenspiel nicht eindeutig eintippbar.
+    Beim Schreiben der Listen war GENAU das der Fehler: die 7er- und 8er-Liste
+    enthielt fast durchgehend Woerter, die einen Buchstaben zu lang waren."""
+    import re
+    import arbeit
+    for laenge, worte in arbeit.WOERTER.items():
+        assert worte, f"Fach {laenge} ist leer"
+        for w in worte:
+            assert len(w) == laenge, f"{w!r} liegt im {laenge}er-Fach, ist aber {len(w)}"
+            assert re.fullmatch(r"[A-Z]+", w), f"{w!r} ist nicht rein A-Z"
+        assert len(set(worte)) == len(worte), f"Doppelte im {laenge}er-Fach"
+    # Jede Wochentags-Laenge muss auch wirklich ein Fach haben.
+    for laenge in set(arbeit.TAGES_LAENGE.values()):
+        assert laenge in arbeit.WOERTER, f"Wochentag verlangt {laenge}, gibt es nicht"
+
+
+def test_arbeit_wordle_faerbung():
+    """Die zweistufige Faerbung - der Klassiker unter den Wordle-Fehlern.
+
+    Erst alle exakten Treffer wegnehmen, DANN die restlichen Buchstaben
+    verteilen. Ohne das faerbt ein Versuch mit zwei gleichen Buchstaben beide
+    gelb, obwohl in der Loesung nur einer steckt."""
+    import arbeit
+    W = arbeit.Wordle
+
+    # Volltreffer.
+    assert W("ABEND").muster("ABEND") == "🟩🟩🟩🟩🟩"
+    # Nichts davon drin.
+    assert W("ABEND").muster("PILZE") == "⬛⬛⬛⬛🟨"      # das E aus ABEND
+    # Doppelter Buchstabe im VERSUCH, einfacher in der Loesung.
+    # NOTEN hat genau ein T. In OTTER steht das zweite T an der richtigen
+    # Stelle (gruen) - fuer das erste T bleibt danach NICHTS uebrig, es muss
+    # grau werden. Ohne die zweistufige Zaehlung waere es gelb.
+    m = W("NOTEN").muster("OTTER")
+    assert m == "🟨⬛🟩🟩⬛", m
+    # Noch deutlicher: ABEND hat ein E, der Versuch besteht nur aus E.
+    # Genau eins davon darf gruen werden, alle anderen grau.
+    m2 = W("ABEND").muster("EEEEE")
+    assert m2 == "⬛⬛🟩⬛⬛", m2
+    # Umgekehrt: doppelt in der Loesung, einfach im Versuch.
+    assert W("ESSEN").muster("SEITE") == "🟨🟨⬛⬛🟨"
+    # Richtiger Buchstabe an falscher Stelle.
+    assert W("KATZE").muster("ZEBRA") == "🟨🟨⬛⬛🟨"
+
+
+def test_arbeit_wordle_ablauf():
+    """Versuche zaehlen, Zustand stimmt, Murks wird abgewiesen."""
+    import arbeit
+    spiel = arbeit.Wordle("ABEND")
+    assert spiel.offen == 6 and not spiel.geloest and not spiel.aus
+
+    assert spiel.raten("XY") == "laenge", "zu kurz durchgelassen"
+    assert spiel.raten("AB3ND") == "laenge", "Ziffer durchgelassen"
+    assert spiel.offen == 6, "ungueltiger Versuch wurde gezaehlt"
+
+    assert spiel.raten("blume") == "weiter"      # klein geschrieben geht auch
+    assert spiel.versuche == ["BLUME"] and spiel.offen == 5
+
+    for _ in range(4):
+        spiel.raten("BLUME")
+    assert spiel.offen == 1 and not spiel.aus
+    assert spiel.raten("BLUME") == "aus"
+    assert spiel.aus and not spiel.geloest
+    assert spiel.raten("ABEND") == "fertig", "nach dem Aus ging es weiter"
+
+    # Und der gute Ausgang.
+    spiel = arbeit.Wordle("ABEND")
+    assert spiel.raten("ABEND") == "geloest"
+    assert spiel.geloest and spiel.lohnfaktor() == 2.0
+
+
+def test_arbeit_wort_des_tages_ist_berechnet():
+    """Dasselbe Wort fuer denselben Server am selben Tag - auch nach einem
+    Neustart mitten im Raten. Und NICHT dasselbe wie auf dem Nachbarserver,
+    sonst holt man sich die Loesung von drueben."""
+    import arbeit
+    a = arbeit.Wordle.des_tages(111, tag="2026-08-16")
+    b = arbeit.Wordle.des_tages(111, tag="2026-08-16")
+    assert a.loesung == b.loesung, "Wort nicht reproduzierbar"
+
+    # Anderer Server, anderer Tag: ueber viele Faelle darf das nicht konstant sein.
+    andere = {arbeit.Wordle.des_tages(gid, tag="2026-08-16").loesung
+              for gid in range(1, 40)}
+    assert len(andere) > 5, "alle Server bekommen fast dasselbe Wort"
+    tage = {arbeit.Wordle.des_tages(111, tag=f"2026-08-{t:02d}").loesung
+            for t in range(1, 29)}
+    assert len(tage) > 10, "das Wort wechselt kaum von Tag zu Tag"
+
+    # Wochentag bestimmt die Laenge: 2026-08-16 ist ein Sonntag -> 8 Buchstaben.
+    import datetime
+    assert datetime.date(2026, 8, 16).weekday() == 6
+    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-16").loesung) == 8
+    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-17").loesung) == 5  # Montag
+    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-21").loesung) == 6  # Freitag
+    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-22").loesung) == 7  # Samstag
+
+
+def test_arbeit_tageswordle_ist_ein_wettrennen():
+    """Wer zuerst loest, nimmt alles - danach ist die Runde durch.
+
+    So gewuenscht: ein Rennen mit einem Sieger hat Spannung, ein Raetsel, das
+    jeder in Ruhe nachholen kann, nicht."""
+    arbeit, restore = _arbeit_frisch({1: 0, 2: 0})
+    try:
+        r = arbeit.instance.raetsel(555)
+        r.starten()
+        wort = r.wort
+        assert r.laeuft and not r.entschieden
+
+        # Nutzer 1 raet daneben, danach richtig.
+        assert r.raten(1, "X" * len(wort))[0] == "weiter"
+        status, spiel = r.raten(1, wort)
+        assert status == "geloest" and r.entschieden and r.gewinner == 1
+        assert len(spiel.versuche) == 2
+
+        # Nutzer 2 kommt zu spaet - und der Versuch wird auch nicht gezaehlt.
+        status2, _ = r.raten(2, wort)
+        assert status2 == "aus_runde", status2
+        assert not r.gespielt(2), "der zu spaete Versuch wurde mitgeschrieben"
+        assert r.gewinner == 1, "der Sieger wurde ueberschrieben"
+    finally:
+        restore()
+
+
+def test_arbeit_tageswordle_preis():
+    """Der Topf haengt an der WORTLAENGE, der Faktor an den Versuchen.
+
+    Vom Nutzer vorgegeben: 5 Buchstaben sollen bei ~50.000 liegen, laengere
+    Woerter mehr - und der Anhieb das Doppelte."""
+    arbeit, restore = _arbeit_frisch()
+    try:
+        r = arbeit.instance.raetsel(1)
+        # 5 Buchstaben, dritter Versuch: 50.000 x 1.5
+        r.daten.update({"datum": arbeit._heute(), "wort": "ABEND",
+                        "spieler": {}, "gewinner": 0})
+        assert r.topf == 50_000
+        assert r.preis(arbeit.Wordle("ABEND", versuche=["A", "B", "ABEND"])) == 75_000
+        # Anhieb -> doppelt.
+        assert r.preis(arbeit.Wordle("ABEND", versuche=["ABEND"])) == 100_000
+        # 8 Buchstaben auf Anhieb: der Sonntags-Jackpot.
+        r.daten["wort"] = "ARBEITER"
+        assert r.topf == 80_000
+        assert r.preis(arbeit.Wordle("ARBEITER", versuche=["ARBEITER"])) == 160_000
+        # Letzter Versuch: nur der Grundtopf, nie weniger.
+        sechs = arbeit.Wordle("ARBEITER", versuche=["X"] * 5 + ["ARBEITER"])
+        assert r.preis(sechs) == 80_000
+    finally:
+        restore()
+
+
+def test_arbeit_wordle_faellt_nur_wenn_was_los_ist():
+    """Nicht die Uhr entscheidet, sondern der Voice-Kanal.
+
+    So gewuenscht: ein Raetsel um 4 Uhr morgens in einen leeren Server zu
+    werfen, waere verschenkt. Bots zaehlen dabei NICHT mit - Flo sitzt oft
+    selbst im Call und wuerde sich sonst mitzaehlen."""
+    arbeit, restore = _arbeit_frisch()
+    try:
+        def guild(n_menschen, n_bots=0):
+            leute = [SimpleNamespace(bot=False) for _ in range(n_menschen)]
+            leute += [SimpleNamespace(bot=True) for _ in range(n_bots)]
+            return SimpleNamespace(id=42, voice_channels=[SimpleNamespace(members=leute)])
+
+        assert arbeit.instance.leute_im_voice(guild(3, 2)) == 3, "Bots mitgezaehlt"
+        assert not arbeit.instance.faellig(guild(2)), "bei zwei Leuten schon gefeuert"
+        assert arbeit.instance.faellig(guild(3)), "bei drei Leuten nicht gefeuert"
+        assert arbeit.instance.faellig(guild(9))
+
+        # Ist das Wort raus, kommt heute keins mehr - egal wie voll es wird.
+        arbeit.instance.raetsel(42).starten()
+        assert not arbeit.instance.faellig(guild(9)), "zweites Wort am selben Tag"
+    finally:
+        restore()
+
+
+def test_arbeit_tagesdeckel_und_serie():
+    """Der Tagesdeckel begrenzt WIRKLICH, und die Serie zahlt sich aus.
+
+    Ohne Deckel waere die Schicht die beste Geldquelle im Spiel - sie ist ja
+    risikofrei, anders als Casino und Aktie."""
+    arbeit, restore = _arbeit_frisch({7: 0})
+    try:
+        wp = arbeit.instance
+        schicht = arbeit.SCHICHTEN["wordle"]
+
+        # Erste volle Schicht: Grundlohn, Serie 1.
+        betrag, serie, _h = wp.abrechnen(7, schicht, 1.0)
+        assert serie == 1 and betrag == schicht.lohn * 1.05, betrag
+
+        # Zweite: Serie 2 -> +10 %.
+        betrag2, serie2, _h = wp.abrechnen(7, schicht, 1.0)
+        assert serie2 == 2 and betrag2 > betrag
+
+        # Reinfall setzt zurueck und zahlt nichts.
+        betrag3, serie3, _h = wp.abrechnen(7, schicht, 0.0)
+        assert betrag3 == 0 and serie3 == 0
+
+        # Deckel: das Konto auf kurz vor Schluss setzen.
+        prof = wp._nutzer(7)
+        prof["tag"], prof["heute"] = arbeit._heute(), arbeit.TAGES_DECKEL - 1000
+        betrag4, _s, hinweis = wp.abrechnen(7, schicht, 1.0)
+        assert betrag4 == 1000, betrag4
+        assert "Tagesdeckel" in hinweis, hinweis
+        # Und danach ist Schluss - aufs Konto kommt wirklich nichts mehr.
+        stand = economy.instance._profile(7)["coins"]
+        betrag5, _s, hinweis5 = wp.abrechnen(7, schicht, 1.0)
+        assert betrag5 == 0 and "voll" in hinweis5.lower(), hinweis5
+        assert economy.instance._profile(7)["coins"] == stand, "trotz Deckel gebucht"
+        assert wp._nutzer(7)["heute"] == arbeit.TAGES_DECKEL
+    finally:
+        restore()
+
+
+def test_arbeit_safe_hinweis_zaehlt_zweistufig():
+    """Beim Zahlenschloss dieselbe Falle wie beim Wordle: '111' gegen '123'
+    darf NICHT dreimal 'richtige Ziffer am falschen Platz' ergeben."""
+    import arbeit
+    view = arbeit.SafeView.__new__(arbeit.SafeView)
+    view.code = "123"
+    assert view.hinweis("123") == (3, 0)
+    assert view.hinweis("111") == (1, 0), view.hinweis("111")
+    assert view.hinweis("321") == (1, 2)
+    assert view.hinweis("456") == (0, 0)
+    assert view.hinweis("213") == (1, 2)
+
+
+def test_arbeit_schichten_sind_vollstaendig():
+    """Jede Schicht muss sich selbst beschreiben und ein Gesicht bauen koennen.
+
+    Der Katalog haengt an den Klassen - wer eine sechste Schicht dazulegt, soll
+    nichts weiter anfassen muessen. Dieser Test faellt um, wenn doch."""
+    import arbeit
+    autor = SimpleNamespace(id=1, display_name="Tester")
+    for key, schicht in arbeit.SCHICHTEN.items():
+        assert schicht.key == key, f"{schicht} kennt seinen eigenen Schluessel nicht"
+        assert schicht.titel and schicht.was, key
+        assert schicht.lohn > 0, key
+        embed, view = schicht.bauen(arbeit.instance, autor)
+        assert embed.description, key
+        assert view.uid == 1 and view.schicht is schicht, key
+
+
+def test_arbeit_cooldown_und_befehle():
+    """'Flo work' startet eine Schicht, die zweite prallt am Cooldown ab -
+    und 'Flo wordle' sagt ehrlich, dass noch kein Wort draussen ist."""
+    arbeit, restore = _arbeit_frisch({5: 0})
+    gesendet = []
+    try:
+        autor = _fake_person(5, name="tester", global_name="Tester")
+        kanal = SimpleNamespace(
+            id=9, send=lambda **kw: _als_coro(gesendet.append(kw) or SimpleNamespace(id=1)))
+        msg = SimpleNamespace(content="Flo work", author=autor, channel=kanal,
+                              guild=SimpleNamespace(id=42))
+
+        antwort = asyncio.run(arbeit.handle(msg))
+        assert antwort is arbeit.HANDLED, antwort
+        assert gesendet and "embed" in gesendet[0]
+
+        # Zweiter Versuch sofort danach: Cooldown-Hinweis statt neuer Schicht.
+        antwort2 = asyncio.run(arbeit.handle(msg))
+        assert "Pause" in _embed_text(antwort2), _embed_text(antwort2)
+        assert len(gesendet) == 1, "trotz Cooldown eine zweite Schicht gestartet"
+
+        # Liste kennt alle Schichten.
+        msg.content = "Flo work liste"
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        for key in arbeit.SCHICHTEN:
+            assert key in text, key
+
+        # Wort des Tages ist noch nicht draussen.
+        msg.content = "Flo wordle"
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        assert "Voice" in text, text
+    finally:
+        restore()
+
+
+def test_arbeit_kanal_wird_vernuenftig_gesucht():
+    """Reihenfolge: eingestellter Kanal -> ein Kanal, der passend heisst ->
+    Ansagen-Kanal. Eine feste ID im Code gibt es bewusst nicht."""
+    arbeit, restore = _arbeit_frisch()
+    try:
+        gigachat = SimpleNamespace(id=200, name="gigachat")
+        sonst = SimpleNamespace(id=201, name="smalltalk")
+        eingestellt = SimpleNamespace(id=300, name="wordle-only")
+        kanaele = {200: gigachat, 201: sonst, 300: eingestellt}
+        guild = SimpleNamespace(id=42, text_channels=[sonst, gigachat],
+                                get_channel=kanaele.get, system_channel=None)
+
+        werte = {}
+        alt = arbeit.instance._cfg
+        arbeit.instance._cfg = lambda gid, key, standard: werte.get(key, standard)
+        try:
+            # Nichts eingestellt -> der Kanal, der 'gigachat' heisst.
+            assert arbeit.instance.kanal_fuer(guild) is gigachat
+            # Eingestellt gewinnt.
+            werte["wordle_channel"] = 300
+            assert arbeit.instance.kanal_fuer(guild) is eingestellt
+            # Eingestellte, aber unbekannte ID: nicht ins Leere posten,
+            # sondern auf den Namens-Fund zurueckfallen.
+            werte["wordle_channel"] = 999
+            assert arbeit.instance.kanal_fuer(guild) is gigachat
+        finally:
+            arbeit.instance._cfg = alt
+    finally:
+        restore()
+
+
+def test_arbeit_tick_merkt_sich_die_ansage():
+    """tick() liefert (guild, embed, view) - und die Ansage MUSS gemerkt werden.
+
+    Das Raten laeuft ueber ein Eingabefeld, und bei einer Modal-Antwort ist
+    interaction.message IMMER None. Ohne die gemerkten IDs koennte die oeffentliche
+    Ansage nach dem Sieg nicht auf 'entschieden' umgestellt werden - sie stuende
+    bis zum naechsten Tag da und lockte Leute in ein Rennen, das laengst
+    gelaufen ist."""
+    arbeit, restore = _arbeit_frisch()
+    try:
+        leute = [SimpleNamespace(bot=False) for _ in range(4)]
+        guild = SimpleNamespace(id=77, voice_channels=[SimpleNamespace(members=leute)])
+
+        faellig = asyncio.run(arbeit.tick([guild]))
+        assert len(faellig) == 1, faellig
+        g, embed, view = faellig[0]
+        assert g is guild
+        assert "Wettrennen" in (embed.description or ""), embed.description
+        assert view.children, "kein Rate-Knopf an der Ansage"
+        assert view.children[0].custom_id == "flo:wordle:77", view.children[0].custom_id
+
+        # Ein zweiter Tick am selben Tag darf NICHTS mehr liefern.
+        assert asyncio.run(arbeit.tick([guild])) == []
+
+        # Ansage merken - genau das macht bot.py nach dem Senden.
+        r = arbeit.instance.raetsel(77)
+        r.ansage_merken(SimpleNamespace(id=4242, channel=SimpleNamespace(id=99)))
+        assert r.daten["ansage"] == 4242 and r.daten["kanal"] == 99
+
+        # Nach dem Sieg zeigt das Embed die Aufloesung statt des Rennens.
+        r.raten(5, r.wort)
+        fertig = arbeit.instance.tages_embed(77)
+        assert "entschieden" in (fertig.title or "").lower(), fertig.title
+        assert r.wort in (fertig.description or ""), fertig.description
+    finally:
+        restore()
+
+
+def _als_coro(wert):
+    """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
+    async def lauf():
+        return wert
+    return lauf()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:

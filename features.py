@@ -38,6 +38,7 @@ CATALOG = [
     {"key": "giveaway", "label": "Giveaways",         "emoji": "🎉", "desc": "Nutzer verlosen eigene Coins (Flo fragt alles ab)"},
     {"key": "merchant", "label": "Fahrender Händler", "emoji": "🛒", "desc": "Täglicher Händler mit exklusiven Titeln"},
     {"key": "steal",    "label": "Coin-Raub",         "emoji": "🥷", "desc": "flo steal @wer – Coins klauen"},
+    {"key": "arbeit",   "label": "Arbeit & Wordle",   "emoji": "🧰", "desc": "flo work – Schichten mit Mini-Spielen, dazu das Wort des Tages"},
     {"key": "handel",   "label": "Handelsbuch",       "emoji": "📒", "desc": "Alle Coin-Transaktionen als Statistik"},
     {"key": "schulden", "label": "Kreide-Tafel",      "emoji": "🧾", "desc": "Merkt sich, wer wem was überwiesen hat (nur Anzeige)"},
     {"key": "luxus",    "label": "Luxus & Thron",     "emoji": "👑", "desc": "Prestige-Shop bis 1 Milliarde & DER THRON"},

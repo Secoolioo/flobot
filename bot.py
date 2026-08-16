@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 
 import admin
 import ai
+import arbeit
 import bayern
 import casino
 import cmdnorm
@@ -176,6 +177,12 @@ HANDEL_ENABLED = handel.setup()
 # Coin-Raub ('Flo steal @wer'): Heist auf fremde Coins - Erfolgschance, Strafe,
 # Cooldown. Braucht economy (dort liegt der Coin-Topf).
 STEAL_ENABLED = steal.setup()
+# Arbeit ('Flo work'): Schichten mit Mini-Spielen (Wordle, Buchstabensalat,
+# Rechnen, Safe, Sortieren) - der dritte Weg zu Coins neben Casino und Aktie,
+# hier zaehlt Koennen statt Glueck. Dazu das WORT DES TAGES: ein Wettrennen um
+# einen fetten Topf, das Flo dann rauslegt, wenn wirklich Leute im Voice sind.
+# Braucht economy (dort liegt der Coin-Topf).
+ARBEIT_ENABLED = arbeit.setup()
 # Hinweis: oeffentliche Aktienkurse (Apple & Co.) gibt es bewusst nicht mehr -
 # 'Flo aktie' ist ausschliesslich die EIGENE FloCorp-Aktie ($FLO), siehe floaktie.
 # Terraria-Wiki ('Flo terraria <frage>'): beantwortet JEDE Terraria-Frage mit
@@ -220,6 +227,7 @@ FEATURE_LOADED = {
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
     "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
     "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
+    "arbeit": ARBEIT_ENABLED,
 }
 
 # Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle. Vorher war das
@@ -232,7 +240,7 @@ _HANDLED_SENTINELS = tuple(
     getattr(modul, "HANDLED") for modul in (
         moderation, music, casino, games, economy, media, food, words, luxus,
         voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
-        steal, bayern, guildcfg, profil)
+        steal, bayern, guildcfg, profil, arbeit)
     if getattr(modul, "HANDLED", None) is not None
 )
 
@@ -244,6 +252,10 @@ MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
 # Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
 # Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
 LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
+# Wort des Tages: alle 5 Minuten nachsehen, ob genug Leute im Voice sitzen.
+# Bewusst kurz getaktet - der Moment, in dem der Call voll wird, soll nicht
+# eine halbe Stunde ungenutzt verstreichen.
+ARBEIT_TICK_SECONDS = float(os.getenv("ARBEIT_TICK_SECONDS", "300"))
 # Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Streamer + Kameras
 # + Nachrichten) misst und den Kurs bewegt. 60 s -> der Kurs steigt/faellt fast in
 # Echtzeit sichtbar.
@@ -285,7 +297,7 @@ _NEED_MESSAGES = any(
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
      STEAL_ENABLED, TERRARIA_ENABLED,
-     MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED]
+     MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED, ARBEIT_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -648,6 +660,8 @@ class FloBot(discord.Client):
         # Giveaway-Knoepfe nur einmal pro Prozess anmelden (on_ready feuert auch
         # bei jedem Reconnect).
         self._giveaway_views_ready = False
+        # Dasselbe fuer die Rate-Knoepfe einer laufenden Wordle-Runde.
+        self._arbeit_views_ready = False
         # Damit die "Guild nicht auffindbar"-Warnung der Aktie nicht jede Minute
         # ins Log rauscht.
         self._floaktie_guild_warned = False
@@ -1040,6 +1054,39 @@ class FloBot(discord.Client):
                 # ganzen tasks.loop DAUERHAFT gestoppt - die Ankunft wurde nie
                 # angesagt, auch nach einem Neustart nicht mehr.
                 log.exception("Haendler-Ansage konnte in #%s nicht gesendet werden",
+                              getattr(channel, "name", "?"))
+
+    @tasks.loop(seconds=ARBEIT_TICK_SECONDS)
+    async def arbeit_loop(self):
+        """Legt das Wort des Tages raus, sobald auf einem Server genug Leute im
+        Voice sitzen - hoechstens einmal pro Tag und Server.
+
+        Die Uhr entscheidet hier bewusst NICHT: ein Raetsel um 4 Uhr morgens in
+        einen leeren Server zu werfen, waere verschenkt. Ist an einem Tag nie
+        etwas los, faellt das Wort an dem Tag eben aus."""
+        try:
+            faellig = await arbeit.tick(
+                [g for g in self.guilds if features.is_on_in(g.id, "arbeit")])
+        except Exception:
+            log.exception("Arbeit-Loop Fehler - laeuft weiter")
+            return
+        for guild, embed, view in faellig:
+            channel = arbeit.kanal_fuer(guild)
+            if channel is None:
+                log.info("Wort des Tages: kein Kanal auf %s - uebersprungen.",
+                         getattr(guild, "name", guild.id))
+                continue
+            try:
+                view.message = await channel.send(embed=embed, view=view)
+                # Wo die Ansage steht, muss arbeit wissen: das Raten laeuft
+                # ueber ein Eingabefeld, und dabei ist interaction.message
+                # immer None - ohne diese IDs koennte die Ansage nach dem Sieg
+                # nicht auf 'entschieden' umgestellt werden.
+                arbeit.raetsel(guild.id).ansage_merken(view.message)
+            except Exception:
+                # BEWUSST breit: ein fehlendes Senderecht in genau einem Kanal
+                # darf den Loop nicht dauerhaft anhalten (siehe merchant_loop).
+                log.exception("Wort des Tages konnte in #%s nicht gesendet werden",
                               getattr(channel, "name", "?"))
 
     @tasks.loop(seconds=LOTTO_TICK_SECONDS)
@@ -1667,6 +1714,7 @@ class FloBot(discord.Client):
             (VOICE_GAGS_ENABLED and _on("voice"), voicegags.handle),
             (GAMES_ENABLED and _on("games"), games.handle),
             (CASINO_ENABLED and _on("casino"), casino.handle),
+            (ARBEIT_ENABLED and _on("arbeit"), arbeit.handle),
             (LUXUS_ENABLED and _on("luxus"), luxus.handle),
             (HANDEL_ENABLED and _on("handel"), handel.handle),
             (SCHULDEN_ENABLED and _on("schulden"), schulden.handle),
@@ -1932,6 +1980,17 @@ class FloBot(discord.Client):
                     log.exception("Giveaway-Knoepfe konnten nicht angemeldet werden")
             if not self.giveaway_loop.is_running():
                 self.giveaway_loop.start()
+        if ARBEIT_ENABLED:
+            # Rate-Knoepfe einer laufenden Wordle-Runde nach einem Neustart
+            # wieder klickbar machen (persistente Views, feste custom_id).
+            if not self._arbeit_views_ready:
+                try:
+                    arbeit.register_views(self)
+                    self._arbeit_views_ready = True
+                except Exception:
+                    log.exception("Wordle-Knoepfe konnten nicht angemeldet werden")
+            if not self.arbeit_loop.is_running():
+                self.arbeit_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
             self.floaktie_market_loop.start()
         # Web-Panel starten (idempotent: laeuft nur einmal, egal wie oft on_ready feuert).
