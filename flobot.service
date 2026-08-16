@@ -2,6 +2,9 @@
 Description=Discord Server-Icon Bot (Tageszeit/Jahreszeit)
 After=network-online.target
 Wants=network-online.target
+# KEIN hartes Startlimit: der Bot soll sich immer wieder selbst fangen. Statt
+# aufzugeben wird der Abstand groesser (siehe RestartSteps unten).
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -9,7 +12,22 @@ WorkingDirectory=/opt/flobot
 ExecStart=/opt/flobot/venv/bin/python /opt/flobot/bot.py
 Environment=PYTHONUNBUFFERED=1
 Restart=always
-RestartSec=10
+# Neustart mit WACHSENDEM Abstand: 5 s, dann laenger, hoechstens 5 Minuten.
+#
+# Vorher stand hier nur RestartSec=10 - und das war gefaehrlich. Kommt der Bot
+# gar nicht hoch (kaputte .env, fehlerhafter Pull, Discord down), startete
+# systemd ihn ALLE ZEHN SEKUNDEN neu, endlos. Jeder Start versucht eine
+# Anmeldung bei Discord: 8.640 Login-Versuche am Tag. Genau dafuer sperrt
+# Discord Tokens.
+#
+# Mit dem Treppen-Abstand sind es im Dauerfehler rund 12 Versuche pro Stunde
+# statt 360 - und ein kurzer Aussetzer (Netz beim Booten noch nicht da) ist
+# trotzdem nach 5 Sekunden wieder geheilt. RestartSteps/RestartMaxDelaySec
+# brauchen systemd >= 254; aeltere Versionen ueberlesen die zwei Zeilen und
+# verhalten sich wie frueher mit RestartSec.
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=300
 
 [Install]
 WantedBy=multi-user.target
