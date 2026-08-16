@@ -79,6 +79,17 @@ VOICE_STALL_TICKS = 2
 # Grenze - ein kurzer Netz-Aussetzer hat so eine ganze Playlist in einem
 # Durchlauf als "nicht ladbar" verbucht und kommentarlos entsorgt.
 ADVANCE_MAX_FEHLER = 2
+# So oft versucht der Watchdog, DENSELBEN Song wiederzubeleben, bevor er ihn
+# aufgibt und zum naechsten geht.
+#
+# Ohne diese Grenze war der Bot in der Sackgasse, die die Nutzer gemeldet haben:
+# ein Song mit toter Stream-Adresse (abgelaufener googlevideo-Link) haengt sofort
+# wieder, der Watchdog startet ihn alle 30 s erneut - und weil dabei jedes Mal
+# die Wiedergabe-Generation hochgezaehlt wird, entwertet er genau den
+# after-Callback, an dem 'skip' haengt. Skip meldete "uebersprungen", passierte
+# aber nichts; 'Flo spiel X' reihte nur ein, weil is_active() die ganze Zeit
+# True blieb. Nur 'Flo stop' kam da raus.
+NEUSTART_MAX_VERSUCHE = 2
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
@@ -165,6 +176,33 @@ _SPOTIFY_TRACK_RE = re.compile(
     r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?track/|spotify:track:)([A-Za-z0-9]+)",
     re.IGNORECASE,
 )
+# Die Spotify-HANDY-App teilt NICHT open.spotify.com, sondern einen Kurzlink:
+# https://spotify.link/aBcDeFg (frueher auch spoti.fi). Der traf keinen einzigen
+# Spotify-Regex, fiel durch die ganze URL-Schleife und landete in der YouTube-
+# TEXTSUCHE - Flo suchte also nach der Zeichenkette "https://spotify.link/aBcDeFg".
+# Genau das war das gemeldete "Spotify geht nur halb": am PC ging es, vom Handy
+# geteilt nicht. Aufgeloest wird er ueber den HTTP-Redirect.
+_SPOTIFY_KURZ_RE = re.compile(
+    r"https?://(?:spotify\.link|spoti\.fi)/\S+", re.IGNORECASE)
+
+# Satzzeichen und Klammern, die im Chat an einer URL kleben, aber nicht dazu
+# gehoeren. Discord-Nutzer schreiben <https://...>, um die Vorschau zu
+# unterdruecken, und Links stehen am Satzende. yt-dlp bekam das Zeichen bisher
+# mit und suchte dann eine Adresse, die es so nicht gibt.
+_URL_MUELL = ">).,;:!?\"'»«"
+
+
+def _url_saeubern(url):
+    """Haengt Satzzeichen ab, die im Chat an der URL kleben."""
+    url = (url or "").strip()
+    # Eine schliessende Klammer nur abschneiden, wenn sie nicht selbst zur
+    # Adresse gehoert (Wikipedia-Links koennen Klammern enthalten).
+    while url and url[-1] in _URL_MUELL:
+        if url[-1] == ")" and url.count("(") > url.count(")"):
+            break
+        url = url[:-1]
+    return url
+
 _SPOTIFY_PLAYLIST_RE = re.compile(
     r"open\.spotify\.com/(?:intl-[a-z]{2}/)?(?:playlist|album)/"
     r"|spotify:(?:playlist|album):",
@@ -478,6 +516,9 @@ class GuildPlayer:
     # sie alle 15 s erneut an, fraß dabei je Takt einen Song und schickte
     # dieselbe Warnung immer wieder in den Chat.
     _advance_aufgegeben: bool = False
+    # Wie oft der Watchdog den LAUFENDEN Song schon wiederbelebt hat. Wird bei
+    # jedem echten Songwechsel zurueckgesetzt (start ohne keep_speed).
+    _neustart_versuche: int = 0
     _last_reconnect: float = 0.0     # monotonic des letzten Reconnect-Versuchs (Loop-Bremse)
     _reconnect_fails: int = 0        # aufeinanderfolgende fehlgeschlagene Reconnects (Aufgabe-Schwelle)
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
@@ -533,6 +574,10 @@ class GuildPlayer:
             # gilt nur fuer den Song, bei dem sie gesetzt wurde.
             self.speed = 1.0
             self.pausiert = False
+            # Neuer Song -> die Wiederbelebungs-Versuche gelten wieder frisch.
+            # (Der Watchdog-Neustart laeuft mit keep_speed=True und zaehlt hier
+            # bewusst NICHT zurueck, sonst koennte er sich ewig selbst verlaengern.)
+            self._neustart_versuche = 0
         before = _FFMPEG_BEFORE
         if seek > 0.5:
             # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
@@ -717,6 +762,11 @@ class GuildPlayer:
                             if self._session_gen == sitzung:
                                 self.queue.insert(0, track)
                             return
+                    # Der vorige Player raeumt noch auf - ohne dieses Warten
+                    # wirft play() 'Already playing audio.', und das wurde als
+                    # "Track nicht ladbar" verbucht: der Song war weg, obwohl
+                    # mit ihm alles in Ordnung war.
+                    await self._warte_bis_still()
                     self.start(track)
                 except Exception:
                     fehler_serie += 1
@@ -800,6 +850,39 @@ class GuildPlayer:
         except (TypeError, ValueError):
             return -1
 
+    async def _warte_bis_still(self, max_sekunden=2.0):
+        """Wartet, bis der Player wirklich aufgehoert hat zu spielen.
+
+        voice.stop() wirkt nicht sofort: der Player-Thread laeuft noch seinen
+        letzten Block zu Ende. Ein play() in dieser Luecke wirft 'Already
+        playing audio.' - und das wurde weiter oben als 'Track nicht ladbar'
+        verbucht, der Song also uebersprungen."""
+        schritte = int(max(1, max_sekunden / 0.05))
+        for _ in range(schritte):
+            if self.voice is None or not self.voice.is_playing():
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
+    async def skip(self):
+        """Zum naechsten Song - und zwar VERLAESSLICH.
+
+        Frueher stand hier nur voice.stop() und der Rest hing am
+        after-Callback. Der wird aber entwertet, sobald die Wiedergabe-
+        Generation zwischendurch hochzaehlt (Watchdog-Neustart, Tempo-Wechsel,
+        Reconnect). Fiel der Skip in so ein Fenster, meldete Flo
+        'uebersprungen' - und es passierte nichts. Jetzt entwerten wir den
+        Callback selbst und stossen den naechsten Song direkt an, damit es
+        genau EINEN Weg gibt und der immer laeuft."""
+        self._play_gen += 1              # laufenden after-Callback entwerten
+        if self.voice is not None:
+            try:
+                self.voice.stop()
+            except Exception:  # noqa: BLE001 - stop darf nie werfen
+                log.debug("voice.stop beim Skip fehlgeschlagen", exc_info=True)
+            await self._warte_bis_still()
+        await self._advance()            # ohne gen -> laeuft IMMER
+
     async def _neustart_an_position(self):
         """Startet den laufenden Song an der zuletzt GEHOERTEN Stelle neu -
         ohne die Verbindung anzufassen und ohne die Warteschlange zu opfern.
@@ -810,6 +893,20 @@ class GuildPlayer:
         track = self.current
         if track is None or self.voice is None or not self.voice.is_connected():
             return False
+        # Die Adresse, die gerade haengt, ist oft schlicht ABGELAUFEN: YouTube
+        # unterschreibt seine Stream-Links zeitlich, und ein Song, der eine
+        # Weile in der Warteschlange stand, hat beim Start eine tote URL.
+        # Denselben toten Link nochmal zu starten heilt gar nichts - also
+        # holen wir uns vorher eine frische Adresse. Scheitert das, geht es
+        # mit der alten weiter (besser als gar kein Versuch).
+        if track.query:
+            try:
+                frisch = await _resolve_track(track)
+                if frisch is not None and frisch.stream_url:
+                    track = frisch
+                    self.current = track
+            except Exception:  # noqa: BLE001 - dann eben mit der alten Adresse
+                log.debug("Frische Stream-Adresse nicht zu bekommen", exc_info=True)
         async with self._voice_lock:
             # Die Uhr lief waehrend des Stalls weiter, gehoert hat man das
             # aber nicht. Die stillen Sekunden also wieder abziehen, damit der
@@ -819,10 +916,7 @@ class GuildPlayer:
             self._play_gen += 1        # haengenden after-Callback entwerten
             try:
                 self.voice.stop()      # killt die haengende FFmpeg-Quelle
-                for _ in range(40):
-                    if not self.voice.is_playing():
-                        break
-                    await asyncio.sleep(0.05)
+                await self._warte_bis_still()
                 self.start(track, seek=pos, keep_speed=True)
                 if self.pausiert:
                     self.pausieren()
@@ -870,9 +964,22 @@ class GuildPlayer:
                 if self._frozen_ticks >= VOICE_STALL_TICKS:
                     self._frozen_ticks = 0
                     self._last_frames = -1
+                    if self._neustart_versuche >= NEUSTART_MAX_VERSUCHE:
+                        # Der Song ist nicht zu retten. WEITER statt ewig
+                        # dasselbe versuchen: genau diese Endlosschleife war
+                        # die Sackgasse, aus der nur 'Flo stop' herausfuehrte.
+                        titel = self.current.title if self.current else "Der Song"
+                        log.error("Audio-Stall: '%s' auch nach %d Neustarts still "
+                                  "- ueberspringe ihn.", titel, self._neustart_versuche)
+                        await self._sag(f"⏭️ **{titel}** liefert keinen Ton mehr – "
+                                        f"ich gehe zum nächsten.")
+                        await self.skip()
+                        return
+                    self._neustart_versuche += 1
                     log.warning("Audio-Stall: verbunden und 'spielend', aber seit "
-                                "%d s kein Ton - starte den Song neu.",
-                                VOICE_STALL_TICKS * VOICE_HEAL_SECONDS)
+                                "%d s kein Ton - starte den Song neu (Versuch %d/%d).",
+                                VOICE_STALL_TICKS * VOICE_HEAL_SECONDS,
+                                self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
                     await self._neustart_an_position()
                     return
             else:
@@ -1678,6 +1785,27 @@ class Music(FeatureBasis):
         self._sp_token["exp"] = now + float(data.get("expires_in", 3600))
         return self._sp_token["value"]  # type: ignore[return-value]
 
+    async def _spotify_kurzlink(self, url):
+        """spotify.link/xxx -> die echte open.spotify.com-Adresse (oder None).
+
+        Der Kurzlink ist eine reine Weiterleitung; wir brauchen nur das Ziel.
+        Bewusst OHNE Token: das geht auch, wenn gar keine Spotify-Keys gesetzt
+        sind - dann greift danach zwar die Track-Aufloesung nicht, aber der Bot
+        sagt wenigstens ehrlich, woran es liegt, statt YouTube nach der URL
+        abzusuchen."""
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(url, allow_redirects=True) as r:
+                    ziel = str(r.url)
+        except (aiohttp.ClientError, OSError) as exc:
+            log.warning("Spotify-Kurzlink nicht aufloesbar (%s): %s", url, exc)
+            return None
+        if "spotify.com" not in ziel.lower():
+            log.warning("Spotify-Kurzlink zeigt nicht auf Spotify: %s", ziel)
+            return None
+        return ziel
+
     async def _spotify_track_meta(self, url):
         """Spotify-Track-Link -> Metadaten fuer die YouTube-Suche:
         {query, name, artist, dur}. 'query' = 'Kuenstler - Titel', 'artist' = der
@@ -1865,13 +1993,17 @@ class Music(FeatureBasis):
     def parse_command(self, text):
         """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
 
-        Aktionen: play, search, spotify_album, spotify_playlist, yt_playlist,
-                  sc_playlist,
+        Aktionen: play, search, spotify_album, spotify_playlist, spotify_kurz,
+                  yt_playlist, sc_playlist,
                   volume, skip, pause, resume, stop, leave, queue.
         """
         # 1) Link in der Nachricht? (staerkstes Signal)
         for url in _URL_RE.findall(text):
+            url = _url_saeubern(url)
             low = url.lower()
+            if _SPOTIFY_KURZ_RE.match(url):
+                # Kurzlink der Handy-App - das Ziel kennt erst der Redirect.
+                return ("spotify_kurz", url)
             m = _SPOTIFY_LIST_RE.search(url)
             if m:
                 kind = (m.group(1) or m.group(2) or "").lower()
@@ -2446,10 +2578,13 @@ class Music(FeatureBasis):
                                title="⏹️  Gestoppt", color=_COL_INFO)
 
         if action == "skip":
-            if not player.is_active():
+            # Nicht an is_active() haengen: genau wenn ein Song HAENGT, will man
+            # skippen - und dann meldete das hier "Ich spiele gerade nichts"
+            # oder der Skip verpuffte. Es reicht, dass es etwas zu tun gibt.
+            if player.current is None and not player.queue:
                 return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
             skipped = player.current.title if player.current else ""
-            player.voice.stop()  # type: ignore[union-attr]  -> loest _after -> naechster Track
+            await player.skip()
             desc = f"**{self._short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
             return self._embed(desc, title="⏭️  Skip", color=_COL_CTRL)
 
@@ -2555,6 +2690,21 @@ class Music(FeatureBasis):
         voice_state = getattr(message.author, "voice", None)
         if voice_state is None or voice_state.channel is None:
             return self._embed("Geh erst in einen Sprachkanal, dann spiele ich dort.", color=_COL_ERR)
+
+        # --- Kurzlink der Spotify-App: erst aufloesen, dann normal weiter ---
+        if action == "spotify_kurz":
+            ziel = await self._spotify_kurzlink(arg)
+            if not ziel:
+                return self._embed(
+                    "Diesen Spotify-Kurzlink konnte ich nicht auflösen. Schick mir "
+                    "den langen Link (`open.spotify.com/...`) oder such direkt: "
+                    f"`{self._bot_name} spiel Künstler Titel`.", color=_COL_ERR)
+            neu = self.parse_command(f"spiel {ziel}")
+            if neu is None or neu[0] == "spotify_kurz":
+                return self._embed(
+                    "Dieser Spotify-Link zeigt auf etwas, das ich nicht abspielen "
+                    "kann (Podcast, Künstler-Seite?).", color=_COL_ERR)
+            action, arg = neu
 
         # --- Mehrere Songs auf einmal (Spotify-Album / YouTube-Playlist) ---
         if action == "spotify_album":
@@ -2717,6 +2867,8 @@ _spotify_track_meta = instance._spotify_track_meta
 _spotify_list_tracks = instance._spotify_list_tracks
 _deep_find = instance._deep_find
 _spotify_playlist_via_embed = instance._spotify_playlist_via_embed
+_spotify_kurzlink = instance._spotify_kurzlink
+_url_saeubern = _url_saeubern
 _clean_lead = instance._clean_lead
 parse_command = instance.parse_command
 _play_many = instance._play_many

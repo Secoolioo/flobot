@@ -8594,6 +8594,102 @@ def test_panel_protokolliert_und_sichert():
         restore()
 
 
+def test_musik_kaputter_song_blockiert_den_naechsten_nicht():
+    """DIE gemeldete Sackgasse: ein Song, der keinen Ton liefert, liess sich
+    nicht wegskippen - nur 'Flo stop' half.
+
+    Grund: der Watchdog belebte denselben toten Song alle 30 s neu, und JEDER
+    Neustart zaehlt die Wiedergabe-Generation hoch. Genau daran hing aber der
+    after-Callback, den 'skip' ausgeloest hat - der Skip verpuffte, Flo meldete
+    trotzdem 'uebersprungen', und weil is_active() die ganze Zeit True blieb,
+    reihte 'Flo spiel X' nur noch ein."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+
+    async def sag(text):
+        gesagt.append(text)
+
+    player._sag = sag
+    guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+    try:
+        kaputt = _track("Kaputt")
+        gut = _track("Gut")
+        player.start(kaputt)
+        player.queue.append(gut)
+        # Der Song "spielt", aber der Block-Zaehler steht: kein Ton.
+        voice.stall = True
+
+        # Der Watchdog versucht es - aber nicht ewig.
+        for _ in range(12):
+            asyncio.run(player.heal(guild))
+        assert player._neustart_versuche <= music.NEUSTART_MAX_VERSUCHE
+        # Er hat aufgegeben und ist weitergegangen, statt in der Schleife zu bleiben.
+        assert player.current is gut, player.current
+        assert not player.queue
+        assert any("nächsten" in t for t in gesagt), gesagt
+    finally:
+        aufraeumen()
+
+
+def test_musik_skip_haengt_nicht_am_callback():
+    """Skip muss auch dann wirken, wenn der after-Callback entwertet ist.
+
+    Der Watchdog, ein Tempo-Wechsel oder ein Reconnect zaehlen die Generation
+    hoch; faellt ein Skip in dieses Fenster, kam er frueher nie an."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        a, b = _track("A"), _track("B")
+        player.start(a)
+        player.queue.append(b)
+        # Generation hochzaehlen, so wie es ein Watchdog-Neustart tut ...
+        player._play_gen += 5
+        # ... und trotzdem muss der Skip durchgehen.
+        asyncio.run(player.skip())
+        assert player.current is b, player.current
+        assert not player.queue
+
+        # Und ein Skip auf dem LETZTEN Song raeumt sauber auf.
+        asyncio.run(player.skip())
+        assert player.current is None and not player.queue
+    finally:
+        aufraeumen()
+
+
+def test_musik_versteht_die_links_aus_den_apps():
+    """Wie Links WIRKLICH im Chat ankommen - nicht wie im Lehrbuch.
+
+    Der Kurzlink der Spotify-Handy-App (spotify.link/...) traf keinen einzigen
+    Regex und landete in der YouTube-TEXTSUCHE: Flo suchte nach der
+    Zeichenkette. Am PC ging es, vom Handy geteilt nicht - genau das gemeldete
+    'Spotify geht nur halb'. Dazu kleben im Chat Satzzeichen an der URL."""
+    import music
+    p = music.instance.parse_command
+    faelle = {
+        # Handy-Share
+        "https://spotify.link/aBcDeFgHi": ("spotify_kurz", "https://spotify.link/aBcDeFgHi"),
+        "https://spoti.fi/3xYz": ("spotify_kurz", "https://spoti.fi/3xYz"),
+        # Discord unterdrueckt die Vorschau mit spitzen Klammern
+        "<https://youtu.be/dQw4w9WgXcQ>": ("play", "https://youtu.be/dQw4w9WgXcQ"),
+        # Link am Satzende / in Klammern
+        "https://youtu.be/dQw4w9WgXcQ.": ("play", "https://youtu.be/dQw4w9WgXcQ"),
+        "(https://youtu.be/dQw4w9WgXcQ)": ("play", "https://youtu.be/dQw4w9WgXcQ"),
+        "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT,":
+            ("play", "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"),
+        # die ueblichen Varianten muessen weiter stimmen
+        "https://m.youtube.com/watch?v=dQw4w9WgXcQ": ("play", "https://m.youtube.com/watch?v=dQw4w9WgXcQ"),
+        "https://music.youtube.com/watch?v=dQw4w9WgXcQ": ("play", "https://music.youtube.com/watch?v=dQw4w9WgXcQ"),
+        "https://www.youtube.com/shorts/dQw4w9WgXcQ": ("play", "https://www.youtube.com/shorts/dQw4w9WgXcQ"),
+        "https://open.spotify.com/intl-de/track/4cOdK2wGLETKBW3PvgPWqT?si=x":
+            ("play", "https://open.spotify.com/intl-de/track/4cOdK2wGLETKBW3PvgPWqT?si=x"),
+    }
+    for eingabe, erwartet in faelle.items():
+        assert p(f"spiel {eingabe}") == erwartet, (eingabe, p(f"spiel {eingabe}"))
+    # Ein Kurzlink OHNE Befehlswort bleibt normales Gerede.
+    assert p("schau mal https://spotify.link/aBc") == ("spotify_kurz", "https://spotify.link/aBc")
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
