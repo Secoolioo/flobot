@@ -157,13 +157,26 @@ _YDL_OPTS = {
 # Wiedergabe liefen mit und ohne sauber durch - der Schaden entsteht nur bei
 # der schubweisen Lieferung, also im Normalbetrieb mit YouTube.)
 #
-# Gegen den STILLEN Stall, gegen den das Timeout gedacht war, hilft jetzt der
-# Fortschritts-Waechter in heal(): der zaehlt die tatsaechlich ausgegebenen
-# Audio-Bloecke (AudioPlayer.loops) und misst damit ECHTEN Ton statt
-# Socket-Betrieb. Steht der Zaehler, holt Flo eine frische Stream-Adresse und
-# setzt an der Stelle fort; nach NEUSTART_MAX_VERSUCHE gibt er den Song auf und
-# geht weiter. Das ist die genauere Messung - und sie kann normale Wiedergabe
-# nicht abwuergen.
+# Und das Timeout hat seine eigene Aufgabe nicht einmal erfuellt. Derselbe
+# Aufbau, aber mit einem Server, der mittendrin verstummt (die Verbindung bleibt
+# offen) - also genau der Fall, fuer den es eingebaut wurde:
+#
+#     -rw_timeout MIT -reconnect* :  lebt nach 70 s noch, 4x "Will reconnect at 0"
+#     nur -reconnect*             :  lebt nach 70 s noch, keine Reconnects
+#     -rw_timeout OHNE -reconnect*:  stirbt nach 15,3 s (returncode 146)
+#
+# Die Reconnect-Flags heben das Timeout also auf: statt abzubrechen, verbindet
+# FFmpeg endlos neu. Nur OHNE sie wuerde es greifen - dann aber wuerde es die
+# oben gemessenen CDN-Pausen erst recht toedlich machen. Beides zusammen geht
+# nicht; die Reconnect-Flags sind im Normalbetrieb das Wertvollere.
+#
+# Gegen den STILLEN Stall hilft deshalb der Fortschritts-Waechter in heal():
+# der zaehlt die tatsaechlich ausgegebenen Audio-Bloecke (AudioPlayer.loops) und
+# misst damit ECHTEN Ton statt Betrieb auf dem Socket. Steht der Zaehler, holt
+# Flo eine frische Stream-Adresse und setzt an der Stelle fort; nach
+# NEUSTART_MAX_VERSUCHE gibt er den Song auf und geht weiter. Das ist die
+# genauere Messung - und sie kann eine gesunde Wiedergabe nicht abwuergen.
+# Nach dieser Messung ist der Waechter die EINZIGE Stall-Erkennung, die es gibt.
 _FFMPEG_BEFORE = (
     "-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 "
     "-reconnect_delay_max 5"
@@ -2885,6 +2898,13 @@ class Music(FeatureBasis):
                                "oder Suchbegriff.", color=_COL_ERR)
 
         track.requested_by = message.author.display_name
+        # Merken, WOMIT dieser Track aufgeloest wurde. Ohne das kann Flo eine
+        # tote Stream-Adresse spaeter nicht erneuern: die Wiederbelebung nach
+        # einem Abbruch und die Auffrischung veralteter Adressen brauchen beide
+        # diese Eingabe. Bei Playlists steht sie laengst drin, bei einem
+        # einzelnen Link fehlte sie.
+        if not track.query:
+            track.query = arg if action == "play" else f"ytsearch1:{arg}"
 
         try:
             await player.connect(voice_state.channel)
