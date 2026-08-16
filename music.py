@@ -101,6 +101,13 @@ NEUSTART_MAX_VERSUCHE = 2
 # fuer fertig und schaltete brav weiter. Fuer den Zuhoerer sieht das aus wie
 # "spielt nur halb und springt dann zum naechsten".
 ABBRUCH_TOLERANZ = 10
+# So alt darf eine Stream-Adresse hoechstens sein, wenn der Song an die Reihe
+# kommt. YouTube unterschreibt seine Adressen zeitlich; wer eine Playlist
+# einwirft und eine Stunde spaeter beim zwanzigsten Song ankommt, hat dort eine
+# tote URL. Der Song "startet" dann, liefert aber nie Ton - und genau das sah
+# nach "der Song geht einfach nicht" aus. Vor dem Start wird deshalb neu
+# aufgeloest, wenn die Adresse aelter ist.
+STREAM_MAX_ALTER = float(os.getenv("MUSIC_STREAM_MAX_ALTER", "900") or "900")
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
 
@@ -213,6 +220,13 @@ _SPOTIFY_KURZ_RE = re.compile(
 # unterdruecken, und Links stehen am Satzende. yt-dlp bekam das Zeichen bisher
 # mit und suchte dann eine Adresse, die es so nicht gibt.
 _URL_MUELL = ">).,;:!?\"'»«"
+
+
+def _adresse_alt(track):
+    """Ist die Stream-Adresse dieses Tracks zu alt zum Abspielen?"""
+    if not track.geloest_um:
+        return False          # unbekannt -> nicht anfassen
+    return (time.monotonic() - track.geloest_um) > STREAM_MAX_ALTER
 
 
 def _url_saeubern(url):
@@ -491,6 +505,10 @@ class Track:
     query: str = ""            # YouTube-Suchbegriff fuer spaetes Aufloesen (Playlist)
     thumbnail: str = ""        # Cover/Vorschaubild fuer das Embed (sofern bekannt)
     match_hint: "dict | None" = None  # Spotify-Metadaten (Titel/Kuenstler/Dauer) fuer Best-Match
+    # monotonic-Zeitpunkt, an dem stream_url geholt wurde. YouTube unterschreibt
+    # seine Adressen zeitlich - eine, die lange in der Warteschlange lag, ist
+    # beim Start tot. Dann spielt Flo "etwas", es kommt aber nie Ton.
+    geloest_um: float = 0.0
 
 
 @dataclass
@@ -778,6 +796,12 @@ class GuildPlayer:
                     return
                 track = self.queue.pop(0)
                 try:
+                    if track.stream_url and track.query and _adresse_alt(track):
+                        # Die Adresse lag zu lange herum (siehe STREAM_MAX_ALTER):
+                        # frisch holen, sonst startet ein Song, der nie Ton macht.
+                        log.info("Stream-Adresse von '%s' ist veraltet - hole eine "
+                                 "frische.", track.title)
+                        track.stream_url = ""
                     if not track.stream_url and track.query:
                         track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
                         if gen is not None and gen != self._play_gen:
@@ -1652,6 +1676,7 @@ class Music(FeatureBasis):
             webpage_url=info.get("webpage_url", ""),
             duration=info.get("duration"),
             thumbnail=info.get("thumbnail") or "",
+            geloest_um=time.monotonic(),
         )
 
     def _norm_match(self, s):
@@ -2930,6 +2955,7 @@ _deep_find = instance._deep_find
 _spotify_playlist_via_embed = instance._spotify_playlist_via_embed
 _spotify_kurzlink = instance._spotify_kurzlink
 _url_saeubern = _url_saeubern
+_adresse_alt = _adresse_alt
 _clean_lead = instance._clean_lead
 parse_command = instance.parse_command
 _play_many = instance._play_many

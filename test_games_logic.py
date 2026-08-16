@@ -8758,6 +8758,50 @@ def test_musik_abgebrochener_song_gilt_nicht_als_fertig():
         aufraeumen()
 
 
+def test_musik_veraltete_stream_adresse_wird_erneuert():
+    """Eine Stream-Adresse, die lange in der Warteschlange lag, ist tot.
+
+    YouTube unterschreibt seine Adressen zeitlich. Wer eine Playlist einwirft
+    und eine Stunde spaeter beim zwanzigsten Song ankommt, startet dort eine
+    URL, die es nicht mehr gibt: der Song 'laeuft', es kommt aber nie Ton -
+    genau das sah nach 'der Song geht einfach nicht' aus."""
+    import time as _t
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    geholt = []
+
+    async def frisch(track):
+        geholt.append(track.title)
+        return music.Track(title=track.title, stream_url="http://stream/neu",
+                           query=track.query, duration=100,
+                           geloest_um=_t.monotonic())
+
+    music._resolve_track = frisch
+    try:
+        alt = music.Track(title="Alt", stream_url="http://stream/tot",
+                          query="ytsearch1:Alt", duration=100,
+                          geloest_um=_t.monotonic() - music.STREAM_MAX_ALTER - 60)
+        assert music._adresse_alt(alt) is True
+        player.queue.append(alt)
+        asyncio.run(player._advance())
+        assert geholt == ["Alt"], geholt
+        assert player.current.stream_url == "http://stream/neu"
+
+        # Eine FRISCHE Adresse wird nicht unnoetig neu geholt.
+        geholt.clear()
+        voice.spielt = False
+        neu = music.Track(title="Neu", stream_url="http://stream/frisch",
+                          query="ytsearch1:Neu", duration=100,
+                          geloest_um=_t.monotonic())
+        assert music._adresse_alt(neu) is False
+        player.queue.append(neu)
+        asyncio.run(player._advance())
+        assert geholt == [], geholt
+        assert player.current.stream_url == "http://stream/frisch"
+    finally:
+        aufraeumen()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
