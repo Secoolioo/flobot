@@ -2415,20 +2415,39 @@ class Music(FeatureBasis):
                 title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE,
             )
 
-        first_inp, _first_title, first_hint = self._unpack_item(items[0])
-        rest = items[1:]
-        try:
-            track = await self._resolve_input(first_inp, first_hint)
-        except Exception:  # noqa: BLE001
-            log.exception("Erster Track nicht ladbar: %s", first_inp)
-            return self._embed("Den ersten Song konnte ich nicht laden.", color=_COL_ERR)
-        track.requested_by = requested_by
-        track.query = first_inp
-        track.match_hint = first_hint
+        # Der erste Song entscheidet NICHT mehr ueber die ganze Liste. Vorher
+        # ging bei einem gesperrten/geloeschten ersten Titel die komplette
+        # Playlist verloren ("Den ersten Song konnte ich nicht laden") - mit 49
+        # einwandfreien Songs dahinter. Jetzt sucht Flo den ersten, der laeuft.
+        track = None
+        uebersprungen = 0
+        rest = list(items)
+        while rest:
+            first_inp, first_title, first_hint = self._unpack_item(rest.pop(0))
+            try:
+                track = await self._resolve_input(first_inp, first_hint)
+            except Exception:  # noqa: BLE001
+                log.warning("Playlist: '%s' nicht ladbar - nehme den naechsten.",
+                            first_title or first_inp)
+                uebersprungen += 1
+                if uebersprungen >= ADVANCE_MAX_FEHLER:
+                    # Zwei am Stueck sind kein Zufall mehr, sondern das Netz.
+                    # Dann NICHT die restliche Liste durchbrennen.
+                    break
+                continue
+            track.requested_by = requested_by
+            track.query = first_inp
+            track.match_hint = first_hint
+            break
+        if track is None:
+            return self._embed(
+                "Von dieser Liste konnte ich gerade keinen Song laden (Netz? "
+                "gesperrt?). Versuch's gleich nochmal.", color=_COL_ERR)
         for item in rest:
             inp, title, hint = self._unpack_item(item)
             self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
         try:
+            await player._warte_bis_still()
             player.start(track)
         except Exception:
             log.exception("Erster Track (Mehrfach) nicht abspielbar: %s", track.title)

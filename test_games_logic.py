@@ -8802,6 +8802,57 @@ def test_musik_veraltete_stream_adresse_wird_erneuert():
         aufraeumen()
 
 
+def test_musik_playlist_ueberlebt_kaputten_ersten_song():
+    """Ein gesperrter erster Titel warf die KOMPLETTE Liste weg.
+
+    'Den ersten Song konnte ich nicht laden' - und die 49 einwandfreien
+    dahinter waren mit weg. Genau so fuehlt sich 'Playlist geht nur halb' an."""
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    versucht = []
+
+    async def resolve(inp, hint):
+        versucht.append(inp)
+        if "kaputt" in inp:
+            raise RuntimeError("gesperrt")
+        return music.Track(title=inp, stream_url="http://stream/x", duration=100)
+
+    async def kein_panel(*a, **k):
+        return None
+
+    alt = (mi._resolve_input, mi._send_panel)
+    mi._resolve_input = resolve
+    mi._send_panel = kein_panel
+    try:
+        items = [("kaputt1", "Kaputt 1", None),
+                 ("gut1", "Gut 1", None),
+                 ("gut2", "Gut 2", None),
+                 ("gut3", "Gut 3", None)]
+        antwort = asyncio.run(mi._play_many(
+            player, _VoiceChannelStub(), items, "wer", "aus der Playlist"))
+        assert antwort is music.HANDLED, antwort
+        # Der kaputte wurde uebersprungen, der naechste laeuft, der Rest wartet.
+        assert player.current.title == "gut1", player.current
+        assert [t.query for t in player.queue] == ["gut2", "gut3"]
+
+        # Zwei kaputte am Stueck sind kein Zufall -> die Liste NICHT durchbrennen.
+        player2, voice2, aufraeumen2 = _musik_umgebung()
+        try:
+            versucht.clear()
+            items = [("kaputt1", "K1", None), ("kaputt2", "K2", None),
+                     ("gut1", "Gut 1", None)]
+            antwort = asyncio.run(mi._play_many(
+                player2, _VoiceChannelStub(), items, "wer", "aus der Playlist"))
+            assert antwort is not music.HANDLED
+            assert len(versucht) == 2, versucht
+        finally:
+            aufraeumen2()
+    finally:
+        (mi._resolve_input, mi._send_panel) = alt
+        aufraeumen()
+
+
 def run():
     tests = sorted(name for name in globals() if name.startswith("test_"))
     for name in tests:
