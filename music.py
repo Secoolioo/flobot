@@ -71,8 +71,10 @@ DEFAULT_VOLUME = 0.5    # 0.0 - 1.0
 VOICE_HEAL_SECONDS = 15
 VOICE_ZOMBIE_TICKS = 3        # so viele stille Ticks (=Sek*Ticks) bis "Zombie" -> Neustart
 # So viele Ticks OHNE einen einzigen gesendeten Audio-Block, bis der Watchdog
-# den Song neu anstoesst. Zweite Verteidigungslinie hinter -rw_timeout: greift
-# auch dann, wenn FFmpeg selbst haengt statt der Verbindung (2 x 15 s = 30 s).
+# den Song neu anstoesst (2 x 15 s = 30 s). Das ist seit dem Rauswurf von
+# -rw_timeout die EINZIGE Stall-Erkennung - und die genauere: sie misst echten
+# TON, nicht Betrieb auf dem Socket, und kann eine gesunde Wiedergabe deshalb
+# nicht abwuergen.
 VOICE_STALL_TICKS = 2
 # So viele Songs duerfen beim Weiterschalten HINTEREINANDER scheitern, bevor
 # der Player aufgibt und die Warteschlange stehen laesst. Vorher gab es keine
@@ -131,21 +133,33 @@ _YDL_OPTS = {
 #   -reconnect_streamed 1        : auch bei Live-/Nicht-Spulbaren Streams
 #   -reconnect_on_network_error 1: auch bei TCP/TLS-Fehlern (ffmpeg >= 4.3)
 #   -reconnect_delay_max 5       : bis zu 5 s zwischen den Versuchen warten
-#   -rw_timeout 15000000         : nach 15 s OHNE ein einziges Byte abbrechen
 #
-# Das -rw_timeout ist die wichtigste Zeile in dieser Datei. Ohne sie wartet
-# FFmpeg bei einem STILLEN Stall (Verbindung steht, es kommen nur keine Daten
-# mehr - haengendes CDN, NAT-Timeout) UNENDLICH lange. Die -reconnect*-Flags
-# greifen da nicht: die brauchen einen Fehler oder ein EOF, und beides kommt
-# nie. Folge (mit echtem FFmpeg nachgestellt): der discord.py-Player-Thread
-# blockiert dauerhaft in source.read(), der after-Callback feuert NIE,
-# is_playing() bleibt True - und weil music.is_active() dann True meldet,
-# haengt jedes weitere 'Flo spiel X' den Song nur noch an die Warteschlange.
-# Genau das war das gemeldete "die Queue ist voll und er spielt nicht".
-# Mit dem Timeout bricht FFmpeg selbst ab, after feuert, _advance laeuft.
+# KEIN -rw_timeout. Das stand hier eine Runde lang und war ein Eigentor - hier
+# die Messung (lokales ffmpeg 6.1.1, Leser im Echtzeit-Takt wie discord.py,
+# Server liefert schubweise mit 20 s Pausen, so drosselt YouTube):
+#
+#     mit -rw_timeout 15000000 :  12,2 s Audio in 99,8 s Wanduhr
+#                                 stderr: "Will reconnect at 0 in 0/1/3 second(s)"
+#     ohne                     :  24,5 s Audio in 80,4 s Wanduhr, keine Reconnects
+#
+# Das Timeout deutet also eine voellig normale Liefer-Pause als NETZWERKFEHLER.
+# Dann greift -reconnect_on_network_error, und FFmpeg verbindet sich neu - bei
+# einem nicht spulbaren Stream wieder AB BYTE 0, der Song faengt von vorne an.
+# Genau das war die Beschwerde "Songs funktionieren nur halbwegs".
+# (Bei einem GESUNDEN Server macht die Option keinen Unterschied: 110 s
+# Wiedergabe liefen mit und ohne sauber durch - der Schaden entsteht nur bei
+# der schubweisen Lieferung, also im Normalbetrieb mit YouTube.)
+#
+# Gegen den STILLEN Stall, gegen den das Timeout gedacht war, hilft jetzt der
+# Fortschritts-Waechter in heal(): der zaehlt die tatsaechlich ausgegebenen
+# Audio-Bloecke (AudioPlayer.loops) und misst damit ECHTEN Ton statt
+# Socket-Betrieb. Steht der Zaehler, holt Flo eine frische Stream-Adresse und
+# setzt an der Stelle fort; nach NEUSTART_MAX_VERSUCHE gibt er den Song auf und
+# geht weiter. Das ist die genauere Messung - und sie kann normale Wiedergabe
+# nicht abwuergen.
 _FFMPEG_BEFORE = (
     "-reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1 "
-    "-reconnect_delay_max 5 -rw_timeout 15000000"
+    "-reconnect_delay_max 5"
 )
 _FFMPEG_OPTS = "-vn"
 

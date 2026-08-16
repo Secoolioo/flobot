@@ -7576,16 +7576,31 @@ def test_musik_befehle_kapern_kein_alltagsdeutsch():
     assert mi.parse_command("lautstärke 250") == ("volume", "250")
 
 
-def test_musik_ffmpeg_bricht_bei_datenstille_ab():
-    """Die eine Zeile, an der der gemeldete Fehler haengt: ohne -rw_timeout
-    wartet FFmpeg bei einem stillen Stall unendlich und der after-Callback
-    feuert nie."""
+def test_musik_ffmpeg_bekommt_kein_lesetimeout():
+    """KEIN -rw_timeout in den FFmpeg-Optionen - das war ein Eigentor.
+
+    Nachgemessen mit echtem ffmpeg 6.1.1 und einem Leser im Echtzeit-Takt
+    (so liest discord.py), Server liefert schubweise mit 20 s Pausen - genau
+    so drosselt YouTube:
+
+        mit -rw_timeout 15s :  12,2 s Audio in 99,8 s Wanduhr,
+                               stderr voller "Will reconnect at 0"
+        ohne                :  24,5 s Audio in 80,4 s Wanduhr, keine Reconnects
+
+    Das Timeout deutet eine normale Liefer-Pause als NETZWERKFEHLER, dann
+    greift -reconnect_on_network_error und FFmpeg faengt wieder bei Byte 0 an.
+    Der Song beginnt also staendig von vorne - die gemeldete Beschwerde
+    "funktioniert nur halbwegs".
+
+    Gegen den stillen Stall steht jetzt der Fortschritts-Waechter in heal():
+    der zaehlt echte Audio-Bloecke statt Socket-Betrieb."""
     import music
-    assert "-rw_timeout" in music._FFMPEG_BEFORE, music._FFMPEG_BEFORE
-    # Wert in Mikrosekunden, plausibel zwischen 5 und 60 Sekunden.
-    import re
-    m = re.search(r"-rw_timeout\s+(\d+)", music._FFMPEG_BEFORE)
-    assert m and 5_000_000 <= int(m.group(1)) <= 60_000_000, music._FFMPEG_BEFORE
+    assert "-rw_timeout" not in music._FFMPEG_BEFORE, music._FFMPEG_BEFORE
+    assert "-timeout" not in music._FFMPEG_BEFORE, music._FFMPEG_BEFORE
+    # Die Reconnect-Flags bleiben: bei einem ECHTEN Fehler sind sie richtig.
+    for flag in ("-reconnect 1", "-reconnect_streamed 1",
+                 "-reconnect_on_network_error 1"):
+        assert flag in music._FFMPEG_BEFORE, flag
 
 
 # --- Schwere Fehler aus dem Volltest (B1-B8) --------------------------------
