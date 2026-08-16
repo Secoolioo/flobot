@@ -1070,14 +1070,20 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Arbeit-Loop Fehler - laeuft weiter")
             return
-        for guild, embed, view in faellig:
+        for guild, embed, view, datei in faellig:
             channel = arbeit.kanal_fuer(guild)
             if channel is None:
                 log.info("Wort des Tages: kein Kanal auf %s - uebersprungen.",
                          getattr(guild, "name", guild.id))
                 continue
             try:
-                view.message = await channel.send(embed=embed, view=view)
+                kwargs = {"embed": embed, "view": view}
+                if datei is not None:
+                    kwargs["file"] = datei
+                view.message = await channel.send(**kwargs)
+                # Der Aushang muss den ganzen Tag stehen bleiben - in einem
+                # Aufraeum-Kanal waere er sonst weg, bevor jemand geraten hat.
+                self.protect_message(view.message)
                 # Wo die Ansage steht, muss arbeit wissen: das Raten laeuft
                 # ueber ein Eingabefeld, und dabei ist interaction.message
                 # immer None - ohne diese IDs koennte die Ansage nach dem Sieg

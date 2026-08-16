@@ -2608,6 +2608,109 @@ class Render:
         return self._png(img)
 
 
+    # === Wordle-Brett ==========================================================
+    # Farben wie im Original - die kennt jeder, und Abweichen davon macht es
+    # nur schwerer lesbar, nicht origineller.
+    _WD_GRUEN = (83, 141, 78)
+    _WD_GELB = (181, 159, 59)
+    _WD_GRAU = (58, 58, 60)
+    _WD_LEER = (44, 45, 48)
+    _WD_BG = (16, 17, 20)
+    _WD_TASTE = (76, 78, 84)
+
+    _WD_FARBE = {"g": _WD_GRUEN, "y": _WD_GELB, "b": _WD_GRAU}
+    # QWERTZ - der Bot ist deutsch, und eine QWERTY-Reihe suchen sich die Leute
+    # dumm und daemlich.
+    _WD_TASTATUR = ("QWERTZUIOP", "ASDFGHJKL", "YXCVBNM")
+
+    def wordle_board(self, zeilen, laenge, *, max_versuche=6, titel="WORDLE",
+                     untertitel="", tastatur=None, verdeckt=False,
+                     loesung=""):
+        """Das Rate-Brett als Bild.
+
+        ``zeilen``: [(wort, farben)] - farben ist 'g'/'y'/'b' je Stelle, gerechnet
+        in arbeit.Wordle.farben(). Diese Funktion RECHNET NICHT selbst: die
+        zweistufige Faerbung darf es nur einmal im Projekt geben.
+        ``tastatur``: {Buchstabe: 'g'|'y'|'b'} - die Denkhilfe darunter.
+        ``verdeckt``: nur Farben, keine Buchstaben (fuer 'alle Versuche weg').
+        ``loesung``: wird unter dem Brett aufgeloest, wenn gesetzt."""
+        # Kachelgroesse so, dass auch acht Buchstaben nicht winzig werden.
+        kachel = 78 if laenge <= 6 else (68 if laenge == 7 else 60)
+        luecke = max(6, kachel // 9)
+        rand = 34
+        brett_b = laenge * kachel + (laenge - 1) * luecke
+        kopf = 86 if not untertitel else 112
+        tast_h = 0
+        if tastatur is not None:
+            tast_taste = 46
+            tast_h = 3 * (tast_taste + 8) + 26
+        loesung_h = 52 if loesung else 0
+        W = max(brett_b + 2 * rand, 520)
+        H = kopf + max_versuche * (kachel + luecke) - luecke + tast_h + loesung_h + 30
+
+        img = self._vgrad(W, H, (26, 28, 36), self._WD_BG).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        d.rounded_rectangle([5, 5, W - 6, H - 6], radius=20,
+                            outline=self._WD_GRUEN, width=3)
+
+        # Kopfzeile
+        t = self._clean_text(titel)
+        d.text((W // 2, 34), t, font=self._font(34), fill=(240, 243, 248), anchor="mm")
+        tw = d.textlength(t, font=self._font(34))
+        d.line([(W // 2 - tw / 2, 56), (W // 2 + tw / 2, 56)],
+               fill=self._WD_GRUEN, width=3)
+        if untertitel:
+            d.text((W // 2, 84), self._clean_text(untertitel), font=self._font(19),
+                   fill=(150, 157, 172), anchor="mm")
+
+        # Das Brett
+        x0 = (W - brett_b) // 2
+        y = kopf
+        for reihe in range(max_versuche):
+            wort, farben = ("", "")
+            if reihe < len(zeilen):
+                wort, farben = zeilen[reihe]
+            for spalte in range(laenge):
+                x = x0 + spalte * (kachel + luecke)
+                if spalte < len(farben):
+                    fuell = self._WD_FARBE.get(farben[spalte], self._WD_GRAU)
+                    d.rounded_rectangle([x, y, x + kachel, y + kachel], radius=9,
+                                        fill=fuell)
+                    if not verdeckt:
+                        d.text((x + kachel / 2, y + kachel / 2 - 2), wort[spalte],
+                               font=self._font(int(kachel * 0.56)),
+                               fill=(255, 255, 255), anchor="mm")
+                else:
+                    # Leere Zelle: nur Umriss, damit man sieht, wie viel noch geht.
+                    d.rounded_rectangle([x, y, x + kachel, y + kachel], radius=9,
+                                        outline=self._WD_LEER, width=3)
+            y += kachel + luecke
+
+        if loesung:
+            d.text((W // 2, y + 12), self._clean_text(loesung.upper()),
+                   font=self._font(30), fill=self._WD_GRUEN, anchor="mm")
+            y += loesung_h
+
+        # Die Tastatur - die eigentliche Denkhilfe: welcher Buchstabe ist raus?
+        if tastatur is not None:
+            y += 14
+            breite = 40
+            for zeile in self._WD_TASTATUR:
+                zb = len(zeile) * breite + (len(zeile) - 1) * 6
+                tx = (W - zb) // 2
+                for buchstabe in zeile:
+                    zustand = tastatur.get(buchstabe)
+                    fuell = self._WD_FARBE.get(zustand, self._WD_TASTE)
+                    text_farbe = (255, 255, 255) if zustand != "b" else (128, 130, 138)
+                    d.rounded_rectangle([tx, y, tx + breite, y + 46], radius=7,
+                                        fill=fuell)
+                    d.text((tx + breite / 2, y + 22), buchstabe, font=self._font(21),
+                           fill=text_farbe, anchor="mm")
+                    tx += breite + 6
+                y += 46 + 8
+        return self._png(img)
+
+
 # --- Modul-Fassade --------------------------------------------------------
 # Eine geteilte Instanz + Aliase, damit die bisherigen Modul-Funktionen
 # (bot.py, casino.py, economy.py, games.py, words.py, food.py, media.py)
@@ -2643,3 +2746,4 @@ wheel_fortune_anim = instance.wheel_fortune_anim
 words_card = instance.words_card
 money_card = instance.money_card
 floaktie_chart = instance.floaktie_chart
+wordle_board = instance.wordle_board

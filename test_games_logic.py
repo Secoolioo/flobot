@@ -9440,6 +9440,15 @@ def test_botsicht_haengt_im_bot_ganz_oben():
 def _arbeit_frisch(coins=None):
     """arbeit mit leerem Store und aktiver Economy. Gibt (modul, restore)."""
     import arbeit
+    # bot ZUERST importieren, und zwar VOR dem Store-Tausch unten.
+    # Grund: eine laufende Schicht meldet sich per lazy 'import bot' beim
+    # Auto-Loesch-Schutz an. Ist bot in diesem Prozess noch nie importiert
+    # worden, laeuft dabei bot.py komplett durch - samt 'ARBEIT_ENABLED =
+    # arbeit.setup()', und das legt einen FRISCHEN Store an. Der Test haette
+    # danach in einen Topf geschrieben, den keiner mehr liest.
+    # (Im Betrieb kann das nicht passieren, siehe den sys.modules-Alias in
+    # bot.py - dort ist bot beim ersten lazy Import laengst geladen.)
+    import bot                                                    # noqa: F401
     restore_eco = _with_economy(coins or {1: 0, 2: 0})
     alt = (arbeit.instance._store, arbeit.instance._enabled)
     arbeit.instance._store = _FakeStore({"nutzer": {}, "tag": {}})
@@ -9694,9 +9703,18 @@ def test_arbeit_schichten_sind_vollstaendig():
         assert schicht.key == key, f"{schicht} kennt seinen eigenen Schluessel nicht"
         assert schicht.titel and schicht.was, key
         assert schicht.lohn > 0, key
-        embed, view = schicht.bauen(arbeit.instance, autor)
+        embed, view, datei = asyncio.run(schicht.bauen(arbeit.instance, autor))
         assert embed.description, key
         assert view.uid == 1 and view.schicht is schicht, key
+        # Die Frist muss zur Aufgabe passen: sechs Rateversuche brauchen mehr
+        # Zeit als fuenf Klicks.
+        assert view.timeout == schicht.frist and schicht.frist >= 300, key
+    # Wordle bringt sein Brett als Bild mit - genau dafuer gibt es das
+    # Drei-Tupel. Faellt render aus, ist datei None und es geht trotzdem.
+    _e, _v, datei = asyncio.run(
+        arbeit.SCHICHTEN["wordle"].bauen(arbeit.instance, autor))
+    assert datei is not None, "Wordle-Schicht ohne Brett-Bild"
+    assert arbeit.SCHICHTEN["wordle"].frist > arbeit.SCHICHTEN["sortieren"].frist
 
 
 def test_arbeit_cooldown_und_befehle():
@@ -9780,8 +9798,11 @@ def test_arbeit_tick_merkt_sich_die_ansage():
 
         faellig = asyncio.run(arbeit.tick([guild]))
         assert len(faellig) == 1, faellig
-        g, embed, view = faellig[0]
+        g, embed, view, datei = faellig[0]
         assert g is guild
+        # Der Aushang bringt ein leeres Brett mit: man sieht auf einen Blick,
+        # wie lang das Wort ist und wie viele Versuche man hat.
+        assert datei is not None, "Aushang ohne Brett-Bild"
         assert "Wettrennen" in (embed.description or ""), embed.description
         assert view.children, "kein Rate-Knopf an der Ansage"
         assert view.children[0].custom_id == "flo:wordle:77", view.children[0].custom_id
@@ -9801,6 +9822,76 @@ def test_arbeit_tick_merkt_sich_die_ansage():
         assert r.wort in (fertig.description or ""), fertig.description
     finally:
         restore()
+
+
+def test_arbeit_laufende_schicht_wird_nicht_weggeraeumt():
+    """Eine laufende Schicht MUSS sich beim Auto-Loesch-Schutz anmelden.
+
+    Ohne das verschwindet sie in einem Aufraeum-Kanal mitten im Spiel: der
+    Cooldown laeuft weiter, der Lohn ist weg, und die Knoepfe zeigen ins Leere.
+    Genau das war die Beschwerde. Freigegeben wird erst, wenn die Schicht
+    wirklich vorbei ist - dann darf sie nach der Gnadenfrist weg."""
+    import bot
+    arbeit, restore = _arbeit_frisch({5: 0})
+    geschuetzt, freigegeben = [], []
+    alt = (bot.protect_message, bot.release_message)
+    bot.protect_message = lambda m: geschuetzt.append(getattr(m, "id", None))
+    bot.release_message = lambda m, **kw: freigegeben.append(getattr(m, "id", None))
+    try:
+        autor = _fake_person(5, name="tester", global_name="Tester")
+        kanal = SimpleNamespace(id=9, send=lambda **kw: _als_coro(SimpleNamespace(id=777)))
+        msg = SimpleNamespace(content="Flo work sortieren", author=autor,
+                              channel=kanal, guild=SimpleNamespace(id=42))
+        assert asyncio.run(arbeit.handle(msg)) is arbeit.HANDLED
+        assert geschuetzt == [777], geschuetzt
+        assert freigegeben == [], "schon vor dem Ende freigegeben"
+
+        # Zeit rum: abrechnen, freigeben - und den STAND stehen lassen.
+        view = arbeit.SortierView(arbeit.instance, 5,
+                                  arbeit.SCHICHTEN["sortieren"], [3, 1, 2])
+        bearbeitet = {}
+
+        async def edit(**kw):
+            bearbeitet.update(kw)
+        view.message = SimpleNamespace(id=777, edit=edit)
+        asyncio.run(view.on_timeout())
+        assert freigegeben == [777], freigegeben
+        # Nur die Knoepfe sind weg; das Embed wird NICHT ueberschrieben -
+        # sonst sieht man nach einer Pause nicht mal mehr, woran man sass.
+        assert bearbeitet.get("view") is None and "embed" not in bearbeitet, bearbeitet
+        assert "content" in bearbeitet and "Zeit" in bearbeitet["content"]
+    finally:
+        bot.protect_message, bot.release_message = alt
+        restore()
+
+
+def test_arbeit_wordle_brett_wird_gezeichnet():
+    """Das Brett kommt als Bild - mit Tastatur, damit man sieht, welche
+    Buchstaben schon raus sind. Und die Farben kommen aus EINER Quelle:
+    farben() rechnet, muster() malt Emojis, das Bild nimmt dieselben Zeichen."""
+    import arbeit
+    import render
+    spiel = arbeit.Wordle("ARBEITER", versuche=["MEISTERN", "ARBEITER"])
+
+    # Eine Quelle fuer die Faerbung.
+    assert spiel.farben("ARBEITER") == "gggggggg"
+    assert spiel.muster("ARBEITER") == "🟩" * 8
+    assert [f for _w, f in spiel.zeilen()] == [spiel.farben("MEISTERN"), "gggggggg"]
+
+    # Tastatur: der beste Stand gewinnt. In MEISTERN ist das E gelb, in
+    # ARBEITER gruen - gruen muss bleiben.
+    tast = spiel.tastatur()
+    assert tast["E"] == "g" and tast["A"] == "g", tast
+    assert tast["M"] == "b" and tast["S"] == "b", tast
+    assert "Q" not in tast, "nie geratener Buchstabe steht in der Tastatur"
+
+    # Und das Bild entsteht wirklich.
+    buf = render.wordle_board(spiel.zeilen(), spiel.laenge, titel="TEST",
+                              tastatur=tast)
+    kopf = buf.read(8)
+    assert kopf.startswith(b"\x89PNG"), kopf
+    # Auch mit acht Buchstaben und ohne Tastatur darf nichts umfallen.
+    assert render.wordle_board([], 8, titel="LEER").read(4) == b"\x89PNG"
 
 
 def _als_coro(wert):

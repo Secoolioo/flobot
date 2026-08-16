@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 204 Tests
+python3 test_games_logic.py    # 206 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -317,12 +317,33 @@ drin.
 **Cooldown 15 Minuten**, **Tagesdeckel 250.000**. Ohne den Deckel wäre die
 Schicht die beste Geldquelle im Spiel — sie ist ja risikofrei.
 
+**Eine laufende Schicht wird nicht weggeräumt.** Sie meldet sich beim
+Auto-Lösch-Schutz an (`bot.protect_message`) und wird erst freigegeben, wenn sie
+wirklich vorbei ist. Vorher verschwand sie in einem Aufräum-Kanal mitten im
+Spiel — der Cooldown lief weiter, der Lohn war weg. Läuft die Zeit ab, werden
+nur die **Knöpfe** abgenommen; der Stand bleibt stehen, damit man noch sieht,
+woran man saß. Die Frist hängt an der Aufgabe: Wordle 15 Minuten, Salat und
+Safe 7, der Rest 5.
+
 ### Wort des Tages
 
 Einmal am Tag legt Flo ein Wordle in den dafür eingestellten Kanal. Das ist ein
 **Wettrennen**: wer es als Erster knackt, nimmt den ganzen Topf, danach ist die
 Runde durch und das Wort wird aufgelöst. Jeder rät für sich — die eigenen
 Versuche sieht nur man selbst.
+
+Das Brett ist ein **gerendertes Bild** (`render.wordle_board`), kein
+Emoji-Salat: echte Kacheln in den bekannten Farben und darunter eine
+**Tastatur**, die zeigt, welche Buchstaben grün, gelb oder durch sind. Das ist
+die eigentliche Denkhilfe — vorher musste man sich merken, was man schon
+ausgeschlossen hatte. Gezeichnet wird im Thread (`asyncio.to_thread`), sonst
+stünde der Bot währenddessen still. Sind alle sechs Versuche weg, während das
+Rennen noch läuft, bekommt man das Brett **verdeckt** zu sehen: die Farben ja,
+die Buchstaben nicht — sonst könnte man die Lösung im Chat ausplaudern.
+
+Die Färbung kommt aus **einer** Quelle: `Wordle.farben()` rechnet, `muster()`
+macht Emojis daraus, das Bild nimmt dieselben Zeichen. Zwei Rechnungen für
+dieselbe Sache wären garantiert irgendwann verschieden falsch.
 
 Der Topf hängt an der **Wortlänge**, und die wächst zum Wochenende:
 

@@ -199,6 +199,56 @@ def _muenzen(n):
     return numfmt.fmt(int(n))
 
 
+def _schuetzen(message):
+    """Meldet eine laufende Arbeit beim Auto-Loesch-Schutz an.
+
+    OHNE das verschwindet eine Schicht in einem Aufraeum-Kanal MITTEN IM SPIEL -
+    der Cooldown laeuft, der Lohn ist weg, und die Knoepfe zeigen ins Leere.
+    Lazy-Import von bot, um Zirkel zu vermeiden (wie casino/games es machen)."""
+    if message is None:
+        return
+    try:
+        import bot
+        bot.protect_message(message)
+    except Exception:  # noqa: BLE001 - ohne bot (Tests) passiert eben nichts
+        pass
+
+
+def _freigeben(message):
+    """Arbeit vorbei -> nach kurzer Gnadenfrist darf aufgeraeumt werden."""
+    if message is None:
+        return
+    try:
+        import bot
+        bot.release_message(message)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _wordle_bild(spiel, titel, untertitel="", *, verdeckt=False, loesung=""):
+    """Das Rate-Brett als Bild-Anhang. (discord.File, Dateiname) - oder (None, "").
+
+    Das Brett war vorher eine Emoji-Zeile mit Buchstaben dahinter. Lesbar war das
+    nur mit Muehe: welcher Buchstabe zu welchem Kaestchen gehoert, musste man
+    abzaehlen, und welche Buchstaben schon raus sind, musste man sich merken.
+    Jetzt ist es ein echtes Brett mit Tastatur darunter.
+
+    Gezeichnet wird im THREAD: PIL rechnet in C und gibt den Event-Loop nicht
+    ab - waehrend Flo ein Brett malt, stuende sonst der ganze Bot."""
+    try:
+        import render
+        buf = await asyncio.to_thread(
+            render.wordle_board,
+            spiel.zeilen(), spiel.laenge, max_versuche=spiel.max_versuche,
+            titel=titel, untertitel=untertitel, tastatur=spiel.tastatur(),
+            verdeckt=verdeckt, loesung=loesung)
+        name = f"wordle{int(time.time() * 1000) % 10**9}.png"
+        return discord.File(buf, filename=name), name
+    except Exception:  # noqa: BLE001 - ein Bild ist nie spielentscheidend
+        log.debug("Wordle-Brett liess sich nicht zeichnen", exc_info=True)
+        return None, ""
+
+
 # ===========================================================================
 # Spiellogik - ohne jedes Discord
 # ===========================================================================
@@ -246,29 +296,58 @@ class Wordle:
             return "geloest"
         return "aus" if self.aus else "weiter"
 
-    # --- Anzeige ---
-    def muster(self, versuch):
-        """Die gruen/gelb/grau-Zeile zu einem Versuch.
+    # --- Faerbung ---
+    # Eine einzige Quelle fuer die Farben: farben() rechnet, muster() malt
+    # Emojis daraus und das Bild in render.py nimmt dieselben Buchstaben.
+    # Frueher haette jede Anzeige ihre eigene Rechnung gebraucht - und die
+    # zweistufige Zaehlung unten wird garantiert an einer davon falsch.
+    _EMOJI = {"g": "🟩", "y": "🟨", "b": "⬛"}
+
+    def farben(self, versuch):
+        """'g' (gruen), 'y' (gelb), 'b' (grau) je Stelle.
 
         Die ZWEISTUFIGE Zaehlweise ist der Kern und wird gern falsch gemacht:
         erst alle exakten Treffer wegnehmen, DANN die restlichen Buchstaben
         verteilen. Sonst faerbt 'OTTER' gegen 'NOTEN' beide T gelb, obwohl in
         der Loesung nur ein T steckt."""
         versuch = str(versuch).upper()
-        muster = ["⬛"] * self.laenge
+        farben = ["b"] * self.laenge
         rest = {}
         for i, richtig in enumerate(self.loesung):
             if i < len(versuch) and versuch[i] == richtig:
-                muster[i] = "🟩"
+                farben[i] = "g"
             else:
                 rest[richtig] = rest.get(richtig, 0) + 1
         for i in range(self.laenge):
-            if muster[i] == "🟩" or i >= len(versuch):
+            if farben[i] == "g" or i >= len(versuch):
                 continue
             if rest.get(versuch[i], 0) > 0:
-                muster[i] = "🟨"
+                farben[i] = "y"
                 rest[versuch[i]] -= 1
-        return "".join(muster)
+        return "".join(farben)
+
+    def muster(self, versuch):
+        """Die gruen/gelb/grau-Zeile zu einem Versuch als Emojis."""
+        return "".join(self._EMOJI[f] for f in self.farben(versuch))
+
+    def zeilen(self):
+        """(Wort, Farben) je Versuch - das, was das Bild zeichnet."""
+        return [(v, self.farben(v)) for v in self.versuche]
+
+    def tastatur(self):
+        """Welcher Buchstabe ist durch? {Buchstabe: 'g'|'y'|'b'}.
+
+        Die eigentliche Denkhilfe beim Wordle: ohne sie muss man sich merken,
+        welche Buchstaben schon raus sind. Der beste Stand gewinnt - ein
+        Buchstabe, der einmal gruen war, wird nie wieder grau."""
+        rang = {"b": 0, "y": 1, "g": 2}
+        stand = {}
+        for wort, farben in self.zeilen():
+            for buchstabe, farbe in zip(wort, farben):
+                if rang[farbe] > rang.get(stand.get(buchstabe, "b"), -1) \
+                        or buchstabe not in stand:
+                    stand[buchstabe] = farbe
+        return stand
 
     def tafel(self, verdeckt=False):
         """Das Rate-Bild. 'verdeckt' zeigt nur die Farben, nicht die Buchstaben -
@@ -416,9 +495,17 @@ class Schicht:
     titel = "Schicht"
     was = ""
     lohn = 5000
+    # Wie lange man an einer Schicht sitzen darf. Wordle braucht deutlich mehr
+    # als ein Klickspiel - drei Minuten fuer sechs Rateversuche waren schlicht
+    # zu knapp, da war die Schicht weg, bevor man nachgedacht hatte.
+    frist = 300
 
-    def bauen(self, chef, autor):
-        """Gibt (embed, view) zurueck. Muss jede Unterklasse liefern."""
+    async def bauen(self, chef, autor):
+        """Gibt (embed, view, datei) zurueck; 'datei' darf None sein.
+
+        Bewusst async fuer ALLE Schichten, obwohl nur Wordle zeichnet: eine
+        einheitliche Schnittstelle ist mehr wert als das eine gesparte await,
+        und die naechste Schicht mit Bild braucht dann nichts umzustellen."""
         raise NotImplementedError
 
     def kopf(self, text):
@@ -432,22 +519,29 @@ class WordleSchicht(Schicht):
     key, titel = "wordle", "🟩 Wordle-Schicht"
     was = "Fünf Buchstaben, sechs Versuche."
     lohn = 9000
+    frist = 900          # 15 Minuten - Wordle will gedacht werden
 
-    def bauen(self, chef, autor):
+    async def bauen(self, chef, autor):
         spiel = Wordle.zufall(5)
         view = WordleView(chef, autor.id, self, spiel)
-        return self.kopf(f"Fünf Buchstaben, **{MAX_VERSUCHE} Versuche**.\n\n"
-                         f"{spiel.tafel()}\n\n"
-                         f"Nur **{autor.display_name}** darf raten."), view
+        embed = self.kopf(f"Fünf Buchstaben, **{MAX_VERSUCHE} Versuche**. "
+                          f"Nur **{autor.display_name}** darf raten.")
+        datei, name = await _wordle_bild(spiel, "WORDLE-SCHICHT",
+                                   f"{MAX_VERSUCHE} Versuche · Grundlohn "
+                                   f"{_muenzen(self.lohn)}")
+        if datei is not None:
+            embed.set_image(url=f"attachment://{name}")
+        return embed, view, datei
 
 
 class SalatSchicht(Schicht):
     key, titel = "salat", "🔤 Buchstabensalat"
     was = "Wort entwirren, drei Versuche."
     lohn = 7000
+    frist = 420
     VERSUCHE = 3
 
-    def bauen(self, chef, autor):
+    async def bauen(self, chef, autor):
         wort = random.choice(WOERTER[6] + WOERTER[7])
         buchstaben = list(wort)
         # Wirklich mischen: sonst steht das Wort im Klartext da.
@@ -457,7 +551,7 @@ class SalatSchicht(Schicht):
                 break
         view = SalatView(chef, autor.id, self, wort)
         return self.kopf(f"Entwirr das:\n\n# `{' '.join(buchstaben)}`\n\n"
-                         f"**{self.VERSUCHE} Versuche.** {len(wort)} Buchstaben."), view
+                         f"**{self.VERSUCHE} Versuche.** {len(wort)} Buchstaben."), view, None
 
 
 class RechenSchicht(Schicht):
@@ -466,25 +560,26 @@ class RechenSchicht(Schicht):
     lohn = 6500
     RUNDEN = 5
 
-    def bauen(self, chef, autor):
+    async def bauen(self, chef, autor):
         view = RechenView(chef, autor.id, self)
         return self.kopf("Fünf Aufgaben. Jede richtige zählt, "
                          "eine falsche beendet die Schicht.\n\n"
-                         + view.frage_text()), view
+                         + view.frage_text()), view, None
 
 
 class SafeSchicht(Schicht):
     key, titel = "safe", "🔐 Safe knacken"
     was = "Zahlenschloss, Hinweise nach jedem Versuch."
     lohn = 7500
+    frist = 420
     VERSUCHE = 5
 
-    def bauen(self, chef, autor):
+    async def bauen(self, chef, autor):
         code = "".join(random.choice("0123456789") for _ in range(3))
         view = SafeView(chef, autor.id, self, code)
         return self.kopf("Ein **dreistelliger** Code. Nach jedem Versuch sagt "
                          "dir das Schloss, wie nah du dran warst.\n\n"
-                         f"**{self.VERSUCHE} Versuche.**"), view
+                         f"**{self.VERSUCHE} Versuche.**"), view, None
 
 
 class SortierSchicht(Schicht):
@@ -492,11 +587,11 @@ class SortierSchicht(Schicht):
     was = "In die richtige Reihenfolge klicken."
     lohn = 6000
 
-    def bauen(self, chef, autor):
+    async def bauen(self, chef, autor):
         zahlen = random.sample(range(10, 100), 5)
         view = SortierView(chef, autor.id, self, zahlen)
         return self.kopf("Klick die Zahlen **von klein nach groß**.\n"
-                         "Ein Fehlklick und die Schicht ist rum."), view
+                         "Ein Fehlklick und die Schicht ist rum."), view, None
 
 
 SCHICHTEN = {s.key: s for s in (WordleSchicht(), SalatSchicht(), RechenSchicht(),
@@ -657,12 +752,23 @@ class Arbeit(FeatureBasis):
         prof["schichten"] = int(prof.get("schichten", 0)) + 1
         self._speichern()
 
-        embed, view = schicht.bauen(self, message.author)
+        embed, view, datei = await schicht.bauen(self, message.author)
         try:
-            view.message = await message.channel.send(embed=embed, view=view)
+            kwargs = {"embed": embed, "view": view}
+            if datei is not None:
+                kwargs["file"] = datei
+            view.message = await message.channel.send(**kwargs)
         except discord.HTTPException:
             log.exception("Schicht konnte nicht gestartet werden")
-            return "Die Schicht ließ sich nicht aufmachen."
+            # Der Cooldown steht schon - waere die Schicht jetzt einfach weg,
+            # haette man 15 Minuten Pause fuer nichts. Also zuruecknehmen.
+            prof["cooldown"] = 0
+            self._speichern()
+            return "Die Schicht ließ sich nicht aufmachen – versuch's nochmal."
+        # WICHTIG: vor dem Auto-Loeschen schuetzen. Ohne das verschwindet die
+        # Schicht in einem Aufraeum-Kanal mitten im Spiel, und der Cooldown
+        # laeuft trotzdem weiter.
+        _schuetzen(view.message)
         return HANDLED
 
     # --- Abrechnung einer Schicht ----------------------------------------
@@ -772,10 +878,29 @@ class Arbeit(FeatureBasis):
                 log.info("Wort des Tages auf %s gestartet (%d Buchstaben, %d im Voice).",
                          getattr(guild, "name", guild.id), len(raetsel.wort),
                          self.leute_im_voice(guild))
-                raus.append((guild, self.tages_embed(guild.id), TagesView(guild.id)))
+                embed, datei = await self.tages_ansage(guild.id)
+                raus.append((guild, embed, TagesView(guild.id), datei))
             except Exception:  # noqa: BLE001
                 log.exception("Wort des Tages fuer %s fehlgeschlagen", guild)
         return raus
+
+    async def tages_ansage(self, gid):
+        """Der Aushang zum Start: Embed + leeres Brett als Bild.
+
+        Das leere Brett ist kein Schmuck - man sieht auf einen Blick, wie lang
+        das Wort ist und wie viele Versuche man hat, ohne es zu lesen."""
+        raetsel = self.raetsel(gid)
+        embed = self.tages_embed(gid)
+        spiel = Wordle(raetsel.wort)
+        wochentag = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag",
+                     "Samstag", "Sonntag"][datetime.now().weekday()]
+        datei, name = await _wordle_bild(
+            spiel, "WORT DES TAGES",
+            f"{wochentag} · {len(raetsel.wort)} Buchstaben · Topf "
+            f"{_muenzen(raetsel.topf)}")
+        if datei is not None:
+            embed.set_image(url=f"attachment://{name}")
+        return embed, datei
 
     def tages_embed(self, gid):
         """Die oeffentliche Ansage - vor und nach der Entscheidung."""
@@ -810,10 +935,13 @@ class Arbeit(FeatureBasis):
                 f"Heute ist noch kein Wort gefallen. Ich lege es raus, sobald "
                 f"mindestens **{self.min_voice(gid)} Leute** im Voice sind.",
                 discord.Color.orange())
+        embed, datei = await self.tages_ansage(gid)
         try:
-            await message.channel.send(embed=self.tages_embed(gid),
-                                       view=TagesView(gid),
-                                       reference=message, mention_author=False)
+            kwargs = {"embed": embed, "view": TagesView(gid),
+                      "reference": message, "mention_author": False}
+            if datei is not None:
+                kwargs["file"] = datei
+            await message.channel.send(**kwargs)
         except discord.HTTPException:
             return "Ging gerade nicht."
         return HANDLED
@@ -865,19 +993,23 @@ class Arbeit(FeatureBasis):
         if status == "weiter":
             e = discord.Embed(
                 title="🟩 Wort des Tages",
-                description=f"{spiel.tafel()}\n\nNoch **{spiel.offen}** Versuche.",
+                description=f"Noch **{spiel.offen}** Versuche. Das Rennen läuft.",
                 color=discord.Color.blurple())
             e.set_footer(text="Nur du siehst das hier.")
-            await interaction.response.send_message(embed=e, ephemeral=True)
+            await self._ephemer_mit_brett(
+                interaction, e, spiel, "DEIN STAND",
+                f"Noch {spiel.offen} von {MAX_VERSUCHE} Versuchen")
             return
         if status == "aus":
             e = discord.Embed(
                 title="🟥 Alle Versuche weg",
-                description=f"{spiel.tafel(verdeckt=True)}\n\n"
-                            f"Sechs Versuche, nichts. Das Wort verrate ich nicht – "
-                            f"es rennen ja noch andere.",
+                description="Sechs Versuche, nichts. Das Wort verrate ich nicht – "
+                            "es rennen ja noch andere.",
                 color=discord.Color.red())
-            await interaction.response.send_message(embed=e, ephemeral=True)
+            # Verdeckt: die Farben darf er sehen, die Buchstaben nicht - sonst
+            # koennte er die Loesung im Chat ausplaudern und das Rennen kippen.
+            await self._ephemer_mit_brett(interaction, e, spiel, "AUS",
+                                          "Alle Versuche verbraucht", verdeckt=True)
             return
 
         # Gewonnen: Topf kassieren, Runde schliessen.
@@ -886,17 +1018,34 @@ class Arbeit(FeatureBasis):
         hinweis = self._deckel_hinweis(gewollt, echt, frei)
         self._speichern()
 
+        n = len(spiel.versuche)
         e = discord.Embed(
             title="🏆 Wort des Tages geknackt",
-            description=f"{spiel.tafel()}\n\n**{spiel.loesung}** – in "
-                        f"{len(spiel.versuche)} Versuch"
-                        f"{'en' if len(spiel.versuche) != 1 else ''}.",
+            description=f"**{spiel.loesung}** – in {n} Versuch"
+                        f"{'en' if n != 1 else ''}. Du warst der Erste.",
             color=discord.Color.gold())
         e.add_field(name="Topf", value=f"**+{_muenzen(echt)}** {economy.COIN}")
         if hinweis:
             e.add_field(name="Hinweis", value=hinweis, inline=False)
-        await interaction.response.send_message(embed=e, ephemeral=True)
+        await self._ephemer_mit_brett(interaction, e, spiel, "GEKNACKT",
+                                      f"{n} Versuch{'e' if n != 1 else ''} · "
+                                      f"+{_muenzen(echt)}")
         await self._tages_ausrufen(interaction, raetsel, spiel, echt)
+
+    @staticmethod
+    async def _ephemer_mit_brett(interaction, embed, spiel, titel, untertitel,
+                                 *, verdeckt=False):
+        """Antwortet nur dem Klickenden - mit dem Brett als Bild.
+
+        Faellt das Zeichnen aus (fehlende Schrift o. ae.), geht die Antwort
+        trotzdem raus: ein fehlendes Bild darf niemandem den Versuch fressen."""
+        datei, name = await _wordle_bild(spiel, titel, untertitel, verdeckt=verdeckt)
+        if datei is not None:
+            embed.set_image(url=f"attachment://{name}")
+            await interaction.response.send_message(embed=embed, file=datei,
+                                                    ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _tages_ausrufen(self, interaction, raetsel, spiel, betrag):
         """Sieg oeffentlich machen und die Ansage auf 'entschieden' umstellen.
@@ -924,7 +1073,20 @@ class Arbeit(FeatureBasis):
             if kanal is None:
                 return
             nachricht = await kanal.fetch_message(msg_id)
-            await nachricht.edit(embed=self.tages_embed(raetsel.gid), view=None)
+            embed = self.tages_embed(raetsel.gid)
+            # Das Siegerbrett bleibt als Beweis stehen - das ist die
+            # interessanteste Nachricht des Tages, nicht ein leeres Gitter.
+            datei, name = await _wordle_bild(
+                spiel, "GELOEST", f"{interaction.user.display_name} · "
+                f"{len(spiel.versuche)} Versuch"
+                f"{'e' if len(spiel.versuche) != 1 else ''}")
+            kwargs = {"embed": embed, "view": None}
+            if datei is not None:
+                embed.set_image(url=f"attachment://{name}")
+                kwargs["attachments"] = [datei]
+            await nachricht.edit(**kwargs)
+            # Rennen gelaufen: der Aushang darf jetzt wieder aufgeraeumt werden.
+            _freigeben(nachricht)
         except Exception:  # noqa: BLE001
             log.debug("Wordle-Ansage nicht aktualisierbar", exc_info=True)
 
@@ -963,8 +1125,8 @@ class SchichtView(discord.ui.View):
     sie liegen laesst, bekommt nichts - sonst blockiert eine vergessene Schicht
     den Cooldown, ohne je abgerechnet zu werden."""
 
-    def __init__(self, chef, uid, schicht, timeout=180):
-        super().__init__(timeout=timeout)
+    def __init__(self, chef, uid, schicht):
+        super().__init__(timeout=schicht.frist)
         self.chef = chef
         self.uid = int(uid)
         self.schicht = schicht
@@ -983,26 +1145,34 @@ class SchichtView(discord.ui.View):
             return
         self.fertig = True
         self.chef.abrechnen(self.uid, self.schicht, 0.0)
+        # Nur die Knoepfe abnehmen, den Stand STEHEN LASSEN. Frueher wurde hier
+        # das ganze Embed durch "Schicht verpennt" ersetzt - wer nach einer
+        # Pause zurueckkam, sah nicht mal mehr, woran er gearbeitet hatte.
         try:
-            await self.message.edit(
-                embed=discord.Embed(title="⌛ Schicht verpennt",
-                                    description="Zu lange nichts gemacht. Kein Lohn.",
-                                    color=discord.Color.dark_grey()),
-                view=None)
+            await self.message.edit(content="⌛ Zeit ist rum – die Schicht ist "
+                                            "unbezahlt verfallen.", view=None)
         except discord.HTTPException:
             pass
+        _freigeben(self.message)
 
-    async def beenden(self, interaction, titel, text, anteil):
+    async def beenden(self, interaction, titel, text, anteil, datei=None):
         """Schicht abschliessen, auszahlen, Ergebnis zeigen."""
         self.fertig = True
         self.stop()
         betrag, serie, hinweis = self.chef.abrechnen(self.uid, self.schicht, anteil)
         emb = self.chef.ergebnis_embed(interaction.user, titel, text,
                                        betrag, serie, hinweis, anteil > 0)
+        kwargs = {"embed": emb, "view": None}
+        if datei is not None:
+            emb.set_image(url=f"attachment://{datei.filename}")
+            kwargs["attachments"] = [datei]
         try:
-            await interaction.response.edit_message(embed=emb, view=None)
+            await interaction.response.edit_message(**kwargs)
         except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=emb, view=None)
+            await interaction.edit_original_response(**kwargs)
+        # Die fertige Schicht darf jetzt weg - aber erst nach der Gnadenfrist,
+        # damit man das Ergebnis noch lesen kann.
+        _freigeben(self.message)
 
 
 class RateModal(discord.ui.Modal):
@@ -1042,22 +1212,29 @@ class WordleView(SchichtView):
             # die Zitterpartie voll bezahlt, der Volltreffer aber besser.
             anteil = self.spiel.lohnfaktor() / 2.0 + 0.5
             n = len(self.spiel.versuche)
+            datei, _n = await _wordle_bild(self.spiel, "GEKNACKT",
+                                     f"{n} Versuch{'e' if n != 1 else ''} gebraucht")
             await self.beenden(interaction, "🟩 Geknackt",
                                f"**{self.spiel.loesung}** – in {n} Versuch"
-                               f"{'en' if n != 1 else ''}.\n\n{self.spiel.tafel()}",
-                               anteil)
+                               f"{'en' if n != 1 else ''}.", anteil, datei)
             return
         if status == "aus":
+            datei, _n = await _wordle_bild(self.spiel, "VORBEI", "Alle sechs Versuche weg",
+                                     loesung=self.spiel.loesung)
             await self.beenden(interaction, "🟥 Vorbei",
-                               f"Das Wort war **{self.spiel.loesung}**.\n\n"
-                               f"{self.spiel.tafel()}", 0.0)
+                               f"Das Wort war **{self.spiel.loesung}**.", 0.0, datei)
             return
         e = discord.Embed(
             title=self.schicht.titel,
-            description=f"Noch **{self.spiel.offen}** Versuche.\n\n"
-                        f"{self.spiel.tafel()}",
+            description=f"Noch **{self.spiel.offen}** Versuche.",
             color=discord.Color.blurple())
-        await interaction.response.edit_message(embed=e, view=self)
+        datei, name = await _wordle_bild(self.spiel, "WORDLE-SCHICHT",
+                                   f"Noch {self.spiel.offen} Versuche")
+        kwargs = {"embed": e, "view": self}
+        if datei is not None:
+            e.set_image(url=f"attachment://{name}")
+            kwargs["attachments"] = [datei]
+        await interaction.response.edit_message(**kwargs)
 
 
 class SalatView(SchichtView):
