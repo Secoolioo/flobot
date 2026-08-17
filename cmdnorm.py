@@ -1,10 +1,20 @@
 """Zentrale Befehls-Normalisierung.
 
 Korrigiert das ERSTE Wort einer an Flo gerichteten Nachricht auf einen bekannten
-Befehl, wenn:
-- es ein bayrisch/oesterreichisches Dialekt-Wort ist (z. B. 'spui' -> 'spiel'), ODER
-- es sich nur um EINEN Tippfehler unterscheidet (Levenshtein/Transposition = 1,
-  z. B. 'skpi' -> 'skip', 'lautstrke' -> ... nutzt eh eigene Toleranz).
+Befehl. Vier Toepfe, in genau dieser Reihenfolge:
+
+1. KNOWN    - alle Woerter, die IRGENDEIN Modul woertlich als Befehl versteht.
+              Treffer heisst: alles gut, NICHTS umschreiben.
+2. ALIAS    - fremdsprachige Synonyme ('wipe' -> 'purge', 'shift' -> 'schicht').
+3. DIALECT  - boarisch/oesterreichisch ('spui' -> 'spiel', 'hackln' -> 'arbeit').
+4. Tippfehler - genau EINE Einfuegung/Loeschung/Nachbar-Vertauschung zu einem
+              KNOWN-Wort, und nur wenn eindeutig ('skpi' -> 'skip').
+              STOPWORDS bremst hier Alltagswoerter aus.
+
+Der Unterschied zwischen 1 und 2/3 ist wichtig: ein Synonym in KNOWN waere tot.
+KNOWN bedeutet 'schon gueltig, nicht anfassen' - das Wort ginge unveraendert an
+ein Modul, das es nicht kennt, und faellt zur KI durch. Uebersetzt wird nur in
+ALIAS/DIALECT.
 
 So reagieren ALLE Feature-Module tolerant, ohne dass jedes einzeln angepasst
 werden muss. bot.py setzt danach message.content kurz auf die korrigierte Form
@@ -125,6 +135,59 @@ class CmdNorm:
         # geht. 'daily' bleibt bewusst der Tagesbonus aus economy.
         "tageswort", "tageswordle", "wortdestages", "tagesraetsel",
         "tagesrätsel", "worddaily", "dailyword",
+        # --- Nachtrag: Befehle, die die Module WOERTLICH kennen, hier aber
+        # fehlten. Solange sie fehlen, hielt _fuzzy sie fuer Vertipper und hat
+        # sie verbogen ('sendpause' -> 'sendepause', 'time-out' -> 'timeout',
+        # 'naehrwert' -> 'naehrwerte'). Jeder Eintrag ist nachgemessen: die
+        # Liste bringt 40 falsche Kaperungen weg und keine neue dazu.
+        # music: Lautstaerke-Kurz- und Tippfehlerformen aus _VOLUME_WORDS
+        "lautst", "lautstk", "lautstrke", "lautstaerk", "lautstärk",
+        "lautsärke", "lautstärje", "lautsterke", "lautstaeke", "lautsärcke",
+        "lautr", "ls", "lst", "lstk", "lstrk", "lstrke",
+        "verlasse", "wiederholen", "wiederholst",
+        # guildcfg (das Modul stand hier ueberhaupt nicht)
+        "einstellungen", "einstellung", "config", "konfig", "konfiguration",
+        "servereinstellungen", "settings",
+        # giveaway (stand hier ebenfalls nicht)
+        "giveaway", "giveaways", "gewinnspiel", "gewinnspiele", "verlosung",
+        "verlosungen", "verlosen", "raffle", "gw",
+        # admin
+        "give", "schenk", "schenke", "take", "entzieh", "entziehe",
+        "coinsset", "givexp", "xpgeben", "announce", "dm", "flüster",
+        "fluester", "shoprefresh", "sendpause", "adminhelp",
+        # moderation
+        "del", "aufraeum", "time-out", "rausschmeiss", "rausschmeiß", "unbann",
+        # casino
+        "bj", "17und4", "siebzehnundvier", "hit", "pass", "dd", "roul",
+        "mine", "rad", "höhertiefer", "hoehertiefer", "don",
+        # games
+        "rps", "sss", "ssp", "w6", "quizduel", "quizzz",
+        # profil / economy
+        "user", "pb", "av", "bal", "lb", "inv",
+        # schulden
+        "debt", "debts", "zurueckzahlen", "zurückzahlen",
+        # arbeit / fun / voicegags / media / food / floaktie
+        "werk", "gas", "sb", "tts", "say", "generiert", "generierst", "img",
+        "naehrwert", "nährwert", "$flo",
+        # bayern: Dialekt-Schalter und die Gruesse, die das Modul erkennt
+        "bayrisch", "bayerisch", "bairisch", "baierisch", "boarisch",
+        "boirisch", "dialekt", "servus", "servas", "sers", "seas", "habidere",
+        "griasdi", "griaßdi", "griasgod", "griaseich", "zefix", "pfiadi",
+        "pfiati", "griaß", "griass", "pfiat", "pfiad",
+    }
+
+    # Fremdsprachige Synonyme -> anerkanntes Befehlswort. Bewusst ein eigener
+    # Topf und NICHT in KNOWN: KNOWN heisst "ist schon ein gueltiger Befehl,
+    # nichts umschreiben" - ein Synonym dort wuerde also unveraendert an ein
+    # Modul gehen, das es nicht kennt, und zur KI durchfallen (nachgeprueft
+    # mit 'wipe'). Hier wird es dagegen auf den echten Befehl umgeschrieben.
+    ALIAS = {
+        "addcoins": "gib", "addmoney": "gib", "addxp": "gibxp",
+        "broadcast": "ansage", "broke": "pleite", "cfg": "config",
+        "grind": "arbeit", "options": "einstellungen", "removemoney": "nimm",
+        "serversettings": "einstellungen", "shift": "schicht",
+        "shopreset": "shopneu", "silence": "mute", "tempmute": "timeout",
+        "warnings": "warns", "whisper": "dm", "wipe": "purge",
     }
 
     # Bayrisch/oesterreichischer Dialekt -> anerkanntes Befehlswort.
@@ -144,6 +207,31 @@ class CmdNorm:
         "haudi": "leave",
         "vasteck": "roast", "obara": "hype",
         "wiavui": "coins",
+        # --- Nachtrag Boarisch. Exakter Vergleich, deshalb ziehen diese
+        # Schluessel keine Nachbarwoerter an (gegengeprueft: 'kommt' bleibt
+        # 'kommt', 'normal' bleibt 'normal').
+        "abgebrannt": "pleite", "aufdrahn": "lauter", "aufhean": "stop",
+        "aufraama": "aufräum", "auframa": "aufräum", "auszoin": "auszahlen",
+        "batzn": "coins", "borgn": "borg", "eistellunga": "einstellungen",
+        "fladern": "klau", "gnua": "genug", "goid": "coins",
+        "greisler": "haendler", "greissler": "haendler", "gschaeft": "shop",
+        "gschäft": "shop", "gwinnspui": "gewinnspiel", "göid": "coins",
+        "hackln": "arbeit", "hackn": "arbeit", "hoits": "stop",
+        "ibaweis": "ueberweis", "iwaspringa": "skip", "kartn": "karte",
+        "kaufn": "kauf", "kimm": "komm", "kini": "thron",
+        "kontostond": "kontostand", "kreidn": "kreide", "kumm": "komm",
+        "leihn": "leih", "lodn": "laden", "nausschmeissn": "kick",
+        "nochmoi": "nochmal", "nomal": "nochmal", "nomoi": "nochmal",
+        "pausn": "pause", "raubn": "raub", "reichstn": "reichste",
+        "schaugn": "check", "schmaeh": "spruch", "schmäh": "spruch",
+        "schotter": "coins", "schuftn": "arbeit", "schuid": "schuld",
+        "schuidn": "schulden", "siebm": "sieben", "spuits": "spiel",
+        "stibitzn": "klau", "vabann": "verbann", "vaschwind": "leave",
+        "vawarn": "verwarn", "vazeih": "verzeih", "weisheid": "weisheit",
+        "wiafln": "würfel", "wörtl": "wordle", "zammrama": "aufräum",
+        "zaster": "coins", "zeichna": "zeichne", "ziag": "zieh",
+        "ziagn": "ziehen", "ziagung": "ziehung", "zoggn": "casino",
+        "zoihn": "zahl", "zoin": "zahl", "übaspringa": "skip",
     }
 
     # Haeufige normale Woerter, die NICHT als vertippter Befehl gelten sollen
@@ -189,6 +277,50 @@ class CmdNorm:
         # eine Loeschung entfernt - 'Flo world of warcraft' wurde damit zu
         # 'Flo word of warcraft' und zeigte die Wort-Statistik.
         "world", "worlds", "worldofwarcraft",
+        # --- Nachgemessen am ganzen Repo-Wortschatz (13.882 Woerter): das
+        # waren echte Fehlgriffe, keine geratenen. Sortiert nach dem Schaden,
+        # den der Fehlgriff angerichtet hat.
+        # Moderation/Raub/Mute: 'Flo heisst du Flo?' hat einen Coin-Raub
+        # gestartet, 'pure' war ein Massenloeschen, 'nebel' ein Knebel,
+        # 'anne' (ein Vorname!) ein Bann.
+        "pure", "heisst", "nebel", "anne",
+        # Gluecksspiel: 'cash' hat Crash gestartet, 'mies'/'meine'/'ines' Mines.
+        "cash", "mies", "meine", "ines",
+        # Coins: 'leiche'/'bogen' waren Kredite, 'leite' eine Privatinsolvenz,
+        # 'schwein' ein Schuldschein, 'takte'/'stake'/'tanke' Coin-Abzug,
+        # 'schenken'/'schenkt' Coin-Geschenke.
+        "leiche", "bogen", "leite", "schwein", "takte", "stake", "tanke",
+        "schenken", "schenkt",
+        # Bilder kosten echtes Geld bei der KI - 'build'/'zeichen'/'malle'
+        # duerfen keinen Auftrag ausloesen.
+        "build", "zeichen", "malle",
+        # 'komma' hat Flo in den Voice geholt.
+        "komma",
+        # Vornamen und sehr haeufige Chatwoerter auf harmlosen Zielen - falsch
+        # bleibt falsch: 'frank'/'krank'/'trank' -> Rang, 'laura' -> Aura,
+        # 'chat'/'hart' -> Aktienchart, 'swords' -> Wortzaehler,
+        # 'dicke' -> Wuerfel, 'close' -> Lottolose, 'grass' -> Grussformel,
+        # 'pfad' -> Abschiedsgruss, 'spieler'/'zweiter' -> Musik.
+        "frank", "krank", "trank", "laura", "chat", "hart", "swords", "dicke",
+        "close", "grass", "pfad", "spieler", "zweiter",
+        # Blackjack 'pass': 'Flo passt das?' und 'Spass' sind haeufiger.
+        "passt", "spass", "spaß",
+        # Nur MIT Satzmuster ein Befehl ('mach den song an', 'red bayerisch').
+        # Die duerfen darum nicht in KNOWN stehen - dort wuerde ihr Schutz hier
+        # wegfallen (STOPWORDS -= KNOWN) und jede Beugung waere Freiwild.
+        "antwort", "antworte", "dreh", "hau", "kannst", "leg", "mach", "pack",
+        "red", "rede", "redn", "schalt", "schreib", "schreibe", "stell", "tu",
+        # Englische und deutsche Alltagswoerter, die einen Buchstaben von einem
+        # Befehl entfernt liegen (aus der Modulpruefung, jedes nachgemessen).
+        "bavaria", "broadcasts", "burns", "burnt", "claims", "clam", "clan",
+        "cleans", "continued", "crow", "debit", "debits", "debut", "debuts",
+        "debüt", "debüts", "drawn", "draws", "even", "gain", "generated",
+        "glatze", "glazed", "guests", "images", "insults", "invests", "item",
+        "lean", "mage", "marco", "mats", "option", "paints", "peak",
+        "purchases", "quit", "quite", "seen", "sehen", "share", "shuffles",
+        "speaks", "spinn", "spion", "spuin", "steak", "stock", "surprised",
+        "surprises", "sven", "swipe", "ticket", "unser", "wealthy", "whispern",
+        "wiped", "wippe",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
@@ -250,7 +382,11 @@ class CmdNorm:
         core = first.lower().strip(".,;:!?-")
         if not core or core in self.KNOWN:
             return None                          # schon ein gueltiger Befehl
-        target = self.DIALECT.get(core)
+        # Erst die exakten Uebersetzungen (Fremdsprache, dann Dialekt), danach
+        # die Tippfehler-Toleranz. Beide Toepfe werden EXAKT verglichen und sind
+        # bewusst keine Fuzzy-Ziele: gemessen zog das sonst Vornamen mit rein
+        # ('emma' -> leave, 'lisa' -> leiser) und 'normal' wurde zu 'nochmal'.
+        target = self.ALIAS.get(core) or self.DIALECT.get(core)
         if target is None:
             if core in self.STOPWORDS:
                 return None                      # normales Wort in Ruhe lassen
@@ -263,6 +399,7 @@ class CmdNorm:
 # Modul-Instanz + Aliase, damit die bisherigen Modulnamen weiter funktionieren.
 instance = CmdNorm()
 KNOWN = CmdNorm.KNOWN
+ALIAS = CmdNorm.ALIAS
 DIALECT = CmdNorm.DIALECT
 STOPWORDS = CmdNorm.STOPWORDS
 _one_typo = instance._one_typo

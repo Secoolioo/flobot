@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 217 Tests
+python3 test_games_logic.py    # 220 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -266,6 +266,51 @@ ein Cooldown von 4 s pro Person.
 > Sonst korrigiert die Tippfehler-Suche es auf einen fremden Befehl — `banner`
 > wurde zu `banne`, und damit hätte `Flo banner @wer` die Person **gebannt**
 > statt ihr Banner zu zeigen. Ein Test prüft das jetzt für alle Profil-Befehle.
+
+---
+
+## Deutsch, Englisch, Boarisch — und Tippfehler
+
+Flo versteht jeden Befehl in **vier Anläufen** (`cmdnorm.py`), immer nur am
+ersten Wort und immer nur, wenn die Nachricht an Flo gerichtet ist:
+
+| # | Topf | Beispiel | Wirkung |
+|---|------|----------|---------|
+| 1 | `KNOWN` (526) | `skip` | schon gültig → **nichts** anfassen |
+| 2 | `ALIAS` (17) | `wipe 50` → `purge 50` | fremdsprachiges Synonym |
+| 3 | `DIALECT` (98) | `hackln` → `arbeit` | boarisch/österreichisch |
+| 4 | Tippfehler | `skpi` → `skip` | eine Einfügung/Löschung/Vertauschung |
+
+**Warum ALIAS und nicht KNOWN?** `KNOWN` heißt *„ist schon ein gültiger Befehl,
+schreib nichts um"*. Ein Synonym dort wäre tot: das Wort ginge unverändert an
+ein Modul, das es nicht kennt, und fiele zur KI durch. Übersetzt wird nur in
+`ALIAS`/`DIALECT`. Beide werden **exakt** verglichen und sind bewusst keine
+Tippfehler-Ziele — nachgemessen zog das sonst Vornamen mit rein (`emma` →
+`leave`, `lisa` → `leiser`) und `normal` wurde zu `nochmal`.
+
+**Ersetzungen sind gesperrt.** Ein Buchstabe gegen einen anderen erzeugt viel zu
+oft ein anderes echtes Wort (`hast`→`halt`, `plan`→`play`, `nice`→`dice`). Echte
+Vertipper sind fast immer vertauschte, verdoppelte oder fehlende Buchstaben.
+
+**`STOPWORDS` (184) sind die Bremse** — nachgemessen am ganzen Wortschatz des
+Repos (13.882 Wörter), nicht geraten. Das waren echte Fehlgriffe:
+
+| war | wurde zu | Schaden |
+|-----|----------|---------|
+| `Flo heisst du Flo?` | `heist` | **Coin-Raub** gestartet |
+| `Flo pure ...` | `purge` | **Massenlöschen** |
+| `Flo nebel` | `knebel` | **Timeout** |
+| `Flo anne` (Vorname) | `banne` | **Bann** |
+| `Flo cash` | `crash` | Crash-**Wette** |
+| `Flo build …` | `bild` | KI-Bildauftrag (kostet) |
+| `Flo komma` | `komm` | Flo in den Voice geholt |
+
+Dieselbe Messung hat auch 16 **echte** Befehle gefunden, die `cmdnorm` verbogen
+hat, weil sie in `KNOWN` fehlten (`sendpause`→`sendepause`, `time-out`→`timeout`,
+`naehrwert`→`naehrwerte`, `rausschmeiss`→`rausschmeis` …). `guildcfg` und
+`giveaway` standen mit **keinem** ihrer Befehle drin. Drei Tests halten das jetzt
+fest, und sie hängen an den Befehlslisten der Module selbst — läuft eine Liste
+auseinander, fällt es sofort auf.
 
 ---
 

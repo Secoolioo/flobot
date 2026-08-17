@@ -7975,6 +7975,149 @@ def test_cmdnorm_kapert_keine_alltagswoerter():
         assert wort in cmdnorm.KNOWN, f"{wort!r} fehlt in cmdnorm.KNOWN"
 
 
+def test_cmdnorm_kennt_die_befehle_aller_module():
+    """KNOWN war unvollstaendig: guildcfg, giveaway und die Kurzformen aus
+    music/casino/games/profil fehlten komplett. Solange ein Befehl dort fehlt,
+    haelt die Aehnlichkeitssuche ihn fuer einen Vertipper und VERBIEGT ihn -
+    'sendpause' wurde zu 'sendepause', 'time-out' zu 'timeout', 'naehrwert' zu
+    'naehrwerte', 'rausschmeiss' zu 'rausschmeis'. Der Befehl war damit weg.
+
+    Der Test haengt an den Befehlslisten der Module selbst, nicht an einer
+    Abschrift - laeuft eine Liste auseinander, faellt es hier auf."""
+    import cmdnorm
+    import arbeit
+    import floaktie
+    import giveaway
+    import guildcfg
+    import lotto
+    import merchant
+    import profil
+    import schulden
+    import steal
+    listen = (
+        arbeit._CMDS + arbeit._LOHN_CMDS + arbeit._TOP_CMDS
+        + arbeit._WORDLE_CMDS + arbeit._TAGES_CMDS
+        + floaktie._CMDS + floaktie._CHART_CMDS
+        + giveaway._CMDS + guildcfg.GuildConfig._CMDS + lotto._CMDS
+        + merchant._CMDS + profil._CHECK_CMDS + profil._AVATAR_CMDS
+        + profil._BANNER_CMDS + schulden._CMDS + steal._CMDS
+    )
+    fehlt = sorted({w for w in listen if w not in cmdnorm.KNOWN})
+    assert not fehlt, f"fehlt in cmdnorm.KNOWN: {fehlt}"
+    # Und keiner davon darf umgeschrieben werden.
+    verbogen = {w: cmdnorm.normalize(w) for w in listen
+                if cmdnorm.normalize(w) not in (None, w)}
+    assert not verbogen, f"cmdnorm verbiegt eigene Befehle: {verbogen}"
+
+    # Die Kurzformen, die vorher gar nicht bekannt waren - stichprobenartig,
+    # aber genau die, die im Chat wirklich getippt werden.
+    for wort in ("ls", "lst", "bal", "lb", "inv", "bj", "dd", "rps", "ssp",
+                 "w6", "dm", "del", "img", "tts", "say", "sb", "gw",
+                 "settings", "config", "unbann", "time-out", "sendpause",
+                 "naehrwert", "nährwert", "quizduel", "rausschmeiss"):
+        assert wort in cmdnorm.KNOWN, wort
+        assert cmdnorm.normalize(f"{wort} x") is None, wort
+
+
+def test_cmdnorm_versteht_englisch_und_boarisch():
+    """Der Bot soll auf Deutsch, Englisch UND Boarisch hoeren. Uebersetzt wird
+    dabei NUR in ALIAS/DIALECT - ein Synonym in KNOWN waere tot: KNOWN heisst
+    'ist schon gueltig, nicht anfassen', das Wort ginge unveraendert an ein
+    Modul, das es nicht kennt, und faellt zur KI durch (mit 'wipe' geprueft)."""
+    import cmdnorm
+
+    # 1. Struktur: jedes Ziel muss ein Modul kennen, kein Schluessel darf tot
+    #    sein, und kein Schluessel darf gleichzeitig als Stopword gebremst sein.
+    fehler = []
+    for name, topf in (("ALIAS", cmdnorm.ALIAS), ("DIALECT", cmdnorm.DIALECT)):
+        for schluessel, ziel in sorted(topf.items()):
+            if ziel not in cmdnorm.KNOWN:
+                fehler.append(f"{name}[{schluessel}] -> {ziel}: kennt kein Modul")
+            if schluessel in cmdnorm.KNOWN:
+                fehler.append(f"{name}[{schluessel}]: steht in KNOWN, Eintrag tot")
+            if schluessel in cmdnorm.STOPWORDS:
+                fehler.append(f"{name}[{schluessel}]: steht in STOPWORDS")
+            if cmdnorm.normalize(f"{schluessel} x") != f"{ziel} x":
+                fehler.append(f"{name}[{schluessel}] schreibt nicht auf {ziel} um")
+    assert not fehler, fehler
+    assert not (set(cmdnorm.ALIAS) & set(cmdnorm.DIALECT)), "Schluessel doppelt"
+    assert not (cmdnorm.STOPWORDS & cmdnorm.KNOWN), "Stopword-Schutz waere tot"
+
+    # 2. Englisch
+    for rein, raus in (("wipe 50", "purge 50"), ("silence @wer", "mute @wer"),
+                       ("tempmute @wer 10m", "timeout @wer 10m"),
+                       ("addcoins @wer 100", "gib @wer 100"),
+                       ("removemoney @wer 100", "nimm @wer 100"),
+                       ("broadcast hallo", "ansage hallo"),
+                       ("whisper @wer hi", "dm @wer hi"),
+                       ("warnings @wer", "warns @wer"), ("cfg", "config"),
+                       ("options", "einstellungen"), ("shift", "schicht"),
+                       ("grind", "arbeit"), ("broke", "pleite")):
+        assert cmdnorm.normalize(rein) == raus, (rein, cmdnorm.normalize(rein))
+
+    # 3. Boarisch - quer durch alle Features
+    for rein, raus in (("spuits was", "spiel was"), ("kimm eina", "komm eina"),
+                       ("nomoi", "nochmal"), ("aufdrahn", "lauter"),
+                       ("vaschwind", "leave"), ("goid", "coins"),
+                       ("schotter", "coins"), ("kontostond", "kontostand"),
+                       ("gschäft", "shop"), ("kini", "thron"),
+                       ("fladern @wer", "klau @wer"), ("hackln", "arbeit"),
+                       ("schuftn", "arbeit"), ("wörtl", "wordle"),
+                       ("gwinnspui 5k 2h", "gewinnspiel 5k 2h"),
+                       ("zoggn", "casino"), ("vawarn @wer", "verwarn @wer"),
+                       ("zammrama 20", "aufräum 20"), ("schaugn @wer", "check @wer"),
+                       ("eistellunga", "einstellungen"), ("schmäh", "spruch")):
+        assert cmdnorm.normalize(rein) == raus, (rein, cmdnorm.normalize(rein))
+
+    # 4. Ende zu Ende: das uebersetzte Wort muss beim echten Modul auch ANKOMMEN.
+    #    'Ziel steht in KNOWN' allein reicht als Beweis nicht - hier laufen die
+    #    Muster der Module selbst mit.
+    import media
+    import moderation
+    strecken = (("wipe 50", moderation._CMD_RE),
+                ("silence @wer 10m", moderation._TIMEOUT_RE),
+                ("tempmute @wer 10m", moderation._TIMEOUT_RE),
+                ("warnings @wer", moderation._WARNS_RE),
+                ("zeichna ein drache", media.Media._GEN_RE))
+    for rein, muster in strecken:
+        norm = cmdnorm.normalize(rein) or rein
+        assert muster.match(norm), f"{rein!r} -> {norm!r} erkennt das Modul nicht"
+
+    # 5. Die Uebersetzungs-Toepfe sind bewusst KEINE Vertipper-Ziele. Gemessen:
+    #    liesse man _fuzzy auch auf ihre Schluessel los, wuerde 'emma' zu leave,
+    #    'lisa' zu leiser und 'normal' zu 'nochmal'.
+    for wort in ("emma", "lisa", "normal", "weit", "hits", "geschäft",
+                 "warning", "kommt", "schleicht"):
+        assert cmdnorm.normalize(wort) is None, (wort, cmdnorm.normalize(wort))
+
+
+def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
+    """Am ganzen Wortschatz des Repos nachgemessen (nicht geraten): das hier
+    waren echte Fehlgriffe der Aehnlichkeitssuche. 'Flo heisst du Flo?' hat
+    einen Coin-Raub gestartet, 'pure' war ein Massenloeschen, 'nebel' ein
+    Knebel, 'cash' eine Crash-Wette, 'build'/'zeichen' ein KI-Bildauftrag
+    (kostet Geld), 'komma' hat Flo in den Voice geholt - und 'anne', 'frank',
+    'laura', 'ines' sind Vornamen."""
+    import cmdnorm
+    ruhe = """pure heisst nebel anne cash mies meine ines leiche bogen leite
+        schwein takte stake tanke schenken schenkt build zeichen malle komma
+        frank krank trank laura chat hart swords dicke close grass pfad
+        spieler zweiter passt spass spaß mach macht kannst red rede stell
+        unser sehen even quite stock share item ticket option marco sven
+        mats""".split()
+    schlecht = {w: cmdnorm.normalize(w) for w in ruhe
+                if cmdnorm.normalize(w) is not None}
+    assert not schlecht, f"Alltagswoerter werden zu Befehlen: {schlecht}"
+
+    # Die Toleranz darf davon nicht stumpf werden - echte Vertipper gehen weiter.
+    for falsch, richtig in (("skpi", "skip"), ("wokr", "work"),
+                            ("wrodle", "wordle"), ("timout", "timeout"),
+                            ("admiin", "admin"), ("lottoo", "lotto"),
+                            ("laut", "lautr"), ("verlassen", "verlasse")):
+        assert cmdnorm.normalize(falsch) == richtig, (falsch,
+                                                     cmdnorm.normalize(falsch))
+
+
 def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
     """Die Bestaetigung band nur an die SLOT-NUMMER. Wuerfelt der Shop um 2 Uhr
     neu, kaufte 'nochmal derselbe Befehl' danach den Titel auf derselben
