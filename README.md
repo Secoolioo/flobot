@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 213 Tests
+python3 test_games_logic.py    # 217 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -297,9 +297,27 @@ zählt Können.
 Flo work              Schicht antreten (zufällige Aufgabe)
 Flo work safe         gezielt eine bestimmte Schicht
 Flo work liste        was es gibt, mit Häufigkeit und Lohn
+Flo wordle            Wordle zum Spaß, jederzeit (max. 15.000)
+Flo wordle 7          … mit 7 Buchstaben
+Flo tageswort         zum Wort des Tages (der fette Topf)
 Flo lohnzettel        eigene Bilanz als Karte (auch: Flo lohnzettel @wer)
 Flo work top          Werk-Rangliste
 ```
+
+Es gibt **drei** Wordle-Sorten, und sie sind absichtlich klar getrennt:
+
+| | wann | Topf |
+|---|---|---|
+| `Flo wordle` | jederzeit, 2 Min Pause | **max. 15.000** |
+| ⭐ Wordle-**Schicht** | ~jede 18. `Flo work` | bis ~66.000 |
+| **Wort des Tages** | 1× täglich im Kanal | 50.000–160.000 |
+
+Das Spaß-Wordle hat einen **harten Deckel** — er greift *vor* dem Gold-Bonus,
+sonst wäre die Obergrenze in Wahrheit das Doppelte und „nie mehr als 15.000"
+gelogen. Es zählt außerdem **nicht** für Stufe und Serie: die Karriere soll für
+Arbeit stehen, nicht für Zeitvertreib — sonst wäre der Werksleiter der, der am
+meisten geraten hat. Eigener kurzer Cooldown, damit es die Schicht nicht
+blockiert (und umgekehrt).
 
 | Schicht | Aufgabe | Grundlohn | Anteil |
 |---|---|---|---|
@@ -685,6 +703,7 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
 | `ARBEIT_GOLD_CHANCE` | `0.08` | Chance auf eine goldene (doppelt zahlende) Schicht |
+| `WORDLE_SPASS_MAX` | `15000` | Höchstlohn je Spaß-Wordle |
 | `WORDLE_VERZUG_MIN` / `_MAX` | `300` / `2700` | Zufallsfenster, bis das Wort des Tages fällt |
 | `WORDLE_CHANNEL_ID` | — | Standard-Kanal fürs Wort des Tages (je Server überschreibbar) |
 | `ARBEIT_COOLDOWN` | `900` | Sekunden zwischen zwei Schichten |

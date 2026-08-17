@@ -7952,6 +7952,28 @@ def test_cmdnorm_kapert_keine_alltagswoerter():
                             ("purg", "purge"), ("lösche", "lösch")):
         assert cmdnorm.normalize(falsch) == richtig, (falsch, cmdnorm.normalize(falsch))
 
+    # --- Die arbeit-Befehle: Vertipper ja, Alltagsdeutsch nein --------------
+    # Alle drei Faelle sind GEMESSEN, nicht geraten. Ohne die Stopwords wuerde
+    # aus "Flo lohnt sich das?" der Lohnzettel und aus "schlicht" eine Schicht.
+    for wort in ("lohnt", "lohnte", "schlicht", "schlichte"):
+        assert cmdnorm.normalize(wort) is None, (wort, cmdnorm.normalize(wort))
+    # 'world' war schon vor arbeit kaputt: 'word' (Wort-Zaehler) ist eine
+    # Loeschung entfernt, also wurde "Flo world of warcraft" zur Wort-Statistik.
+    assert cmdnorm.normalize("world of warcraft") is None
+    for falsch, richtig in (("wokr", "work"), ("arbiet", "arbeit"),
+                            ("schihct", "schicht"), ("lohnzettl", "lohnzettel"),
+                            ("wrodle", "wordle"), ("tageswrot", "tageswort"),
+                            ("gehatl", "gehalt"), ("malohcen", "malochen")):
+        raus = cmdnorm.normalize(falsch)
+        assert raus == richtig, (falsch, raus)
+
+    # Und jedes Befehlswort, das arbeit.py selbst versteht, MUSS in KNOWN
+    # stehen - sonst greift die Korrektur fuer genau dieses Wort nicht.
+    import arbeit
+    for wort in (arbeit._CMDS + arbeit._LOHN_CMDS + arbeit._WORDLE_CMDS
+                 + arbeit._TAGES_CMDS):
+        assert wort in cmdnorm.KNOWN, f"{wort!r} fehlt in cmdnorm.KNOWN"
+
 
 def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
     """Die Bestaetigung band nur an die SLOT-NUMMER. Wuerfelt der Shop um 2 Uhr
@@ -9782,9 +9804,11 @@ def test_arbeit_cooldown_und_befehle():
         assert antwort is arbeit.HANDLED, antwort
         assert gesendet and "embed" in gesendet[0]
 
-        # Zweiter Versuch sofort danach: Cooldown-Hinweis statt neuer Schicht.
+        # Zweiter Versuch sofort danach: Cooldown-Hinweis statt neuer Schicht,
+        # und der Hinweis sagt auch, WIE LANGE noch.
         antwort2 = asyncio.run(arbeit.handle(msg))
-        assert "Pause" in _embed_text(antwort2), _embed_text(antwort2)
+        text2 = _embed_text(antwort2)
+        assert "warten" in text2.lower() and "Minuten" in text2, text2
         assert len(gesendet) == 1, "trotz Cooldown eine zweite Schicht gestartet"
 
         # Die Liste nennt jede BESTELLBARE Schicht mit ihrem Schluessel.
@@ -9798,8 +9822,10 @@ def test_arbeit_cooldown_und_befehle():
             else:
                 assert key in text, key
 
-        # Wort des Tages ist noch nicht draussen.
-        msg.content = "Flo wordle"
+        # 'Flo wordle' ist jetzt das SPASS-Wordle - das Wort des Tages hat
+        # eigene Woerter. Sonst wuesste man nicht, ob man um 15.000 oder um
+        # 80.000 spielt.
+        msg.content = "Flo tageswort"
         text = _embed_text(asyncio.run(arbeit.handle(msg)))
         assert "Voice" in text, text
     finally:
@@ -10198,6 +10224,130 @@ def test_arbeit_lohnzettel_und_rangliste_als_karte():
         assert gesendet and "file" in gesendet[0]
     finally:
         restore()
+
+
+def test_arbeit_spasswordle_deckel_haelt_wirklich():
+    """'Flo wordle' zum Spass - aber NIE mehr als der Deckel hergibt.
+
+    Der Deckel greift VOR dem Gold-Bonus. Danach waere die Obergrenze in
+    Wahrheit das Doppelte, und "nie mehr als 15.000" waere gelogen."""
+    arbeit, restore = _arbeit_frisch({7: 0})
+    try:
+        wp = arbeit.instance
+        prof = wp._nutzer(7)
+        # Hoechste Stufe und volle Serie: der Deckel muss trotzdem halten.
+        prof["serie"] = 999
+        prof["geschafft"] = arbeit.STUFEN[-1].ab
+
+        for laenge in sorted(arbeit.WOERTER):
+            runde = arbeit.SPASS.fuer_laenge(laenge)
+            for anteil in (1.5, 1.2, 1.0, 0.5):
+                for gold in (False, True):
+                    prof["heute"] = 0          # Tagesdeckel wegdenken
+                    prof["tag"] = arbeit._heute()
+                    betrag, _i = wp.abrechnen(7, runde, anteil, gold=gold)
+                    assert betrag <= arbeit.SPASS_MAX, (laenge, anteil, gold, betrag)
+
+        # Ohne Deckel waere es wirklich mehr - der Deckel ist also kein Deko.
+        acht = arbeit.SPASS.fuer_laenge(8)
+        assert acht.lohn * 1.5 > arbeit.SPASS_MAX, "Deckel greift nie"
+
+        # Und es bleibt klar unter dem Wort des Tages.
+        kleinster_topf = min(arbeit.TAGES_LAENGEN) * arbeit.TAGES_PRO_BUCHSTABE
+        assert arbeit.SPASS_MAX < kleinster_topf, (arbeit.SPASS_MAX, kleinster_topf)
+        assert arbeit.SPASS_MAX <= 15000, arbeit.SPASS_MAX
+    finally:
+        restore()
+
+
+def test_arbeit_spasswordle_ist_keine_karriere():
+    """Zeitvertreib zaehlt NICHT fuer Stufe und Serie.
+
+    Sonst waere der Werksleiter der, der am meisten geraten hat - und die
+    Karriere haette nichts mehr mit Arbeit zu tun."""
+    arbeit, restore = _arbeit_frisch({7: 0})
+    try:
+        wp = arbeit.instance
+        runde = arbeit.SPASS.fuer_laenge(5)
+        for _ in range(40):
+            wp.abrechnen(7, runde, 1.0)
+        prof = wp._nutzer(7)
+        assert prof["geschafft"] == 0, "Spass zaehlt fuer die Karriere"
+        assert prof["serie"] == 0, "Spass baut eine Serie auf"
+        assert prof["schichten"] == 0
+        # Aber die eigene Bilanz wird gefuehrt.
+        assert prof["spass_gespielt"] == 40 and prof["spass_siege"] == 40
+        # Eine echte Schicht danach ist trotzdem Schicht 1.
+        wp.abrechnen(7, arbeit.SCHICHTEN["safe"], 1.0)
+        assert wp._nutzer(7)["geschafft"] == 1
+
+        # Und die Runde wird NIE per 'Flo work' gezogen.
+        assert "spasswordle" not in arbeit.SCHICHTEN
+        random.seed(3)
+        assert all(arbeit.schicht_ziehen().key != "spasswordle"
+                   for _ in range(2000))
+    finally:
+        random.seed()
+        restore()
+
+
+def test_arbeit_spasswordle_eigener_cooldown_und_laenge():
+    """Das Spass-Wordle hat einen EIGENEN, kurzen Cooldown - es darf die
+    Schicht nicht blockieren und umgekehrt. Und die Laenge darf man waehlen."""
+    arbeit, restore = _arbeit_frisch({5: 0})
+    gesendet = []
+    try:
+        autor = _fake_person(5, name="tester", global_name="Tester")
+        kanal = SimpleNamespace(id=9, send=lambda **kw: _als_coro(
+            gesendet.append(kw) or SimpleNamespace(id=1)))
+        msg = SimpleNamespace(content="Flo wordle 7", author=autor, channel=kanal,
+                              guild=SimpleNamespace(id=42))
+        assert asyncio.run(arbeit.handle(msg)) is arbeit.HANDLED
+        assert len(gesendet) == 1 and "file" in gesendet[0], gesendet[0].keys()
+        prof = arbeit.instance._nutzer(5)
+        # Eigener Schluessel, kurzer Cooldown - und die SCHICHT ist frei.
+        assert prof["cooldown_spass"] > int(time.time()), prof
+        assert prof["cooldown"] == 0, "Spass hat die Schicht blockiert"
+        assert prof["schichten"] == 0, "Spass wurde als Schicht gezaehlt"
+
+        # Direkt nochmal: Cooldown-Hinweis, in SEKUNDEN (er ist kurz).
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        assert "warten" in text.lower(), text
+        assert len(gesendet) == 1
+
+        # Eine echte Schicht geht trotzdem sofort.
+        msg.content = "Flo work sortieren"
+        assert asyncio.run(arbeit.handle(msg)) is arbeit.HANDLED
+        assert len(gesendet) == 2
+
+        # Unsinnige Laenge wird erklaert, nicht still auf 5 gedreht.
+        arbeit.instance._nutzer(5)["cooldown_spass"] = 0
+        msg.content = "Flo wordle 12"
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        assert "Buchstaben" in text and str(min(arbeit.WOERTER)) in text, text
+        msg.content = "Flo wordle blau"
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        assert "wordle" in text.lower(), text
+        assert len(gesendet) == 2, "trotz Murks eine Runde gestartet"
+    finally:
+        restore()
+
+
+def test_arbeit_wordle_versteht_vertipper_und_fremdsprachen():
+    """'Flo wordle' muss auch bei Vertippern und auf Englisch/Bayrisch greifen.
+
+    Zwei Ebenen: die haeufigsten Schreibweisen stehen direkt im Modul, alles
+    Weitere faengt cmdnorm ab (ein Tippfehler, kein Buchstaben-Tausch)."""
+    import arbeit
+    import cmdnorm
+    # Direkt verstanden - ohne Umweg ueber die Korrektur.
+    for wort in ("wordle", "wordl", "wordel", "worlde", "wörtle"):
+        assert wort in arbeit._WORDLE_CMDS, wort
+    # Wort des Tages hat eigene Woerter, und 'daily' ist NICHT dabei:
+    # das ist seit immer der Tagesbonus aus economy.
+    assert "daily" not in arbeit._TAGES_CMDS
+    assert "daily" in cmdnorm.KNOWN
+    assert not set(arbeit._WORDLE_CMDS) & set(arbeit._TAGES_CMDS)
 
 
 def _als_coro(wert):

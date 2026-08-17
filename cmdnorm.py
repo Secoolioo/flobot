@@ -112,6 +112,19 @@ class CmdNorm:
         "male", "zeichne", "generier", "generiere", "bild", "quote", "zitat", "meme",
         # food
         "kalorien", "kcal", "naehrwerte", "nährwerte", "makros", "makro",
+        # arbeit (Schichten, Lohnzettel, Wordle) - das Modul fehlte hier ganz,
+        # damit griff die Tippfehler-Korrektur fuer keinen seiner Befehle.
+        "work", "arbeit", "arbeiten", "job", "schicht", "malochen",
+        "lohnzettel", "lohn", "gehalt", "arbeitszeugnis",
+        # Spass-Wordle: die Schreibweisen, die Leute WIRKLICH tippen. Mehr als
+        # einen Vertipper faengt _fuzzy nicht, deshalb stehen die haeufigen
+        # Varianten direkt hier.
+        "wordle", "wordl", "wordel", "worlde", "wörtle", "woertle", "wortle",
+        "wörtel",
+        # Wort des Tages - eigene Woerter, damit klar ist, um welchen Topf es
+        # geht. 'daily' bleibt bewusst der Tagesbonus aus economy.
+        "tageswort", "tageswordle", "wortdestages", "tagesraetsel",
+        "tagesrätsel", "worddaily", "dailyword",
     }
 
     # Bayrisch/oesterreichischer Dialekt -> anerkanntes Befehlswort.
@@ -167,6 +180,15 @@ class CmdNorm:
         # 1 Buchstabe von 'setze'/'trage' entfernt - Alltags-Imperative bleiben
         # Alltagssprache ('Flo setz dich mal' war vorher 'Titel dich besitzt du nicht').
         "setz", "trag",
+        # 1 Tippfehler von den arbeit-Befehlen. Nachgemessen, nicht geraten:
+        # ohne die ersten drei wuerde aus 'Flo lohnt sich das?' der Lohnzettel,
+        # aus 'schlicht' eine Schicht.
+        "lohnt", "lohnte", "schlicht",
+        # 'world' war schon VORHER kaputt und hat mit arbeit nichts zu tun:
+        # 'word' steht seit immer in KNOWN (Wort-Zaehler), und 'world' ist davon
+        # eine Loeschung entfernt - 'Flo world of warcraft' wurde damit zu
+        # 'Flo word of warcraft' und zeigte die Wort-Statistik.
+        "world", "worlds", "worldofwarcraft",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

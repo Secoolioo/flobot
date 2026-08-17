@@ -2714,8 +2714,13 @@ class Render:
     # === Lohnzettel ============================================================
     def lohnzettel(self, name, avatar, *, stufe, symbol, bonus, geschafft,
                    angetreten, serie, beste_serie, verdient, heute, deckel,
-                   gold, naechste=None, fehlt=0, wordle=None):
-        """Die Arbeitsbilanz als Karte. ``wordle``: (siege, gespielt, verteilung)."""
+                   gold, naechste=None, fehlt=0, wordle=None, spass=None):
+        """Die Arbeitsbilanz als Karte.
+
+        ``wordle``: (siege, gespielt, verteilung) fuers Wort des Tages.
+        ``spass``: (siege, gespielt) fuer die Spass-Runden - bewusst GETRENNT
+        gezaehlt, sonst weiss man nicht mehr, ob die Verteilung vom fetten
+        Tagesraetsel kommt oder vom Zeitvertreib."""
         W = 900
         H = 470 if not wordle else 592
         img = self._vgrad(W, H, (24, 27, 35), (13, 14, 20)).convert("RGBA")
@@ -2796,7 +2801,10 @@ class Render:
             y += 18
             d.text((34, y), "WORT DES TAGES", font=self._font(17),
                    fill=(150, 157, 172))
-            d.text((W - 34, y), f"{siege} von {gespielt} geknackt",
+            rechts = f"{siege} von {gespielt} geknackt"
+            if spass and spass[1]:
+                rechts += f"   ·   Spaß {spass[0]}/{spass[1]}"
+            d.text((W - 34, y), rechts,
                    font=self._font(17), fill=(150, 157, 172), anchor="ra")
             y += 32
             hoch = max(1, max(verteilung) if verteilung else 1)

@@ -68,7 +68,20 @@ HANDLED = object()
 _CMDS = ("work", "arbeit", "arbeiten", "job", "schicht", "malochen")
 _LOHN_CMDS = ("lohnzettel", "lohn", "gehalt", "arbeitszeugnis")
 _TOP_CMDS = ("top", "rangliste", "bestenliste", "leaderboard", "werk")
-_WORDLE_CMDS = ("wordle", "wordl", "tageswort", "wortdestages")
+# Spass-Wordle: die Tippfehler, die Leute WIRKLICH machen, gleich mit drin.
+# cmdnorm faengt zwar Vertipper ab, aber nur bei Woertern, die es kennt - und
+# nur einen Fehler. 'wordl' und 'wordel' sind so haeufig, dass sie hier direkt
+# stehen.
+# 'wordly' stand hier mal mit drin und ist wieder raus: es ist kein deutscher
+# Vertipper, aber das englische 'worldly' ist davon eine Loeschung entfernt -
+# damit waere aus "Flo worldly wisdom" ein Wordle geworden.
+_WORDLE_CMDS = ("wordle", "wordl", "wordel", "worlde", "wörtle",
+                "woertle", "wortle", "wörtel")
+# Das Wort des Tages hat EIGENE Woerter - sonst waere nicht klar, ob man um
+# 50.000 spielt oder um Spass. 'daily' ist bewusst NICHT dabei: das ist seit
+# immer der Tagesbonus aus economy.
+_TAGES_CMDS = ("tageswort", "tageswordle", "wortdestages", "tagesraetsel",
+               "tagesrätsel", "worddaily", "dailyword")
 
 # --- Balance ----------------------------------------------------------------
 # Cooldown zwischen zwei Schichten. 15 Minuten: lang genug, dass niemand den
@@ -83,6 +96,16 @@ TAGES_DECKEL = int(os.getenv("ARBEIT_TAGESDECKEL", "250000") or "250000")
 # wirklich zu Ende zu bringen, statt sie wegzuklicken.
 SERIE_SCHRITT = 0.05
 SERIE_MAX = 0.50
+
+# --- Spass-Wordle -----------------------------------------------------------
+# Jederzeit spielbar, ohne auf den Voice-Kanal oder die Schicht-Pause zu warten.
+# Damit das die Wirtschaft nicht aushebelt, gilt ein HARTER Deckel je Runde und
+# ein eigener, kurzer Cooldown: es soll Spass machen, nicht die Haupteinnahme
+# sein. Das Wort des Tages (50.000-160.000) und die seltene Wordle-Schicht
+# bleiben klar darueber.
+SPASS_MAX = int(os.getenv("WORDLE_SPASS_MAX", "15000") or "15000")
+SPASS_JE_BUCHSTABE = int(os.getenv("WORDLE_SPASS_JE_BUCHSTABE", "2000") or "2000")
+SPASS_COOLDOWN = int(os.getenv("WORDLE_SPASS_COOLDOWN", "120") or "120")
 
 # --- Wort des Tages ---------------------------------------------------------
 TAGES_PRO_BUCHSTABE = int(os.getenv("WORDLE_PRO_BUCHSTABE", "10000") or "10000")
@@ -626,8 +649,18 @@ class Schicht:
     # jederzeit anfordern kann, ist nicht selten, sondern nur schlecht
     # sortiert. Dafuer zahlt sie deutlich besser.
     selten = False
+    # Eigener Hoechstlohn je Runde (None = nur der Tagesdeckel gilt).
+    deckel = None
+    # Zaehlt die Runde fuer Karriere und Serie? Beim Spass-Wordle NICHT: die
+    # Stufe soll fuer ARBEIT stehen, nicht fuer Zeitvertreib - sonst waere der
+    # Werksleiter der, der am meisten geraten hat.
+    zaehlt = True
+    # Welcher Cooldown gilt. Das Spass-Wordle hat einen eigenen, damit es die
+    # Schicht nicht blockiert (und umgekehrt).
+    cooldown_key = "cooldown"
+    cooldown_sek = None          # None = COOLDOWN
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         """Gibt (embed, view, datei) zurueck; 'datei' darf None sein.
 
         Bewusst async fuer ALLE Schichten, obwohl nur Wordle zeichnet: eine
@@ -653,7 +686,7 @@ class WordleSchicht(Schicht):
     selten = True
     frist = 900          # 15 Minuten - Wordle will gedacht werden
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         spiel = Wordle.zufall(5)
         view = WordleView(chef, autor.id, self, spiel)
         embed = self.kopf(f"Fünf Buchstaben, **{MAX_VERSUCHE} Versuche**. "
@@ -673,7 +706,7 @@ class SalatSchicht(Schicht):
     frist = 420
     VERSUCHE = 3
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         wort = random.choice(WOERTER[6] + WOERTER[7])
         buchstaben = list(wort)
         # Wirklich mischen: sonst steht das Wort im Klartext da.
@@ -692,7 +725,7 @@ class RechenSchicht(Schicht):
     lohn = 6500
     RUNDEN = 5
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         view = RechenView(chef, autor.id, self)
         return self.kopf("Fünf Aufgaben. Jede richtige zählt, "
                          "eine falsche beendet die Schicht.\n\n"
@@ -706,7 +739,7 @@ class SafeSchicht(Schicht):
     frist = 420
     VERSUCHE = 5
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         code = "".join(random.choice("0123456789") for _ in range(3))
         view = SafeView(chef, autor.id, self, code)
         return self.kopf("Ein **dreistelliger** Code. Nach jedem Versuch sagt "
@@ -719,7 +752,7 @@ class SortierSchicht(Schicht):
     was = "In die richtige Reihenfolge klicken."
     lohn = 6000
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         zahlen = random.sample(range(10, 100), 5)
         view = SortierView(chef, autor.id, self, zahlen)
         return self.kopf("Klick die Zahlen **von klein nach groß**.\n"
@@ -733,7 +766,7 @@ class PaareSchicht(Schicht):
     frist = 420
     PAARE = 4
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         werkzeug = random.sample(["🔧", "🔩", "⚙️", "🔌", "🧪", "📐", "🪛", "🔨"],
                                  self.PAARE)
         karten = werkzeug * 2
@@ -763,10 +796,60 @@ class KontrolleSchicht(Schicht):
         "Gebaeude": ("Turm", "Scheune", "Halle", "Villa", "Huette", "Bahnhof"),
     }
 
-    async def bauen(self, chef, autor):
+    async def bauen(self, chef, autor, **_extra):
         view = KontrolleView(chef, autor.id, self)
         return self.kopf("Vier Stück gehören zusammen, **eins nicht**. "
                          "Klick den Ausschuss.\n\n" + view.frage_text()), view, None
+
+
+class SpassWordle(Schicht):
+    """Wordle zum Spass - jederzeit, aber mit hartem Deckel.
+
+    BEWUSST NICHT in SCHICHTEN: es soll nie per 'Flo work' gezogen werden und
+    auch nicht bestellbar sein wie eine Schicht. Es erbt trotzdem alles, was
+    eine Schicht koennen muss - Auto-Loesch-Schutz, Frist, Brett, Abrechnung -
+    statt das alles ein zweites Mal zu schreiben."""
+
+    key, titel = "spasswordle", "🟩 Wordle"
+    was = "Wordle zum Spaß, jederzeit."
+    # Lohn = Laenge x SPASS_JE_BUCHSTABE x Leistung, aber NIE mehr als SPASS_MAX.
+    # Der Deckel bindet wirklich: acht Buchstaben auf Anhieb waeren sonst 24.000.
+    lohn = 0                     # wird je Runde aus der Wortlaenge gerechnet
+    deckel = SPASS_MAX
+    zaehlt = False               # Zeitvertreib ist keine Karriere
+    cooldown_key = "cooldown_spass"
+    cooldown_sek = SPASS_COOLDOWN
+    frist = 900
+
+    def fuer_laenge(self, laenge):
+        """Eine eigene Ausfuehrung mit dem Lohn fuer genau diese Wortlaenge.
+
+        Kopie statt Zustand am Singleton: sonst haette die Runde von A den Lohn
+        von B, wenn zwei gleichzeitig spielen."""
+        eigen = SpassWordle()
+        eigen.lohn = int(laenge) * SPASS_JE_BUCHSTABE
+        eigen.titel = f"🟩 Wordle · {laenge} Buchstaben"
+        return eigen
+
+    async def bauen(self, chef, autor, laenge=5):
+        laenge = int(laenge)
+        eigen = self.fuer_laenge(laenge)
+        spiel = Wordle.zufall(laenge)
+        view = WordleView(chef, autor.id, eigen, spiel)
+        hoechst = min(SPASS_MAX, round(eigen.lohn * 1.5))
+        embed = eigen.kopf(
+            f"**{laenge} Buchstaben**, {MAX_VERSUCHE} Versuche. "
+            f"Nur **{autor.display_name}** darf raten.\n"
+            f"Bis zu **{_muenzen(hoechst)}** {economy.COIN} – je weniger "
+            f"Versuche, desto mehr.")
+        datei, name = await _wordle_bild(
+            spiel, "WORDLE", f"{laenge} Buchstaben · bis {_muenzen(hoechst)}")
+        if datei is not None:
+            embed.set_image(url=f"attachment://{name}")
+        return embed, view, datei
+
+
+SPASS = SpassWordle()
 
 
 # Die Ziehung: jede Schicht bringt ihr eigenes Gewicht mit. Wordle steht mit 8
@@ -830,6 +913,9 @@ class Arbeit(FeatureBasis):
         prof.setdefault("wordle_siege", 0)      # Woerter des Tages geknackt
         prof.setdefault("wordle_gespielt", 0)
         prof.setdefault("wordle_verteilung", [0] * MAX_VERSUCHE)
+        prof.setdefault("spass_gespielt", 0)    # Wordle zum Spass
+        prof.setdefault("spass_siege", 0)
+        prof.setdefault("cooldown_spass", 0)
         return prof
 
     def raetsel(self, gid):
@@ -893,8 +979,15 @@ class Arbeit(FeatureBasis):
             return await self._lohnzettel(message)
         if erst in _TOP_CMDS and len(teile) == 1:
             return await self._rangliste(message)
-        if erst in _WORDLE_CMDS and len(teile) == 1:
+        if erst in _TAGES_CMDS:
             return await self._tages_zeigen(message)
+        if erst in _WORDLE_CMDS:
+            zweit_w = teile[1].lower().strip(".,!?") if len(teile) > 1 else ""
+            if zweit_w in ("tag", "heute", "tageswort", "daily"):
+                return await self._tages_zeigen(message)
+            if zweit_w in ("statistik", "stats", "bilanz", "lohnzettel"):
+                return await self._lohnzettel(message)
+            return await self._spass_starten(message, zweit_w)
         if erst not in _CMDS:
             return None
 
@@ -973,6 +1066,13 @@ class Arbeit(FeatureBasis):
         wordle = ((int(prof.get("wordle_siege", 0)),
                    int(prof.get("wordle_gespielt", 0)), verteilung)
                   if prof.get("wordle_gespielt") else None)
+        spass = ((int(prof.get("spass_siege", 0)),
+                  int(prof.get("spass_gespielt", 0)))
+                 if prof.get("spass_gespielt") else None)
+        # Nur Spass gespielt, nie beim Tagesraetsel dabei? Dann trotzdem den
+        # Wordle-Block zeigen - sonst fehlt die halbe Bilanz.
+        if wordle is None and spass is not None:
+            wordle = (0, 0, [0] * MAX_VERSUCHE)
         avatar = await self._avatar(ziel)
         try:
             import render
@@ -985,7 +1085,8 @@ class Arbeit(FeatureBasis):
                 verdient=int(prof.get("verdient", 0)), heute=heute,
                 deckel=TAGES_DECKEL, gold=int(prof.get("gold", 0)),
                 naechste=(weiter.titel if weiter else None),
-                fehlt=(weiter.ab - geschafft if weiter else 0), wordle=wordle)
+                fehlt=(weiter.ab - geschafft if weiter else 0), wordle=wordle,
+                spass=spass)
         except Exception:  # noqa: BLE001
             log.exception("Lohnzettel-Karte fehlgeschlagen - Text-Fallback")
             return self._lohnzettel_text(ziel, prof, heute, stufe, weiter)
@@ -1085,12 +1186,19 @@ class Arbeit(FeatureBasis):
         except Exception:  # noqa: BLE001
             return None
 
-    async def _schicht_starten(self, message, schicht=None):
+    async def _schicht_starten(self, message, schicht=None, **extra):
         prof = self._nutzer(message.author.id)
-        warte = int(prof.get("cooldown", 0)) - int(time.time())
+        # Jede Art hat ihren eigenen Cooldown-Schluessel: ein Spass-Wordle darf
+        # die Schicht nicht blockieren und umgekehrt.
+        schluessel = (schicht.cooldown_key if schicht is not None else "cooldown")
+        pause = COOLDOWN
+        if schicht is not None and schicht.cooldown_sek is not None:
+            pause = int(schicht.cooldown_sek)
+        warte = int(prof.get(schluessel, 0)) - int(time.time())
         if warte > 0:
-            return self._kurz(f"⏳ Pause. Nächste Schicht in "
-                              f"**{warte // 60 + 1} Minuten**.",
+            wie_lang = (f"**{warte // 60 + 1} Minuten**" if warte >= 60
+                        else f"**{warte} Sekunden**")
+            return self._kurz(f"⏳ Kurz warten – noch {wie_lang}.",
                               discord.Color.orange())
         if self._tageskonto(prof) >= TAGES_DECKEL:
             return self._kurz(
@@ -1098,11 +1206,12 @@ class Arbeit(FeatureBasis):
                 f"{economy.COIN} voll. Morgen wieder.", discord.Color.orange())
 
         schicht = schicht or schicht_ziehen()
-        prof["cooldown"] = int(time.time()) + COOLDOWN
-        prof["schichten"] = int(prof.get("schichten", 0)) + 1
+        prof[schluessel] = int(time.time()) + pause
+        if schicht.zaehlt:
+            prof["schichten"] = int(prof.get("schichten", 0)) + 1
         self._speichern()
 
-        embed, view, datei = await schicht.bauen(self, message.author)
+        embed, view, datei = await schicht.bauen(self, message.author, **extra)
         if view.gold:
             embed.color = discord.Color.gold()
             embed.title = "🥇 " + (embed.title or schicht.titel)
@@ -1119,14 +1228,35 @@ class Arbeit(FeatureBasis):
             log.exception("Schicht konnte nicht gestartet werden")
             # Der Cooldown steht schon - waere die Schicht jetzt einfach weg,
             # haette man 15 Minuten Pause fuer nichts. Also zuruecknehmen.
-            prof["cooldown"] = 0
+            prof[schluessel] = 0
             self._speichern()
-            return "Die Schicht ließ sich nicht aufmachen – versuch's nochmal."
+            return "Das ließ sich nicht aufmachen – versuch's nochmal."
         # WICHTIG: vor dem Auto-Loeschen schuetzen. Ohne das verschwindet die
         # Schicht in einem Aufraeum-Kanal mitten im Spiel, und der Cooldown
         # laeuft trotzdem weiter.
         _schuetzen(view.message)
         return HANDLED
+
+    async def _spass_starten(self, message, laenge_roh=""):
+        """'Flo wordle' - jederzeit, mit eigenem kurzen Cooldown.
+
+        Die Wortlaenge darf man waehlen ('Flo wordle 7'): laenger heisst mehr
+        Lohn, bis der Deckel greift. Unsinnige Angaben werden freundlich
+        abgewiesen statt still auf 5 zu fallen - sonst wundert man sich, warum
+        'Flo wordle 12' ein Fuenf-Buchstaben-Wort gibt."""
+        laenge = 5
+        if laenge_roh:
+            if not numfmt.ist_zahl(laenge_roh):
+                return self._kurz(
+                    f"So: `{self._bot_name} wordle` oder mit Länge, z. B. "
+                    f"`{self._bot_name} wordle 7`.", discord.Color.orange())
+            laenge = int(laenge_roh)
+            if laenge not in WOERTER:
+                moeglich = ", ".join(str(x) for x in sorted(WOERTER))
+                return self._kurz(
+                    f"Ich habe nur Wörter mit **{moeglich}** Buchstaben.",
+                    discord.Color.orange())
+        return await self._schicht_starten(message, SPASS, laenge=laenge)
 
     # --- Abrechnung einer Schicht ----------------------------------------
     def abrechnen(self, uid, schicht, anteil, *, gold=False):
@@ -1142,7 +1272,14 @@ class Arbeit(FeatureBasis):
         anzeigen will (Serie, Stufe, Aufstieg, Gold, Deckel-Hinweis)."""
         prof = self._nutzer(uid)
         vorher = int(prof.get("geschafft", 0))
-        if anteil > 0:
+        if not schicht.zaehlt:
+            # Zeitvertreib (Spass-Wordle): Bilanz mitschreiben, aber Karriere
+            # und Serie NICHT anfassen. Sonst waere der Werksleiter der, der am
+            # meisten geraten hat.
+            prof["spass_gespielt"] = int(prof.get("spass_gespielt", 0)) + 1
+            if anteil > 0:
+                prof["spass_siege"] = int(prof.get("spass_siege", 0)) + 1
+        elif anteil > 0:
             prof["serie"] = int(prof.get("serie", 0)) + 1
             prof["geschafft"] = vorher + 1
             prof["beste_serie"] = max(int(prof.get("beste_serie", 0)),
@@ -1155,8 +1292,15 @@ class Arbeit(FeatureBasis):
 
         faktor = 1.0 + self._serie_bonus(prof) + stufe.bonus
         gewollt = int(round(schicht.lohn * anteil * faktor))
+        if schicht.deckel is not None:
+            # Der eigene Deckel greift VOR dem Gold-Bonus: sonst waere die
+            # Obergrenze in Wahrheit das Doppelte, und "nie mehr als 15.000"
+            # waere gelogen.
+            gewollt = min(gewollt, int(schicht.deckel))
         if gold and gewollt > 0:
             gewollt = int(round(gewollt * GOLD_FAKTOR))
+            if schicht.deckel is not None:
+                gewollt = min(gewollt, int(schicht.deckel))
             prof["gold"] = int(prof.get("gold", 0)) + 1
         echt, frei = self._auszahlen(uid, gewollt, f"arbeit:{schicht.key}")
         info = {
