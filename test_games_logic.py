@@ -9477,9 +9477,13 @@ def test_arbeit_woerter_sind_sauber():
             assert len(w) == laenge, f"{w!r} liegt im {laenge}er-Fach, ist aber {len(w)}"
             assert re.fullmatch(r"[A-Z]+", w), f"{w!r} ist nicht rein A-Z"
         assert len(set(worte)) == len(worte), f"Doppelte im {laenge}er-Fach"
-    # Jede Wochentags-Laenge muss auch wirklich ein Fach haben.
-    for laenge in set(arbeit.TAGES_LAENGE.values()):
-        assert laenge in arbeit.WOERTER, f"Wochentag verlangt {laenge}, gibt es nicht"
+    # Jede ziehbare Laenge muss auch wirklich ein Fach haben - sonst faellt das
+    # Wort des Tages an dem Tag auf die 5er-Liste zurueck, ohne dass es jemand
+    # merkt (ausser am zu kleinen Topf).
+    for laenge in arbeit.TAGES_LAENGEN:
+        assert laenge in arbeit.WOERTER, f"Ziehung verlangt {laenge}, gibt es nicht"
+    assert len(arbeit.TAGES_GEWICHT_WOCHE) == len(arbeit.TAGES_LAENGEN)
+    assert len(arbeit.TAGES_GEWICHT_WOCHENENDE) == len(arbeit.TAGES_LAENGEN)
 
 
 def test_arbeit_wordle_faerbung():
@@ -9554,13 +9558,35 @@ def test_arbeit_wort_des_tages_ist_berechnet():
             for t in range(1, 29)}
     assert len(tage) > 10, "das Wort wechselt kaum von Tag zu Tag"
 
-    # Wochentag bestimmt die Laenge: 2026-08-16 ist ein Sonntag -> 8 Buchstaben.
+    # Die LAENGE wird gewuerfelt, nicht am Wochentag festgemacht - vorher war
+    # Mo-Do immer 5 Buchstaben, also vier Tage die Woche dieselbe Aufgabe und
+    # derselbe Topf.
+    laengen = [len(arbeit.Wordle.des_tages(1, tag=f"2026-0{m}-{t:02d}").loesung)
+               for m in (7, 8, 9) for t in range(1, 29)]
+    assert set(laengen) == set(arbeit.TAGES_LAENGEN), sorted(set(laengen))
+    haeufigste = max(set(laengen), key=laengen.count)
+    assert laengen.count(haeufigste) < len(laengen) * 0.6, \
+        "eine Laenge dominiert alles"
+
+    # Aber reproduzierbar: derselbe Tag, dieselbe Laenge.
+    assert (arbeit.Wordle.des_tages(1, tag="2026-08-16").loesung
+            == arbeit.Wordle.des_tages(1, tag="2026-08-16").loesung)
+
+    # Am Wochenende sind lange Woerter wahrscheinlicher - im Schnitt, nicht
+    # garantiert. Ueber ein ganzes Jahr muss sich das zeigen.
     import datetime
-    assert datetime.date(2026, 8, 16).weekday() == 6
-    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-16").loesung) == 8
-    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-17").loesung) == 5  # Montag
-    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-21").loesung) == 6  # Freitag
-    assert len(arbeit.Wordle.des_tages(1, tag="2026-08-22").loesung) == 7  # Samstag
+    woche, ende = [], []
+    for n in range(365):
+        tag = (datetime.date(2026, 1, 1) + datetime.timedelta(days=n)).isoformat()
+        laenge = len(arbeit.Wordle.des_tages(1, tag=tag).loesung)
+        (ende if datetime.date.fromisoformat(tag).weekday() >= 5 else woche
+         ).append(laenge)
+    assert sum(ende) / len(ende) > sum(woche) / len(woche), \
+        "Wochenende ist im Schnitt nicht laenger"
+
+    # Und die Ziehung selbst: jeder Wurf landet in einem echten Fach.
+    for wurf in range(0, 5000, 7):
+        assert arbeit.laenge_des_tages("2026-08-17", wurf) in arbeit.TAGES_LAENGEN
 
 
 def test_arbeit_tageswordle_ist_ein_wettrennen():
@@ -9630,9 +9656,26 @@ def test_arbeit_wordle_faellt_nur_wenn_was_los_ist():
             return SimpleNamespace(id=42, voice_channels=[SimpleNamespace(members=leute)])
 
         assert arbeit.instance.leute_im_voice(guild(3, 2)) == 3, "Bots mitgezaehlt"
-        assert not arbeit.instance.faellig(guild(2)), "bei zwei Leuten schon gefeuert"
-        assert arbeit.instance.faellig(guild(3)), "bei drei Leuten nicht gefeuert"
-        assert arbeit.instance.faellig(guild(9))
+
+        # Zu wenig los: nicht mal ein Termin wird gezogen.
+        assert not arbeit.instance.faellig(guild(2)), "bei zwei Leuten schon geplant"
+        assert arbeit.instance.raetsel(42).geplant_fuer is None
+
+        # Genug Leute: JETZT wird geplant - aber noch nichts gepostet.
+        assert not arbeit.instance.faellig(guild(3)), "sofort gefeuert statt geplant"
+        termin = arbeit.instance.raetsel(42).geplant_fuer
+        assert termin is not None and termin > int(time.time()), termin
+
+        # Der Termin bleibt STEHEN. Wuerde er bei jedem Tick neu gezogen,
+        # ruecke er ewig weiter weg und das Wort kaeme nie.
+        assert not arbeit.instance.faellig(guild(5))
+        assert arbeit.instance.raetsel(42).geplant_fuer == termin, "Termin verschoben"
+
+        # Termin da und immer noch was los -> jetzt faellt es.
+        arbeit.instance.raetsel(42).daten["plan_zeit"] = 0
+        assert arbeit.instance.faellig(guild(3))
+        # Ist der Call inzwischen leer, wartet Flo trotzdem.
+        assert not arbeit.instance.faellig(guild(1)), "in den leeren Call gepostet"
 
         # Ist das Wort raus, kommt heute keins mehr - egal wie voll es wird.
         arbeit.instance.raetsel(42).starten()
@@ -9738,11 +9781,16 @@ def test_arbeit_cooldown_und_befehle():
         assert "Pause" in _embed_text(antwort2), _embed_text(antwort2)
         assert len(gesendet) == 1, "trotz Cooldown eine zweite Schicht gestartet"
 
-        # Liste kennt alle Schichten.
+        # Die Liste nennt jede BESTELLBARE Schicht mit ihrem Schluessel.
+        # Die seltene steht auch drin, aber ohne Schluessel - man kann sie ja
+        # nicht anfordern, und ein Schluessel waere eine Einladung dazu.
         msg.content = "Flo work liste"
         text = _embed_text(asyncio.run(arbeit.handle(msg)))
-        for key in arbeit.SCHICHTEN:
-            assert key in text, key
+        for key, sch in arbeit.SCHICHTEN.items():
+            if sch.selten:
+                assert "SELTEN" in text and "bestellbar" in text.lower(), text
+            else:
+                assert key in text, key
 
         # Wort des Tages ist noch nicht draussen.
         msg.content = "Flo wordle"
@@ -9796,6 +9844,15 @@ def test_arbeit_tick_merkt_sich_die_ansage():
         leute = [SimpleNamespace(bot=False) for _ in range(4)]
         guild = SimpleNamespace(id=77, voice_channels=[SimpleNamespace(members=leute)])
 
+        # Erster Tick: es ist genug los, ALSO wird ein Termin gezogen - aber
+        # noch nichts gepostet. Das Wort soll ueberraschen, nicht an der
+        # dritten Person im Call haengen.
+        assert asyncio.run(arbeit.tick([guild])) == []
+        r0 = arbeit.instance.raetsel(77)
+        assert r0.geplant_fuer is not None, "kein Termin gezogen"
+        assert r0.geplant_fuer >= int(time.time()) + arbeit.VERZUG_MIN
+        # Termin vorziehen (im Betrieb wartet Flo 5-45 Minuten).
+        r0.daten["plan_zeit"] = 0
         faellig = asyncio.run(arbeit.tick([guild]))
         assert len(faellig) == 1, faellig
         g, embed, view, datei = faellig[0]
@@ -9892,6 +9949,77 @@ def test_arbeit_wordle_brett_wird_gezeichnet():
     assert kopf.startswith(b"\x89PNG"), kopf
     # Auch mit acht Buchstaben und ohne Tastatur darf nichts umfallen.
     assert render.wordle_board([], 8, titel="LEER").read(4) == b"\x89PNG"
+
+
+def test_arbeit_wordle_ist_selten_und_nicht_bestellbar():
+    """Wordle soll ein Highlight sein, keine Routine.
+
+    Beides gehoert zusammen und war der eigentliche Denkfehler davor: eine
+    seltene Schicht, die man sich per 'Flo work wordle' jederzeit holen kann,
+    ist nicht selten - sie ist nur schlecht sortiert. Also: kaum gezogen UND
+    nicht bestellbar, dafuer deutlich besser bezahlt."""
+    arbeit, restore = _arbeit_frisch({5: 0})
+    try:
+        # Etwa jede sechzehnte Schicht - nicht jede fuenfte.
+        p = arbeit.seltene_chance()
+        assert 0.03 < p < 0.10, p
+        # Und sie zahlt sich aus: klar mehr als jede normale Schicht.
+        normal = max(s.lohn for s in arbeit.SCHICHTEN.values() if not s.selten)
+        selten = max(s.lohn for s in arbeit.SCHICHTEN.values() if s.selten)
+        assert selten >= normal * 2.5, (normal, selten)
+
+        # Die Ziehung haelt sich grob an die Gewichte.
+        random.seed(4)
+        gezogen = [arbeit.schicht_ziehen().key for _ in range(4000)]
+        anteil = gezogen.count("wordle") / len(gezogen)
+        assert abs(anteil - p) < 0.02, (anteil, p)
+        # Jede Schicht kommt ueberhaupt vor - sonst ist eine tot.
+        assert set(gezogen) == set(arbeit.SCHICHTEN), set(arbeit.SCHICHTEN) - set(gezogen)
+
+        # Bestellen geht nicht - und die Absage erklaert, warum.
+        autor = _fake_person(5, name="tester", global_name="Tester")
+        msg = SimpleNamespace(content="Flo work wordle", author=autor,
+                              channel=SimpleNamespace(id=9), guild=SimpleNamespace(id=42))
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        assert "nicht aussuchen" in text, text
+        # Wichtig: der Cooldown darf dabei NICHT anspringen - man hat ja
+        # nicht gearbeitet, nur gefragt.
+        assert arbeit.instance._nutzer(5)["cooldown"] == 0, "Absage kostet Cooldown"
+    finally:
+        random.seed()
+        restore()
+
+
+def test_arbeit_neue_schichten_funktionieren():
+    """Werkzeug sortieren (Memory) und Qualitaetskontrolle - die zwei, die den
+    Platz fuellen, den Wordle als seltene Schicht frei gemacht hat."""
+    import arbeit
+    autor = SimpleNamespace(id=1, display_name="Tester")
+
+    # Memory: acht Kisten, vier Paare, jedes Werkzeug genau zweimal.
+    _e, view, _d = asyncio.run(
+        arbeit.SCHICHTEN["paare"].bauen(arbeit.instance, autor))
+    assert len(view.karten) == 8, view.karten
+    for stueck in set(view.karten):
+        assert view.karten.count(stueck) == 2, (stueck, view.karten)
+    assert len(view.children) == 8
+    # Verdeckt starten: kein Knopf verraet schon sein Werkzeug.
+    assert all(k.emoji is None for k in view.children), "Kisten liegen offen"
+
+    # Qualitaetskontrolle: fuenf Stuecke, genau eins aus einer anderen Kiste.
+    _e, view2, _d = asyncio.run(
+        arbeit.SCHICHTEN["kontrolle"].bauen(arbeit.instance, autor))
+    woerter = [k.label for k in view2.children]
+    assert len(woerter) == 5 and len(set(woerter)) == 5, woerter
+    assert view2.ausschuss in woerter
+    daheim = set(arbeit.KontrolleSchicht.KISTEN[view2.heimat])
+    fremde = [w for w in woerter if w not in daheim]
+    assert fremde == [view2.ausschuss], (fremde, view2.ausschuss)
+
+    # Keine Kiste teilt sich ein Wort mit einer anderen - sonst gaebe es
+    # Runden mit zwei richtigen Antworten.
+    alle = [w for worte in arbeit.KontrolleSchicht.KISTEN.values() for w in worte]
+    assert len(alle) == len(set(alle)), "Wort kommt in zwei Kisten vor"
 
 
 def _als_coro(wert):

@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 206 Tests
+python3 test_games_logic.py    # 208 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -300,13 +300,21 @@ Flo work liste        was es gibt
 Flo lohnzettel        eigene Bilanz: Schichten, Serie, Verdienst
 ```
 
-| Schicht | Aufgabe | Grundlohn |
-|---|---|---|
-| `wordle` | Fünf Buchstaben, sechs Versuche | 9.000 |
-| `safe` | Zahlenschloss, Hinweise nach jedem Versuch | 7.500 |
-| `salat` | Buchstabensalat entwirren, drei Versuche | 7.000 |
-| `rechnen` | Fünf Aufgaben, eine falsche beendet die Schicht | 6.500 |
-| `sortieren` | Zahlen in die richtige Reihenfolge klicken | 6.000 |
+| Schicht | Aufgabe | Grundlohn | Anteil |
+|---|---|---|---|
+| `safe` | Zahlenschloss, Hinweise nach jedem Versuch | 7.500 | ~16 % |
+| `salat` | Buchstabensalat entwirren, drei Versuche | 7.000 | ~16 % |
+| `paare` | Werkzeug sortieren: vier Paare, wenige Griffe | 6.800 | ~16 % |
+| `rechnen` | Fünf Aufgaben, eine falsche beendet die Schicht | 6.500 | ~16 % |
+| `kontrolle` | Qualitätskontrolle: den Ausschuss finden, dreimal | 6.200 | ~16 % |
+| `sortieren` | Zahlen in die richtige Reihenfolge klicken | 6.000 | ~16 % |
+| ⭐ **Wordle** | Fünf Buchstaben, sechs Versuche | **22.000** | **~6 %** |
+
+**Wordle ist die seltene Schicht.** Sie kommt etwa jede **18. Schicht** von
+allein — und lässt sich **nicht bestellen**: `Flo work wordle` gibt eine
+freundliche Absage statt der Schicht. Beides gehört zusammen; eine seltene
+Aufgabe, die man sich jederzeit holen kann, ist nicht selten, sondern nur
+schlecht sortiert. Dafür zahlt sie das Dreifache.
 
 Dazu kommt die **Leistung** (wie schnell/sauber) und die **Serie**: jede
 geschaffte Schicht in Folge legt 5 % drauf, gedeckelt bei +50 %. Ein Reinfall
@@ -345,23 +353,35 @@ Die Färbung kommt aus **einer** Quelle: `Wordle.farben()` rechnet, `muster()`
 macht Emojis daraus, das Bild nimmt dieselben Zeichen. Zwei Rechnungen für
 dieselbe Sache wären garantiert irgendwann verschieden falsch.
 
-Der Topf hängt an der **Wortlänge**, und die wächst zum Wochenende:
+Der Topf hängt an der **Wortlänge** — und die wird **jeden Tag neu gewürfelt**:
 
-| Tag | Buchstaben | Grundtopf | auf Anhieb |
-|---|---|---|---|
-| Mo–Do | 5 | 50.000 | 100.000 |
-| Fr | 6 | 60.000 | 120.000 |
-| Sa | 7 | 70.000 | 140.000 |
-| So | 8 | **80.000** | **160.000** |
+| Buchstaben | Grundtopf | auf Anhieb | Mo–Fr | Sa/So |
+|---|---|---|---|---|
+| 5 | 50.000 | 100.000 | 34 % | 16 % |
+| 6 | 60.000 | 120.000 | 30 % | 26 % |
+| 7 | 70.000 | 140.000 | 21 % | 30 % |
+| 8 | **80.000** | **160.000** | 15 % | 28 % |
+
+Vorher hing die Länge am Wochentag — Mo–Do also immer fünf Buchstaben, vier Tage
+die Woche dieselbe Aufgabe und derselbe Topf. Jetzt weiß man morgens nicht, was
+kommt. Am Wochenende verschiebt sich das Gewicht nach oben, garantiert ist nichts.
 
 Der Faktor sinkt mit jedem Versuch (1× → ×2,0 … 6× → ×1,0), unter den Grundtopf
-geht es nie. Die Wordle-**Schicht** aus `Flo work` zahlt bewusst nur einen
-Bruchteil — das Wort des Tages soll der Höhepunkt bleiben.
+geht es nie. Die Wordle-**Schicht** aus `Flo work` zahlt trotz ihrer Seltenheit
+nur einen Bruchteil davon — das Wort des Tages bleibt der Höhepunkt.
 
-**Wann es fällt, entscheidet nicht die Uhr, sondern der Server:** Flo wartet, bis
-mindestens `wordle_min_voice` Leute (Standard **3**, Bots zählen nicht) in einem
-Sprachkanal sitzen. Ist an einem Tag nie was los, fällt das Wort aus — ein
-Rätsel um 4 Uhr morgens in einen leeren Server zu werfen wäre verschenkt.
+**Wann es fällt, entscheidet nicht die Uhr, sondern der Server** — und dann noch
+der Zufall:
+
+1. Es müssen mindestens `wordle_min_voice` Leute (Standard **3**, Bots zählen
+   nicht) in einem Sprachkanal sitzen. Ist an einem Tag nie was los, fällt das
+   Wort aus — ein Rätsel um 4 Uhr morgens in einen leeren Server zu werfen wäre
+   verschenkt.
+2. Dann zieht Flo einen Zeitpunkt in den nächsten **5–45 Minuten** und wartet.
+   Sonst hinge das Wort sichtbar an der dritten Person im Call, und man könnte
+   es sich herbeiholen. Der Termin wird **einmal** gezogen und bleibt stehen —
+   würde er bei jedem Tick neu gewürfelt, rückte er ewig weiter weg. Leert sich
+   der Call vorher, wartet Flo, bis wieder genug da sind.
 
 **Kanal einstellen** (sonst sucht Flo einen, der `gigachat` oder `wordle` heißt,
 und nimmt notfalls den Ansagen-Kanal):

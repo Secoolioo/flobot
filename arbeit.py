@@ -85,14 +85,26 @@ SERIE_MAX = 0.50
 
 # --- Wort des Tages ---------------------------------------------------------
 TAGES_PRO_BUCHSTABE = int(os.getenv("WORDLE_PRO_BUCHSTABE", "10000") or "10000")
-# Wortlaenge nach Wochentag (Montag = 0). Zum Wochenende laenger und damit
-# lukrativer - Sonntag ist Zahltag.
-TAGES_LAENGE = {0: 5, 1: 5, 2: 5, 3: 5, 4: 6, 5: 7, 6: 8}
+# Wortlaenge: WUERFELT je Tag und Server, nicht am Wochentag festgemacht.
+# Vorher war Mo-Do immer 5 Buchstaben - vier Tage die Woche dieselbe Aufgabe
+# und derselbe Topf, das nutzt sich ab. Jetzt weiss man morgens nicht, was
+# kommt: ein kurzes Wort mit kleinem Topf oder acht Buchstaben fuer 80.000.
+# Am Wochenende verschiebt sich das Gewicht nach oben - lange Woerter werden
+# dann wahrscheinlicher, ohne dass es garantiert waere.
+TAGES_LAENGEN = (5, 6, 7, 8)
+TAGES_GEWICHT_WOCHE = (34, 30, 21, 15)      # Montag bis Freitag
+TAGES_GEWICHT_WOCHENENDE = (16, 26, 30, 28)  # Samstag und Sonntag
 # Je weniger Versuche, desto mehr. Schluessel = gebrauchte Versuche.
 VERSUCH_FAKTOR = {1: 2.00, 2: 1.75, 3: 1.50, 4: 1.30, 5: 1.15, 6: 1.00}
 MAX_VERSUCHE = 6
 # So viele Leute muessen im Voice sitzen, damit sich das Raetsel lohnt.
 STANDARD_MIN_VOICE = 3
+# Sind genug Leute da, faellt das Wort NICHT sofort, sondern irgendwann in den
+# naechsten Minuten. Zwei Gruende: es soll ueberraschen statt vorhersagbar an
+# der dritten Person zu haengen ("gleich kommt das Wordle, ich mach den Call
+# voll"), und wer zufaellig gerade auf den Kanal schaut, hat keinen Vorsprung.
+VERZUG_MIN = int(os.getenv("WORDLE_VERZUG_MIN", "300") or "300")      # 5 Min
+VERZUG_MAX = int(os.getenv("WORDLE_VERZUG_MAX", "2700") or "2700")    # 45 Min
 
 # Wie der Kanal gefunden wird, wenn nichts eingestellt ist: ein Kanal, der so
 # heisst. Das trifft den Normalfall, ohne eine ID in den Code zu schreiben -
@@ -197,6 +209,27 @@ def _heute():
 
 def _muenzen(n):
     return numfmt.fmt(int(n))
+
+
+def laenge_des_tages(tag, wurf):
+    """Wie lang ist das Wort heute? Gewichtet gezogen, aber reproduzierbar.
+
+    'wurf' ist eine beliebig grosse Zahl (kommt aus dem Tages-Hash) - damit
+    faellt an demselben Tag auf demselben Server immer dieselbe Laenge, auch
+    nach einem Neustart. Am Wochenende sind lange Woerter wahrscheinlicher,
+    aber nie sicher: das Wuerfeln ist ja der Punkt."""
+    try:
+        wochenende = datetime.strptime(tag, "%Y-%m-%d").weekday() >= 5
+    except (TypeError, ValueError):
+        wochenende = False
+    gewichte = TAGES_GEWICHT_WOCHENENDE if wochenende else TAGES_GEWICHT_WOCHE
+    ziel = int(wurf) % sum(gewichte)
+    summe = 0
+    for laenge, gewicht in zip(TAGES_LAENGEN, gewichte):
+        summe += gewicht
+        if ziel < summe:
+            return laenge
+    return TAGES_LAENGEN[-1]
 
 
 def _schuetzen(message):
@@ -377,14 +410,15 @@ class Wordle:
         einem Neustart mitten im Rateverlauf. Und zwei Server bekommen
         verschiedene Woerter, damit man sich die Loesung nicht von nebenan holt."""
         tag = tag or _heute()
-        if laenge is None:
-            try:
-                laenge = TAGES_LAENGE[datetime.strptime(tag, "%Y-%m-%d").weekday()]
-            except (TypeError, ValueError):
-                laenge = 5
-        liste = WOERTER.get(laenge) or WOERTER[5]
+        # EIN Hash, zwei Entscheidungen: die hinteren Stellen ziehen die Laenge,
+        # die vorderen das Wort. So bleibt beides reproduzierbar, ohne zwei
+        # Hashes rechnen zu muessen - und die zwei Wuerfe beeinflussen sich
+        # nicht (verschiedene Enden derselben Zufallszahl).
         roh = hashlib.sha256(f"{tag}:{int(gid or 0)}".encode()).hexdigest()
-        return cls(liste[int(roh, 16) % len(liste)], versuche=versuche)
+        if laenge is None:
+            laenge = laenge_des_tages(tag, int(roh[-8:], 16))
+        liste = WOERTER.get(laenge) or WOERTER[5]
+        return cls(liste[int(roh[:32], 16) % len(liste)], versuche=versuche)
 
 
 class Tagesraetsel:
@@ -445,6 +479,33 @@ class Tagesraetsel:
                            "kanal": 0, "ansage": 0})
         return spiel
 
+    # --- Der Zufalls-Termin ---
+    @property
+    def geplant_fuer(self):
+        """Ab wann darf das Wort fallen? None = fuer heute noch kein Termin.
+
+        Bewusst None und nicht 0: '0' ist ein gueltiger Zeitpunkt (und in Tests
+        genau der, den man setzt, um sofort zu feuern). Mit 0 als 'kein Termin'
+        haette Flo den Plan bei jedem Tick neu gezogen und das Wort waere nie
+        gefallen."""
+        if self.daten.get("plan_tag") != _heute():
+            return None
+        zeit = self.daten.get("plan_zeit")
+        return int(zeit) if zeit is not None else None
+
+    def termin_setzen(self, jetzt=None, wuerfel=None):
+        """Merkt sich einen Zeitpunkt in den naechsten Minuten.
+
+        Wird genau EINMAL pro Tag gesetzt: waere es bei jedem Tick neu
+        gewuerfelt, ruecke der Termin staendig weiter weg und das Wort kaeme
+        nie. Der Termin ueberlebt einen Neustart, weil er im Store steht."""
+        jetzt = int(jetzt if jetzt is not None else time.time())
+        spanne = max(0, VERZUG_MAX - VERZUG_MIN)
+        wurf = wuerfel if wuerfel is not None else random.random()
+        self.daten["plan_tag"] = _heute()
+        self.daten["plan_zeit"] = jetzt + VERZUG_MIN + int(wurf * spanne)
+        return self.daten["plan_zeit"]
+
     def ansage_merken(self, message):
         """Wo die oeffentliche Ansage steht.
 
@@ -499,6 +560,13 @@ class Schicht:
     # als ein Klickspiel - drei Minuten fuer sechs Rateversuche waren schlicht
     # zu knapp, da war die Schicht weg, bevor man nachgedacht hatte.
     frist = 300
+    # Wie oft die Schicht gezogen wird (relativ zu den anderen).
+    gewicht = 22
+    # SELTEN heisst: kommt kaum vor UND laesst sich nicht bestellen. Beides
+    # gehoert zusammen - eine seltene Schicht, die man per 'Flo work wordle'
+    # jederzeit anfordern kann, ist nicht selten, sondern nur schlecht
+    # sortiert. Dafuer zahlt sie deutlich besser.
+    selten = False
 
     async def bauen(self, chef, autor):
         """Gibt (embed, view, datei) zurueck; 'datei' darf None sein.
@@ -517,8 +585,13 @@ class Schicht:
 
 class WordleSchicht(Schicht):
     key, titel = "wordle", "🟩 Wordle-Schicht"
-    was = "Fünf Buchstaben, sechs Versuche."
-    lohn = 9000
+    was = "Fünf Buchstaben, sechs Versuche. Kommt selten – und zahlt dann fett."
+    # Selten und deutlich besser bezahlt: rund jede sechzehnte Schicht. Wer sie
+    # zieht, hat einen guten Tag - genau das soll sie sein, ein Highlight und
+    # keine Routine.
+    lohn = 22000
+    gewicht = 8
+    selten = True
     frist = 900          # 15 Minuten - Wordle will gedacht werden
 
     async def bauen(self, chef, autor):
@@ -594,8 +667,68 @@ class SortierSchicht(Schicht):
                          "Ein Fehlklick und die Schicht ist rum."), view, None
 
 
+class PaareSchicht(Schicht):
+    key, titel = "paare", "🧰 Werkzeug sortieren"
+    was = "Vier Paare finden, so wenige Griffe wie möglich."
+    lohn = 6800
+    frist = 420
+    PAARE = 4
+
+    async def bauen(self, chef, autor):
+        werkzeug = random.sample(["🔧", "🔩", "⚙️", "🔌", "🧪", "📐", "🪛", "🔨"],
+                                 self.PAARE)
+        karten = werkzeug * 2
+        random.shuffle(karten)
+        view = PaareView(chef, autor.id, self, karten)
+        return self.kopf(f"Acht Kisten, **{self.PAARE} Paare**. Immer zwei "
+                         f"aufmachen.\nJe weniger Griffe, desto mehr Lohn – "
+                         f"acht wären perfekt."), view, None
+
+
+class KontrolleSchicht(Schicht):
+    key, titel = "kontrolle", "🔍 Qualitätskontrolle"
+    was = "Den Ausschuss finden – dreimal."
+    lohn = 6200
+    frist = 300
+    RUNDEN = 3
+    # Vier aus einer Kiste, eins gehoert nicht dazu. Bewusst Woerter statt
+    # Zahlen: Rechnen gibt es schon als eigene Schicht.
+    KISTEN = {
+        "Werkzeug": ("Hammer", "Zange", "Schraube", "Bohrer", "Feile", "Meissel"),
+        "Obst": ("Apfel", "Birne", "Kirsche", "Pflaume", "Banane", "Traube"),
+        "Fahrzeug": ("Lastwagen", "Bagger", "Traktor", "Motorrad", "Bus", "Zug"),
+        "Tier": ("Dachs", "Otter", "Reiher", "Marder", "Hirsch", "Fuchs"),
+        "Moebel": ("Sessel", "Schrank", "Tisch", "Regal", "Kommode", "Hocker"),
+        "Wetter": ("Nebel", "Hagel", "Sturm", "Regen", "Schnee", "Frost"),
+        "Musik": ("Geige", "Trommel", "Fluegel", "Posaune", "Harfe", "Gitarre"),
+        "Gebaeude": ("Turm", "Scheune", "Halle", "Villa", "Huette", "Bahnhof"),
+    }
+
+    async def bauen(self, chef, autor):
+        view = KontrolleView(chef, autor.id, self)
+        return self.kopf("Vier Stück gehören zusammen, **eins nicht**. "
+                         "Klick den Ausschuss.\n\n" + view.frage_text()), view, None
+
+
+# Die Ziehung: jede Schicht bringt ihr eigenes Gewicht mit. Wordle steht mit 8
+# gegen rund 130 der anderen - also etwa jede sechzehnte Schicht.
 SCHICHTEN = {s.key: s for s in (WordleSchicht(), SalatSchicht(), RechenSchicht(),
-                                SafeSchicht(), SortierSchicht())}
+                                SafeSchicht(), SortierSchicht(), PaareSchicht(),
+                                KontrolleSchicht())}
+
+
+def schicht_ziehen():
+    """Eine Schicht nach Gewicht ziehen."""
+    kandidaten = list(SCHICHTEN.values())
+    return random.choices(kandidaten,
+                          weights=[s.gewicht for s in kandidaten], k=1)[0]
+
+
+def seltene_chance():
+    """Wie wahrscheinlich ist eine seltene Schicht? (fuer die Anzeige)"""
+    gesamt = sum(s.gewicht for s in SCHICHTEN.values())
+    selten = sum(s.gewicht for s in SCHICHTEN.values() if s.selten)
+    return selten / gesamt if gesamt else 0.0
 
 
 # ===========================================================================
@@ -696,7 +829,23 @@ class Arbeit(FeatureBasis):
         zweit = teile[1].lower().strip(".,!?") if len(teile) > 1 else ""
         if zweit in ("liste", "list", "was", "hilfe", "help"):
             return self._schichtliste()
-        return await self._schicht_starten(message, SCHICHTEN.get(zweit))
+        gewuenscht = SCHICHTEN.get(zweit)
+        if gewuenscht is not None and gewuenscht.selten:
+            # Seltene Schichten kann man sich NICHT bestellen - sonst waeren sie
+            # nicht selten, sondern nur schlecht sortiert.
+            return self._kurz(
+                f"**{gewuenscht.titel}** kannst du dir nicht aussuchen – die "
+                f"kommt von allein, in etwa **jeder {self._selten_alle()}. "
+                f"Schicht**. Dafür zahlt sie auch das Dreifache.\n"
+                f"`{self._bot_name} work` und Daumen drücken.",
+                discord.Color.gold())
+        return await self._schicht_starten(message, gewuenscht)
+
+    @staticmethod
+    def _selten_alle():
+        """'jede N. Schicht' - fuer die Anzeige."""
+        p = seltene_chance()
+        return int(round(1 / p)) if p else 0
 
     def _schichtliste(self):
         e = discord.Embed(
@@ -704,10 +853,24 @@ class Arbeit(FeatureBasis):
             description=(f"`{self._bot_name} work` gibt dir eine zufällige – "
                          f"`{self._bot_name} work <name>` genau die hier:"),
             color=discord.Color.blurple())
-        for key, s in SCHICHTEN.items():
-            e.add_field(name=f"{s.titel} · `{key}`",
-                        value=f"{s.was}\nGrundlohn **{_muenzen(s.lohn)}** {economy.COIN}",
+        gesamt = sum(x.gewicht for x in SCHICHTEN.values())
+        for key, sch in SCHICHTEN.items():
+            if sch.selten:
+                continue
+            anteil = round(100 * sch.gewicht / gesamt)
+            e.add_field(name=f"{sch.titel} · `{key}`",
+                        value=f"{sch.was}\nGrundlohn **{_muenzen(sch.lohn)}** "
+                              f"{economy.COIN} · etwa {anteil} % der Schichten",
                         inline=False)
+        for sch in SCHICHTEN.values():
+            if not sch.selten:
+                continue
+            e.add_field(
+                name=f"⭐ {sch.titel} · SELTEN",
+                value=f"{sch.was}\nGrundlohn **{_muenzen(sch.lohn)}** "
+                      f"{economy.COIN} · etwa jede **{self._selten_alle()}. "
+                      f"Schicht**\n*Nicht bestellbar – die kommt von allein.*",
+                inline=False)
         e.set_footer(text=f"Alle {COOLDOWN // 60} Minuten eine Schicht · "
                           f"höchstens {_muenzen(TAGES_DECKEL)} am Tag")
         return e
@@ -747,7 +910,7 @@ class Arbeit(FeatureBasis):
                 f"🛑 Feierabend. Du hast heute deine **{_muenzen(TAGES_DECKEL)}** "
                 f"{economy.COIN} voll. Morgen wieder.", discord.Color.orange())
 
-        schicht = schicht or random.choice(list(SCHICHTEN.values()))
+        schicht = schicht or schicht_ziehen()
         prof["cooldown"] = int(time.time()) + COOLDOWN
         prof["schichten"] = int(prof.get("schichten", 0)) + 1
         self._speichern()
@@ -829,15 +992,34 @@ class Arbeit(FeatureBasis):
             return STANDARD_MIN_VOICE
         return wert if wert >= 1 else STANDARD_MIN_VOICE
 
-    def faellig(self, guild):
-        """Ist auf diesem Server heute noch kein Wort gefallen - und lohnt es sich?
+    def faellig(self, guild, jetzt=None):
+        """Darf jetzt ein Wort fallen? Zwei Bedingungen, beide muessen stimmen.
 
-        Nicht die Uhr entscheidet, sondern ob wirklich jemand da ist. Ein Raetsel
-        um 4 Uhr morgens in einen leeren Server zu werfen, waere verschenkt: bis
-        abends jemand hinschaut, hat es keiner mitbekommen."""
-        if self.raetsel(getattr(guild, "id", 0)).datum == _heute():
+        1. ES MUSS WAS LOS SEIN. Nicht die Uhr entscheidet, sondern ob wirklich
+           jemand da ist - ein Raetsel um 4 Uhr morgens in einen leeren Server
+           zu werfen waere verschenkt.
+        2. DER GEWUERFELTE TERMIN MUSS DA SEIN. Sobald genug Leute im Call
+           sitzen, wird ein Zeitpunkt in den naechsten 5-45 Minuten gezogen.
+           Bis dahin passiert nichts. Sonst haenge das Wort sichtbar an der
+           dritten Person, und man koennte es sich herbeiholen.
+
+        Leert sich der Call vor dem Termin, wartet Flo eben - der Termin bleibt
+        stehen und greift, sobald wieder genug da sind."""
+        gid = getattr(guild, "id", 0)
+        raetsel = self.raetsel(gid)
+        if raetsel.datum == _heute():
             return False
-        return self.leute_im_voice(guild) >= self.min_voice(getattr(guild, "id", 0))
+        if self.leute_im_voice(guild) < self.min_voice(gid):
+            return False
+        jetzt = int(jetzt if jetzt is not None else time.time())
+        termin = raetsel.geplant_fuer
+        if termin is None:
+            termin = raetsel.termin_setzen(jetzt)
+            self._speichern()
+            log.info("Wort des Tages auf %s eingeplant (in %d Min).",
+                     getattr(guild, "name", gid), max(0, termin - jetzt) // 60)
+            return False
+        return jetzt >= termin
 
     def kanal_fuer(self, guild):
         """Wohin das Wort des Tages geht."""
@@ -1433,6 +1615,150 @@ class SortierKnopf(discord.ui.Button):
                           description=f"**{v.gedrueckt} von {len(v.reihenfolge)}** – "
                                       f"weiter.",
                           color=discord.Color.blurple())
+        await interaction.response.edit_message(embed=e, view=v)
+
+
+class PaareView(SchichtView):
+    """Memory mit acht Kisten. Zwei aufmachen, passt es, bleiben sie offen."""
+
+    def __init__(self, chef, uid, schicht, karten):
+        super().__init__(chef, uid, schicht)
+        self.karten = karten
+        self.offen = []          # gerade aufgedeckte Knopf-Nummern
+        self.gefunden = 0
+        self.griffe = 0
+        self.sperre = False      # waehrend das falsche Paar noch sichtbar ist
+        for i in range(len(karten)):
+            self.add_item(PaarKnopf(i))
+
+    def stand(self):
+        perfekt = self.schicht.PAARE * 2
+        return (f"**{self.gefunden} von {self.schicht.PAARE}** Paaren · "
+                f"{self.griffe} Griffe (perfekt wären {perfekt})")
+
+
+class PaarKnopf(discord.ui.Button):
+    def __init__(self, nr):
+        # Ein blosses Leerzeichen als Beschriftung waere riskant: Discord
+        # schneidet Randweiss ab und lehnt leere Labels ab. Ein Fragezeichen
+        # sagt ausserdem klar "hier liegt noch was drunter".
+        super().__init__(label="?", style=discord.ButtonStyle.secondary,
+                         row=nr // 4)
+        self.nr = nr
+
+    async def callback(self, interaction):
+        v = self.view
+        # Waehrend das falsche Paar noch offen liegt, wird nicht weitergeklickt -
+        # sonst deckt ein schneller Klick drei Kisten auf und die Rechnung unten
+        # geht nicht mehr auf.
+        if v.sperre or self.disabled or self.nr in v.offen:
+            await interaction.response.defer()
+            return
+        v.offen.append(self.nr)
+        self.label = None
+        self.emoji = v.karten[self.nr]
+        self.style = discord.ButtonStyle.primary
+
+        if len(v.offen) < 2:
+            await interaction.response.edit_message(view=v)
+            return
+
+        v.griffe += 1
+        a, b = v.offen
+        treffer = v.karten[a] == v.karten[b]
+        if treffer:
+            v.gefunden += 1
+            for nr in (a, b):
+                knopf = v.children[nr]
+                knopf.style = discord.ButtonStyle.success
+                knopf.disabled = True
+            v.offen = []
+            if v.gefunden >= v.schicht.PAARE:
+                # Perfekt sind PAARE Griffe (jeder sitzt), doppelt so viele
+                # sind noch in Ordnung, darunter wird es duenn.
+                perfekt = v.schicht.PAARE
+                anteil = max(0.4, min(1.2, (perfekt * 2) / max(1, v.griffe) * 0.6))
+                await v.beenden(interaction, "🧰 Kiste sortiert",
+                                f"Alle {perfekt} Paare in **{v.griffe} Griffen**.",
+                                anteil)
+                return
+            e = discord.Embed(title=v.schicht.titel, description=v.stand(),
+                              color=discord.Color.blurple())
+            await interaction.response.edit_message(embed=e, view=v)
+            return
+
+        # Daneben: kurz zeigen, dann wieder zumachen.
+        v.sperre = True
+        e = discord.Embed(title=v.schicht.titel,
+                          description=v.stand() + "\n\nPasst nicht.",
+                          color=discord.Color.blurple())
+        await interaction.response.edit_message(embed=e, view=v)
+        await asyncio.sleep(1.1)
+        for nr in v.offen:
+            knopf = v.children[nr]
+            knopf.emoji = None
+            knopf.label = "?"
+            knopf.style = discord.ButtonStyle.secondary
+        v.offen = []
+        v.sperre = False
+        try:
+            await interaction.edit_original_response(view=v)
+        except discord.HTTPException:
+            pass
+
+
+class KontrolleView(SchichtView):
+    """Vier gehoeren zusammen, eins nicht. Dreimal."""
+
+    def __init__(self, chef, uid, schicht):
+        super().__init__(chef, uid, schicht)
+        self.runde = 0
+        self.richtig = 0
+        self._neue_runde()
+
+    def _neue_runde(self):
+        kisten = list(self.schicht.KISTEN)
+        heimat, fremd = random.sample(kisten, 2)
+        stuecke = random.sample(self.schicht.KISTEN[heimat], 4)
+        self.ausschuss = random.choice(self.schicht.KISTEN[fremd])
+        self.heimat = heimat
+        auswahl = stuecke + [self.ausschuss]
+        random.shuffle(auswahl)
+        self.clear_items()
+        for wort in auswahl:
+            self.add_item(KontrolleKnopf(wort))
+
+    def frage_text(self):
+        return f"**Runde {self.runde + 1} von {self.schicht.RUNDEN}**"
+
+
+class KontrolleKnopf(discord.ui.Button):
+    def __init__(self, wort):
+        super().__init__(label=wort, style=discord.ButtonStyle.secondary)
+        self.wort = wort
+
+    async def callback(self, interaction):
+        v = self.view
+        if self.wort != v.ausschuss:
+            await v.beenden(
+                interaction, "🔍 Durchgerutscht",
+                f"**{self.wort}** ist {v.heimat} – der Ausschuss war "
+                f"**{v.ausschuss}**.\nGeschafft: **{v.richtig} von "
+                f"{v.schicht.RUNDEN}**.",
+                v.richtig / v.schicht.RUNDEN * 0.5)
+            return
+        v.richtig += 1
+        v.runde += 1
+        if v.runde >= v.schicht.RUNDEN:
+            await v.beenden(interaction, "🔍 Alles geprüft",
+                            f"Alle **{v.schicht.RUNDEN}** Runden sauber.", 1.0)
+            return
+        v._neue_runde()
+        e = discord.Embed(title=v.schicht.titel,
+                          description="Vier gehören zusammen, **eins nicht**.\n\n"
+                                      + v.frage_text(),
+                          color=discord.Color.blurple())
+        e.set_footer(text=f"{v.richtig} richtig")
         await interaction.response.edit_message(embed=e, view=v)
 
 
