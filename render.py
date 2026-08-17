@@ -2711,6 +2711,165 @@ class Render:
         return self._png(img)
 
 
+    # === Lohnzettel ============================================================
+    def lohnzettel(self, name, avatar, *, stufe, symbol, bonus, geschafft,
+                   angetreten, serie, beste_serie, verdient, heute, deckel,
+                   gold, naechste=None, fehlt=0, wordle=None):
+        """Die Arbeitsbilanz als Karte. ``wordle``: (siege, gespielt, verteilung)."""
+        W = 900
+        H = 470 if not wordle else 592
+        img = self._vgrad(W, H, (24, 27, 35), (13, 14, 20)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        akzent = (212, 175, 55)
+        d.rounded_rectangle([6, 6, W - 7, H - 7], radius=20, outline=akzent, width=3)
+
+        # Kopf: Bild, Name, Stufe
+        # Profilbild rund: _round_img macht mit radius=w/2 einen Kreis daraus.
+        # Faellt es aus (kein Bild geladen), steht da eben nur der Name.
+        bild = self._round_img(avatar, 84, 84, radius=42) if avatar else None
+        if bild is not None:
+            img.paste(bild, (34, 30), bild)
+        else:
+            d.ellipse([34, 30, 34 + 84, 30 + 84], fill=(40, 43, 54))
+            d.text((34 + 42, 30 + 42), self._clean_text(name[:1].upper()),
+                   font=self._font(38), fill=(150, 157, 172), anchor="mm")
+        d.text((140, 36), self._clean_text(name), font=self._font(34),
+               fill=(240, 243, 248))
+        # symbol ist ein Emoji - die Schrift (DejaVu) hat dafuer keine Glyphe und
+        # malte ein leeres Kaestchen. _clean_text wirft es weg; bleibt nichts
+        # uebrig, steht eben nur die Stufe da. Im Chat-Embed kommt das Emoji
+        # weiterhin vor, dort kann Discord es.
+        sym = self._clean_text(symbol)
+        d.text((140, 80), (f"{sym}  " if sym else "") + self._clean_text(stufe),
+               font=self._font(23), fill=akzent)
+        d.text((W - 34, 40), f"+{round(bonus * 100)} %", font=self._font(30),
+               fill=akzent, anchor="ra")
+        d.text((W - 34, 78), "Stufen-Zuschlag", font=self._font(15),
+               fill=(140, 146, 160), anchor="ra")
+
+        # Fortschritt zur naechsten Stufe
+        y = 140
+        if naechste:
+            d.text((34, y), f"bis {self._clean_text(naechste)}", font=self._font(17),
+                   fill=(160, 167, 182))
+            d.text((W - 34, y), f"noch {fehlt} Schichten", font=self._font(17),
+                   fill=(160, 167, 182), anchor="ra")
+            gesamt = max(1, geschafft + fehlt)
+            frac = max(0.02, min(1.0, geschafft / gesamt))
+            d.rounded_rectangle([34, y + 28, W - 34, y + 44], radius=8,
+                                fill=(38, 41, 52))
+            d.rounded_rectangle([34, y + 28, 34 + int((W - 68) * frac), y + 44],
+                                radius=8, fill=akzent)
+        else:
+            d.text((34, y), "Oben angekommen – mehr geht nicht.",
+                   font=self._font(19), fill=akzent)
+        y += 74
+
+        # Kennzahlen
+        kacheln = [
+            ("Geschafft", f"{geschafft}", f"von {angetreten} angetreten"),
+            ("Serie", f"{serie}", f"Bestwert {beste_serie}"),
+            ("Verdient", self._kurz_zahl(verdient), "insgesamt"),
+            ("Heute", self._kurz_zahl(heute), f"von {self._kurz_zahl(deckel)}"),
+        ]
+        bw = (W - 68 - 3 * 14) // 4
+        for i, (titel, wert, unten) in enumerate(kacheln):
+            x = 34 + i * (bw + 14)
+            d.rounded_rectangle([x, y, x + bw, y + 110], radius=13,
+                                fill=(30, 33, 43), outline=(46, 50, 63), width=2)
+            d.text((x + bw / 2, y + 22), titel, font=self._font(15),
+                   fill=(140, 146, 160), anchor="mm")
+            d.text((x + bw / 2, y + 58), wert, font=self._font(31),
+                   fill=(240, 243, 248), anchor="mm")
+            d.text((x + bw / 2, y + 90), unten, font=self._font(14),
+                   fill=(120, 126, 140), anchor="mm")
+        y += 130
+        if gold:
+            d.text((34, y), self._clean_text(f"{gold} goldene Schichten erwischt"),
+                   font=self._font(18), fill=akzent)
+        y += 34
+
+        # Wordle-Bilanz mit Verteilung der Versuche
+        if wordle:
+            siege, gespielt, verteilung = wordle
+            d.line([(34, y), (W - 34, y)], fill=(46, 50, 63), width=2)
+            y += 18
+            d.text((34, y), "WORT DES TAGES", font=self._font(17),
+                   fill=(150, 157, 172))
+            d.text((W - 34, y), f"{siege} von {gespielt} geknackt",
+                   font=self._font(17), fill=(150, 157, 172), anchor="ra")
+            y += 32
+            hoch = max(1, max(verteilung) if verteilung else 1)
+            bh, bw2 = 54, (W - 68 - 5 * 10) // 6
+            for i, n in enumerate(verteilung[:6]):
+                x = 34 + i * (bw2 + 10)
+                d.rounded_rectangle([x, y, x + bw2, y + bh], radius=9,
+                                    fill=(30, 33, 43))
+                if n:
+                    h = max(6, int(bh * n / hoch))
+                    d.rounded_rectangle([x, y + bh - h, x + bw2, y + bh], radius=9,
+                                        fill=(83, 141, 78))
+                d.text((x + bw2 / 2, y + bh / 2), str(n), font=self._font(19),
+                       fill=(255, 255, 255), anchor="mm")
+                d.text((x + bw2 / 2, y + bh + 15), f"{i + 1}.", font=self._font(14),
+                       fill=(120, 126, 140), anchor="mm")
+        return self._png(img)
+
+
+    # === Arbeits-Rangliste =====================================================
+    def arbeit_rangliste(self, rows, *, titel="WERK-RANGLISTE", untertitel=""):
+        """``rows``: [(platz, name, stufe_symbol, stufe, geschafft, verdient)]."""
+        W = 900
+        kopf, zeile = 112, 58
+        H = kopf + max(1, len(rows)) * zeile + 26
+        img = self._vgrad(W, H, (24, 27, 35), (13, 14, 20)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        akzent = (212, 175, 55)
+        d.rounded_rectangle([6, 6, W - 7, H - 7], radius=20, outline=akzent, width=3)
+        d.text((34, 30), self._clean_text(titel), font=self._font(34),
+               fill=(240, 243, 248))
+        tw = d.textlength(self._clean_text(titel), font=self._font(34))
+        d.line([(34, 76), (34 + tw, 76)], fill=akzent, width=3)
+        if untertitel:
+            d.text((W - 34, 46), self._clean_text(untertitel), font=self._font(17),
+                   fill=(140, 146, 160), anchor="rm")
+
+        medaille = {1: (255, 215, 0), 2: (196, 202, 212), 3: (191, 137, 92)}
+        y = kopf
+        for platz, name, symbol, stufe, geschafft, verdient in rows:
+            if (y - kopf) // zeile % 2 == 1:
+                d.rounded_rectangle([16, y - 4, W - 16, y + zeile - 12], radius=11,
+                                    fill=(29, 32, 42))
+            farbe = medaille.get(platz, (150, 157, 172))
+            d.text((44, y + 16), f"{platz}", font=self._font(26), fill=farbe,
+                   anchor="mm")
+            sym = self._clean_text(symbol)
+            d.text((78, y + 4), (f"{sym}  " if sym else "") + self._clean_text(name),
+                   font=self._font(22), fill=(235, 238, 245))
+            d.text((78, y + 32), self._clean_text(stufe), font=self._font(15),
+                   fill=(130, 136, 150))
+            d.text((W - 34, y + 6), self._kurz_zahl(verdient), font=self._font(23),
+                   fill=akzent, anchor="ra")
+            d.text((W - 34, y + 34), f"{geschafft} Schichten", font=self._font(15),
+                   fill=(130, 136, 150), anchor="ra")
+            y += zeile
+        return self._png(img)
+
+
+    @staticmethod
+    def _kurz_zahl(n):
+        """Grosse Zahlen kurz: 1.250.000 -> 1,25 Mio. Auf einer Kachel ist kein
+        Platz fuer sieben Ziffern."""
+        n = int(n or 0)
+        if abs(n) >= 1_000_000_000:
+            return f"{n / 1_000_000_000:.2f}".replace(".", ",") + " Mrd"
+        if abs(n) >= 1_000_000:
+            return f"{n / 1_000_000:.2f}".replace(".", ",") + " Mio"
+        if abs(n) >= 10_000:
+            return f"{n // 1000}".replace(",", ".") + "k"
+        return f"{n:,}".replace(",", ".")
+
+
 # --- Modul-Fassade --------------------------------------------------------
 # Eine geteilte Instanz + Aliase, damit die bisherigen Modul-Funktionen
 # (bot.py, casino.py, economy.py, games.py, words.py, food.py, media.py)
@@ -2747,3 +2906,5 @@ words_card = instance.words_card
 money_card = instance.money_card
 floaktie_chart = instance.floaktie_chart
 wordle_board = instance.wordle_board
+lohnzettel = instance.lohnzettel
+arbeit_rangliste = instance.arbeit_rangliste

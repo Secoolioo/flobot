@@ -67,6 +67,7 @@ HANDLED = object()
 # --- Befehlswoerter ---------------------------------------------------------
 _CMDS = ("work", "arbeit", "arbeiten", "job", "schicht", "malochen")
 _LOHN_CMDS = ("lohnzettel", "lohn", "gehalt", "arbeitszeugnis")
+_TOP_CMDS = ("top", "rangliste", "bestenliste", "leaderboard", "werk")
 _WORDLE_CMDS = ("wordle", "wordl", "tageswort", "wortdestages")
 
 # --- Balance ----------------------------------------------------------------
@@ -189,6 +190,61 @@ WOERTER = {
         "TROMMELN VERTRAGE VIERTELN VORHANGE WANDERER WERKZEUG ZWIEBELN"
         ).split(),
 }
+
+# --- Karriere ---------------------------------------------------------------
+# Das Rueckgrat der ganzen Sache. Vorher gab es nur die Serie: ein Reinfall und
+# alles war weg, ueber Wochen baute man NICHTS auf. Die Stufe zaehlt dagegen
+# GESCHAFFTE Schichten und geht nie zurueck - wer dranbleibt, verdient dauerhaft
+# mehr, und es gibt einen Grund, morgen wiederzukommen.
+class Stufe:
+    """Eine Karrierestufe: ab wie vielen geschafften Schichten, wie viel mehr."""
+
+    def __init__(self, ab, titel, bonus, symbol):
+        self.ab = int(ab)
+        self.titel = titel
+        self.bonus = float(bonus)     # +Anteil auf den Lohn
+        self.symbol = symbol
+
+    def __repr__(self):
+        return f"<Stufe {self.titel} ab {self.ab}>"
+
+
+# Absichtlich flach am Anfang (die erste Stufe ist nach zehn Schichten drin) und
+# steil am Ende - der Werksleiter soll etwas bedeuten.
+STUFEN = (
+    Stufe(0, "Praktikant", 0.00, "🧻"),
+    Stufe(10, "Aushilfe", 0.08, "🧹"),
+    Stufe(30, "Facharbeiter", 0.16, "🔧"),
+    Stufe(75, "Vorarbeiter", 0.25, "📋"),
+    Stufe(150, "Schichtleiter", 0.34, "🎖️"),
+    Stufe(300, "Meister", 0.42, "🏅"),
+    Stufe(600, "Werksleiter", 0.50, "👑"),
+)
+
+
+def stufe_fuer(geschafft):
+    """Die aktuelle Stufe zu einer Zahl geschaffter Schichten."""
+    aktuell = STUFEN[0]
+    for st in STUFEN:
+        if int(geschafft or 0) >= st.ab:
+            aktuell = st
+    return aktuell
+
+
+def naechste_stufe(geschafft):
+    """Die naechste Stufe - oder None, wenn oben angekommen."""
+    for st in STUFEN:
+        if int(geschafft or 0) < st.ab:
+            return st
+    return None
+
+
+# --- Goldene Schicht --------------------------------------------------------
+# Jede Schicht kann golden sein: doppelter Lohn. Reiner Zufall, klar markiert -
+# das ist der kleine Kick, der auch die dreissigste Rechenschicht interessant
+# macht, ohne dass man dafuer etwas koennen muesste.
+GOLD_CHANCE = float(os.getenv("ARBEIT_GOLD_CHANCE", "0.08") or "0.08")
+GOLD_FAKTOR = 2.0
 
 # --- Flavor -----------------------------------------------------------------
 _SCHICHT_START = ["Anwesenheit notiert. Los.", "Stempelkarte durch. Ich schau zu.",
@@ -520,18 +576,21 @@ class Tagesraetsel:
     def raten(self, uid, wort):
         """Ein Versuch. Gibt (status, spiel) zurueck.
 
-        status: 'aus_runde' (Runde schon entschieden) | 'fertig' (diese Person
-        ist durch) | 'laenge' | 'weiter' | 'geloest' | 'aus'."""
+        status: 'kein_wort' | 'fertig' (diese Person ist durch) | 'laenge' |
+        'weiter' | 'geloest' | 'aus'.
+
+        WICHTIG: der Sieger wird nur gesetzt, wenn noch keiner drinsteht. Wer
+        nach der Entscheidung noch loest, darf das - er nimmt dem Ersten aber
+        nichts weg. Ob Geld fliesst, entscheidet der Aufrufer daran, ob DIESE
+        Person der Gewinner ist."""
         if not self.laeuft:
             return "kein_wort", None
-        if self.entschieden:
-            return "aus_runde", self.spiel_von(uid)
         spiel = self.spiel_von(uid)
         status = spiel.raten(wort)
         if status in ("laenge", "fertig"):
             return status, spiel
         self.daten.setdefault("spieler", {})[str(int(uid))] = list(spiel.versuche)
-        if status == "geloest":
+        if status == "geloest" and not self.entschieden:
             self.daten["gewinner"] = int(uid)
             self.daten["versuche"] = len(spiel.versuche)
         return status, spiel
@@ -761,9 +820,17 @@ class Arbeit(FeatureBasis):
     # --- Daten ------------------------------------------------------------
     def _nutzer(self, uid):
         topf = self._store.data.setdefault("nutzer", {})
-        return topf.setdefault(str(int(uid)), {
+        prof = topf.setdefault(str(int(uid)), {
             "cooldown": 0, "serie": 0, "schichten": 0, "geschafft": 0,
             "verdient": 0, "tag": "", "heute": 0})
+        # Nachtraeglich dazugekommene Felder ergaenzen: ein Konto aus der Zeit
+        # vor der Karriere darf nicht an einem fehlenden Schluessel scheitern.
+        prof.setdefault("beste_serie", int(prof.get("serie", 0)))
+        prof.setdefault("gold", 0)              # goldene Schichten erwischt
+        prof.setdefault("wordle_siege", 0)      # Woerter des Tages geknackt
+        prof.setdefault("wordle_gespielt", 0)
+        prof.setdefault("wordle_verteilung", [0] * MAX_VERSUCHE)
+        return prof
 
     def raetsel(self, gid):
         """Das Tagesraetsel eines Servers - immer dasselbe Objekt auf denselben
@@ -804,8 +871,11 @@ class Arbeit(FeatureBasis):
                     f"{_muenzen(echt)} an.")
         return "Dein Tagesdeckel ist voll – heute gibt es nichts mehr."
 
-    def _serie_faktor(self, prof):
-        return 1.0 + min(SERIE_MAX, int(prof.get("serie", 0)) * SERIE_SCHRITT)
+    @staticmethod
+    def _serie_bonus(prof):
+        """Nur der ZUSCHLAG (0..0,5), nicht der ganze Faktor - so lassen sich
+        Serie und Stufe sauber addieren."""
+        return min(SERIE_MAX, int(prof.get("serie", 0)) * SERIE_SCHRITT)
 
     # --- Befehle ----------------------------------------------------------
     async def handle(self, message):
@@ -820,7 +890,9 @@ class Arbeit(FeatureBasis):
         erst = teile[0].lower().strip(".,!?")
 
         if erst in _LOHN_CMDS:
-            return self._lohnzettel(message.author)
+            return await self._lohnzettel(message)
+        if erst in _TOP_CMDS and len(teile) == 1:
+            return await self._rangliste(message)
         if erst in _WORDLE_CMDS and len(teile) == 1:
             return await self._tages_zeigen(message)
         if erst not in _CMDS:
@@ -829,6 +901,10 @@ class Arbeit(FeatureBasis):
         zweit = teile[1].lower().strip(".,!?") if len(teile) > 1 else ""
         if zweit in ("liste", "list", "was", "hilfe", "help"):
             return self._schichtliste()
+        if zweit in _TOP_CMDS:
+            return await self._rangliste(message)
+        if zweit in _LOHN_CMDS or zweit in ("bilanz", "statistik", "stats"):
+            return await self._lohnzettel(message)
         gewuenscht = SCHICHTEN.get(zweit)
         if gewuenscht is not None and gewuenscht.selten:
             # Seltene Schichten kann man sich NICHT bestellen - sonst waeren sie
@@ -875,28 +951,139 @@ class Arbeit(FeatureBasis):
                           f"höchstens {_muenzen(TAGES_DECKEL)} am Tag")
         return e
 
-    def _lohnzettel(self, autor):
-        prof = self._nutzer(autor.id)
+    @staticmethod
+    async def _avatar(user):
+        try:
+            return await asyncio.wait_for(user.display_avatar.with_size(128).read(), 6)
+        except Exception:  # noqa: BLE001 - Profilbild ist nur Deko
+            return None
+
+    async def _lohnzettel(self, message):
+        """Die Arbeitsbilanz als Karte - mit Stufe, Fortschritt und Wordle-Bilanz.
+
+        Faellt das Zeichnen aus, geht der alte Text-Weg raus: eine fehlende
+        Schrift darf niemandem seine Zahlen vorenthalten."""
+        ziel = next((m for m in message.mentions if not m.bot), None) or message.author
+        prof = self._nutzer(ziel.id)
         heute = self._tageskonto(prof)
+        geschafft = int(prof.get("geschafft", 0))
+        stufe = stufe_fuer(geschafft)
+        weiter = naechste_stufe(geschafft)
+        verteilung = list(prof.get("wordle_verteilung") or [0] * MAX_VERSUCHE)
+        wordle = ((int(prof.get("wordle_siege", 0)),
+                   int(prof.get("wordle_gespielt", 0)), verteilung)
+                  if prof.get("wordle_gespielt") else None)
+        avatar = await self._avatar(ziel)
+        try:
+            import render
+            buf = await asyncio.to_thread(
+                render.lohnzettel, ziel.display_name, avatar,
+                stufe=stufe.titel, symbol=stufe.symbol, bonus=stufe.bonus,
+                geschafft=geschafft, angetreten=int(prof.get("schichten", 0)),
+                serie=int(prof.get("serie", 0)),
+                beste_serie=int(prof.get("beste_serie", 0)),
+                verdient=int(prof.get("verdient", 0)), heute=heute,
+                deckel=TAGES_DECKEL, gold=int(prof.get("gold", 0)),
+                naechste=(weiter.titel if weiter else None),
+                fehlt=(weiter.ab - geschafft if weiter else 0), wordle=wordle)
+        except Exception:  # noqa: BLE001
+            log.exception("Lohnzettel-Karte fehlgeschlagen - Text-Fallback")
+            return self._lohnzettel_text(ziel, prof, heute, stufe, weiter)
+        warte = int(prof.get("cooldown", 0)) - int(time.time())
+        e = discord.Embed(
+            title=f"🧾 Lohnzettel · {ziel.display_name}",
+            description=(f"{stufe.symbol} **{stufe.titel}** · "
+                         f"+{round(stufe.bonus * 100)} % auf jeden Lohn"),
+            color=discord.Color.gold())
+        e.set_image(url="attachment://lohnzettel.png")
+        e.set_footer(text=(f"Nächste Schicht in {warte // 60 + 1} Min."
+                           if warte > 0 else "Du kannst sofort ran."))
+        try:
+            await message.channel.send(
+                embed=e, file=discord.File(buf, filename="lohnzettel.png"))
+        except discord.HTTPException:
+            return self._lohnzettel_text(ziel, prof, heute, stufe, weiter)
+        return HANDLED
+
+    def _lohnzettel_text(self, ziel, prof, heute, stufe, weiter):
+        """Der Notweg ohne Bild - dieselben Zahlen, nur als Embed."""
         quote = 0
         if prof.get("schichten"):
             quote = round(100 * int(prof.get("geschafft", 0)) / int(prof["schichten"]))
-        e = discord.Embed(title=f"🧾 Lohnzettel · {autor.display_name}",
-                          color=discord.Color.green())
+        e = discord.Embed(title=f"🧾 Lohnzettel · {ziel.display_name}",
+                          color=discord.Color.gold())
+        e.add_field(name="Stufe",
+                    value=f"{stufe.symbol} **{stufe.titel}**\n"
+                          f"+{round(stufe.bonus * 100)} % Zuschlag")
         e.add_field(name="Schichten",
                     value=f"{prof.get('schichten', 0)} angetreten\n"
                           f"{prof.get('geschafft', 0)} geschafft ({quote} %)")
         e.add_field(name="Serie",
                     value=f"**{prof.get('serie', 0)}** in Folge\n"
-                          f"Zuschlag **+{round((self._serie_faktor(prof) - 1) * 100)} %**")
+                          f"Bestwert {prof.get('beste_serie', 0)}")
         e.add_field(name="Verdient",
                     value=f"insgesamt **{_muenzen(prof.get('verdient', 0))}** "
                           f"{economy.COIN}\nheute **{_muenzen(heute)}** von "
-                          f"{_muenzen(TAGES_DECKEL)}")
-        warte = int(prof.get("cooldown", 0)) - int(time.time())
-        e.set_footer(text=(f"Nächste Schicht in {warte // 60 + 1} Min."
-                           if warte > 0 else "Du kannst sofort ran."))
+                          f"{_muenzen(TAGES_DECKEL)}", inline=False)
+        if weiter is not None:
+            e.set_footer(text=f"Noch {weiter.ab - int(prof.get('geschafft', 0))} "
+                              f"Schichten bis {weiter.titel}")
         return e
+
+    async def _rangliste(self, message):
+        """Wer im Werk was reisst - nach Verdienst, mit Stufe."""
+        leute = []
+        for uid, prof in (self._store.data.get("nutzer") or {}).items():
+            if not isinstance(prof, dict) or not int(prof.get("geschafft", 0)):
+                continue
+            leute.append((int(prof.get("verdient", 0)), int(uid), prof))
+        if not leute:
+            return self._kurz(
+                f"Hier hat noch niemand gearbeitet. `{self._bot_name} work` – "
+                f"sei der Erste.", discord.Color.orange())
+        leute.sort(key=lambda e: -e[0])
+        zeilen = []
+        for platz, (verdient, uid, prof) in enumerate(leute[:10], 1):
+            stufe = stufe_fuer(prof.get("geschafft", 0))
+            name = str(uid)
+            nutzer = self._safe_user(message, uid)
+            if nutzer is not None:
+                name = nutzer.display_name
+            zeilen.append((platz, name, stufe.symbol, stufe.titel,
+                           int(prof.get("geschafft", 0)), verdient))
+        try:
+            import render
+            buf = await asyncio.to_thread(
+                render.arbeit_rangliste, zeilen,
+                untertitel=f"{len(leute)} Arbeiter · {len(SCHICHTEN)} Schichten")
+            e = discord.Embed(title="🏭 Werk-Rangliste", color=discord.Color.gold())
+            e.set_image(url="attachment://rangliste.png")
+            await message.channel.send(
+                embed=e, file=discord.File(buf, filename="rangliste.png"))
+            return HANDLED
+        except Exception:  # noqa: BLE001
+            log.exception("Rangliste-Karte fehlgeschlagen - Text-Fallback")
+        e = discord.Embed(title="🏭 Werk-Rangliste", color=discord.Color.gold())
+        e.description = "\n".join(
+            f"**{p}.** {n} · {sym} {st} · {_muenzen(v)} {economy.COIN} "
+            f"({g} Schichten)" for p, n, sym, st, g, v in zeilen)
+        return e
+
+    @staticmethod
+    def _safe_user(message, uid):
+        """Nutzer zu einer ID - erst im Server, dann global. Nie ein Fehler."""
+        guild = getattr(message, "guild", None)
+        try:
+            if guild is not None:
+                m = guild.get_member(int(uid))
+                if m is not None:
+                    return m
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return message._state._get_client().get_user(int(uid))
+        except Exception:  # noqa: BLE001
+            return None
 
     async def _schicht_starten(self, message, schicht=None):
         prof = self._nutzer(message.author.id)
@@ -916,6 +1103,13 @@ class Arbeit(FeatureBasis):
         self._speichern()
 
         embed, view, datei = await schicht.bauen(self, message.author)
+        if view.gold:
+            embed.color = discord.Color.gold()
+            embed.title = "🥇 " + (embed.title or schicht.titel)
+            embed.add_field(
+                name="🥇 Goldene Schicht",
+                value="Diese eine zählt **doppelt**. Streng dich an.",
+                inline=False)
         try:
             kwargs = {"embed": embed, "view": view}
             if datei is not None:
@@ -935,34 +1129,80 @@ class Arbeit(FeatureBasis):
         return HANDLED
 
     # --- Abrechnung einer Schicht ----------------------------------------
-    def abrechnen(self, uid, schicht, anteil):
+    def abrechnen(self, uid, schicht, anteil, *, gold=False):
         """Zahlt eine beendete Schicht aus. 'anteil' ist die Leistung (0..1,2).
 
-        Gibt (betrag, serie, hinweis) zurueck; die View baut daraus das Ergebnis."""
+        Der Lohn setzt sich ADDITIV zusammen: Grundlohn x Leistung x
+        (1 + Serien-Zuschlag + Stufen-Zuschlag), am Ende ggf. verdoppelt.
+        Additiv und nicht multiplikativ, weil sich sonst zwei Faktoren von je
+        +50 % zu +125 % aufschaukeln - und die Schicht faengt an, das Wort des
+        Tages zu ueberholen, das ja der Hoehepunkt bleiben soll.
+
+        Gibt (betrag, info) zurueck; 'info' ist alles, was das Ergebnis-Embed
+        anzeigen will (Serie, Stufe, Aufstieg, Gold, Deckel-Hinweis)."""
         prof = self._nutzer(uid)
+        vorher = int(prof.get("geschafft", 0))
         if anteil > 0:
             prof["serie"] = int(prof.get("serie", 0)) + 1
-            prof["geschafft"] = int(prof.get("geschafft", 0)) + 1
+            prof["geschafft"] = vorher + 1
+            prof["beste_serie"] = max(int(prof.get("beste_serie", 0)),
+                                      int(prof["serie"]))
         else:
             prof["serie"] = 0
-        gewollt = int(round(schicht.lohn * anteil * self._serie_faktor(prof)))
-        echt, frei = self._auszahlen(uid, gewollt, f"arbeit:{schicht.key}")
-        return echt, int(prof.get("serie", 0)), self._deckel_hinweis(gewollt, echt, frei)
+        nachher = int(prof.get("geschafft", 0))
+        stufe = stufe_fuer(nachher)
+        aufgestiegen = stufe.ab > stufe_fuer(vorher).ab
 
-    def ergebnis_embed(self, autor, titel, text, betrag, serie, hinweis, gut):
+        faktor = 1.0 + self._serie_bonus(prof) + stufe.bonus
+        gewollt = int(round(schicht.lohn * anteil * faktor))
+        if gold and gewollt > 0:
+            gewollt = int(round(gewollt * GOLD_FAKTOR))
+            prof["gold"] = int(prof.get("gold", 0)) + 1
+        echt, frei = self._auszahlen(uid, gewollt, f"arbeit:{schicht.key}")
+        info = {
+            "serie": int(prof.get("serie", 0)),
+            "serie_bonus": self._serie_bonus(prof),
+            "stufe": stufe,
+            "aufgestiegen": aufgestiegen,
+            "geschafft": nachher,
+            "gold": bool(gold and echt > 0),
+            "hinweis": self._deckel_hinweis(gewollt, echt, frei),
+        }
+        return echt, info
+
+    def ergebnis_embed(self, autor, titel, text, betrag, info, gut):
+        stufe = info["stufe"]
         e = discord.Embed(
-            title=titel,
+            title=("🥇 " + titel if info.get("gold") else titel),
             description=text + "\n\n" + random.choice(_LOB if gut else _TADEL),
-            color=discord.Color.green() if gut else discord.Color.red())
+            color=discord.Color.gold() if info.get("gold")
+            else (discord.Color.green() if gut else discord.Color.red()))
         if betrag > 0:
-            e.add_field(name="Lohn", value=f"**+{_muenzen(betrag)}** {economy.COIN}")
-        if serie:
-            zuschlag = round(min(SERIE_MAX, serie * SERIE_SCHRITT) * 100)
-            e.add_field(name="Serie", value=f"**{serie}** in Folge (+{zuschlag} %)")
-        if hinweis:
-            e.add_field(name="Hinweis", value=hinweis, inline=False)
-        e.set_footer(text=f"{autor.display_name} · nächste Schicht in "
-                          f"{COOLDOWN // 60} Minuten")
+            wert = f"**+{_muenzen(betrag)}** {economy.COIN}"
+            if info.get("gold"):
+                wert += "\n🥇 **Goldene Schicht** – doppelter Lohn"
+            e.add_field(name="Lohn", value=wert)
+        if info.get("serie"):
+            e.add_field(name="Serie",
+                        value=f"**{info['serie']}** in Folge "
+                              f"(+{round(info['serie_bonus'] * 100)} %)")
+        e.add_field(name="Stufe",
+                    value=f"{stufe.symbol} **{stufe.titel}** "
+                          f"(+{round(stufe.bonus * 100)} %)")
+        if info.get("aufgestiegen"):
+            e.add_field(
+                name="🎉 Aufstieg",
+                value=f"Du bist jetzt **{stufe.titel}** – ab sofort "
+                      f"**+{round(stufe.bonus * 100)} %** auf jeden Lohn.",
+                inline=False)
+        if info.get("hinweis"):
+            e.add_field(name="Hinweis", value=info["hinweis"], inline=False)
+        weiter = naechste_stufe(info.get("geschafft", 0))
+        fuss = f"{autor.display_name} · nächste Schicht in {COOLDOWN // 60} Min."
+        if weiter is not None:
+            fehlt = weiter.ab - int(info.get("geschafft", 0))
+            fuss += f" · {fehlt} bis {weiter.titel}"
+        e.set_footer(text=fuss)
         return e
 
     # --- Wort des Tages: wann und wohin -----------------------------------
@@ -1136,12 +1376,20 @@ class Arbeit(FeatureBasis):
             await interaction.response.send_message(
                 "Das Wort von neulich ist durch. Warte aufs nächste.", ephemeral=True)
             return
-        if raetsel.entschieden:
-            await interaction.response.send_message(
-                f"Zu spät – <@{raetsel.gewinner}> war schneller. "
-                f"Das Wort war **{raetsel.wort}**.", ephemeral=True)
-            return
         spiel = raetsel.spiel_von(interaction.user.id)
+        if raetsel.entschieden and not spiel.geloest:
+            # Das Rennen ist gelaufen - Geld gibt es nicht mehr. Weiterraten
+            # darf man trotzdem: fuer die eigene Bilanz. Genau DAS hat die
+            # Runde vorher nicht zugelassen, und damit war fuer alle ausser dem
+            # Sieger der Tag gelaufen, sobald jemand schneller war.
+            if spiel.aus:
+                await interaction.response.send_message(
+                    f"Rennen gelaufen, deine Versuche auch. Das Wort war "
+                    f"**{raetsel.wort}**.", ephemeral=True)
+                return
+            await interaction.response.send_modal(
+                TagesModal(gid, spiel.laenge, nur_ehre=True))
+            return
         if spiel.aus:
             await interaction.response.send_message(
                 f"Deine {MAX_VERSUCHE} Versuche sind weg. Verraten wird trotzdem "
@@ -1159,10 +1407,6 @@ class Arbeit(FeatureBasis):
             await interaction.response.send_message("Gerade läuft kein Wort.",
                                                     ephemeral=True)
             return
-        if status == "aus_runde":
-            await interaction.response.send_message(
-                f"Zu spät – <@{raetsel.gewinner}> war schneller.", ephemeral=True)
-            return
         if status == "laenge":
             await interaction.response.send_message(
                 f"{len(raetsel.wort)} Buchstaben, nur Buchstaben. Nochmal.",
@@ -1172,6 +1416,12 @@ class Arbeit(FeatureBasis):
             await interaction.response.send_message("Für heute bist du durch.",
                                                     ephemeral=True)
             return
+        # Teilnahme mitschreiben - genau einmal am Tag, beim ersten Versuch.
+        prof = self._nutzer(interaction.user.id)
+        if len(spiel.versuche) == 1:
+            prof["wordle_gespielt"] = int(prof.get("wordle_gespielt", 0)) + 1
+            self._speichern()
+
         if status == "weiter":
             e = discord.Embed(
                 title="🟩 Wort des Tages",
@@ -1194,13 +1444,35 @@ class Arbeit(FeatureBasis):
                                           "Alle Versuche verbraucht", verdeckt=True)
             return
 
-        # Gewonnen: Topf kassieren, Runde schliessen.
+        # Geloest. Die Bilanz zaehlt immer, das Geld nur fuer den Ersten.
+        n = len(spiel.versuche)
+        prof["wordle_siege"] = int(prof.get("wordle_siege", 0)) + 1
+        verteilung = list(prof.get("wordle_verteilung") or [0] * MAX_VERSUCHE)
+        while len(verteilung) < MAX_VERSUCHE:
+            verteilung.append(0)
+        if 1 <= n <= MAX_VERSUCHE:
+            verteilung[n - 1] += 1
+        prof["wordle_verteilung"] = verteilung
+
+        sieger = raetsel.gewinner == interaction.user.id
+        if not sieger:
+            self._speichern()
+            e = discord.Embed(
+                title="🟩 Doch noch geknackt",
+                description=f"**{spiel.loesung}** – in {n} Versuch"
+                            f"{'en' if n != 1 else ''}.\n\n"
+                            f"Den Topf hat <@{raetsel.gewinner}> mitgenommen, "
+                            f"aber in deiner Bilanz steht es.",
+                color=discord.Color.blurple())
+            await self._ephemer_mit_brett(interaction, e, spiel, "GEKNACKT",
+                                          f"{n} Versuch{'e' if n != 1 else ''} · "
+                                          f"nur für die Ehre")
+            return
+
         gewollt = raetsel.preis(spiel)
         echt, frei = self._auszahlen(interaction.user.id, gewollt, "arbeit:tageswordle")
         hinweis = self._deckel_hinweis(gewollt, echt, frei)
         self._speichern()
-
-        n = len(spiel.versuche)
         e = discord.Embed(
             title="🏆 Wort des Tages geknackt",
             description=f"**{spiel.loesung}** – in {n} Versuch"
@@ -1314,6 +1586,10 @@ class SchichtView(discord.ui.View):
         self.schicht = schicht
         self.message = None
         self.fertig = False
+        # Gold wird BEIM START gewuerfelt, nicht beim Abrechnen: so kann es
+        # dranstehen, waehrend man arbeitet. Man soll wissen, dass die Schicht
+        # doppelt zaehlt - das ist der halbe Spass daran.
+        self.gold = random.random() < GOLD_CHANCE
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.uid:
@@ -1326,6 +1602,7 @@ class SchichtView(discord.ui.View):
         if self.fertig or self.message is None:
             return
         self.fertig = True
+        # Verfallen ist verfallen: kein Gold-Bonus auf nichts.
         self.chef.abrechnen(self.uid, self.schicht, 0.0)
         # Nur die Knoepfe abnehmen, den Stand STEHEN LASSEN. Frueher wurde hier
         # das ganze Embed durch "Schicht verpennt" ersetzt - wer nach einer
@@ -1341,9 +1618,10 @@ class SchichtView(discord.ui.View):
         """Schicht abschliessen, auszahlen, Ergebnis zeigen."""
         self.fertig = True
         self.stop()
-        betrag, serie, hinweis = self.chef.abrechnen(self.uid, self.schicht, anteil)
+        betrag, info = self.chef.abrechnen(self.uid, self.schicht, anteil,
+                                          gold=self.gold)
         emb = self.chef.ergebnis_embed(interaction.user, titel, text,
-                                       betrag, serie, hinweis, anteil > 0)
+                                       betrag, info, anteil > 0)
         kwargs = {"embed": emb, "view": None}
         if datei is not None:
             emb.set_image(url=f"attachment://{datei.filename}")
@@ -1766,12 +2044,14 @@ class KontrolleKnopf(discord.ui.Button):
 # Wort des Tages: ein Knopf fuer alle, jeder raet fuer sich
 # ===========================================================================
 class TagesModal(discord.ui.Modal):
-    def __init__(self, gid, laenge):
-        super().__init__(title="Wort des Tages", timeout=120)
+    def __init__(self, gid, laenge, *, nur_ehre=False):
+        super().__init__(title=("Wort des Tages – nur für die Ehre" if nur_ehre
+                                else "Wort des Tages"), timeout=120)
         self.gid = int(gid)
         self.feld = discord.ui.TextInput(
             label=f"{laenge} Buchstaben", min_length=laenge, max_length=laenge,
-            placeholder="Nur Buchstaben, keine Umlaute")
+            placeholder=("Der Topf ist weg – zählt für deine Bilanz"
+                         if nur_ehre else "Nur Buchstaben, keine Umlaute"))
         self.add_item(self.feld)
 
     async def on_submit(self, interaction):

@@ -9607,11 +9607,15 @@ def test_arbeit_tageswordle_ist_ein_wettrennen():
         assert status == "geloest" and r.entschieden and r.gewinner == 1
         assert len(spiel.versuche) == 2
 
-        # Nutzer 2 kommt zu spaet - und der Versuch wird auch nicht gezaehlt.
-        status2, _ = r.raten(2, wort)
-        assert status2 == "aus_runde", status2
-        assert not r.gespielt(2), "der zu spaete Versuch wurde mitgeschrieben"
+        # Nutzer 2 darf NACH der Entscheidung weiterraten - fuer die eigene
+        # Bilanz. Der Topf ist weg, aber der Tag ist nicht gelaufen: vorher war
+        # fuer alle ausser dem Sieger sofort Schluss.
+        status2, spiel2 = r.raten(2, wort)
+        assert status2 == "geloest", status2
+        assert spiel2.geloest and r.gespielt(2)
+        # Der Sieger bleibt der Erste - daran aendert das nichts.
         assert r.gewinner == 1, "der Sieger wurde ueberschrieben"
+        assert r.daten["versuche"] == 2, r.daten["versuche"]
     finally:
         restore()
 
@@ -9694,28 +9698,30 @@ def test_arbeit_tagesdeckel_und_serie():
         wp = arbeit.instance
         schicht = arbeit.SCHICHTEN["wordle"]
 
-        # Erste volle Schicht: Grundlohn, Serie 1.
-        betrag, serie, _h = wp.abrechnen(7, schicht, 1.0)
-        assert serie == 1 and betrag == schicht.lohn * 1.05, betrag
+        # Erste volle Schicht: Grundlohn + 5 % Serie (Stufe 0 gibt nichts dazu).
+        betrag, info = wp.abrechnen(7, schicht, 1.0)
+        assert info["serie"] == 1 and betrag == round(schicht.lohn * 1.05), betrag
+        assert info["stufe"].titel == "Praktikant", info["stufe"]
 
-        # Zweite: Serie 2 -> +10 %.
-        betrag2, serie2, _h = wp.abrechnen(7, schicht, 1.0)
-        assert serie2 == 2 and betrag2 > betrag
+        # Zweite: Serie 2 -> mehr.
+        betrag2, info2 = wp.abrechnen(7, schicht, 1.0)
+        assert info2["serie"] == 2 and betrag2 > betrag
 
-        # Reinfall setzt zurueck und zahlt nichts.
-        betrag3, serie3, _h = wp.abrechnen(7, schicht, 0.0)
-        assert betrag3 == 0 and serie3 == 0
+        # Reinfall setzt die Serie zurueck und zahlt nichts - die STUFE bleibt.
+        betrag3, info3 = wp.abrechnen(7, schicht, 0.0)
+        assert betrag3 == 0 and info3["serie"] == 0
+        assert info3["geschafft"] == 2, "Reinfall hat die Stufe angetastet"
 
         # Deckel: das Konto auf kurz vor Schluss setzen.
         prof = wp._nutzer(7)
         prof["tag"], prof["heute"] = arbeit._heute(), arbeit.TAGES_DECKEL - 1000
-        betrag4, _s, hinweis = wp.abrechnen(7, schicht, 1.0)
+        betrag4, info4 = wp.abrechnen(7, schicht, 1.0)
         assert betrag4 == 1000, betrag4
-        assert "Tagesdeckel" in hinweis, hinweis
+        assert "Tagesdeckel" in info4["hinweis"], info4["hinweis"]
         # Und danach ist Schluss - aufs Konto kommt wirklich nichts mehr.
         stand = economy.instance._profile(7)["coins"]
-        betrag5, _s, hinweis5 = wp.abrechnen(7, schicht, 1.0)
-        assert betrag5 == 0 and "voll" in hinweis5.lower(), hinweis5
+        betrag5, info5 = wp.abrechnen(7, schicht, 1.0)
+        assert betrag5 == 0 and "voll" in info5["hinweis"].lower(), info5
         assert economy.instance._profile(7)["coins"] == stand, "trotz Deckel gebucht"
         assert wp._nutzer(7)["heute"] == arbeit.TAGES_DECKEL
     finally:
@@ -10020,6 +10026,178 @@ def test_arbeit_neue_schichten_funktionieren():
     # Runden mit zwei richtigen Antworten.
     alle = [w for worte in arbeit.KontrolleSchicht.KISTEN.values() for w in worte]
     assert len(alle) == len(set(alle)), "Wort kommt in zwei Kisten vor"
+
+
+def test_arbeit_karriere_geht_nie_zurueck():
+    """Die Stufe ist das Rueckgrat: sie zaehlt GESCHAFFTE Schichten und faellt
+    nie. Vorher gab es nur die Serie - ein Reinfall und alles war weg, ueber
+    Wochen baute man nichts auf."""
+    import arbeit
+    assert arbeit.stufe_fuer(0).titel == "Praktikant"
+    assert arbeit.stufe_fuer(9).titel == "Praktikant"
+    assert arbeit.stufe_fuer(10).titel == "Aushilfe"
+    assert arbeit.stufe_fuer(10**6).titel == arbeit.STUFEN[-1].titel
+
+    # Monoton: mehr Schichten sind nie eine schlechtere Stufe.
+    letzter = -1.0
+    for n in range(0, 900, 7):
+        bonus = arbeit.stufe_fuer(n).bonus
+        assert bonus >= letzter, (n, bonus, letzter)
+        letzter = bonus
+
+    # Die Schwellen muessen aufsteigen, sonst greift stufe_fuer daneben.
+    schwellen = [st.ab for st in arbeit.STUFEN]
+    assert schwellen == sorted(schwellen) and len(set(schwellen)) == len(schwellen)
+    assert arbeit.STUFEN[0].ab == 0, "es gibt keine Stufe fuer Anfaenger"
+    assert arbeit.naechste_stufe(0).titel == "Aushilfe"
+    assert arbeit.naechste_stufe(10**6) is None, "oben muss Schluss sein"
+
+
+def test_arbeit_lohn_ist_additiv_und_gedeckelt():
+    """Serie und Stufe werden ADDIERT, nicht multipliziert.
+
+    Multiplikativ schaukeln sich zwei Zuschlaege von je +50 % zu +125 % auf -
+    und dann faengt die Schicht an, das Wort des Tages zu ueberholen, das ja
+    der Hoehepunkt bleiben soll."""
+    arbeit, restore = _arbeit_frisch({7: 0})
+    try:
+        wp = arbeit.instance
+        schicht = arbeit.SCHICHTEN["safe"]
+        prof = wp._nutzer(7)
+        # Volle Serie und hoechste Stufe von Hand setzen.
+        prof["serie"] = 999
+        prof["geschafft"] = arbeit.STUFEN[-1].ab
+        max_faktor = 1.0 + arbeit.SERIE_MAX + arbeit.STUFEN[-1].bonus
+        assert max_faktor <= 2.05, max_faktor      # nicht aus dem Ruder
+
+        betrag, info = wp.abrechnen(7, schicht, 1.0)
+        erwartet = round(schicht.lohn * 1.0 * (1.0 + info["serie_bonus"]
+                                               + info["stufe"].bonus))
+        assert betrag == erwartet, (betrag, erwartet)
+        # Selbst im Bestfall bleibt eine normale Schicht unter dem kleinsten
+        # Tages-Wordle-Topf - sonst waere das Wort des Tages entwertet.
+        kleinster_topf = min(arbeit.TAGES_LAENGEN) * arbeit.TAGES_PRO_BUCHSTABE
+        beste_normal = max(s.lohn for s in arbeit.SCHICHTEN.values() if not s.selten)
+        assert beste_normal * 1.2 * max_faktor < kleinster_topf
+    finally:
+        restore()
+
+
+def test_arbeit_goldene_schicht_verdoppelt():
+    """Gold wird BEIM START gewuerfelt, damit es dransteht, waehrend man
+    arbeitet - und verdoppelt am Ende den Lohn. Auf null bleibt null: fuer eine
+    verpatzte Schicht gibt es auch doppelt nichts."""
+    arbeit, restore = _arbeit_frisch({7: 0})
+    try:
+        wp = arbeit.instance
+        schicht = arbeit.SCHICHTEN["safe"]
+        normal, _i = wp.abrechnen(7, schicht, 1.0)
+        wp._nutzer(7)["serie"] = 0          # gleiche Ausgangslage
+        gold, info = wp.abrechnen(7, schicht, 1.0, gold=True)
+        assert gold == normal * 2, (normal, gold)
+        assert info["gold"] is True and wp._nutzer(7)["gold"] == 1
+
+        # Verpatzt: kein Lohn, also auch keine Gold-Zaehlung.
+        _b, info2 = wp.abrechnen(7, schicht, 0.0, gold=True)
+        assert info2["gold"] is False and wp._nutzer(7)["gold"] == 1
+
+        # Die Chance muss eine Chance bleiben - nicht immer, nicht nie.
+        assert 0.0 < arbeit.GOLD_CHANCE < 0.35, arbeit.GOLD_CHANCE
+        random.seed(11)
+        views = [arbeit.SchichtView(wp, 7, schicht) for _ in range(3000)]
+        anteil = sum(1 for v in views if v.gold) / len(views)
+        assert abs(anteil - arbeit.GOLD_CHANCE) < 0.03, anteil
+    finally:
+        random.seed()
+        restore()
+
+
+def test_arbeit_wordle_bilanz_wird_mitgeschrieben():
+    """Jede Teilnahme am Wort des Tages zaehlt genau einmal, jeder Erfolg
+    landet in der Verteilung - auch der, fuer den es kein Geld mehr gab."""
+    arbeit, restore = _arbeit_frisch({1: 0, 2: 0})
+    try:
+        wp = arbeit.instance
+        r = wp.raetsel(900)
+        r.starten()
+        wort = r.wort
+
+        gesendet = []
+
+        class Antwort:
+            def __init__(self):
+                self.done = False
+
+            async def send_message(self, **kw):
+                gesendet.append(kw)
+
+        class Ia:
+            def __init__(self, uid):
+                self.user = SimpleNamespace(id=uid, display_name=f"U{uid}")
+                self.response = Antwort()
+                self.channel = SimpleNamespace(
+                    send=lambda **kw: _als_coro(None))
+                self.client = SimpleNamespace(get_channel=lambda _c: None)
+
+        # Nutzer 1: einmal daneben, dann richtig -> Sieger.
+        asyncio.run(wp.tages_antwort(Ia(1), 900, "X" * len(wort)))
+        asyncio.run(wp.tages_antwort(Ia(1), 900, wort))
+        p1 = wp._nutzer(1)
+        assert p1["wordle_gespielt"] == 1, "Teilnahme mehrfach gezaehlt"
+        assert p1["wordle_siege"] == 1
+        assert p1["wordle_verteilung"][1] == 1, p1["wordle_verteilung"]
+
+        # Nutzer 2 loest NACH der Entscheidung: Bilanz ja, Geld nein.
+        vorher = economy.instance._profile(2)["coins"]
+        asyncio.run(wp.tages_antwort(Ia(2), 900, wort))
+        p2 = wp._nutzer(2)
+        assert p2["wordle_siege"] == 1 and p2["wordle_verteilung"][0] == 1
+        assert economy.instance._profile(2)["coins"] == vorher, "trotzdem bezahlt"
+        assert r.gewinner == 1, "Sieger ueberschrieben"
+    finally:
+        restore()
+
+
+def test_arbeit_lohnzettel_und_rangliste_als_karte():
+    """Beide Karten entstehen wirklich - und ohne Bild gibt es einen Textweg,
+    damit eine fehlende Schrift niemandem seine Zahlen vorenthaelt."""
+    import render
+    arbeit, restore = _arbeit_frisch({5: 0, 6: 0})
+    try:
+        wp = arbeit.instance
+        for _ in range(12):
+            wp.abrechnen(5, arbeit.SCHICHTEN["safe"], 1.0)
+        wp.abrechnen(6, arbeit.SCHICHTEN["salat"], 1.0)
+        prof = wp._nutzer(5)
+        assert arbeit.stufe_fuer(prof["geschafft"]).titel == "Aushilfe"
+
+        buf = render.lohnzettel("Tester", None, stufe="Aushilfe", symbol="🧹",
+                                bonus=0.08, geschafft=12, angetreten=12, serie=12,
+                                beste_serie=12, verdient=90000, heute=90000,
+                                deckel=arbeit.TAGES_DECKEL, gold=0,
+                                naechste="Facharbeiter", fehlt=18,
+                                wordle=(2, 5, [0, 1, 1, 0, 0, 0]))
+        assert buf.read(4) == b"\x89PNG"
+        rows = [(1, "Tester", "🧹", "Aushilfe", 12, 90000)]
+        assert render.arbeit_rangliste(rows).read(4) == b"\x89PNG"
+
+        # Der Textweg trägt dieselben Zahlen.
+        text = _embed_text(wp._lohnzettel_text(
+            SimpleNamespace(id=5, display_name="Tester"), prof, 90000,
+            arbeit.stufe_fuer(12), arbeit.naechste_stufe(12)))
+        assert "Aushilfe" in text and "12" in text, text
+
+        # Die Rangliste sortiert nach Verdienst, nicht nach ID.
+        gesendet = []
+        msg = SimpleNamespace(
+            guild=None, mentions=[],
+            author=SimpleNamespace(id=5, display_name="Tester"),
+            channel=SimpleNamespace(send=lambda **kw: _als_coro(
+                gesendet.append(kw) or SimpleNamespace(id=1))))
+        assert asyncio.run(wp._rangliste(msg)) is arbeit.HANDLED
+        assert gesendet and "file" in gesendet[0]
+    finally:
+        restore()
 
 
 def _als_coro(wert):

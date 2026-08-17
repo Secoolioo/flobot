@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 208 Tests
+python3 test_games_logic.py    # 213 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -295,9 +295,10 @@ zählt Können.
 
 ```
 Flo work              Schicht antreten (zufällige Aufgabe)
-Flo work wordle       gezielt eine bestimmte Schicht
-Flo work liste        was es gibt
-Flo lohnzettel        eigene Bilanz: Schichten, Serie, Verdienst
+Flo work safe         gezielt eine bestimmte Schicht
+Flo work liste        was es gibt, mit Häufigkeit und Lohn
+Flo lohnzettel        eigene Bilanz als Karte (auch: Flo lohnzettel @wer)
+Flo work top          Werk-Rangliste
 ```
 
 | Schicht | Aufgabe | Grundlohn | Anteil |
@@ -324,6 +325,39 @@ drin.
 
 **Cooldown 15 Minuten**, **Tagesdeckel 250.000**. Ohne den Deckel wäre die
 Schicht die beste Geldquelle im Spiel — sie ist ja risikofrei.
+
+### Karriere
+
+Das Rückgrat: die **Stufe** zählt *geschaffte* Schichten und **fällt nie**. Die
+Serie ist nach einem Reinfall weg — über Wochen baute man vorher gar nichts auf.
+
+| ab … Schichten | Stufe | Zuschlag |
+|---|---|---|
+| 0 | 🧻 Praktikant | +0 % |
+| 10 | 🧹 Aushilfe | +8 % |
+| 30 | 🔧 Facharbeiter | +16 % |
+| 75 | 📋 Vorarbeiter | +25 % |
+| 150 | 🎖️ Schichtleiter | +34 % |
+| 300 | 🏅 Meister | +42 % |
+| 600 | 👑 Werksleiter | +50 % |
+
+Serie und Stufe werden **addiert**, nicht multipliziert:
+`Grundlohn × Leistung × (1 + Serie + Stufe)`. Multiplikativ schaukeln sich zwei
+Zuschläge von je +50 % zu +125 % auf — und dann überholt die Schicht das Wort des
+Tages, das der Höhepunkt bleiben soll. So liegt der Höchstfaktor bei **2,0**, und
+selbst die beste normale Schicht bleibt unter dem kleinsten Tagestopf. Ein Test
+rechnet das nach.
+
+**🥇 Goldene Schicht:** jede Schicht hat ~8 % Chance, **doppelt** zu zahlen. Das
+wird **beim Start** gewürfelt und steht dran, während man arbeitet — das ist der
+halbe Spaß daran. Auf null bleibt null: für eine verpatzte Schicht gibt es auch
+doppelt nichts.
+
+`Flo lohnzettel` zeigt das als gerenderte Karte: Stufe, Fortschrittsbalken zur
+nächsten, geschafft/angetreten, Serie samt Bestwert, Verdienst, Tagesstand,
+goldene Schichten und die **Wordle-Bilanz** mit der Verteilung der Versuche.
+`Flo work top` dasselbe als Rangliste. Fällt das Zeichnen aus, kommen dieselben
+Zahlen als Text — eine fehlende Schrift darf niemandem seine Bilanz vorenthalten.
 
 **Eine laufende Schicht wird nicht weggeräumt.** Sie meldet sich beim
 Auto-Lösch-Schutz an (`bot.protect_message`) und wird erst freigegeben, wenn sie
@@ -369,6 +403,11 @@ kommt. Am Wochenende verschiebt sich das Gewicht nach oben, garantiert ist nicht
 Der Faktor sinkt mit jedem Versuch (1× → ×2,0 … 6× → ×1,0), unter den Grundtopf
 geht es nie. Die Wordle-**Schicht** aus `Flo work` zahlt trotz ihrer Seltenheit
 nur einen Bruchteil davon — das Wort des Tages bleibt der Höhepunkt.
+
+**Nach der Entscheidung darf man weiterraten** — für die eigene Bilanz, nicht
+fürs Geld. Der Topf gehört dem Ersten, daran ändert das nichts; aber vorher war
+für alle außer dem Sieger der Tag gelaufen, sobald jemand schneller war. Jetzt
+zählt jeder Erfolg in die Wordle-Verteilung auf dem Lohnzettel.
 
 **Wann es fällt, entscheidet nicht die Uhr, sondern der Server** — und dann noch
 der Zufall:
@@ -645,6 +684,8 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
+| `ARBEIT_GOLD_CHANCE` | `0.08` | Chance auf eine goldene (doppelt zahlende) Schicht |
+| `WORDLE_VERZUG_MIN` / `_MAX` | `300` / `2700` | Zufallsfenster, bis das Wort des Tages fällt |
 | `WORDLE_CHANNEL_ID` | — | Standard-Kanal fürs Wort des Tages (je Server überschreibbar) |
 | `ARBEIT_COOLDOWN` | `900` | Sekunden zwischen zwei Schichten |
 | `ARBEIT_TAGESDECKEL` | `250000` | wie viel Arbeit am Tag höchstens einbringt |
