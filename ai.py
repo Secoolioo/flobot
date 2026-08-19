@@ -113,8 +113,15 @@ class FloAI:
     # Modelle, die als Ersatz nie in Frage kommen (koennen kein Chat).
     _UNBRAUCHBAR = ("whisper", "tts", "embed", "guard", "moderation", "rerank",
                     "safety", "prompt-guard")
-    # Woran man ein Modell erkennt, das Bilder lesen kann.
-    _SIEHT_BILDER = ("scout", "maverick", "vision", "-vl", "vl-", "multimodal", "omni")
+    # Woran man ein Modell erkennt, das Bilder lesen kann. Das bleibt Stochern
+    # im Namen - kein Anbieter verraet die Modalitaet in /models. Nachgemessen
+    # fehlten die zwei verbreitetsten Familien ueberhaupt (pixtral, llava), damit
+    # blieb das Bild-Lesen tot, obwohl ein Ersatz in der Liste stand. Der
+    # verlaessliche Hebel ist und bleibt LLM_VISION_MODEL in der .env; das hier
+    # ist die Notheilung. Findet sie nichts, wird die ganze Liste geloggt.
+    _SIEHT_BILDER = ("scout", "maverick", "vision", "-vl", "vl-", "vl_",
+                     "multimodal", "omni", "llava", "pixtral", "internvl",
+                     "minicpm-v", "moondream", "idefics", "image", "bild")
 
     # Open-Meteo liefert WMO-Wettercodes; hier in deutschen Klartext uebersetzt.
     WMO_CODES = {
@@ -446,10 +453,13 @@ class FloAI:
                 art, status, meldung, cf = self._einordnen(exc)
                 # EINE Zeile, greppbar - statt eines Tracebacks, den auf dem Handy
                 # niemand lesen kann. Der Traceback kommt nur bei "unbekannt".
-                log.warning("KI-Fehler: %s (HTTP %s%s) %s", art, status or "-",
-                            f", Cloudflare {cf}" if cf else "", meldung)
-                if art == "unbekannt":
-                    log.debug("KI-Fehler im Detail", exc_info=True)
+                # Die Ausnahmeklasse gehoert MIT in die eine Zeile. Vorher stand
+                # sie nur in einem log.debug - und bot.py:70 loggt ab INFO, das
+                # Detail erreichte das Journal also ausgerechnet im Fall
+                # "unbekannt" nie, wo es als einziges weiterhilft.
+                log.warning("KI-Fehler: %s (HTTP %s%s) [%s] %s", art, status or "-",
+                            f", Cloudflare {cf}" if cf else "",
+                            type(exc).__name__, meldung)
 
                 if art == "modell" and not modell_versucht:
                     modell_versucht = True

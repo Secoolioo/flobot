@@ -5,8 +5,10 @@ test_logic.py):  python test_games_logic.py
 """
 
 import asyncio
+import io
 import os
 import random
+import re
 import tempfile
 import time
 from types import SimpleNamespace
@@ -10846,6 +10848,96 @@ def test_ki_gegen_einen_echten_http_anbieter():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def test_ki_der_arzt_verschluckt_keine_meldung():
+    """Nachgemessen und es stimmte NICHT: der Suchfilter in 'k' fand zwar
+    "KI-Fehler", aber genau die Zeilen nicht, die sagen was Flo selbst repariert
+    hat und was in die .env gehoert ("KI: wechsle selbst auf ...", "KI: Signatur
+    ... funktioniert", "KI-Selbsttest fehlgeschlagen"). Der Arzt verschwieg also
+    die Heilung.
+
+    Der Test liest BEIDE Dateien als Quelltext, damit eine neue Log-Zeile in
+    ai.py nicht still aus dem Filter fallen kann."""
+    import ai
+    hier = os.path.dirname(os.path.abspath(ai.__file__))
+    arzt = open(os.path.join(hier, "k"), encoding="utf-8").read()
+
+    muster = re.search(r'grep -E "([^"]+)"', arzt)
+    assert muster, "in 'k' steht kein grep -E mehr"
+    filter_re = re.compile(muster.group(1))
+
+    quelle = open(ai.__file__, encoding="utf-8").read()
+    meldungen = re.findall(r'log\.[a-z]+\(\s*"(KI[^"]*)', quelle)
+    assert len(meldungen) >= 10, f"nur {len(meldungen)} KI-Meldungen gefunden"
+    durchgefallen = [m for m in meldungen if not filter_re.search(m)]
+    assert not durchgefallen, f"'k' zeigt diese Zeilen nicht an: {durchgefallen}"
+
+    # Und der Vorspann von journalctl muss WIRKLICH weg sein: das sind fuenf
+    # Felder ("Aug 19 14:25:20 Ubuntu python3[8422]:"), nicht vier.
+    beispiel = "Aug 19 14:25:20 Ubuntu python3[8422]: 2026-08-19 [ERROR] KI: Modell weg"
+    schnitt = re.search(r"sed 's/(\^[^']+)/", arzt)
+    assert schnitt, "in 'k' steht kein sed mehr"
+    gekuerzt = re.sub(schnitt.group(1).replace("^", "^"), "", beispiel)
+    assert not gekuerzt.startswith("python"), (
+        f"der Unit-Vorspann bleibt stehen: {gekuerzt!r}")
+
+
+def test_ki_findet_bildmodelle_auch_anderer_familien():
+    """Die Marker-Liste kannte nur Metas Namen. Nachgemessen fehlten pixtral und
+    llava - die zwei verbreitetsten Bild-Modellfamilien ueberhaupt. Mustert der
+    Anbieter Scout aus, blieb das Bild-Lesen damit tot, obwohl ein tauglicher
+    Ersatz in der Liste stand."""
+    import ai
+    flo = ai.FloAI()
+    for liste, erwartet in (
+            (["llama-4-scout-17b", "gpt-oss-120b"], "llama-4-scout-17b"),
+            (["pixtral-12b", "gpt-oss-120b"], "pixtral-12b"),
+            (["llava-1.6-34b", "gpt-oss-120b"], "llava-1.6-34b"),
+            (["qwen2-vl-72b", "gpt-oss-120b"], "qwen2-vl-72b")):
+        assert flo._modell_waehlen(liste, True) == erwartet, liste
+    # Ein reines Textmodell darf NICHT als Bild-Ersatz durchgehen - es wuerde
+    # das Bild-Format ablehnen. Lieber ehrlich nichts finden.
+    assert flo._modell_waehlen(["gpt-oss-120b", "whisper-large-v3"], True) == ""
+    # Und niemals etwas, das gar nicht chatten kann.
+    assert flo._modell_waehlen(["whisper-large-v3", "guard-12b"], False) == ""
+
+
+def test_ki_unbekannter_fehler_nennt_die_ausnahmeklasse():
+    """Bei einem Fehler ohne HTTP-Status ("unbekannt") ist die Ausnahmeklasse die
+    einzige Spur. Die stand nur in einem log.debug - und bot.py:70 loggt ab INFO,
+    also erreichte sie das Journal ausgerechnet dort nie, wo sie gebraucht wird."""
+    import ai
+    import logging
+    puffer = io.StringIO()
+    griff = logging.StreamHandler(puffer)
+    protokoll = logging.getLogger("dcbot.ai")
+    protokoll.addHandler(griff)
+    alt_stufe = protokoll.level
+    protokoll.setLevel(logging.INFO)          # so wie bot.py es einstellt
+    try:
+        class VoelligUnbekannt(Exception):
+            pass
+        flo, _ = _ki_frisch([VoelligUnbekannt("kaputt")] * 8)
+        asyncio.run(flo.ask_flo("hi"))
+    finally:
+        protokoll.removeHandler(griff)
+        protokoll.setLevel(alt_stufe)
+    text = puffer.getvalue()
+    assert "KI-Fehler: unbekannt" in text, text
+    assert "VoelligUnbekannt" in text, f"Ausnahmeklasse fehlt im Log: {text!r}"
+
+
+def test_ki_vorgaben_von_bot_und_arzt_sind_gleich():
+    """tools_ki_check.py haelt die Vorgaben bewusst als eigene Kopie - es muss
+    auch laufen, wenn ai.py gar nicht importierbar ist. Genau deshalb koennen
+    beide auseinanderlaufen, und dann diagnostiziert der Arzt etwas anderes als
+    der Bot tut."""
+    import ai
+    import tools_ki_check
+    assert tools_ki_check.STANDARD_BASE == ai.FloAI.DEFAULT_BASE_URL
+    assert tools_ki_check.STANDARD_MODELL == ai.FloAI.DEFAULT_MODEL
+    assert tools_ki_check.STANDARD_VISION == ai.FloAI.DEFAULT_VISION_MODEL
 
 
 def _als_coro(wert):

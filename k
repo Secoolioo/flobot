@@ -25,12 +25,18 @@ logs() {
         return
     fi
     # Nur die Ursachenzeilen, nicht der ganze Traceback - das passt sonst auf
-    # kein Handy-Display. Die Zeile "KI-Fehler ..." kommt aus ai.py.
+    # kein Handy-Display.
+    #
+    # "KI:" MUSS mit rein: genau diese Zeilen sagen, was Flo selbst repariert hat
+    # und was dauerhaft in die .env gehoert ("wechsle selbst auf ...", "Signatur
+    # ... funktioniert"). Ohne sie verschweigt der Arzt die Heilung.
     treffer="$(journalctl -u flobot --since -6h --no-pager 2>/dev/null \
-        | grep -E "KI-Fehler|LLM-Aufruf|Vision-Aufruf|LLM generate|KI-Feature" \
+        | grep -E "KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate" \
         | tail -8)"
     if [ -n "$treffer" ]; then
-        echo "$treffer" | sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* //' | cut -c1-160
+        # journalctl setzt FUENF Felder davor: "Aug 19 14:25:20 Ubuntu python3[8422]:"
+        # - mit vier blieb "python3[8422]:" stehen und frass die Zeilenbreite.
+        echo "$treffer" | sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* //' | cut -c1-200
     else
         echo "  Keine KI-Fehler in den letzten 6 Stunden."
     fi
