@@ -13,6 +13,7 @@ Der Schluessel wird NIE vollstaendig ausgegeben - auch nicht im Fehlerfall.
 
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -44,6 +45,7 @@ class KiCheck:
         self.key = ""
         self.probleme = []      # (Ueberschrift, Was tun)
         self.modelle = None     # Liste vom Anbieter, None = nicht abrufbar
+        self.cf_code = ""       # Cloudflare-Fehlercode, falls einer kam
 
     # --- Ausgabe ------------------------------------------------------------
     def titel(self, text):
@@ -126,12 +128,16 @@ class KiCheck:
         # Ein Port in der URL schlaegt das Schema. Ohne das haette jeder lokale
         # Anbieter (Ollama :11434, LM Studio :1234) faelschlich "kommt nicht raus"
         # gemeldet, weil nur nach http/https entschieden wurde.
+        # Direkt umwandeln statt vorher zu pruefen: es gibt Ziffern, die eine
+        # Pruefung durchlassen und int() trotzdem nicht mag.
         hostteil = teil.split("/", 1)[0]
         host, _, portteil = hostteil.rpartition(":")
-        if not host or not portteil.isdigit():
-            host, port = hostteil, (443 if self.base.startswith("https") else 80)
-        else:
+        try:
             port = int(portteil)
+            if not host:
+                raise ValueError
+        except ValueError:
+            host, port = hostteil, (443 if self.base.startswith("https") else 80)
 
         try:
             adressen = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
@@ -165,23 +171,29 @@ class KiCheck:
         return True
 
     # --- HTTP-Helfer --------------------------------------------------------
-    def _anfrage(self, pfad, daten=None):
-        """Gibt (status, body_text) zurueck. Wirft nicht - Fehler sind Daten."""
+    def _anfrage(self, pfad, daten=None, ua=None, zeit=None):
+        """Gibt (status, body_text, kopfzeilen) zurueck. Wirft nicht - Fehler
+        sind hier Daten. 'ua' setzt eine abweichende Client-Signatur; genau die
+        prueft Cloudflare bei Fehler 1010."""
         url = f"{self.base}{pfad}"
         kopf = {"Authorization": f"Bearer {self.key or 'ollama'}",
                 "Content-Type": "application/json"}
+        if ua:
+            kopf["User-Agent"] = ua
         rumpf = json.dumps(daten).encode() if daten is not None else None
         req = urllib.request.Request(url, data=rumpf, headers=kopf,
                                      method="POST" if daten is not None else "GET")
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as antwort:
-                return antwort.status, antwort.read().decode("utf-8", "replace")
+            with urllib.request.urlopen(req, timeout=zeit or TIMEOUT) as antwort:
+                return (antwort.status, antwort.read().decode("utf-8", "replace"),
+                        dict(antwort.headers))
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read().decode("utf-8", "replace")
+            return (exc.code, exc.read().decode("utf-8", "replace"),
+                    dict(exc.headers or {}))
         except urllib.error.URLError as exc:
-            return 0, str(exc.reason)
+            return 0, str(exc.reason), {}
         except (socket.timeout, TimeoutError):
-            return 0, f"Zeitueberschreitung nach {TIMEOUT}s"
+            return 0, f"Zeitueberschreitung nach {zeit or TIMEOUT}s", {}
 
     @staticmethod
     def _meldung(body):
@@ -198,7 +210,7 @@ class KiCheck:
     # --- Schritt 3: gibt es das Modell ueberhaupt noch? --------------------
     def modelle_pruefen(self):
         self.titel("3. Modell-Liste des Anbieters")
-        status, body = self._anfrage("/models")
+        status, body, kopf = self._anfrage("/models")
         if status == 200:
             try:
                 self.modelle = sorted(m["id"] for m in json.loads(body).get("data", []))
@@ -218,7 +230,7 @@ class KiCheck:
                                "dann: systemctl restart flobot")
             self._vorschlagen()
             return True
-        self._status_deuten(status, body, "Modell-Liste")
+        self._status_deuten(status, body, "Modell-Liste", kopf)
         # Status 0 = gar keine Antwort. Dann ist auch der Chat-Aufruf sinnlos.
         return status != 0
 
@@ -243,7 +255,7 @@ class KiCheck:
     def aufruf_pruefen(self):
         self.titel("4. Echter Chat-Aufruf (so wie der Bot ihn macht)")
         start = time.monotonic()
-        status, body = self._anfrage("/chat/completions", {
+        status, body, kopf = self._anfrage("/chat/completions", {
             "model": self.modell,
             "messages": [{"role": "user", "content": "Sag nur: ok"}],
             "max_tokens": 5,
@@ -259,12 +271,40 @@ class KiCheck:
             self.ok("Die KI-Strecke funktioniert. Wenn Flo trotzdem meckert, "
                     "liegt es nicht am Anbieter - siehe Log unten.")
             return True
-        self._status_deuten(status, body, "Chat-Aufruf")
+        self._status_deuten(status, body, "Chat-Aufruf", kopf)
         return False
 
-    def _status_deuten(self, status, body, was):
+    @staticmethod
+    def _cloudflare_code(body):
+        """Cloudflare antwortet VOR dem Anbieter. Seine Codes bedeuten etwas
+        voellig anderes als ein Fehler der API - 1010 heisst z. B. 'wegen der
+        Client-Signatur gesperrt' und hat mit dem Schluessel nichts zu tun."""
+        treffer = re.search(r"error code:\s*(\d{4})", body or "")
+        return treffer.group(1) if treffer else ""
+
+    def _status_deuten(self, status, body, was, kopf=None):
         """Uebersetzt HTTP-Status + Anbietertext in einen deutschen Satz."""
         meldung = self._meldung(body)
+        kopf = kopf or {}
+        strahl = kopf.get("cf-ray") or kopf.get("Cf-Ray") or kopf.get("CF-RAY") or ""
+        cf = self._cloudflare_code(body)
+        if cf:
+            self.cf_code = cf
+            erklaerung = {
+                "1010": "Cloudflare sperrt die Client-Signatur (Browser/Programm).",
+                "1006": "Cloudflare hat diese IP gesperrt.",
+                "1007": "Cloudflare hat diese IP gesperrt.",
+                "1008": "Cloudflare hat diese IP gesperrt.",
+                "1015": "Cloudflare drosselt: zu viele Anfragen von dieser IP.",
+                "1020": "Eine Firewall-Regel des Anbieters lehnt die Anfrage ab.",
+            }.get(cf, "Cloudflare lehnt die Anfrage ab.")
+            self.fehler(f"{was}: {erklaerung} (Cloudflare-Fehler {cf}, HTTP {status})")
+            if strahl:
+                print(f"        Cloudflare Ray-ID: {strahl}")
+            self.merke(f"Cloudflare blockt vor Groq (Fehler {cf})",
+                       "Der Schluessel ist NICHT schuld - die Anfrage kommt nie bei "
+                       "Groq an. Siehe Signatur-Test unten.")
+            return
         if status == 0:
             self.fehler(f"{was}: keine Antwort ({meldung})")
             self.merke("Anbieter nicht erreichbar",
@@ -297,6 +337,68 @@ class KiCheck:
             self.fehler(f"{was}: HTTP {status}. Anbieter sagt: {meldung}")
             self.merke(f"Unerwarteter Status {status}", "Meldung oben lesen.")
 
+    # --- Schritt 5: Signatur oder IP? --------------------------------------
+    # Cloudflare-Fehler 1010 heisst "wegen der Client-Signatur gesperrt". Ob
+    # damit das PROGRAMM oder die IP gemeint ist, kann man nicht raten - aber
+    # messen: dieselbe Anfrage mit verschiedenen Signaturen. Kommt eine durch,
+    # ist es die Signatur (im Code zu beheben). Kommt keine durch, ist es die IP.
+    SIGNATUREN = (
+        ("Python (Standard)", "Python-urllib/3.11"),
+        ("openai-Paket", "OpenAI/Python 1.40.0"),
+        ("curl", "curl/8.5.0"),
+        ("Browser", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    )
+
+    def signatur_pruefen(self):
+        """Nur bei einer Cloudflare-Sperre sinnvoll - sonst reine Zeitverschwendung."""
+        if not self.cf_code:
+            return
+        self.titel("5. Woran liegt die Sperre? (Signatur-Test)")
+        durch = []
+        for name, ua in self.SIGNATUREN:
+            status, body, _ = self._anfrage("/models", ua=ua, zeit=12)
+            cf = self._cloudflare_code(body)
+            if status == 200:
+                self.ok(f"{name:18s} -> kommt DURCH (HTTP 200)")
+                durch.append((name, ua))
+            elif status in (401, 403) and not cf:
+                # Von Groq selbst beantwortet - Cloudflare war also zufrieden.
+                self.ok(f"{name:18s} -> kommt durch bis Groq (HTTP {status})")
+                durch.append((name, ua))
+            else:
+                zusatz = f", Cloudflare {cf}" if cf else ""
+                self.warn(f"{name:18s} -> blockiert (HTTP {status}{zusatz})")
+
+        if durch:
+            name, ua = durch[0]
+            self.ok(f"Es liegt an der SIGNATUR - mit '{name}' geht es.")
+            self.merke("Cloudflare sperrt die Client-Signatur",
+                       f"Im Bot eine andere Signatur setzen. Sofort testbar per .env: "
+                       f"LLM_USER_AGENT={ua}   dann: systemctl restart flobot")
+        else:
+            self.fehler("Keine Signatur kommt durch - dann ist die IP gesperrt.")
+            self.merke("Die IP dieses Servers ist bei Cloudflare gesperrt",
+                       "Kein Code-Fix moeglich. Moeglichkeiten: Router neu verbinden "
+                       "(neue IP), anderer Weg raus (VPN/Proxy), oder bei Groq mit der "
+                       "Ray-ID melden.")
+        self._ip_zeigen()
+
+    def _ip_zeigen(self):
+        """Welche IP sieht die Aussenwelt? Die steht in der Cloudflare-Sperre."""
+        for dienst in ("https://api.ipify.org", "https://ipinfo.io/ip",
+                       "https://icanhazip.com"):
+            try:
+                req = urllib.request.Request(dienst, headers={"User-Agent": "curl/8.5.0"})
+                with urllib.request.urlopen(req, timeout=8) as a:
+                    ip = a.read().decode("utf-8", "replace").strip()
+                if ip:
+                    print(f"        Oeffentliche IP dieses Servers: {ip}")
+                    print("        (die ist gesperrt, nicht der Schluessel)")
+                    return
+            except Exception:  # noqa: BLE001 - reine Zusatzinfo, darf scheitern
+                continue
+
     # --- Abschluss ----------------------------------------------------------
     def bericht(self):
         self.titel("Ergebnis")
@@ -319,6 +421,7 @@ class KiCheck:
         erreichbar = self.modelle_pruefen()
         if erreichbar is not False:
             self.aufruf_pruefen()
+        self.signatur_pruefen()
         return self.bericht()
 
 

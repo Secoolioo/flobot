@@ -210,10 +210,21 @@ class FloAI:
             self._client = None
             return False
 
-        self._client = AsyncOpenAI(api_key=api_key or "ollama", base_url=base_url)
+        # Client-Signatur. Groq sitzt hinter Cloudflare, und Cloudflare kann eine
+        # Anfrage schon WEGEN DER SIGNATUR ablehnen (Fehler 1010, HTTP 403) - der
+        # Schluessel ist daran unbeteiligt, die Anfrage erreicht Groq nie. Mit
+        # LLM_USER_AGENT laesst sich das ohne Codeaenderung umstellen;
+        # tools_ki_check.py misst, welche Signatur durchkommt.
+        ua = os.getenv("LLM_USER_AGENT", "").strip()
+        self._client = AsyncOpenAI(
+            api_key=api_key or "ollama",
+            base_url=base_url,
+            default_headers={"User-Agent": ua} if ua else None,
+        )
         log.info(
-            "KI-Feature aktiv (Anbieter: %s, Modell: %s, Standardstadt: %s).",
+            "KI-Feature aktiv (Anbieter: %s, Modell: %s, Standardstadt: %s%s).",
             base_url, self._model, self._default_city,
+            f", Signatur: {ua}" if ua else "",
         )
         return True
 
