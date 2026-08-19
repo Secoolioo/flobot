@@ -1929,6 +1929,12 @@ class FloBot(discord.Client):
         log.info("Flo laeuft auf %d Server(n): %s", len(self.guilds),
                  ", ".join(g.name for g in self.guilds) or "(keinem)")
         if AI_ENABLED:
+            # Einmal wirklich nachfragen, statt "KI aktiv" nur zu behaupten.
+            # Bisher hing diese Meldung allein daran, dass ein Schluessel in der
+            # .env stand - ob er noch gilt und ob es das Modell ueberhaupt noch
+            # gibt, hat nie jemand geprueft. Laeuft nebenher und kann den Start
+            # nicht kippen; das Ergebnis steht danach im Log.
+            self.loop.create_task(ai.selbsttest())
             for guild in self.guilds:
                 lesbar = [
                     c.name

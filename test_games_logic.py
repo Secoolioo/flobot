@@ -10493,6 +10493,361 @@ def test_arbeit_wordle_versteht_vertipper_und_fremdsprachen():
     assert not set(arbeit._WORDLE_CMDS) & set(arbeit._TAGES_CMDS)
 
 
+# --- KI-Ausfaelle: jede Ursache eigen behandeln -----------------------------
+class _KiAntwort:
+    """Antwort des Anbieters, so wie das openai-Paket sie liefert."""
+
+    def __init__(self, text="ok"):
+        nachricht = SimpleNamespace(content=text, tool_calls=None)
+        self.choices = [SimpleNamespace(message=nachricht)]
+
+
+class _KiFehler(Exception):
+    """Fehler des Anbieters mit HTTP-Status und Wortlaut - genau die zwei Dinge,
+    an denen ai._einordnen() sich orientiert."""
+
+    def __init__(self, status, text=""):
+        self.status_code = status
+        self.response = SimpleNamespace(status_code=status, text=text)
+        super().__init__(text or f"HTTP {status}")
+
+
+class _KiAnbieter:
+    """Falscher LLM-Anbieter: arbeitet eine vorgegebene Folge ab und schreibt
+    mit, mit welchem Modell und welcher Signatur er angesprochen wurde."""
+
+    def __init__(self, folge, modelle=(), signatur=""):
+        self._folge = list(folge)
+        self._modelle = list(modelle)
+        self.signatur = signatur
+        self.modelle_gefragt = 0
+        self.aufrufe = []          # je Aufruf das benutzte Modell
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._create))
+        self.models = SimpleNamespace(list=self._models)
+
+    async def _create(self, **kw):
+        self.aufrufe.append(kw.get("model"))
+        naechste = self._folge.pop(0) if self._folge else _KiAntwort()
+        if isinstance(naechste, Exception):
+            raise naechste
+        return naechste
+
+    async def _models(self):
+        self.modelle_gefragt += 1
+        return SimpleNamespace(data=[SimpleNamespace(id=m) for m in self._modelle])
+
+
+def _ki_frisch(folge, modelle=(), modell="altes-modell-70b"):
+    """Eine FloAI-Instanz mit falschem Anbieter und ohne Wartezeiten."""
+    import ai
+    flo = ai.FloAI()
+    flo._model = modell
+    flo._vision_model = "altes-vision-modell"
+    flo._api_key = "gsk_test"
+    flo._basis_url = "https://api.example.invalid/v1"
+    flo.WARTEN = (0.0, 0.0, 0.0)     # Tests sollen nicht wirklich schlafen
+    anbieter = _KiAnbieter(folge, modelle)
+    flo._client = anbieter
+    return flo, anbieter
+
+
+def test_ki_fehler_werden_unterschieden():
+    """Vorher gab JEDE Ursache denselben Satz: abgelaufener Schluessel,
+    ausgemustertes Modell, leeres Kontingent, Cloudflare-Sperre. Damit war ohne
+    Serverzugang nicht zu sehen, woran es liegt - und im Log stand nur ein
+    Traceback."""
+    import ai
+    faelle = {
+        401: "auth",
+        404: "modell",
+        429: "limit",
+        503: "stoerung",
+        400: "anfrage",
+    }
+    saetze = {}
+    for status, art in faelle.items():
+        flo, _ = _ki_frisch([_KiFehler(status, "kaputt")] * 8)
+        antwort = asyncio.run(flo.ask_flo("hi"))
+        assert antwort == ai.FloAI.MELDUNGEN[art], (status, antwort)
+        saetze[art] = antwort
+    # Cloudflare-Sperre ist etwas anderes als ein verbotener Zugriff.
+    flo, _ = _ki_frisch([_KiFehler(403, "error code: 1010")] * 8)
+    flo._signatur_wechseln = lambda ua: False        # keine Rettung erlauben
+    saetze["signatur"] = asyncio.run(flo.ask_flo("hi"))
+    assert saetze["signatur"] == ai.FloAI.MELDUNGEN["signatur"]
+    flo, _ = _ki_frisch([_KiFehler(403, "nope")] * 8)
+    saetze["verboten"] = asyncio.run(flo.ask_flo("hi"))
+    assert saetze["verboten"] == ai.FloAI.MELDUNGEN["verboten"]
+    # Jede Ursache muss WIRKLICH einen eigenen Satz haben.
+    assert len(set(saetze.values())) == len(saetze), saetze
+
+
+def test_ki_wiederholt_nur_was_davon_besser_wird():
+    """Ein einzelner 429 oder eine 503-Delle hat die Antwort bisher sofort
+    getoetet. Wiederholt werden darf aber nur, was sich bessern kann - ein
+    abgelehnter Schluessel wird beim zweiten Mal nicht gueltiger, das waere
+    reines Haemmern gegen den Anbieter."""
+    # Voruebergehend: erst 429, dann 503, dann klappt es.
+    flo, anbieter = _ki_frisch([_KiFehler(429, "rate limit"),
+                                _KiFehler(503, "unavailable"),
+                                _KiAntwort("Na klar.")])
+    assert asyncio.run(flo.ask_flo("hi")) == "Na klar."
+    assert len(anbieter.aufrufe) == 3, anbieter.aufrufe
+
+    # Dauerhaft: genau EIN Versuch, kein Nachtreten.
+    for status, text in ((401, "bad key"), (400, "kaputt"), (403, "nope")):
+        flo, anbieter = _ki_frisch([_KiFehler(status, text)] * 8)
+        asyncio.run(flo.ask_flo("hi"))
+        assert len(anbieter.aufrufe) == 1, (status, anbieter.aufrufe)
+
+    # Und es gibt eine Obergrenze - kein Dauerfeuer.
+    flo, anbieter = _ki_frisch([_KiFehler(429, "rate limit")] * 50)
+    asyncio.run(flo.ask_flo("hi"))
+    assert len(anbieter.aufrufe) == flo.WIEDERHOLUNGEN + 1, anbieter.aufrufe
+
+
+def test_ki_heilt_ein_ausgemustertes_modell_selbst():
+    """Anbieter mustern Modelle aus - genau das erklaert 'geht seit gestern gar
+    nicht mehr, ohne dass jemand am Code war'. Statt dauerhaft stumm zu sein
+    holt Flo die aktuelle Liste und nimmt selbst den besten Ersatz."""
+    flo, anbieter = _ki_frisch(
+        [_KiFehler(404, "The model `altes-modell-70b` has been decommissioned"),
+         _KiAntwort("Bin wieder da.")],
+        modelle=["whisper-large-v3", "neu-klein-8b", "neu-gross-70b",
+                 "llama-guard-4-12b"])
+    assert asyncio.run(flo.ask_flo("hi")) == "Bin wieder da."
+    assert anbieter.modelle_gefragt == 1
+    # Groesstes taugliches Modell, und nichts, was gar nicht chatten kann.
+    assert flo._model == "neu-gross-70b", flo._model
+    assert anbieter.aufrufe == ["altes-modell-70b", "neu-gross-70b"]
+
+    # Vision nimmt nur ein Modell, das wirklich Bilder kann.
+    flo, _ = _ki_frisch([_KiFehler(404, "model_not_found"), _KiAntwort("Bild gesehen.")],
+                        modelle=["neu-gross-70b", "scout-17b", "whisper-large-v3"])
+    assert asyncio.run(flo.see_image("was ist das", "http://x/y.png")) == "Bild gesehen."
+    assert flo._vision_model == "scout-17b", flo._vision_model
+
+    # Und wenn es keinen Ersatz gibt, wird ehrlich gemeldet statt endlos gesucht.
+    import ai
+    flo, anbieter = _ki_frisch([_KiFehler(404, "model_not_found")] * 8, modelle=[])
+    assert asyncio.run(flo.ask_flo("hi")) == ai.FloAI.MELDUNGEN["modell"]
+    assert len(anbieter.aufrufe) == 1, anbieter.aufrufe
+
+
+def test_ki_wechselt_die_signatur_wenn_cloudflare_sperrt():
+    """Gemessen auf dem echten Server: Groq sitzt hinter Cloudflare, und
+    Cloudflare hat mit HTTP 403 'error code: 1010' geblockt - die Anfrage kam nie
+    bei Groq an. Ein anderer Schluessel oder ein anderes Modell haetten daran
+    nichts geaendert; nur eine andere Client-Signatur hilft."""
+    import ai
+    gebaut = []
+
+    flo, _ = _ki_frisch([])
+    def bauen(ua):
+        gebaut.append(ua)
+        # Die erste Ersatz-Signatur kommt durch, die urspruengliche nicht.
+        if ua == ai.FloAI.SIGNATUREN[0]:
+            return _KiAnbieter([_KiAntwort("Wieder da.")])
+        return _KiAnbieter([_KiFehler(403, "error code: 1010")] * 8)
+    flo._client_bauen = bauen
+    flo._client = _KiAnbieter([_KiFehler(403, "error code: 1010")] * 8)
+
+    assert asyncio.run(flo.ask_flo("hi")) == "Wieder da."
+    assert gebaut and gebaut[0] == ai.FloAI.SIGNATUREN[0], gebaut
+    assert flo._signatur == ai.FloAI.SIGNATUREN[0]
+    # Nach dem Erfolg ist der Hinweis abgearbeitet und wird nicht endlos wiederholt.
+    assert flo._signatur_offen == ""
+
+    # Kommt KEINE Signatur durch, ist die IP gesperrt - dann ehrlich melden und
+    # nicht ewig weiterprobieren.
+    flo, _ = _ki_frisch([])
+    versuche = []
+    flo._client_bauen = lambda ua: (versuche.append(ua),
+                                    _KiAnbieter([_KiFehler(403, "error code: 1010")] * 8))[1]
+    flo._client = _KiAnbieter([_KiFehler(403, "error code: 1010")] * 8)
+    assert asyncio.run(flo.ask_flo("hi")) == ai.FloAI.MELDUNGEN["signatur"]
+    assert len(versuche) == len(ai.FloAI.SIGNATUREN), versuche
+
+
+def test_ki_stoerung_landet_nicht_im_gedaechtnis():
+    """bot.py schreibt JEDE Antwort ins Kurzzeit-Gedaechtnis (bot.py:1529 und
+    :1820) - auch eine Stoerungsmeldung. Die ging danach als Gespraechsverlauf
+    wieder ans Modell, das sie brav nachgeplappert hat."""
+    import ai
+    flo, _ = _ki_frisch([])
+    for satz in ai.FloAI.MELDUNGEN.values():
+        flo.note_message(4711, "Flo", satz, is_bot=True)
+    flo.note_message(4711, "Flo", "Klar, mach ich.", is_bot=True)
+    gemerkt = [e["content"] for e in flo._HISTORY.get(4711, [])]
+    assert gemerkt == ["Klar, mach ich."], gemerkt
+
+
+def test_ki_selbsttest_sagt_die_wahrheit():
+    """Der Log meldete 'KI-Feature aktiv', sobald ein Schluessel in der .env
+    stand - ob er noch gilt, hat nie jemand geprueft. Eine Zusicherung, die
+    niemand nachgesehen hat, ist schlimmer als keine."""
+    flo, _ = _ki_frisch([_KiAntwort("ok")])
+    assert asyncio.run(flo.selbsttest()) is True
+    flo, _ = _ki_frisch([_KiFehler(401, "bad key")] * 8)
+    assert asyncio.run(flo.selbsttest()) is False
+    # Ohne Client faellt er sauber durch, statt zu krachen.
+    flo, _ = _ki_frisch([])
+    flo._client = None
+    assert asyncio.run(flo.selbsttest()) is False
+
+
+def test_ki_hat_nur_noch_einen_weg_nach_draussen():
+    """Vier eigene try/except-Bloecke bedeuteten vier Politiken, die
+    auseinanderlaufen. Es darf genau EINE Stelle geben, die den Anbieter
+    anspricht - sonst vergisst der naechste Aufruf das Wiederholen wieder."""
+    import ai
+    quelle = open(ai.__file__, encoding="utf-8").read()
+    assert quelle.count("chat.completions.create") == 1, (
+        "es gibt wieder mehr als einen Weg zum Anbieter")
+    # Und JEDER oeffentliche Aufrufer muss LlmFehler behandeln - sonst platzt
+    # die Ausnahme bis in bot.py durch und der Nutzer sieht gar nichts.
+    import inspect
+    for name in ("ask_flo", "see_image", "see_image_raw", "generate"):
+        koerper = inspect.getsource(getattr(ai.FloAI, name))
+        assert "except LlmFehler" in koerper, f"{name} behandelt LlmFehler nicht"
+        assert "except Exception" in koerper, f"{name} hat kein Sicherheitsnetz mehr"
+
+
+def test_ki_gegen_einen_echten_http_anbieter():
+    """Der Ernstfall-Test: echtes openai-Paket, echter HTTP-Server, echte
+    Ausnahmen. ai._einordnen() liest exc.status_code bzw. exc.response.status_code -
+    ob das mit den tatsaechlichen Ausnahmen des Pakets zusammenpasst, beweisen
+    nachgebaute Fehler NICHT. Genau hier bricht es sonst still.
+
+    Laeuft komplett auf 127.0.0.1 mit einem freien Port, kein echtes Netz."""
+    import ai
+    try:
+        import openai  # noqa: F401
+    except ImportError:                       # Bot laeuft auch ohne das Paket
+        return
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    fall = {"wert": "ok", "modelle": []}
+    cf_seite = "<html>error code: 1010</html>"
+
+    def antwort(text):
+        return _json.dumps({"id": "1", "object": "chat.completion", "created": 1,
+                            "model": "m", "choices": [{"index": 0,
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": text}}]})
+
+    class Griff(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _raus(self, code, text, typ="application/json"):
+            roh = text.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", typ)
+            self.send_header("Content-Length", str(len(roh)))
+            self.end_headers()
+            self.wfile.write(roh)
+
+        def do_GET(self):
+            if "/models" in self.path:
+                return self._raus(200, _json.dumps({"object": "list", "data": [
+                    {"id": m, "object": "model"} for m in fall["modelle"]]}))
+            return self._raus(404, _json.dumps({"error": {"message": "nope"}}))
+
+        def do_POST(self):
+            art = fall["wert"]
+            ua = self.headers.get("User-Agent", "")
+            if art == "ok":
+                return self._raus(200, antwort("Antwort da."))
+            if art == "cf_signatur":
+                if "curl" in ua:
+                    return self._raus(200, antwort("Mit curl gehts."))
+                return self._raus(403, cf_seite, "text/html")
+            if art == "cf_ip":
+                return self._raus(403, cf_seite, "text/html")
+            if art == "modell_weg":
+                laenge = int(self.headers.get("Content-Length", 0))
+                try:
+                    gewuenscht = _json.loads(self.rfile.read(laenge)).get("model", "")
+                except ValueError:
+                    gewuenscht = ""
+                if gewuenscht and gewuenscht in fall["modelle"]:
+                    return self._raus(200, antwort("Neues Modell laeuft."))
+                return self._raus(404, _json.dumps({"error": {
+                    "message": "The model `x` has been decommissioned"}}))
+            return self._raus({"401": 401, "429": 429, "503": 503, "400": 400}[art],
+                              _json.dumps({"error": {"message": "kaputt"}}))
+
+    server = HTTPServer(("127.0.0.1", 0), Griff)   # Port 0 = freien nehmen
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    alt_umgebung = {k: os.environ.get(k) for k in
+                    ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_USER_AGENT")}
+
+    def frisch():
+        os.environ["LLM_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
+        os.environ["LLM_API_KEY"] = "gsk_test"
+        os.environ["LLM_MODEL"] = "altes-modell-70b"
+        os.environ.pop("LLM_USER_AGENT", None)
+        flo = ai.FloAI()
+        assert flo.setup() is True
+        flo.WARTEN = (0.0, 0.0, 0.0)           # Tests sollen nicht schlafen
+        return flo
+
+    try:
+        M = ai.FloAI.MELDUNGEN
+        assert asyncio.run(frisch().ask_flo("hi")) == "Antwort da."
+
+        for art, schluessel in (("401", "auth"), ("429", "limit"),
+                                ("503", "stoerung"), ("400", "anfrage")):
+            fall["wert"] = art
+            assert asyncio.run(frisch().ask_flo("hi")) == M[schluessel], art
+
+        # Cloudflare sperrt die IP: keine Signatur kommt durch -> ehrlich melden.
+        fall["wert"] = "cf_ip"
+        assert asyncio.run(frisch().ask_flo("hi")) == M["signatur"]
+
+        # Cloudflare sperrt nur die Signatur -> Flo holt sich selbst raus.
+        fall["wert"] = "cf_signatur"
+        assert asyncio.run(frisch().ask_flo("hi")) == "Mit curl gehts."
+
+        # Modell ausgemustert -> Flo nimmt selbst das groesste taugliche.
+        fall["wert"] = "modell_weg"
+        fall["modelle"] = ["klein-8b", "gross-70b", "whisper-large-v3"]
+        flo = frisch()
+        assert asyncio.run(flo.ask_flo("hi")) == "Neues Modell laeuft."
+        assert flo._model == "gross-70b", flo._model
+
+        fall["modelle"] = []
+        assert asyncio.run(frisch().ask_flo("hi")) == M["modell"]
+
+        # Der Selbsttest muss beides koennen: bestaetigen und widersprechen.
+        fall["wert"] = "ok"
+        assert asyncio.run(frisch().selbsttest()) is True
+        fall["wert"] = "401"
+        assert asyncio.run(frisch().selbsttest()) is False
+
+        # Haengt der Anbieter, wartet Discord nicht ewig.
+        fall["wert"] = "ok"
+        flo = frisch()
+        flo.ZEITLIMIT = 0.001
+        flo._client = flo._client_bauen("")
+        start = time.time()
+        asyncio.run(flo.ask_flo("hi"))
+        assert time.time() - start < 10, "Zeitlimit greift nicht"
+    finally:
+        server.shutdown()
+        for k, v in alt_umgebung.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():

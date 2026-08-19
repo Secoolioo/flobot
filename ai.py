@@ -30,6 +30,23 @@ except ImportError:  # pragma: no cover - nur relevant ohne Paket
 
 log = logging.getLogger("dcbot.ai")
 
+
+class LlmFehler(Exception):
+    """Ein LLM-Aufruf ist ENDGUELTIG gescheitert - mit Einordnung, warum.
+
+    Vorher fing jeder der vier Aufrufe ein nacktes Exception und gab denselben
+    Satz zurueck. Damit war von aussen nicht zu unterscheiden, ob der Schluessel
+    abgelaufen, das Modell ausgemustert, das Kontingent leer oder der Anbieter
+    unerreichbar war - und der Grund verschwand im Traceback."""
+
+    def __init__(self, art, status=None, meldung="", cf=""):
+        self.art = art          # auth | modell | signatur | verboten | limit |
+                                # stoerung | netz | anfrage | unbekannt
+        self.status = status    # HTTP-Status, falls es einen gab
+        self.meldung = meldung  # Wortlaut des Anbieters
+        self.cf = cf            # Cloudflare-Fehlercode, falls Cloudflare geblockt hat
+        super().__init__(f"{art} (HTTP {status or '-'}): {meldung}")
+
 # So viele Kanaele behaelt das Kurzzeit-Gedaechtnis hoechstens.
 _HISTORY_MAX_CHANNELS = 200
 
@@ -51,6 +68,53 @@ class FloAI:
 
     MAX_STEPS = 5          # max. Tool-Runden pro Frage (Schutz vor Endlosschleifen)
     MAX_TOKENS = 800       # Antwortlaenge (Discord erlaubt max. 2000 Zeichen)
+
+    # --- Wie hartnaeckig ist Flo? ------------------------------------------
+    # Ein einzelner 429 oder eine 503-Delle beim Anbieter hat die Antwort bisher
+    # sofort getoetet, obwohl der zweite Versuch nach einer Sekunde durchgeht.
+    # Wiederholt wird aber NUR, was davon besser wird: ein abgelehnter Schluessel
+    # wird beim zweiten Mal auch nicht gueltiger, das waere nur Haemmern.
+    WIEDERHOLUNGEN = 3            # zusaetzliche Versuche bei voruebergehenden Fehlern
+    WARTEN = (0.8, 2.4, 6.0)      # Abstand davor, wachsend
+    ZEITLIMIT = 45.0              # Sekunden pro Aufruf - ohne das wartet Discord ewig
+
+    # Client-Signaturen, die Flo der Reihe nach probiert, wenn Cloudflare ihn
+    # WEGEN DER SIGNATUR aussperrt (Fehler 1010, HTTP 403). Die Anfrage erreicht
+    # den Anbieter dabei nie - der Schluessel ist unbeteiligt.
+    SIGNATUREN = (
+        "curl/8.5.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36",
+        "Flo-Bot/1.0",
+    )
+
+    # Was der Nutzer im Chat liest - je Ursache etwas anderes, damit man ohne
+    # Serverzugang sieht, woran es liegt.
+    MELDUNGEN = {
+        "auth": "Mein KI-Schluessel wird nicht mehr akzeptiert - da muss der Chef ran.",
+        "modell": "Mein KI-Modell gibt's nicht mehr und ich hab auf die Schnelle "
+                  "keinen Ersatz gefunden.",
+        "signatur": "Der KI-Anbieter sperrt mich komplett aus - liegt nicht an dir.",
+        "verboten": "Der KI-Anbieter laesst mich gerade nicht rein.",
+        "limit": "Ich hab mein KI-Kontingent verbraten. Gib mir ein paar Minuten.",
+        "stoerung": "Beim KI-Anbieter brennt gerade was. Versuch's gleich nochmal.",
+        "netz": "Ich komm gerade nicht zur KI durch. Versuch's gleich nochmal.",
+        "anfrage": "Damit konnte die KI nichts anfangen - formulier's mal anders.",
+        "unbekannt": "Mein KI-Dienst antwortet gerade nicht. Versuch es gleich nochmal.",
+    }
+
+    # Alles, was Flo bei einer Stoerung sagt - darf nie im Gedaechtnis landen.
+    _FEHLERSAETZE = frozenset(MELDUNGEN.values()) | {
+        "Mein KI-Modus ist gerade nicht eingerichtet.",
+        "Das war mir gerade zu kompliziert - frag mich nochmal einfacher.",
+        "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal.",
+    }
+
+    # Modelle, die als Ersatz nie in Frage kommen (koennen kein Chat).
+    _UNBRAUCHBAR = ("whisper", "tts", "embed", "guard", "moderation", "rerank",
+                    "safety", "prompt-guard")
+    # Woran man ein Modell erkennt, das Bilder lesen kann.
+    _SIEHT_BILDER = ("scout", "maverick", "vision", "-vl", "vl-", "multimodal", "omni")
 
     # Open-Meteo liefert WMO-Wettercodes; hier in deutschen Klartext uebersetzt.
     WMO_CODES = {
@@ -165,6 +229,12 @@ class FloAI:
         self._client = None
         self._model = self.DEFAULT_MODEL
         self._vision_model = self.DEFAULT_VISION_MODEL
+        # Zugangsdaten bleiben gemerkt: bei einer Cloudflare-Sperre wird der
+        # Client mit anderer Signatur neu gebaut, dafuer braucht es beides.
+        self._api_key = ""
+        self._basis_url = ""
+        self._signatur = ""
+        self._signatur_offen = ""   # gewechselt, aber noch nicht bewaehrt
         self._default_city = "Regensburg"
         self._bot_name = "Flo"
         # Hoehere Temperatur = lockerer, spontaner, weniger Lehrbuch. Per LLM_TEMPERATURE
@@ -216,11 +286,11 @@ class FloAI:
         # LLM_USER_AGENT laesst sich das ohne Codeaenderung umstellen;
         # tools_ki_check.py misst, welche Signatur durchkommt.
         ua = os.getenv("LLM_USER_AGENT", "").strip()
-        self._client = AsyncOpenAI(
-            api_key=api_key or "ollama",
-            base_url=base_url,
-            default_headers={"User-Agent": ua} if ua else None,
-        )
+        # Merken, damit _signatur_wechseln() den Client spaeter neu bauen kann.
+        self._api_key = api_key or "ollama"
+        self._basis_url = base_url
+        self._signatur = ua
+        self._client = self._client_bauen(ua)
         log.info(
             "KI-Feature aktiv (Anbieter: %s, Modell: %s, Standardstadt: %s%s).",
             base_url, self._model, self._default_city,
@@ -228,9 +298,202 @@ class FloAI:
         )
         return True
 
+    def _client_bauen(self, ua):
+        """Baut den LLM-Client. max_retries=0 mit Absicht: das Wiederholen macht
+        _chat() selbst - sonst multiplizieren sich die Versuche (3 x 3 = 9) und
+        Flo haemmert bei einer Sperre minutenlang gegen den Anbieter."""
+        return AsyncOpenAI(
+            api_key=self._api_key or "ollama",
+            base_url=self._basis_url,
+            default_headers={"User-Agent": ua} if ua else None,
+            timeout=self.ZEITLIMIT,
+            max_retries=0,
+        )
+
     def is_enabled(self):
         """True, wenn der LLM-Client einsatzbereit ist."""
         return self._client is not None
+
+    # --- Fehler einordnen ---------------------------------------------------
+    @staticmethod
+    def _cf_code(text):
+        """Cloudflare antwortet VOR dem Anbieter und hat eigene Codes. 1010 heisst
+        'wegen der Client-Signatur gesperrt' und hat mit dem Schluessel nichts zu
+        tun - wer das als API-Fehler liest, tauscht ewig den falschen Knopf."""
+        treffer = re.search(r"error code:\s*(\d{4})", text or "")
+        return treffer.group(1) if treffer else ""
+
+    def _einordnen(self, exc):
+        """Macht aus einer beliebigen Ausnahme (art, status, meldung, cf).
+
+        Bewusst ueber getattr statt ueber die Fehlerklassen des openai-Pakets:
+        deren Namen und Vererbung haben sich zwischen Versionen schon geaendert,
+        der HTTP-Status nicht."""
+        status = getattr(exc, "status_code", None)
+        antwort = getattr(exc, "response", None)
+        if status is None and antwort is not None:
+            status = getattr(antwort, "status_code", None)
+        text = ""
+        if antwort is not None:
+            try:
+                text = antwort.text or ""
+            except Exception:  # noqa: BLE001 - Wortlaut ist Zugabe, nie kritisch
+                text = ""
+        rumpf = f"{text} {exc}".strip()
+        cf = self._cf_code(rumpf)
+        klein = rumpf.lower()
+        modell_weg = any(w in klein for w in (
+            "decommission", "model_not_found", "does not exist", "unknown model",
+            "model not found", "has been deprecated"))
+
+        if status == 401:
+            art = "auth"
+        elif status == 403:
+            art = "signatur" if cf else "verboten"
+        elif status == 404 or modell_weg:
+            art = "modell"
+        elif status == 429:
+            art = "limit"
+        elif status and status >= 500:
+            art = "stoerung"
+        elif status == 400:
+            art = "anfrage"
+        elif status is None:
+            name = type(exc).__name__.lower()
+            art = "netz" if any(w in name for w in
+                                ("connection", "timeout", "apiconnection")) else "unbekannt"
+        else:
+            art = "unbekannt"
+        return art, status, (text or str(exc)).strip()[:300], cf
+
+    # --- Selbstheilung ------------------------------------------------------
+    def _modell_waehlen(self, namen, vision):
+        """Sucht aus der Liste des Anbieters den besten Ersatz."""
+        tauglich = []
+        for name in namen:
+            klein = name.lower()
+            if any(w in klein for w in self._UNBRAUCHBAR):
+                continue
+            sieht = any(w in klein for w in self._SIEHT_BILDER)
+            if vision and not sieht:
+                continue
+            groesse = re.search(r"(\d+)\s*b\b", klein)
+            tauglich.append((int(groesse.group(1)) if groesse else 0, name))
+        if not tauglich:
+            return ""
+        # Groesstes Modell zuerst; bei Gleichstand der kuerzere (schlichtere) Name.
+        tauglich.sort(key=lambda x: (-x[0], len(x[1]), x[1]))
+        return tauglich[0][1]
+
+    async def _modell_heilen(self, vision):
+        """Anbieter mustern Modelle aus. Statt dauerhaft stumm zu sein holt Flo
+        die aktuelle Liste und nimmt den besten Ersatz - und schreibt ins Log,
+        was dauerhaft in die .env gehoert."""
+        try:
+            liste = await self._client.models.list()
+            namen = sorted(m.id for m in liste.data)
+        except Exception as exc:  # noqa: BLE001 - Heilung ist Zugabe, nie kritisch
+            log.warning("KI: Modell-Liste nicht abrufbar (%s) - kein Ersatz moeglich.",
+                        type(exc).__name__)
+            return False
+        alt = self._vision_model if vision else self._model
+        neu = self._modell_waehlen(namen, vision)
+        schluessel = "LLM_VISION_MODEL" if vision else "LLM_MODEL"
+        if not neu or neu == alt:
+            log.error("KI: Modell %r gibt es nicht mehr und ich finde keinen Ersatz. "
+                      "Verfuegbar waeren: %s", alt, ", ".join(namen[:15]) or "(nichts)")
+            return False
+        if vision:
+            self._vision_model = neu
+        else:
+            self._model = neu
+        log.warning("KI: Modell %r gibt es nicht mehr - wechsle selbst auf %r. "
+                    "Dauerhaft machen mit  %s=%s  in der .env.",
+                    alt, neu, schluessel, neu)
+        return True
+
+    def _signatur_wechseln(self, ua):
+        """Cloudflare kann eine Anfrage schon wegen der Client-Signatur ablehnen
+        (Fehler 1010). Dann hilft kein anderer Schluessel und kein anderes Modell -
+        nur eine andere Signatur. Flo probiert sie selbst durch."""
+        if not self._basis_url or ua == self._signatur:
+            return False
+        try:
+            self._client = self._client_bauen(ua)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("KI: Signaturwechsel fehlgeschlagen (%s).", type(exc).__name__)
+            return False
+        self._signatur = ua
+        self._signatur_offen = ua
+        log.warning("KI: Cloudflare sperrt die bisherige Client-Signatur - "
+                    "probiere %r.", ua)
+        return True
+
+    # --- Der EINZIGE Weg zum LLM -------------------------------------------
+    async def _chat(self, *, vision=False, **kw):
+        """Fuehrt einen Chat-Aufruf aus und haelt die ganze Politik an EINER
+        Stelle: wiederholen was Sinn hat, Modell und Signatur selbst heilen,
+        alles andere sofort sauber melden. Wirft LlmFehler, wenn es endgueltig
+        nicht geht - die vier Aufrufer machen daraus ihre Antwort."""
+        versuche = 0
+        modell_versucht = False
+        offene_signaturen = [ua for ua in self.SIGNATUREN if ua != self._signatur]
+        while True:
+            kw["model"] = self._vision_model if vision else self._model
+            try:
+                antwort = await self._client.chat.completions.create(**kw)
+            except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet, nicht verschluckt
+                art, status, meldung, cf = self._einordnen(exc)
+                # EINE Zeile, greppbar - statt eines Tracebacks, den auf dem Handy
+                # niemand lesen kann. Der Traceback kommt nur bei "unbekannt".
+                log.warning("KI-Fehler: %s (HTTP %s%s) %s", art, status or "-",
+                            f", Cloudflare {cf}" if cf else "", meldung)
+                if art == "unbekannt":
+                    log.debug("KI-Fehler im Detail", exc_info=True)
+
+                if art == "modell" and not modell_versucht:
+                    modell_versucht = True
+                    if await self._modell_heilen(vision):
+                        continue
+                if art == "signatur" and offene_signaturen:
+                    if self._signatur_wechseln(offene_signaturen.pop(0)):
+                        continue
+                if art in ("limit", "stoerung", "netz") and versuche < self.WIEDERHOLUNGEN:
+                    await asyncio.sleep(self.WARTEN[min(versuche, len(self.WARTEN) - 1)])
+                    versuche += 1
+                    continue
+                raise LlmFehler(art, status, meldung, cf) from exc
+
+            if self._signatur_offen:
+                log.warning("KI: Signatur %r funktioniert. Dauerhaft machen mit  "
+                            "LLM_USER_AGENT=%s  in der .env.",
+                            self._signatur_offen, self._signatur_offen)
+                self._signatur_offen = ""
+            return antwort
+
+    def fehlertext(self, fehler):
+        """Der Satz, den der Chat zu sehen bekommt - je Ursache ein anderer."""
+        return self.MELDUNGEN.get(fehler.art, self.MELDUNGEN["unbekannt"])
+
+    async def selbsttest(self):
+        """Prueft EINMAL beim Start, ob die KI wirklich antwortet. Ohne das sagt
+        der Log 'KI-Feature aktiv', auch wenn Schluessel oder Modell laengst tot
+        sind - eine Zusicherung, die niemand geprueft hat. Startet nie den Bot ab."""
+        if self._client is None:
+            return False
+        try:
+            await self._chat(messages=[{"role": "user", "content": "ok"}], max_tokens=5,
+                             temperature=0)
+        except LlmFehler as fehler:
+            log.error("KI-Selbsttest fehlgeschlagen: %s (HTTP %s%s). Pruefen mit:  "
+                      "bash k", fehler.art, fehler.status or "-",
+                      f", Cloudflare {fehler.cf}" if fehler.cf else "")
+            return False
+        except Exception:  # noqa: BLE001 - ein Selbsttest darf nie den Start kippen
+            log.exception("KI-Selbsttest abgebrochen")
+            return False
+        log.info("KI-Selbsttest ok (Modell: %s).", self._model)
+        return True
 
     # --- Ansprache: die EINZIGE Autoritaet fuer den Namen -------------------
     # Frueher hielt sich jedes der 21 Feature-Module beim Start seine eigene
@@ -556,16 +819,17 @@ class FloAI:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            response = await self._client.chat.completions.create(
-                model=self._model,
+            response = await self._chat(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
             text = self._sanitize_output((response.choices[0].message.content or "").strip())
             return text or None
+        except LlmFehler:
+            return None                          # Grund steht schon einzeilig im Log
         except Exception:  # noqa: BLE001 - Bot soll nie wegen LLM-Fehler crashen
-            log.exception("LLM generate() fehlgeschlagen")
+            log.exception("LLM generate() unerwartet gescheitert")
             return None
 
     def note_message(self, channel_id, name, content, *, is_bot = False):
@@ -573,6 +837,13 @@ class FloAI:
         Gespraech folgen kann. bot.py ruft das fuer JEDE Nachricht im Chat auf -
         auch fuer Flos eigene Antworten (is_bot=True)."""
         if not channel_id or not content:
+            return
+        # Eigene Stoerungsmeldungen NICHT merken. bot.py schreibt jede Antwort
+        # ins Gedaechtnis (bot.py:1529 und :1820) - auch "Mein KI-Dienst
+        # antwortet gerade nicht". Die ging danach als Gespraechsverlauf wieder
+        # ans Modell und wurde brav nachgeplappert. Hier statt an beiden
+        # Aufrufstellen, damit es keine dritte geben kann, die es vergisst.
+        if is_bot and content.strip() in self._FEHLERSAETZE:
             return
         content = content.strip()
         if not content:
@@ -646,8 +917,7 @@ class FloAI:
 
         try:
             for _ in range(self.MAX_STEPS):
-                response = await self._client.chat.completions.create(
-                    model=self._model,
+                response = await self._chat(
                     messages=messages,
                     tools=[self.WEATHER_TOOL],
                     max_tokens=self.MAX_TOKENS,
@@ -705,9 +975,11 @@ class FloAI:
                             "content": json.dumps(result, ensure_ascii=False),
                         }
                     )
+        except LlmFehler as fehler:
+            return self.fehlertext(fehler)       # je Ursache ein anderer Satz
         except Exception:  # noqa: BLE001 - Discord-Bot soll nie wegen LLM-Fehler crashen
-            log.exception("LLM-Aufruf fehlgeschlagen")
-            return "Mein KI-Dienst antwortet gerade nicht. Versuch es gleich nochmal."
+            log.exception("LLM-Aufruf unerwartet gescheitert")
+            return self.MELDUNGEN["unbekannt"]
 
         return "Das war mir gerade zu kompliziert - frag mich nochmal einfacher."
 
@@ -732,17 +1004,19 @@ class FloAI:
             ]},
         ]
         try:
-            response = await self._client.chat.completions.create(
-                model=self._vision_model,
+            response = await self._chat(
+                vision=True,
                 messages=messages,
                 max_tokens=self.MAX_TOKENS,
                 temperature=self.TEMPERATURE,
             )
             text = self._sanitize_output((response.choices[0].message.content or "").strip())
             return text or "Dazu faellt mir gerade nichts ein."
+        except LlmFehler as fehler:
+            return self.fehlertext(fehler)
         except Exception:  # noqa: BLE001
-            log.exception("Vision-Aufruf fehlgeschlagen")
-            return "Das Bild konnte ich mir gerade nicht anschauen - versuch's gleich nochmal."
+            log.exception("Vision-Aufruf unerwartet gescheitert")
+            return self.MELDUNGEN["unbekannt"]
 
     async def see_image_raw(self, prompt, image_url, *, temperature = 0.3,
                             max_tokens = 500):
@@ -751,8 +1025,8 @@ class FloAI:
         if self._client is None:
             return None
         try:
-            response = await self._client.chat.completions.create(
-                model=self._vision_model,
+            response = await self._chat(
+                vision=True,
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": image_url}},
@@ -761,8 +1035,10 @@ class FloAI:
                 temperature=temperature,
             )
             return (response.choices[0].message.content or "").strip() or None
+        except LlmFehler:
+            return None                          # Grund steht schon einzeilig im Log
         except Exception:  # noqa: BLE001
-            log.exception("Vision-Raw-Aufruf fehlgeschlagen")
+            log.exception("Vision-Raw-Aufruf unerwartet gescheitert")
             return None
 
 
@@ -772,6 +1048,8 @@ class FloAI:
 instance = FloAI()
 
 DEFAULT_BASE_URL = FloAI.DEFAULT_BASE_URL
+selbsttest = instance.selbsttest
+fehlertext = instance.fehlertext
 DEFAULT_MODEL = FloAI.DEFAULT_MODEL
 DEFAULT_VISION_MODEL = FloAI.DEFAULT_VISION_MODEL
 MAX_STEPS = FloAI.MAX_STEPS

@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 220 Tests
+python3 test_games_logic.py    # 228 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -121,6 +121,64 @@ python3 tools_aktien_sim.py    # 60 simulierte Tage, 8 Durchläufe
 
 Kein Teil des Bots. Spielt Serverbetrieb mit Wochenenden, unterschiedlich vollen
 Calls und toten Tagen durch und prüft acht Kriterien (siehe unten).
+
+---
+
+## Wenn die KI nicht antwortet
+
+```
+bash k setup     einmalig - danach reicht ueberall:  k
+k                Konfig, Netz, Modell, echter Aufruf + letzte Fehler
+k n              vorher git pull
+k l              nur das Log
+k r              Dienst neu starten
+```
+
+`tools_ki_check.py` fragt den Anbieter direkt und sagt in Klartext, woran es
+liegt — statt eines Tracebacks, den auf dem Handy niemand liest. Der Schlüssel
+wird dabei **nie** vollständig ausgegeben, auch nicht im Fehlerfall.
+
+### Flo holt sich selbst wieder raus
+
+Zwei Ausfälle passieren im Betrieb wirklich, und beide löst Flo inzwischen
+allein — er sagt danach im Log, was dauerhaft in die `.env` gehört:
+
+| Was passiert | Was Flo tut |
+|---|---|
+| Anbieter **mustert das Modell aus** (404) | holt die aktuelle Modell-Liste, nimmt das größte taugliche und macht weiter |
+| **Cloudflare** sperrt die Client-Signatur (403, `error code: 1010`) | probiert andere Signaturen durch, bis eine durchkommt |
+| **Ratenlimit** (429) oder Störung (5xx) | wiederholt mit wachsendem Abstand (0,8 s · 2,4 s · 6 s) |
+| **Schlüssel abgelehnt** (401), Anfrage kaputt (400) | wiederholt **nicht** — das wird beim zweiten Mal nicht besser |
+
+Wichtig zum Einordnen: **401 heißt Schlüssel, 403 mit `error code: 1010` heißt
+Cloudflare.** Im zweiten Fall erreicht die Anfrage den Anbieter nie — Schlüssel
+tauschen oder Modell umstellen bringt dort gar nichts. Kommt keine Signatur
+durch, ist die IP des Anschlusses gesperrt; dann hilft kein Code, sondern nur
+eine andere Route ins Netz.
+
+### Statt einem Satz für alles
+
+Früher fingen **vier** Stellen in `ai.py` ein nacktes `except Exception` ab und
+gaben alle denselben Satz zurück — der Grund verschwand im Traceback. Jetzt gibt
+es genau **einen** Weg zum Anbieter (`FloAI._chat`), dort steht die ganze
+Politik, und jede Ursache hat ihren eigenen Satz im Chat. Ein Test hält fest,
+dass es bei einem Weg bleibt.
+
+Störungsmeldungen landen außerdem **nicht mehr im Kurzzeit-Gedächtnis**. Vorher
+schrieb `bot.py` jede Antwort mit, also auch „Mein KI-Dienst antwortet gerade
+nicht" — die ging als Gesprächsverlauf wieder ans Modell, das sie brav
+nachplapperte.
+
+Beim Start prüft Flo einmal wirklich nach (`ai.selbsttest()`). Vorher hing die
+Meldung „KI-Feature aktiv" allein daran, dass ein Schlüssel in der `.env` stand.
+
+| `.env` | was |
+|---|---|
+| `LLM_API_KEY` | Schlüssel beim Anbieter (Groq) |
+| `LLM_BASE_URL` | Standard `https://api.groq.com/openai/v1` |
+| `LLM_MODEL`, `LLM_VISION_MODEL` | Chat- und Bild-Modell |
+| `LLM_USER_AGENT` | Client-Signatur — nur nötig, wenn Cloudflare blockt |
+| `LLM_TEMPERATURE` | 0 = brav, ~1.2 = chaotisch (Standard 0.9) |
 
 ---
 
