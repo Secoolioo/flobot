@@ -1728,14 +1728,17 @@ class Economy(FeatureBasis):
             emb.set_footer(text=f"{len(items)} Titel heute · Kauf gibt die farbige Rolle")
         return emb
 
-    def _shop_banner_file(self, items, date):
+    async def _shop_banner_file(self, items, date):
         """Optionales Shop-Banner (render.shop_banner). Faellt sauber aus, wenn der
         Renderer (noch) nicht da ist."""
         fn = getattr(render, "shop_banner", None)
         if not callable(fn):
             return None
         try:
-            buf = fn(items, date=date)
+            # In einen Thread: das Banner ist 1000x950 mit zwei GaussianBlur(46)
+            # und braucht gemessen 236-278 ms. Auf dem Event-Loop steht in der
+            # Zeit der GANZE Bot - Musik stottert, alle anderen warten.
+            buf = await asyncio.to_thread(fn, items, date=date)
         except Exception:  # noqa: BLE001 - Bild ist nice-to-have, nie fatal
             log.exception("Shop-Banner fehlgeschlagen - nutze Embed ohne Bild")
             return None
@@ -1751,7 +1754,7 @@ class Economy(FeatureBasis):
                 title="🛒 Flo Shop",
                 description="Der Shop ist gerade leer – schau gleich nochmal rein.",
                 color=discord.Color.blurple())
-        file = self._shop_banner_file(items, st.get("date", ""))
+        file = await self._shop_banner_file(items, st.get("date", ""))
         emb = self._shop_embed(items, with_fields=(file is None),
                                member=message.author)
         if file is not None:

@@ -4378,6 +4378,43 @@ def test_bilder_blockieren_den_bot_nicht():
                     continue
                 verdaechtig.append(f"{p.name}:{n.lineno} {n.func.value.id}.{n.func.attr}")
 
+        # ZWEITER Weg, den die Suche oben NICHT sieht: die Zeichenfunktion wird
+        # per getattr geholt und dann unter einem eigenen Namen gerufen -
+        #     fn = getattr(render, "shop_banner", None)
+        #     buf = fn(items, date=date)
+        # Genau so lief das Shop-Banner (gemessen 236-278 ms) jahrelang auf dem
+        # Event-Loop, waehrend dieser Test gruen war.
+        per_getattr = {}
+        for n in ast.walk(baum):
+            if not (isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)):
+                continue
+            ruf = n.value
+            if not (isinstance(ruf.func, ast.Name) and ruf.func.id == "getattr"):
+                continue
+            if not (ruf.args and isinstance(ruf.args[0], ast.Name)
+                    and ruf.args[0].id in ("render", "leaderboard_img")):
+                continue
+            for ziel in n.targets:
+                if isinstance(ziel, ast.Name):
+                    quelle_name = (ruf.args[1].value
+                                   if len(ruf.args) > 1 and isinstance(ruf.args[1], ast.Constant)
+                                   else "?")
+                    per_getattr[ziel.id] = quelle_name
+        if per_getattr:
+            for fn in ast.walk(baum):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if fn.name in im_thread:
+                    continue
+                for n in ast.walk(fn):
+                    if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)):
+                        continue
+                    if n.func.id not in per_getattr or ausgelagert(n):
+                        continue
+                    verdaechtig.append(
+                        f"{p.name}:{n.lineno} {n.func.id}() = "
+                        f"render.{per_getattr[n.func.id]} (per getattr geholt)")
+
     assert not verdaechtig, ("Bild wird auf dem Event-Loop gezeichnet: "
                              + ", ".join(verdaechtig))
 
@@ -11396,6 +11433,36 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
     arztruf = open("k", encoding="utf-8").read()
     for datei in ("tools_ki_check.py", "tools_musik_check.py", "tools_check.py"):
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
+
+
+def test_botsicht_antwort_kommt_wirklich_raus():
+    """Antworten aus der BotSicht scheiterten AUSNAHMSLOS. Der Code reichte ein
+    discord.Object als 'reference' weiter, discord.py ruft darauf aber
+    to_message_reference_dict() auf - die Methode hat Object nicht:
+
+        TypeError: reference parameter must be Message, MessageReference,
+                   or PartialMessage
+
+    Das landete im breiten except, der Nutzer sah "senden fehlgeschlagen" und
+    suchte den Fehler bei sich. Der Kommentar im Code behauptete ausdruecklich
+    das Gegenteil - deshalb hier ein Test, der discord.py selbst fragt."""
+    import discord
+    # 1. Die Tatsache, auf der alles beruht.
+    assert not hasattr(discord.Object(id=1), "to_message_reference_dict")
+    verweis = discord.MessageReference(message_id=1, channel_id=2, guild_id=3,
+                                       fail_if_not_exists=False)
+    daten = verweis.to_message_reference_dict()
+    assert daten["message_id"] == 1 and daten["fail_if_not_exists"] is False
+
+    # 2. Der Code baut wirklich eine MessageReference, nicht ein Object.
+    quelle = open("webpanel.py", encoding="utf-8").read()
+    stelle = quelle.index('kwargs["reference"]')
+    block = quelle[stelle:stelle + 320]
+    assert "discord.MessageReference(" in block, block[:200]
+    assert "discord.Object" not in block, block[:200]
+    # Und das Versprechen "faellt auf eine normale Nachricht zurueck" muss auch
+    # eingeloest sein - sonst scheitert die Antwort weiterhin, nur spaeter.
+    assert "fail_if_not_exists=False" in block, block[:300]
 
 
 def test_tts_nutzertext_ist_niemals_eine_option():

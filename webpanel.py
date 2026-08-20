@@ -2103,10 +2103,19 @@ class WebPanel(FeatureBasis):
         kwargs = {"allowed_mentions": self._sicht_pings()}
         antwort_auf = self._uid(data.get("reply_to"))
         if antwort_auf is not None:
-            # Nicht erst holen: discord.Object reicht zum Antworten und spart
-            # einen API-Aufruf. Ist die Nachricht weg, faellt Discord selbst
-            # auf eine normale Nachricht zurueck.
-            kwargs["reference"] = discord.Object(id=antwort_auf)
+            # Nicht erst holen - das spart einen API-Aufruf. Aber es MUSS eine
+            # MessageReference sein: discord.py ruft to_message_reference_dict()
+            # auf, und discord.Object hat die Methode nicht ("reference parameter
+            # must be Message, MessageReference, or PartialMessage"). Mit Object
+            # scheiterte JEDE Antwort aus der BotSicht - der frueher hier
+            # stehende Kommentar behauptete das Gegenteil.
+            # fail_if_not_exists=False liefert genau das Versprechen: ist die
+            # Nachricht weg, wird daraus eine normale Nachricht.
+            kwargs["reference"] = discord.MessageReference(
+                message_id=antwort_auf,
+                channel_id=getattr(kanal, "id", 0),
+                guild_id=getattr(getattr(kanal, "guild", None), "id", None),
+                fail_if_not_exists=False)
             kwargs["mention_author"] = True
         try:
             msg = await kanal.send(text, **kwargs)
