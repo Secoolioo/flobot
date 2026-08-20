@@ -257,13 +257,21 @@ class Casino(FeatureBasis):
             return MAX_BET
         return min(MAX_BET, eigen) if eigen > 0 else MAX_BET
 
-    def _check_bet(self, uid, bet):
-        """Prueft einen Einsatz. Rueckgabe: (gepruefter Einsatz, Fehlertext oder None)."""
+    def _check_bet(self, uid, bet, gid=None):
+        """Prueft einen Einsatz. Rueckgabe: (gepruefter Einsatz, Fehlertext oder None).
+
+        'gid' MUSS aus jedem Knopf-/Formular-Weg mitkommen. Der Server-Deckel
+        haengt sonst an ai.aktuelle_guild(), und die wird im ganzen Repo an
+        genau EINER Stelle gesetzt: in bot.on_message. Ein Klick kommt aber als
+        eigenes Ereignis herein, ohne diesen Kontext - nachgemessen ist die
+        Guild dort 0, und dann gilt wieder der globale MAX_BET. Der Deckel, den
+        ein Server-Admin gesetzt hat, war damit ueber Menue, Dropdown und
+        "Nochmal" komplett wirkungslos."""
         if bet is None:
             return 0, "Wie viel setzt du? z. B. `50` oder `alles`."
         if bet < MIN_BET:
             return 0, f"Mindesteinsatz ist {MIN_BET} {economy.COIN}."
-        deckel = self.max_bet()
+        deckel = self.max_bet(gid)
         if bet > deckel:
             return 0, f"Maximaleinsatz ist {numfmt.fmt(deckel)} {economy.COIN}."
         bal = economy.get_coins(uid)
@@ -1637,7 +1645,7 @@ class _MinesAgainBtn(discord.ui.Button):
         if v.is_finished():          # Doppelklick: nur der erste Klick startet neu
             await interaction.response.defer()
             return
-        bet, err = _check_bet(v.uid, v.bet)
+        bet, err = _check_bet(v.uid, v.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return
@@ -2048,7 +2056,7 @@ class _SerienRestart(discord.ui.Button):
         if v.is_finished():
             await interaction.response.defer()
             return
-        bet, err = _check_bet(interaction.user.id, self.bet)
+        bet, err = _check_bet(interaction.user.id, self.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return
@@ -2372,7 +2380,8 @@ class _BetModal(discord.ui.Modal):
 
     async def on_submit(self, interaction):
         uid = self.uid
-        bet, err = _check_bet(uid, _resolve_bet(self.bet.value, uid))
+        bet, err = _check_bet(uid, _resolve_bet(self.bet.value, uid),
+                              interaction.guild_id)
         if err:
             await interaction.response.send_message(err, ephemeral=True)
             return
@@ -2545,7 +2554,7 @@ class _AgainView(discord.ui.View):
         if self.is_finished():
             await interaction.response.defer()
             return
-        bet, err = _check_bet(uid, self.params.get("bet"))
+        bet, err = _check_bet(uid, self.params.get("bet"), interaction.guild_id)
         if err:
             await interaction.response.send_message(err, ephemeral=True)
             return
@@ -2783,7 +2792,7 @@ class _Setup(discord.ui.View):
 
     async def _ensure_bet(self, interaction):
         """Prueft den gewaehlten Einsatz. Bei Problem: kurzer ephemerer Hinweis."""
-        bet, err = _check_bet(self.uid, self.bet)
+        bet, err = _check_bet(self.uid, self.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return None
@@ -2799,7 +2808,7 @@ class _Setup(discord.ui.View):
             except discord.HTTPException:
                 pass
             return None
-        bet, err = _check_bet(self.uid, self.bet)
+        bet, err = _check_bet(self.uid, self.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return None
@@ -2928,7 +2937,7 @@ class _NumberBetModal(discord.ui.Modal):
         if not numfmt.ist_zahl(raw) or not (0 <= int(raw) <= 36):
             await interaction.response.send_message("Bitte eine Zahl von 0 bis 36.", ephemeral=True)
             return
-        bet, err = _check_bet(s.uid, s.bet)
+        bet, err = _check_bet(s.uid, s.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return
@@ -3029,7 +3038,7 @@ class _CrashTargetModal(discord.ui.Modal):
                 "Ziel muss eine Zahl über 1.0 sein (z. B. 2.5).", ephemeral=True)
             return
         target = min(target, 100.0)
-        bet, err = _check_bet(s.uid, s.bet)
+        bet, err = _check_bet(s.uid, s.bet, interaction.guild_id)
         if err:
             await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
             return

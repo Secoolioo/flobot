@@ -11444,6 +11444,69 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_server_einsatzdeckel_gilt_auch_fuer_knoepfe():
+    """Der je Server eingestellte Maximaleinsatz haengt an ai.aktuelle_guild().
+    Die wird im GANZEN Repo an genau einer Stelle gesetzt: bot.on_message. Ein
+    Klick kommt aber als eigenes Ereignis herein, ohne diesen Kontext.
+
+    Nachgemessen bei Server-Deckel 1.000:
+        max_bet(gid) = 1.000          max_bet() ohne Kontext = 1.000.000.000
+        50.000 mit Guild  -> abgelehnt
+        50.000 ohne Guild -> ANGENOMMEN
+
+    Der Deckel galt damit nur fuer getippte Befehle. Ueber Menue, Dropdown
+    "Alles" und "Nochmal" lief die Runde mit dem vollen Konto."""
+    import guildcfg
+    economy.setup()
+    guildcfg.setup()
+    casino.setup()
+    gid, uid = 770077, 909090
+    economy.add_coins(uid, 100_000_000 - economy.get_coins(uid))
+    ok, wert, _fehler = asyncio.run(
+        guildcfg.instance.setzen(gid, "casino_max_einsatz", "1000"))
+    assert ok and wert == 1000, (ok, wert)
+    try:
+        # Mit Guild greift der Deckel.
+        bet, fehler = casino.instance._check_bet(uid, 50_000, gid)
+        assert bet == 0 and fehler and "Maximaleinsatz" in fehler, (bet, fehler)
+        # Ein erlaubter Einsatz geht weiterhin durch.
+        bet, fehler = casino.instance._check_bet(uid, 500, gid)
+        assert bet == 500 and fehler is None, (bet, fehler)
+        # Und der globale Deckel bleibt die Notbremse: ein Server darf strenger
+        # sein als die .env, nie lockerer.
+        assert casino.instance.max_bet(gid) <= casino.MAX_BET
+    finally:
+        asyncio.run(guildcfg.instance.loeschen(gid, "casino_max_einsatz"))
+
+    # --- Die Regel, damit keine neue Knopf-Stelle sie vergisst -------------
+    # In casino.py sind die beiden Wege sauber zu unterscheiden:
+    #   self._check_bet(...)  = getippter Befehl, laeuft IN on_message (Kontext da)
+    #   _check_bet(...)       = Knopf/Formular, eigener Task (kein Kontext)
+    # Die zweite Form MUSS die Guild mitgeben.
+    quelle = open("casino.py", encoding="utf-8").read()
+    fehlt = []
+    for treffer in re.finditer(r"(?<![\w.])_check_bet\(", quelle):
+        if quelle[:treffer.start()].rstrip().endswith("def"):
+            continue                      # die Definition selbst, kein Aufruf
+        # Bis zur SCHLIESSENDEN Klammer lesen, nicht bis zur naechsten: die
+        # Argumente enthalten selbst Klammern (self.params.get("bet")).
+        tiefe, i = 0, treffer.end() - 1
+        while i < len(quelle):
+            if quelle[i] == "(":
+                tiefe += 1
+            elif quelle[i] == ")":
+                tiefe -= 1
+                if tiefe == 0:
+                    break
+            i += 1
+        argumente = quelle[treffer.end():i]
+        if "guild_id" not in argumente:
+            zeile = quelle[:treffer.start()].count("\n") + 1
+            fehlt.append(f"casino.py:{zeile}  _check_bet({' '.join(argumente.split())})")
+    assert not fehlt, ("Knopf-Weg ohne Guild - der Server-Deckel gilt dort "
+                       "nicht:\n  " + "\n  ".join(fehlt))
+
+
 def test_doppelklick_verleiht_nicht_zweimal():
     """discord.py serialisiert Klick-Callbacks NICHT. Zwei Klicks auf
     »Annehmen« in ~200 ms liefen beide in _ja - und weil dort vor dem ersten
