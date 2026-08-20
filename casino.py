@@ -1915,8 +1915,13 @@ class DuelView(discord.ui.View):
         face = random.choice(["kopf", "zahl"])
         winner = self.challenger if face == "kopf" else self.target
         loser = self.target if face == "kopf" else self.challenger
-        pot = self.bet * 2
-        pot = _auszahlen(winner.id, pot, "duell")
+        # Getrennt buchen: der eigene EINSATZ des Siegers kommt nur zurueck und
+        # ist keine Einnahme - sonst zahlt er die 20-%-Schuldentilgung auf sein
+        # eigenes Geld. Nur die zweite Haelfte (das Geld des Verlierers) ist ein
+        # echter Gewinn. Gemessen war der Sieger sonst 200 von 1.000 aermer.
+        zurueck = _auszahlen(winner.id, self.bet, "duell", rueckgabe=True)
+        gewinn = _auszahlen(winner.id, self.bet, "duell")
+        pot = zurueck + gewinn
         await economy.flush()
         await record(winner.id, "duell", self.bet, pot)
         await record(loser.id, "duell", self.bet, 0)
@@ -1927,7 +1932,7 @@ class DuelView(discord.ui.View):
             title="⚔️ Münz-Duell",
             description=(f"Die Münze zeigt **{face.upper()}**!\n"
                          f"🏆 {winner.mention} gewinnt den Pott: "
-                         f"**+{numfmt.fmt(self.bet)} {economy.COIN}** "
+                         f"**+{numfmt.fmt(gewinn)} {economy.COIN}** "
                          f"(von {loser.display_name})."),
             color=_C_WIN)
         emb.set_author(name="🎰 Flo Casino")
