@@ -486,12 +486,20 @@ class Merchant(FeatureBasis):
                 f"({meta['emoji']} {meta['label']}) und hast die Rolle "
                 f"**{meta['role']}** bekommen. Ein Schnäppchen! 🤝")
 
-    def eligible_gives(self, member, min_rarity):
-        """Titel im Inventar, die als Tausch-Einsatz taugen (Rang >= min_rarity)."""
+    def eligible_gives(self, member, min_rarity, max_rarity=None):
+        """Titel im Inventar, die als Tausch-Einsatz taugen.
+
+        Rang >= min_rarity - und NIE besser als die Belohnung. Vorher gab es nur
+        die Untergrenze: wer fuer einen Tausch "mindestens episch" brauchte,
+        konnte seinen GOETTLICHEN Titel hergeben und einen schlechteren
+        zurueckbekommen. Unwiderruflich, ohne Rueckfrage, und im Dropdown stand
+        er ganz normal zur Auswahl."""
         min_rank = titles.RANK.get(min_rarity, 0)
+        max_rank = titles.RANK.get(max_rarity, 99) if max_rarity else 99
         out = []
         for o in economy.list_titles(member.id):
-            if titles.RANK.get(o.get("rarity", "normal"), 0) >= min_rank:
+            rang = titles.RANK.get(o.get("rarity", "normal"), 0)
+            if min_rank <= rang <= max_rank:
                 out.append(o)
         return out
 
@@ -512,10 +520,21 @@ class Merchant(FeatureBasis):
         if besitz is None:
             return "Diesen Titel besitzt du gar nicht."
         min_rank = titles.RANK.get(t["need_rarity"], 0)
-        if titles.RANK.get(besitz.get("rarity", "normal"), 0) < min_rank:
+        eigen_rang = titles.RANK.get(besitz.get("rarity", "normal"), 0)
+        if eigen_rang < min_rank:
             need_meta = titles.RARITY.get(t["need_rarity"], titles.RARITY["normal"])
             return (f"Für diesen Tausch brauchst du mindestens einen "
                     f"**{need_meta['label']}**-Titel als Einsatz.")
+        # Auch serverseitig: niemand gibt etwas Besseres her, als er bekommt.
+        # Die Auswahl filtert das schon, aber der Tausch darf sich nicht darauf
+        # verlassen - der Titel ist danach weg und kommt nicht zurueck.
+        lohn_rang = titles.RANK.get(t.get("reward_rarity", "normal"), 0)
+        if eigen_rang > lohn_rang:
+            rew_meta = titles.RARITY.get(t.get("reward_rarity", "normal"),
+                                         titles.RARITY["normal"])
+            return (f"Nicht dein Ernst – der Einsatz ist **besser** als die "
+                    f"Belohnung (**{rew_meta['label']}**). Such dir einen "
+                    f"schwächeren Titel aus.")
         surcharge = int(t["surcharge"])
         if economy.get_coins(member.id) < surcharge:
             fehlt = surcharge - economy.get_coins(member.id)
@@ -633,7 +652,8 @@ class _TradeSelect(discord.ui.Select):
             await interaction.response.send_message(
                 f"Den Titel **{t['reward_label']}** hast du schon. 😎", ephemeral=True)
             return
-        eligible = instance.eligible_gives(interaction.user, t["need_rarity"])
+        eligible = instance.eligible_gives(interaction.user, t["need_rarity"],
+                                           t.get("reward_rarity"))
         if not eligible:
             need_meta = titles.RARITY.get(t["need_rarity"], titles.RARITY["normal"])
             await interaction.response.send_message(

@@ -485,11 +485,16 @@ class _QDuelChallenge(discord.ui.View):
         # DANN die Interaction bestaetigen (defer): das Generieren der KI-Frage
         # kann laenger als Discords 3-Sekunden-Antwortfrist dauern - ohne defer
         # wuerde die Erstantwort danach fehlschlagen und beide Einsaetze waeren weg.
-        await interaction.response.defer()
+        # Das defer gehoert INS try. Die Einsaetze sind hier laengst abgebucht
+        # und geflusht (oben, bewusst vor jedem await) - schlaegt ausgerechnet
+        # das defer fehl (Interaction abgelaufen, Discord-Aussetzer), lag genau
+        # dieser eine Aufruf ausserhalb der Absicherung, und beide Einsaetze
+        # waren weg. Der except-Zweig darunter bucht sie bereits zurueck.
         try:
+            await interaction.response.defer()
             frage, antwort = await _gen_quiz_frage()
-        except Exception:  # noqa: BLE001 - KI-Fehler darf keine Einsaetze fressen
-            log.exception("Quiz-Duell: Frage fehlgeschlagen - Einsaetze zurueck")
+        except Exception:  # noqa: BLE001 - kein Fehler darf Einsaetze fressen
+            log.exception("Quiz-Duell: Start fehlgeschlagen - Einsaetze zurueck")
             economy.add_coins(self.a.id, self.bet, reason="spiele-rueck")
             economy.add_coins(self.b.id, self.bet, reason="spiele-rueck")
             await economy.flush()

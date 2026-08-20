@@ -5239,8 +5239,16 @@ def test_floaktie_chart_klebt_keine_tage_doppelt():
         assert starts[2] <= starts[1] <= starts[0], starts
 
         # 4) Decken die Ticks das ganze Fenster ab, kommt KEINE Historie dazu.
-        fa._store.data["ticks"] = [{"t": jetzt - 86400 + i * 600, "price": 1100 + i}
-                                   for i in range(140)]
+        #
+        # Der erste Tick lag hier auf GENAU der Fenstergrenze (jetzt - 86400).
+        # _series liest die Uhr aber selbst und spaeter - vergehen dazwischen
+        # ein paar Millisekunden, rutscht der Tick aus dem Fenster, Historie
+        # wird ergaenzt und der Test faellt um. Genau so ist er auf einer
+        # ausgelasteten Maschine gerissen (erwartet >= 1100, bekommen 900),
+        # nachdem er kurz zuvor noch gruen war. Eine Minute Luft macht ihn von
+        # der Wanduhr unabhaengig, ohne die Aussage zu aendern.
+        fa._store.data["ticks"] = [{"t": jetzt - 86400 + 60 + i * 600,
+                                    "price": 1100 + i} for i in range(140)]
         assert fa._series(1)[0] >= 1100, fa._series(1)[0]
 
         # 5) Ganz ohne Ticks traegt die Historie die Reihe allein.
@@ -8360,6 +8368,81 @@ def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
                             ("laut", "lautr"), ("verlassen", "verlasse")):
         assert cmdnorm.normalize(falsch) == richtig, (falsch,
                                                      cmdnorm.normalize(falsch))
+
+
+def test_haendler_nimmt_keinen_besseren_titel_als_einsatz():
+    """Der Tausch prueft nur eine UNTERGRENZE. Wer fuer einen Tausch
+    'mindestens episch' braucht, konnte damit seinen GOETTLICHEN Titel
+    hergeben und einen schlechteren zurueckbekommen - unwiderruflich, ohne
+    Rueckfrage, und im Dropdown stand er ganz normal zur Auswahl."""
+    import merchant
+    import titles
+    m = merchant.instance
+
+    besitz = [
+        {"text": "n", "label": "Normal", "rarity": "normal"},
+        {"text": "e", "label": "Episch", "rarity": "episch"},
+        {"text": "x", "label": "Exklusiv", "rarity": "exklusiv"},
+        {"text": "g", "label": "Goettlich", "rarity": "goettlich"},
+    ]
+    alt_liste = economy.list_titles
+    economy.list_titles = lambda _uid: besitz
+    try:
+        wer = SimpleNamespace(id=1)
+        # Tausch: braucht mindestens 'episch', gibt 'exklusiv'.
+        auswahl = [o["rarity"] for o in m.eligible_gives(wer, "episch", "exklusiv")]
+        assert "episch" in auswahl and "exklusiv" in auswahl, auswahl
+        assert "goettlich" not in auswahl, "der bessere Titel steht noch im Dropdown"
+        assert "normal" not in auswahl, auswahl
+        # Ohne Obergrenze bleibt das alte Verhalten (andere Aufrufer).
+        assert "goettlich" in [o["rarity"] for o in m.eligible_gives(wer, "episch")]
+    finally:
+        economy.list_titles = alt_liste
+
+    # Die Rangfolge, auf der das beruht, muss aufsteigend sein.
+    assert titles.RANK["goettlich"] > titles.RANK["exklusiv"] > titles.RANK["episch"]
+
+
+def test_schicht_rechnet_bei_doppelklick_nur_einmal_ab():
+    """SchichtView.beenden() setzte self.fertig, hat es aber nie GEPRUEFT - und
+    interaction_check prueft nur, WER klickt, nicht wie oft. Zwei schnelle
+    Klicks (oder zwei Modal-Eingaben) liefen also beide durch und
+    abrechnen() schrieb den Lohn zweimal gut.
+
+    Der Riegel gehoert an genau eine Stelle: dreizehn Aufrufstellen koennen ihn
+    nicht jede fuer sich mitbringen."""
+    import arbeit
+    v = arbeit.SchichtView(arbeit.instance, 4242, arbeit.SCHICHTEN["salat"])
+    v.message = None
+    gerufen = []
+
+    alt_abrechnen = arbeit.instance.abrechnen
+    alt_embed = arbeit.instance.ergebnis_embed
+    arbeit.instance.abrechnen = lambda *a, **k: (gerufen.append(1), (1000, ""))[1]
+    arbeit.instance.ergebnis_embed = lambda *a, **k: SimpleNamespace(
+        set_image=lambda **kw: None)
+
+    async def nichts(**_k):
+        pass
+
+    inter = SimpleNamespace(
+        response=SimpleNamespace(edit_message=nichts, defer=nichts),
+        user=SimpleNamespace(id=4242, display_name="x"),
+        edit_original_response=nichts)
+
+    async def dreimal():
+        await v.beenden(inter, "t", "x", 1.0)
+        await v.beenden(inter, "t", "x", 1.0)     # Doppelklick
+        await v.beenden(inter, "t", "x", 1.0)
+
+    try:
+        asyncio.run(dreimal())
+    finally:
+        arbeit.instance.abrechnen = alt_abrechnen
+        arbeit.instance.ergebnis_embed = alt_embed
+
+    assert len(gerufen) == 1, f"Lohn wurde {len(gerufen)}x gutgeschrieben"
+    assert v.fertig is True
 
 
 def test_antwort_mit_ping_ist_kein_ziel():

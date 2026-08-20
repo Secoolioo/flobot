@@ -16,6 +16,7 @@ import copy
 import json
 import logging
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -37,6 +38,7 @@ class JsonStore:
         # Der Standard ist zugleich die TYP-SCHABLONE (siehe _schablone_pruefen).
         self._default = copy.deepcopy(default or {})
         self.data = copy.deepcopy(self._default)
+        self._verdaechtig = False   # schon eine Sicherheitskopie angelegt?
         self._load()
 
     def _schablone_pruefen(self):
@@ -55,6 +57,25 @@ class JsonStore:
             wert = self.data.get(key, None)
             if self._passt(wert, muster):
                 continue
+            # ERST sichern, dann zuruecksetzen. Ohne das war der alte Inhalt
+            # beim naechsten save() endgueltig weg: der Schluessel wird durch
+            # den Standard ersetzt, und save() schreibt genau den auf die
+            # Platte. Der Lese-Weg legt eine kaputte Datei laengst beiseite
+            # (_beiseite), dieser Weg tat es als einziger nicht.
+            #
+            # KOPIE, nicht verschieben: die uebrigen Schluessel der Datei sind
+            # in Ordnung und sollen weiterlaufen.
+            if not self._verdaechtig:
+                self._verdaechtig = True
+                if self.path.exists():
+                    ziel = self.path.with_name(
+                        f"{self.path.name}.kaputt-{time.strftime('%Y%m%d-%H%M%S')}")
+                    try:
+                        shutil.copy2(self.path, ziel)
+                        log.error("%s: Sicherheitskopie unter %s abgelegt.",
+                                  self.path.name, ziel.name)
+                    except OSError as exc:
+                        log.error("%s liess sich nicht sichern: %s", self.path.name, exc)
             log.error("%s: '%s' hat den falschen Typ (%s statt %s) - "
                       "setze diesen Schluessel auf den Standard zurueck.",
                       self.path.name, key, type(wert).__name__, type(muster).__name__)

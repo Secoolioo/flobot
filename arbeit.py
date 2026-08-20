@@ -1763,6 +1763,17 @@ class SchichtView(discord.ui.View):
 
     async def beenden(self, interaction, titel, text, anteil, datei=None):
         """Schicht abschliessen, auszahlen, Ergebnis zeigen."""
+        if self.fertig:
+            # Zweiter Klick (oder zweite Modal-Eingabe) - NICHT nochmal
+            # abrechnen. interaction_check prueft nur, WER klickt, nicht wie
+            # oft; und dreizehn Aufrufstellen koennen den Riegel nicht jede
+            # fuer sich mitbringen. Ohne das lief abrechnen() zweimal und der
+            # Lohn wurde doppelt gutgeschrieben.
+            try:
+                await interaction.response.defer()
+            except Exception:  # noqa: BLE001 - schon beantwortet ist auch gut
+                pass
+            return
         self.fertig = True
         self.stop()
         betrag, info = self.chef.abrechnen(self.uid, self.schicht, anteil,
