@@ -33,7 +33,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
+from basis import FeatureBasis, erstes_ziel
 import economy
 import numfmt
 import render

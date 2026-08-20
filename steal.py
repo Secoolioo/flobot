@@ -24,7 +24,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
+from basis import FeatureBasis, echte_erwaehnungen
 import economy
 from store import JsonStore
 

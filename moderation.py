@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 import discord
 
 import ai
-from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
+from basis import FeatureBasis, echte_erwaehnungen
 import guildcfg
 from store import JsonStore
 
