@@ -11444,6 +11444,52 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_zwei_skips_fressen_keinen_song():
+    """Zwei Skips kurz hintereinander (oder Skip, waehrend der after-Callback
+    schon laeuft) liefen beide gleichzeitig durch _advance. Beide holten sich
+    mit queue.pop(0) einen Track - einer davon verschwand spurlos.
+
+    Der 'gen'-Schutz greift dagegen NICHT: Aufrufe ohne gen (skip, weiter,
+    Reconnect) umgehen ihn ausdruecklich, und das ist so gewollt.
+
+    Wichtig am Fix: der zweite Lauf wird nicht VERSCHLUCKT, er wartet nur. Die
+    Zusicherung "ohne gen laeuft IMMER" bleibt damit wahr - ein frueher
+    Ausstieg haette einen zweiten Skip stillschweigend gefressen."""
+    import music
+    spieler = music.GuildPlayer(loop=asyncio.get_event_loop_policy().new_event_loop(),
+                               guild_id=77, volume=0.5)
+    lief = []
+
+    async def falsches_intern(gen=None):
+        # Genau die kritische Stelle: lesen, abgeben, schreiben.
+        lief.append("start")
+        if spieler.queue:
+            track = spieler.queue.pop(0)
+            await asyncio.sleep(0)        # hier wechselt der Task
+            lief.append(track)
+        lief.append("ende")
+
+    spieler._advance_intern = falsches_intern
+    spieler.queue = ["A", "B", "C"]
+
+    async def zwei_skips():
+        await asyncio.gather(spieler._advance(), spieler._advance())
+
+    asyncio.run(zwei_skips())
+
+    # Kein Track darf verlorengehen, und die Laeufe duerfen sich nicht
+    # verschraenken (start/ende muessen paarweise aufeinander folgen).
+    geholt = [x for x in lief if x in ("A", "B", "C")]
+    assert geholt == ["A", "B"], f"Songs verschwunden oder doppelt: {lief}"
+    assert spieler.queue == ["C"], spieler.queue
+    assert lief == ["start", "A", "ende", "start", "B", "ende"], lief
+
+    # Und der Lock muss wirklich um den ganzen Lauf liegen.
+    quelle = inspect.getsource(music.GuildPlayer._advance)
+    assert "_advance_lock" in quelle and "_advance_intern" in quelle
+    assert quelle.index("_advance_lock") < quelle.index("_advance_intern")
+
+
 def test_server_einsatzdeckel_gilt_auch_fuer_knoepfe():
     """Der je Server eingestellte Maximaleinsatz haengt an ai.aktuelle_guild().
     Die wird im GANZEN Repo an genau einer Stelle gesetzt: bot.on_message. Ein

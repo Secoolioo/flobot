@@ -618,6 +618,10 @@ class GuildPlayer:
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
     # damit nie zwei channel.connect() gleichzeitig laufen.
     _voice_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Serialisiert die Songwechsel. Zwei gleichzeitige Laeufe (zwei schnelle
+    # Skips, oder Skip waehrend der after-Callback schon laeuft) haben beide aus
+    # derselben Warteschlange gepoppt - dabei ging ein Track spurlos verloren.
+    _advance_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def connect(self, channel):
         # Lock: nie gleichzeitig mit einem Watchdog-_reconnect verbinden.
@@ -827,6 +831,22 @@ class GuildPlayer:
         uebersprungen - die KOMPLETTE Warteschlange lief leer (4 -> 0), current
         stand auf None, und das gerade gepostete Panel wurde geloescht.
         Aufrufe ohne 'gen' (z. B. aus _reconnect) pruefen nichts."""
+        # WARTEN statt aussteigen. Der zweite Lauf wird nicht verschluckt - er
+        # kommt nur nach dem ersten dran. Das ist wichtig: die Zusicherung
+        # weiter unten ("ohne gen laeuft IMMER", music.py:992) bleibt damit
+        # wahr. Ein frueher Ausstieg haette einen zweiten Skip stillschweigend
+        # geschluckt, und genau das war an einem Vorschlag falsch, der hier
+        # schon mal stand.
+        #
+        # Kein Deadlock: der einzige Weg zurueck nach _advance fuehrt ueber
+        # _after, und das plant per run_coroutine_threadsafe einen NEUEN Task -
+        # es ruft sich nie innerhalb desselben Aufrufs selbst.
+        async with self._advance_lock:
+            return await self._advance_intern(gen)
+
+    async def _advance_intern(self, gen=None):
+        """Der eigentliche Songwechsel. Nur ueber _advance aufrufen - der haelt
+        den Lock."""
         # _advancing markiert die (ggf. langsame) Aufloesephase, damit der Voice-
         # Watchdog in dieser Luecke KEINEN Zombie-Alarm ausloest.
         if gen is not None and gen != self._play_gen:
