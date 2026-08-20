@@ -11533,6 +11533,93 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
                        "der Befehl faellt zur KI durch):\n  " + "\n  ".join(stumm))
 
 
+#: Eingaben, an denen Befehle erfahrungsgemaess zerbrechen. Bewusst gemein:
+#: leer, Grenzwerte, falsche Zahlenformate, fremde Ziffernsysteme, Formatzeichen,
+#: Einschleusungsversuche, Massen-Erwaehnungen, unsichtbare und ueberlange Texte.
+_BOESE_EINGABEN = (
+    "", " ", "   ", "\t", "\n",
+    "0", "-1", "-999999999999", "999999999999999999999999", "1e308", "nan", "inf",
+    "0.5", "1,5", "1_000", "0x10", "1e-5", "٣", "½", "²",
+    "abc", "null", "None", "undefined", "%s", "{0}", "{{}}", "%%",
+    "'; DROP TABLE x; --", "../../etc/passwd", "<script>alert(1)</script>",
+    "@everyone", "@here", "<@0>", "<@999999999999999999>",
+    "a" * 5000, "🎉" * 200, "\u200b" * 50, "\x00", "\ufeff",
+    "-0", "+5", "5 5 5 5 5", "1 2 3 4 5 6 7 8 9 10 11 12",
+    "999999999999 rot", "0 rot", "-100 rot", "abc rot", "100 abcdef",
+    "<@123> -999999", "<@123> 0", "<@123> abc", "<@123>",
+)
+
+
+def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
+    """Aktiv gesuchte Grenzfaelle statt Hoffnung: jeder Befehl, der Argumente
+    nimmt, bekommt 47 gemeine Eingaben - leer, negativ, absurd gross, falsche
+    Zahlenformate, arabische Ziffern, Formatzeichen, Einschleusungsversuche,
+    @everyone, 5000 Zeichen, Nullbytes.
+
+    Ein Absturz hier ist im Betrieb eine Nachricht, die Flo verschluckt - und
+    bei Coin-Befehlen im schlimmsten Fall ein abgebuchter Einsatz ohne Spiel.
+
+    WICHTIG: alles laeuft in EINEM Event-Loop. Mit asyncio.run je Eingabe misst
+    man das Testgeschirr statt den Bot - die geteilte HTTP-Sitzung ueberlebt das
+    Schliessen des Loops nicht und erzeugt 44 Phantom-Fehler."""
+    import arbeit
+    import casino
+    import games
+    import guildcfg
+    import handel
+    import lotto
+    import luxus
+    import merchant
+    import moderation
+    import profil
+    import schulden
+    import steal
+    import terraria
+    import words
+
+    mit_argumenten = {
+        economy: ("pay", "zahl", "kaufen", "buy", "equip", "setze", "top", "coins"),
+        schulden: ("leih", "tilg", "abzahl", "borg", "schuldschein"),
+        steal: ("steal", "klau"),
+        lotto: ("lotto", "lose"),
+        floaktie: ("aktie", "kaufen", "verkaufen"),
+        arbeit: ("work", "wordle", "lohnzettel"),
+        games: ("zahlenraten", "coinflip", "wuerfel", "quiz"),
+        casino: ("roulette", "blackjack", "mines", "crash", "keno", "hilo",
+                 "turm", "slots", "baccarat", "sieben", "rubbellos", "duell"),
+        moderation: ("purge", "warn", "timeout", "kick", "ban", "unban", "unwarn"),
+        guildcfg: ("einstellung",),
+        words: ("wort",),
+        profil: ("check", "avatar"),
+        luxus: ("luxus", "thron"),
+        merchant: ("haendler",),
+        terraria: ("terraria",),
+        handel: ("handel",),
+    }
+    for modul in mit_argumenten:
+        modul.setup()
+
+    abstuerze = []
+
+    async def alles_durchspielen():
+        for modul, befehle in mit_argumenten.items():
+            for befehl in befehle:
+                for eingabe in _BOESE_EINGABEN:
+                    text = f"{befehl} {eingabe}".strip()
+                    try:
+                        await modul.handle(_rauch_nachricht(text))
+                    except Exception as exc:  # noqa: BLE001 - genau das suchen wir
+                        abstuerze.append(
+                            f"{modul.__name__} '{befehl}' mit {eingabe[:30]!r}: "
+                            f"{type(exc).__name__}: {str(exc)[:100]}")
+
+    asyncio.run(alles_durchspielen())
+    # Doppelte Meldungen zusammenfassen - sonst steht derselbe Fehler 47-mal da.
+    eindeutig = sorted(set(abstuerze))
+    assert not eindeutig, (f"{len(abstuerze)} Abstuerze bei feindlicher Eingabe:\n  "
+                           + "\n  ".join(eindeutig[:20]))
+
+
 def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
     """Der Rauchtest nuetzt nichts, wenn er ein Modul vergisst, das bot.py
     aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten."""
