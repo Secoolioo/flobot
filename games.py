@@ -722,12 +722,36 @@ class Games(FeatureBasis):
         """{'day': 'YYYY-MM-DD', 'won': {uid: netto}} in data/games.json."""
         if self._store is None:
             return None
-        st = self._store.data.setdefault("daily", {"day": "", "won": {}})
+        # Nicht nur auf "fehlt" pruefen, sondern auf BRAUCHBAR. Eine games.json
+        # mit  "daily": null  oder  "won": null  ist GUELTIGES JSON und kommt
+        # deshalb an der Quarantaene im Store vorbei. setdefault() half nur
+        # gegen einen fehlenden Schluessel, nicht gegen einen kaputten Wert.
+        #
+        # Der AttributeError landete mitten in der Abrechnung einer GEWONNENEN
+        # Runde: bot.py faengt ihn ab und loggt "Spiele-Hook fehlgeschlagen",
+        # der Spieler sieht gar nichts und sein Einsatz ist weg. Betroffen waren
+        # Mathe, Anagramm, Quiz, Zahlenraten, Reaktion und das Schnell-Event.
+        # Vier Formen sind nachgemessen: daily=null, won=null, won=Liste und ein
+        # nicht-numerischer Wert darin.
+        st = self._store.data.get("daily")
+        if not isinstance(st, dict):
+            st = {"day": "", "won": {}}
+            self._store.data["daily"] = st
+        if not isinstance(st.get("won"), dict):
+            st["won"] = {}
         heute = self._heute()
         if st.get("day") != heute:
             st["day"] = heute
             st["won"] = {}
         return st
+
+    @staticmethod
+    def _kappe_zahl(wert):
+        """Ein Zaehlerstand aus der Datei - notfalls 0 statt ValueError."""
+        try:
+            return int(wert or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _kappe_rest(self, uid):
         """Wie viel NETTO-Gewinn dieser Nutzer heute noch bekommen kann."""
@@ -736,7 +760,7 @@ class Games(FeatureBasis):
         st = self._kappe_state()
         if st is None:
             return GAMES_DAILY_MAX
-        return max(0, GAMES_DAILY_MAX - int(st["won"].get(str(uid), 0) or 0))
+        return max(0, GAMES_DAILY_MAX - self._kappe_zahl(st["won"].get(str(uid))))
 
     def _kappe_buchen(self, uid, netto):
         """Merkt einen Netto-Gewinn fuer heute (nur positive Betraege zaehlen).
@@ -750,7 +774,7 @@ class Games(FeatureBasis):
         if st is None:
             return
         key = str(uid)
-        st["won"][key] = int(st["won"].get(key, 0) or 0) + int(netto)
+        st["won"][key] = self._kappe_zahl(st["won"].get(key)) + int(netto)
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -845,7 +869,9 @@ class Games(FeatureBasis):
         if os.getenv("GAMES_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Spiele-Feature aus (GAMES_ENABLED=0).")
             return False
-        self._store = JsonStore("games.json", default={"counting": {}})
+        self._store = JsonStore("games.json",
+                                default={"counting": {},
+                                         "daily": {"day": "", "won": {}}})
         self._event_words = self._load_event_words()
         self._enabled = True
         log.info(

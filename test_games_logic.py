@@ -11444,6 +11444,115 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_doppelklick_verleiht_nicht_zweimal():
+    """discord.py serialisiert Klick-Callbacks NICHT. Zwei Klicks auf
+    »Annehmen« in ~200 ms liefen beide in _ja - und weil dort vor dem ersten
+    await weder die Knoepfe deaktiviert noch die View gestoppt wurde, verlieh
+    Flo ZWEIMAL: der Verleiher zahlte 10.000 statt der angebotenen 5.000, der
+    Schuldner bekam zwei Posten.
+
+    Das Fenster ist echt: das erste await steht erst in annehmen()."""
+    import schulden
+    schulden.setup()
+
+    aufrufe = []
+
+    class FalschesModul:
+        async def annehmen(self, *_a, **_k):
+            aufrufe.append(1)
+            await asyncio.sleep(0)          # genau hier gibt der Task ab
+            return True, "abgemacht"
+
+    class FalscheAntwort:
+        def __init__(self):
+            self.deferred = 0
+
+        async def edit_message(self, **_k):
+            return None
+
+        async def defer(self):
+            self.deferred += 1
+
+    class FalscheInteraktion:
+        def __init__(self):
+            self.response = FalscheAntwort()
+            self.user = SimpleNamespace(id=2)
+
+    ziel = SimpleNamespace(id=2, display_name="Bert")
+    besteller = SimpleNamespace(id=1, display_name="Anna")
+    view = schulden._AnfrageView(FalschesModul(), besteller, ziel, 5000,
+                                 grund="Test", faellig=0.0, mit_geld=True)
+
+    # discord.ui verpackt die Methode in ein Item - die echte Funktion liegt
+    # darunter. So wird genau das aufgerufen, was auch ein Klick ausloest.
+    ja = schulden._AnfrageView._ja
+    ja = getattr(ja, "callback", ja)
+    ja = getattr(ja, "callback", ja)
+
+    async def zwei_klicks():
+        a, b = FalscheInteraktion(), FalscheInteraktion()
+        # Genau gleichzeitig - so wie ein Doppelklick ankommt.
+        await asyncio.gather(ja(view, a, None), ja(view, b, None))
+        return a, b
+
+    a, b = asyncio.run(zwei_klicks())
+
+    assert len(aufrufe) == 1, (
+        f"annehmen() lief {len(aufrufe)}x - der Verleiher zahlt doppelt")
+    assert a.response.deferred + b.response.deferred == 1, (
+        "der zweite Klick wurde nicht sauber abgewiesen")
+    # Und die Knoepfe muessen aus sein, bevor irgendetwas gebucht wird.
+    quelle = inspect.getsource(schulden._AnfrageView._ja)
+    assert quelle.index("self._laeuft = True") < quelle.index("await self._modul"), (
+        "der Riegel steht nicht VOR dem ersten await - dann greift er nicht")
+
+
+def test_kaputte_games_json_kostet_keinen_gewinn():
+    """Eine games.json mit  "daily": null  ist GUELTIGES JSON und kommt deshalb
+    an der Quarantaene im Store vorbei. setdefault() half nur gegen einen
+    FEHLENDEN Schluessel, nicht gegen einen kaputten Wert.
+
+    Der AttributeError landete mitten in der Abrechnung einer GEWONNENEN Runde.
+    bot.py faengt ihn ab und loggt "Spiele-Hook fehlgeschlagen" - der Spieler
+    sieht gar nichts und sein Einsatz ist weg. Betroffen: Mathe, Anagramm,
+    Quiz, Zahlenraten, Reaktion und das Schnell-Event."""
+    import games
+    games.setup()
+    g = games.instance
+    if g._store is None:
+        return
+    alt_daily = g._store.data.get("daily")
+    heute = g._heute()
+    kaputte_formen = (
+        (None, "daily ist null"),
+        ("quatsch", "daily ist Text"),
+        ([], "daily ist Liste"),
+        ({"day": heute, "won": None}, "won ist null"),
+        ({"day": heute, "won": []}, "won ist Liste"),
+        ({"day": heute, "won": {"4242": "viel"}}, "Zaehlerstand ist Text"),
+    )
+    try:
+        for form, name in kaputte_formen:
+            g._store.data["daily"] = dict(form) if isinstance(form, dict) else form
+            g._kappe_rest(4242)          # darf nicht fliegen
+            g._store.data["daily"] = dict(form) if isinstance(form, dict) else form
+            g._kappe_buchen(4242, 100)   # darf auch nicht fliegen
+            # Und danach muss die Struktur wieder brauchbar sein.
+            zustand = g._store.data["daily"]
+            assert isinstance(zustand, dict), (name, zustand)
+            assert isinstance(zustand.get("won"), dict), (name, zustand)
+    finally:
+        if alt_daily is None:
+            g._store.data.pop("daily", None)
+        else:
+            g._store.data["daily"] = alt_daily
+
+    # Der Store-Standard muss den Zweig selbst schon kennen - sonst entsteht die
+    # Luecke beim naechsten frischen Server wieder.
+    quelle = inspect.getsource(games.Games.setup)
+    assert '"daily"' in quelle, "der Store-Standard kennt 'daily' nicht"
+
+
 def test_grosses_bild_reisst_den_bot_nicht_ins_oom():
     """Der Groessendeckel in food.py:142 zaehlt BYTES - und das ist die falsche
     Groesse. Ein PNG mit einer einfarbigen Flaeche ist winzig gepackt und

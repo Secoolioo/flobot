@@ -1631,6 +1631,12 @@ class _AnfrageView(discord.ui.View):
         self.faellig = faellig
         self.mit_geld = mit_geld
         self.message = None
+        # Riegel gegen den Doppelklick. discord.py serialisiert Klick-Callbacks
+        # NICHT: zwei Klicks in ~200 ms laufen beide in _ja, und weil dort vor
+        # dem ersten await weder Knoepfe deaktiviert noch die View gestoppt
+        # wird, verlieh Flo zweimal - der Verleiher zahlte 10.000 statt 5.000,
+        # der Schuldner hatte zwei Posten.
+        self._laeuft = False
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.ziel.id:
@@ -1650,6 +1656,12 @@ class _AnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Annehmen", emoji="🤝", style=discord.ButtonStyle.success)
     async def _ja(self, interaction, _b):
+        if self._laeuft:
+            await interaction.response.defer()   # zweiter Klick: nichts tun
+            return
+        self._laeuft = True          # SYNCHRON, vor dem ersten await
+        for ch in self.children:
+            ch.disabled = True
         ok, text = await self._modul.annehmen(
             self.besteller, self.ziel, self.betrag, grund=self.grund,
             faellig=self.faellig, mit_geld=self.mit_geld)
@@ -1657,6 +1669,10 @@ class _AnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Ablehnen", emoji="✋", style=discord.ButtonStyle.secondary)
     async def _nein(self, interaction, _b):
+        if self._laeuft:
+            await interaction.response.defer()
+            return
+        self._laeuft = True          # auch gegen "Annehmen UND Ablehnen"
         await self._abschliessen(
             interaction, f"✋ <@{self.ziel.id}> hat abgelehnt – es ist nichts passiert.")
 
