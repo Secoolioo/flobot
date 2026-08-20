@@ -11444,6 +11444,48 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_pvp_sieger_zahlt_keine_tilgung_auf_den_eigenen_einsatz():
+    """Quizduell und Schere-Stein-Papier buchten den GANZEN Pot direkt per
+    add_coins. Damit galt auch der eigene Einsatz des Siegers als Einnahme -
+    wer Schulden hat, gibt davon 20 % ab.
+
+    An echten Konten gemessen (Einsatz 1.000, Pot 2.000, Schuldner):
+        direkt gebucht  -> netto +600
+        ueber _auszahlen-> netto +800   (nur der GEWINN wird getilgt)
+
+    Dazu lief die Tageskappe (GAMES_DAILY_MAX) an beiden Wegen vorbei, und die
+    Ansage nannte den Einsatz als Gewinn statt des wirklich gezahlten Betrags."""
+    import games
+    import schulden
+    economy.setup()
+    schulden.setup()
+    games.setup()
+    sieger, glaeubiger = 770101, 770202
+    economy.add_coins(sieger, 20_000 - economy.get_coins(sieger))
+    economy.add_coins(glaeubiger, 1_000)
+    schulden.instance.buch.anlegen(glaeubiger, sieger, 50_000, grund="Test")
+
+    einsatz = 1_000
+    vorher = economy.get_coins(sieger)
+    economy.add_coins(sieger, -einsatz)              # Einsatz wird gezogen
+    gezahlt = games._auszahlen(sieger, einsatz * 2, einsatz, "sspduell")
+    netto = economy.get_coins(sieger) - vorher
+
+    assert gezahlt == einsatz * 2, gezahlt
+    assert netto == 800, (
+        f"netto {netto} statt 800 - der Sieger zahlt Tilgung auf sein eigenes Geld")
+
+    # Und beide PvP-Wege muessen wirklich ueber _auszahlen laufen.
+    quelle = open("games.py", encoding="utf-8").read()
+    fuer_pvp = (inspect.getsource(games.Games._check_qduel)
+                + inspect.getsource(games._SSPDuel))
+    assert "economy.add_coins(sieger.id, pot)" not in fuer_pvp
+    assert "economy.add_coins(message.author.id, pot)" not in fuer_pvp
+    assert fuer_pvp.count("_auszahlen(") >= 2, (
+        "ein PvP-Weg bucht wieder direkt - dann zahlt der Sieger Tilgung auf "
+        "seinen eigenen Einsatz")
+
+
 def test_zwei_skips_fressen_keinen_song():
     """Zwei Skips kurz hintereinander (oder Skip, waehrend der after-Callback
     schon laeuft) liefen beide gleichzeitig durch _advance. Beide holten sich

@@ -625,15 +625,16 @@ class _SSPDuel(discord.ui.View):
         self.done = True
         sieger = self.a if _SSP_BEATS[pa] == pb else self.b
         verlierer = self.b if sieger is self.a else self.a
-        pot = self.bet * 2
-        economy.add_coins(sieger.id, pot)
+        # Wie beim Quizduell: Einsatz zurueck und Gewinn getrennt buchen.
+        pot = _auszahlen(sieger.id, self.bet * 2, self.bet, "sspduell")
+        gewinn = max(0, pot - self.bet)
         await economy.flush()
         await _record(sieger.id, "sspduell", self.bet, pot)
         await _record(verlierer.id, "sspduell", self.bet, 0)
         await interaction.response.edit_message(
             embed=self._emb(f"{_SSP[pa]} vs {_SSP[pb]} – "
                             f"🏆 **{sieger.display_name}** gewinnt "
-                            f"**+{numfmt.fmt(self.bet)}** Flo Coins!",
+                            f"**+{numfmt.fmt(gewinn)}** Flo Coins!",
                             discord.Color.green()), view=None)
         self.stop()
         _release(self.message)
@@ -1815,14 +1816,21 @@ class Games(FeatureBasis):
         self._qduel.pop(message.channel.id, None)
         self._new_token(message.channel.id)
         self._release(runde.get("msg"))
-        pot = runde["bet"] * 2
-        economy.add_coins(message.author.id, pot)
+        # Ueber _auszahlen, nicht direkt: der EINSATZ des Siegers kommt nur
+        # zurueck (keine Einnahme, also keine Schulden-Tilgung darauf), nur der
+        # GEWINN ist eine echte Einnahme. Direkt gebucht zahlte der Sieger
+        # Tilgung auf sein eigenes Geld - gemessen netto +600 statt +800 - und
+        # die Tageskappe wurde ganz umgangen.
+        pot = self._auszahlen(message.author.id, runde["bet"] * 2,
+                              runde["bet"], "quizduell")
+        gewinn = max(0, pot - runde["bet"])
         await economy.flush()
         await self._record(message.author.id, "quizduell", runde["bet"], pot)
         verlierer = next(u for u in runde["players"] if u != message.author.id)
         await self._record(verlierer, "quizduell", runde["bet"], 0)
         await self._say(message, f"🏆 **{message.author.display_name}** holt den Pot "
-                                 f"(**+{numfmt.fmt(runde['bet'])}** Flo Coins)! Antwort: {runde['answer']}")
+                                 f"(**+{numfmt.fmt(gewinn)}** Flo Coins)! "
+                                 f"Antwort: {runde['answer']}")
         return True
 
     async def _quizduell(self, message, args):
@@ -1942,6 +1950,9 @@ _pick_event_channel = instance._pick_event_channel
 _check_event = instance._check_event
 _bet_hint = instance._bet_hint
 _record = instance._record
+# Die View-Klassen (SSP-Duell) buchen ueber diesen Alias - ohne ihn waere der
+# Sieg ein NameError.
+_auszahlen = instance._auszahlen
 _take_bet = instance._take_bet
 _mathe_aufgabe = instance._mathe_aufgabe
 _start_mathe = instance._start_mathe
