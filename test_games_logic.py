@@ -9598,10 +9598,19 @@ def test_botsicht_schreibt_aber_pingt_nie_alle():
             assert am.everyone is False and am.roles is False, "Massen-Ping moeglich!"
             assert am.users is True and am.replied_user is True
 
-            # Antwort setzt eine Referenz.
+            # Antwort setzt eine Referenz. Sie MUSS eine MessageReference sein:
+            # discord.py ruft to_message_reference_dict() auf, und die hat nur
+            # diese Klasse. Frueher stand hier ein discord.Object - der Test
+            # fragte '.id' ab und war damit gruen, waehrend in Wirklichkeit
+            # JEDE Antwort mit einem TypeError scheiterte. Die Zusicherung hat
+            # den Fehler also nicht gefunden, sondern festgeschrieben.
             await cli.post("/api/sicht/send",
                            json={"channel": "100", "text": "dazu", "reply_to": "9001"})
-            assert gesendet[1][1]["reference"].id == 9001, gesendet[1][1]
+            import discord as _d
+            verweis = gesendet[1][1]["reference"]
+            assert isinstance(verweis, _d.MessageReference), type(verweis)
+            assert verweis.message_id == 9001, gesendet[1][1]
+            assert verweis.to_message_reference_dict()["message_id"] == 9001
 
             # Leerer Text und unbekannter Kanal werden abgewiesen.
             assert (await cli.post("/api/sicht/send",
