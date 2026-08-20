@@ -2632,7 +2632,9 @@ def _giveaway_setup(coins_by_uid):
     # WICHTIG: _protect macht 'import bot' - das wuerde im Test alle setup()s neu
     # fahren und die Fake-Stores (und damit die Kontostaende) austauschen.
     alt_protect = gw._protect
-    gw._protect = lambda _msg: None
+    # Signatur wie das Original (das kennt 'slot' seit jeher) - eine zu enge
+    # Attrappe faellt sonst um, sobald der Aufrufer den Slot mitgibt.
+    gw._protect = lambda _msg, **_k: None
 
     def restore():
         gw._store, gw._enabled, gw._wizards, gw._client = alt
@@ -8368,6 +8370,44 @@ def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
                             ("laut", "lautr"), ("verlassen", "verlasse")):
         assert cmdnorm.normalize(falsch) == richtig, (falsch,
                                                      cmdnorm.normalize(falsch))
+
+
+def test_giveaway_panel_behaelt_seinen_loeschschutz():
+    """_protect gibt beim Schuetzen das VORIGE Panel desselben Slots frei - so
+    ist es gedacht ("es kann nur EINS je Slot aktuell sein"). Aber ALLE
+    Sendestellen liefen ueber denselben Standard-Slot: jede Assistenten-Frage
+    gab damit den Schutz des LAUFENDEN Giveaway-Panels frei.
+
+    In einem Aufraeum-Kanal verschwand danach genau die Nachricht mit dem
+    Mitmach-Knopf - waehrend die Coins weiter hinterlegt blieben."""
+    import giveaway
+    gw = giveaway.instance
+    geschuetzt = []
+    alt_protect = gw._protect
+    gw._protect = lambda msg, **kw: geschuetzt.append(kw.get("slot", "panel"))
+    try:
+        zaehler = {"n": 0}
+
+        async def send(**_k):
+            zaehler["n"] += 1
+            return SimpleNamespace(id=zaehler["n"])
+
+        kanal = SimpleNamespace(id=77, send=send)
+
+        async def lauf():
+            await gw._send(kanal, embed=None, slot="gw:5")   # das Panel
+            await gw._send(kanal, embed=None)                # Assistenten-Frage
+            await gw._send(kanal, embed=None)                # noch eine
+
+        asyncio.run(lauf())
+    finally:
+        gw._protect = alt_protect
+
+    assert geschuetzt[0] == "gw:5", geschuetzt
+    assert geschuetzt[1] == geschuetzt[2] == "wizard:77", geschuetzt
+    assert geschuetzt[0] not in geschuetzt[1:], (
+        "Panel und Assistenten-Fragen teilen sich wieder einen Slot - die "
+        "naechste Frage raeumt das laufende Giveaway weg")
 
 
 def test_haendler_nimmt_keinen_besseren_titel_als_einsatz():

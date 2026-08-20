@@ -566,10 +566,22 @@ class Giveaway(FeatureBasis):
         await self._send(channel, self._frage_bestaetigung(data, guthaben))
         return HANDLED
 
-    async def _send(self, channel, embed=None, content=None, view=None):
+    async def _send(self, channel, embed=None, content=None, view=None, *, slot=None):
+        """Nachricht senden und vorm Auto-Loeschen schuetzen.
+
+        Der 'slot' ist wichtig: _protect gibt beim Schuetzen das VORIGE Panel
+        desselben Slots frei. Vorher liefen ALLE Sendestellen ueber den
+        Standard-Slot "panel" - also gab jede Assistenten-Frage den Schutz des
+        LAUFENDEN Giveaway-Panels frei. In einem Aufraeum-Kanal verschwand damit
+        genau die Nachricht mit dem Mitmach-Knopf, waehrend die Coins weiter
+        hinterlegt blieben.
+
+        Standard ist deshalb ein Slot JE KANAL: der Assistent raeumt nur noch
+        seine eigenen Fragen weg. Das Panel bekommt seinen eigenen (gw:<id>).
+        """
         try:
             msg = await channel.send(content=content, embed=embed, view=view)
-            self._protect(msg)
+            self._protect(msg, slot=slot or f"wizard:{getattr(channel, 'id', 0)}")
             return msg
         except discord.HTTPException:
             log.warning("Giveaway-Nachricht konnte nicht gesendet werden")
@@ -746,7 +758,8 @@ class Giveaway(FeatureBasis):
             pass
         view = JoinView(gid)
         msg = await self._send(message.channel, embed=self._panel(g, message.author),
-                               content="🎉 **Neues Giveaway!**", view=view)
+                               content="🎉 **Neues Giveaway!**", view=view,
+                               slot=f"gw:{gid}")
         if msg is not None:
             g["message"] = msg.id
             view.message = msg
