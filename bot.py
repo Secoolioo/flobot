@@ -138,6 +138,10 @@ AI_ENABLED = ai.setup()
 # Musik-Feature initialisieren (YouTube via yt-dlp, Spotify-Aufloesung ueber die
 # Spotify-API). Ohne yt-dlp/ffmpeg/PyNaCl bleibt es aus, der Bot laeuft weiter.
 MUSIC_ENABLED = music.setup()
+# Der Musik-Selbsttest kostet EINEN YouTube-Abruf und ein paar Zehntelsekunden
+# ffmpeg beim Start. Wer das nicht will: MUSIK_SELBSTTEST=0 in der .env.
+SELBSTTEST_MUSIK = (os.getenv("MUSIK_SELBSTTEST", "1") or "1").strip().lower() \
+    not in ("0", "aus", "false", "nein")
 
 # Spass-Features (jedes faellt einzeln aus, ohne den Rest zu stoeren):
 #   economy  = Level & Flo Coins (XP fuers Schreiben/Voice, Shop, Daily)
@@ -1910,6 +1914,14 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Server-Schalter konnten nicht geloescht werden")
 
+    async def _musik_selbsttest(self):
+        """Musik-Selbsttest nebenher - darf den Start nie kippen."""
+        try:
+            await music.selbsttest()
+            await music.spotify_selbsttest()
+        except Exception:  # noqa: BLE001 - ein Selbsttest ist nie kritisch
+            log.exception("Musik-Selbsttest abgebrochen")
+
     async def on_ready(self):
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)
         if MODE in ("check", "once"):
@@ -1935,6 +1947,14 @@ class FloBot(discord.Client):
             # gibt, hat nie jemand geprueft. Laeuft nebenher und kann den Start
             # nicht kippen; das Ergebnis steht danach im Log.
             self.loop.create_task(ai.selbsttest())
+        if MUSIC_ENABLED and SELBSTTEST_MUSIK:
+            # Dasselbe fuer die Musik, und aus demselben Grund: "Musik-Feature
+            # aktiv" hiess bisher nur, dass yt-dlp, ffmpeg und PyNaCl INSTALLIERT
+            # sind. Beim Ausfall am 20.08.2026 loeste yt-dlp sauber auf, ffmpeg
+            # bekam vom Ziel aber 403 - im Log stand trotzdem "aktiv", und
+            # gemerkt hat es erst jemand im Voice. Der Selbsttest holt echte
+            # Ton-Bytes und meldet genau diesen Fall.
+            self.loop.create_task(self._musik_selbsttest())
             for guild in self.guilds:
                 lesbar = [
                     c.name

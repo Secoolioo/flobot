@@ -141,6 +141,65 @@ def test_roulette_auszahlung():
     assert payout is None
 
 
+def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
+    """_roulette_payout liefert bei einem unbekannten Tipp (None, target) - und
+    direkt danach stand 'payout > 0'. Das ist ein TypeError, kein Fehlschlag.
+
+    Heute pruefen alle vier Aufrufer den Tipp vorher ab, der Pfad ist also nicht
+    erreichbar. Aber der Einsatz ist an dieser Stelle SCHON abgebucht: wer den
+    fuenften Aufrufer schreibt und die Pruefung vergisst, verbrennt fremde Coins
+    mit einem Absturz. Die Absicherung gehoert deshalb an die eine Stelle."""
+    import io
+    e = economy.instance
+    uid = 987654321
+
+    async def kein_bild(*_a, **_k):          # Bildbau kostet hier nur Zeit
+        return io.BytesIO(b"x"), "png"
+
+    alt_anim = casino.instance._anim
+    casino.instance._anim = kein_bild
+    try:
+        e.add_coins(uid, 10_000 - e.get_coins(uid))    # Startguthaben setzen
+        einsatz = 500
+        e.add_coins(uid, -einsatz)           # so wie es jeder Aufrufer tut
+        vorher = e.get_coins(uid)
+        emb, datei = asyncio.run(
+            casino.instance._play_roulette(uid, einsatz, "voelliger quatsch"))
+        # 1. Kein Absturz, und die Form der Rueckgabe bleibt gleich - die
+        #    Aufrufer reichen 'datei' direkt an Discord weiter.
+        assert emb is not None and datei is not None
+        # 2. Der Einsatz ist zurueck: kein Gewinn, kein Verlust.
+        assert e.get_coins(uid) == vorher + einsatz, (
+            f"Coins verbrannt: {vorher} -> {e.get_coins(uid)}")
+    finally:
+        casino.instance._anim = alt_anim
+        e.add_coins(uid, -e.get_coins(uid))            # Testkonto wieder leeren
+
+    # Ein gueltiger Tipp verhaelt sich unveraendert.
+    assert casino._roulette_payout("rot", 10, 1) == (20, "Rot")
+
+
+def test_arbeit_spasswordle_haelt_den_vertrag_der_basisklasse():
+    """Alle Schichten versprechen bauen(chef, autor, **_extra). SpassWordle hat
+    das **_extra weggelassen - damit wirft derselbe Aufruf, den jede andere
+    Schicht klaglos schluckt, bei dieser einen einen TypeError. Der Aufrufer
+    (arbeit.py:1214 reicht **extra durch) kann das nicht sehen."""
+    import arbeit
+    import inspect
+    basis = inspect.signature(arbeit.Schicht.bauen).parameters
+    assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in basis.values())
+    for name, obj in vars(arbeit).items():
+        if not (isinstance(obj, type) and issubclass(obj, arbeit.Schicht)
+                and obj is not arbeit.Schicht):
+            continue
+        if "bauen" not in vars(obj):
+            continue                          # erbt die Basis-Signatur, passt
+        params = inspect.signature(obj.bauen).parameters
+        assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()), (
+            f"{name}.bauen nimmt kein **_extra - arbeit.py:1214 reicht aber "
+            f"beliebige Schluesselwoerter durch")
+
+
 # --- Keno-Tabelle -----------------------------------------------------------------
 def test_keno_tabelle():
     """Jede Tippanzahl muss denselben Rueckfluss haben. Vorher lag der RTP je nach
@@ -9183,6 +9242,71 @@ def test_musik_ffmpeg_holt_damit_wirklich_ton():
         server.shutdown()
     assert ohne == 0, f"ohne Kennung kam unerwartet Ton ({ohne} Bytes)"
     assert mit > 10000, f"mit Kennung kam kein Ton ({mit} Bytes)"
+
+
+def test_musik_selbsttest_meldet_die_wahrheit():
+    """"Musik-Feature aktiv" hiess bisher nur: yt-dlp, ffmpeg und PyNaCl sind
+    INSTALLIERT. Ob damit ein Ton herauskommt, hat nie jemand geprueft - beim
+    Ausfall am 20.08.2026 loeste yt-dlp sauber auf, ffmpeg bekam vom Ziel aber
+    403. Im Log stand trotzdem "aktiv"; gemerkt hat es erst jemand im Voice."""
+    import logging
+    import music
+    m = music.Music()
+    m._enabled = True
+
+    puffer = io.StringIO()
+    griff = logging.StreamHandler(puffer)
+    protokoll = logging.getLogger("dcbot.music")
+    protokoll.addHandler(griff)
+    alt_stufe = protokoll.level
+    protokoll.setLevel(logging.INFO)
+
+    async def kein_extract(_eingabe):
+        raise RuntimeError("yt-dlp kaputt")
+
+    try:
+        # 1. yt-dlp kommt nicht durch -> ehrlich melden, nicht "aktiv" behaupten.
+        m._extract = kein_extract
+        ok, grund = asyncio.run(m.selbsttest())
+        assert ok is False and "yt-dlp" in grund, (ok, grund)
+
+        # 2. Aufloesen klappt, aber es kommt kein Ton (genau der 403-Fall).
+        async def extract_ok(_eingabe):
+            return music.Track(title="Testsong", stream_url="http://x/y")
+        m._extract = extract_ok
+
+        async def kein_ton(_track):
+            return 0, "Server returned 403 Forbidden (access denied)"
+        m._probe_ton = kein_ton
+        ok, grund = asyncio.run(m.selbsttest())
+        assert ok is False and "403" in grund, (ok, grund)
+        # Und der Log muss den Fall BEIM NAMEN nennen - sonst sucht man wieder
+        # beim Schluessel oder beim Modell.
+        assert "Client-Bindung" in puffer.getvalue(), puffer.getvalue()
+
+        # 3. Es kommt Ton -> ok.
+        async def viel_ton(_track):
+            return 576000, ""
+        m._probe_ton = viel_ton
+        ok, grund = asyncio.run(m.selbsttest())
+        assert ok is True and grund == "", (ok, grund)
+
+        # 4. Ohne Stream-Adresse gibt es nichts zu spielen.
+        async def ohne_adresse(_eingabe):
+            return music.Track(title="x", stream_url="")
+        m._extract = ohne_adresse
+        assert asyncio.run(m.selbsttest())[0] is False
+
+        # 5. Ist die Musik aus, ist das KEIN Fehler.
+        m._enabled = False
+        assert asyncio.run(m.selbsttest())[0] is False
+    finally:
+        protokoll.removeHandler(griff)
+        protokoll.setLevel(alt_stufe)
+
+    # Und der Selbsttest muss die Client-Kennung wirklich mitschicken - sonst
+    # prueft er nicht die Strecke, die im Betrieb bricht.
+    assert "ffmpeg_vorspann()" in inspect.getsource(music.Music._probe_ton)
 
 
 def test_musik_spotify_erneuert_sich_ueber_youtube_nicht_ueber_spotify():

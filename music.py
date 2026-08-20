@@ -27,6 +27,7 @@ import random
 import re
 import shlex
 import shutil
+import subprocess
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -1667,6 +1668,81 @@ class Music(FeatureBasis):
     def is_enabled(self):
         return self._enabled
 
+    # --- Selbsttest: laeuft die Kette wirklich durch? -----------------------
+    # "Musik-Feature aktiv" hing bisher allein daran, dass yt-dlp, ffmpeg und
+    # PyNaCl INSTALLIERT sind. Ob damit auch nur ein Ton herauskommt, hat nie
+    # jemand geprueft - und genau das war der Ausfall: yt-dlp loeste sauber auf,
+    # ffmpeg bekam vom Ziel aber 403, weil ihm die Client-Kennung fehlte. Im Log
+    # stand trotzdem "aktiv". Eine Zusicherung, die niemand nachgesehen hat, ist
+    # schlimmer als keine.
+    SELBSTTEST_PROBE = "ytsearch1:lofi hip hop radio"
+    SELBSTTEST_SEKUNDEN = 0.6
+
+    async def selbsttest(self):
+        """Loest EINEN Song auf und holt ein paar Zehntelsekunden echten Ton.
+        Genau die Strecke, die im Betrieb bricht. Gibt (ok, grund) zurueck und
+        wirft nie - ein Selbsttest darf den Start niemals kippen."""
+        if not self._enabled:
+            return False, "Musik-Feature ist aus"
+        try:
+            track = await self._extract(self.SELBSTTEST_PROBE)
+        except Exception as exc:  # noqa: BLE001 - jeder Grund ist hier eine Antwort
+            grund = f"yt-dlp kommt nicht durch ({type(exc).__name__}: {str(exc)[:160]})"
+            log.error("Musik-Selbsttest: %s. Meist hilft:  venv/bin/pip install -U "
+                      "yt-dlp", grund)
+            return False, grund
+        if not track.stream_url:
+            log.error("Musik-Selbsttest: yt-dlp liefert keine Stream-Adresse.")
+            return False, "keine Stream-Adresse"
+
+        bytes_ton, fehler = await self._probe_ton(track)
+        if bytes_ton <= 0:
+            hinweis = ""
+            if "403" in fehler:
+                # Genau der Ausfall vom 20.08.2026 - beim Namen nennen.
+                hinweis = (" Das ist die Client-Bindung: die Adresse gilt nur fuer "
+                           "den Client, mit dem yt-dlp sie geholt hat.")
+            log.error("Musik-Selbsttest: ffmpeg bekommt keinen Ton (%s).%s",
+                      fehler or "kein Grund gemeldet", hinweis)
+            return False, fehler or "kein Ton"
+        log.info("Musik-Selbsttest ok (%s, %d Bytes Ton in %.1fs).",
+                 track.title[:50], bytes_ton, self.SELBSTTEST_SEKUNDEN)
+        return True, ""
+
+    async def _probe_ton(self, track):
+        """Zieht kurz echten Ton durch ffmpeg - so wie GuildPlayer.start es tut,
+        inklusive Client-Kennung. Gibt (bytes, fehlertext) zurueck."""
+        ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
+        vorne = [t for t in (track.ffmpeg_vorspann(), _FFMPEG_BEFORE) if t]
+        argv = [ffmpeg, "-hide_banner", "-loglevel", "error",
+                *shlex.split(" ".join(vorne)), "-i", track.stream_url,
+                "-t", str(self.SELBSTTEST_SEKUNDEN),
+                "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
+
+        def hole():
+            fertig = subprocess.run(argv, capture_output=True, timeout=45)
+            return len(fertig.stdout), fertig.stderr.decode("utf-8", "replace")[:200].strip()
+
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, hole)
+        except Exception as exc:  # noqa: BLE001
+            return 0, f"{type(exc).__name__}: {str(exc)[:160]}"
+
+    async def spotify_selbsttest(self):
+        """Prueft die Spotify-Zugangsdaten wirklich, statt nur ihr Vorhandensein
+        zu melden. Gibt (ok, grund). Ohne Keys ist es kein Fehler - dann kann Flo
+        eben nur YouTube."""
+        if not (self._spotify_id and self._spotify_secret):
+            return True, ""
+        token = await self._spotify_token()
+        if not token:
+            log.error("Musik-Selbsttest: Spotify-Zugangsdaten werden abgelehnt - "
+                      "Spotify-Links koennen nicht aufgeloest werden. Pruefen mit:  "
+                      "bash k m")
+            return False, "Spotify-Token abgelehnt"
+        log.info("Musik-Selbsttest: Spotify-Token ok.")
+        return True, ""
+
     def _player_for(self, guild_id):
         player = self._players.get(guild_id)
         if player is None:
@@ -3085,6 +3161,8 @@ _embed = instance._embed
 _build_audio_filter = instance._build_audio_filter
 _is_volume_word = instance._is_volume_word
 setup = instance.setup
+selbsttest = instance.selbsttest
+spotify_selbsttest = instance.spotify_selbsttest
 is_enabled = instance.is_enabled
 _player_for = instance._player_for
 heal_voice = instance.heal_voice

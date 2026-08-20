@@ -1707,7 +1707,7 @@ class Economy(FeatureBasis):
                     inline=True,
                 )
             while len(emb.fields) % 3 != 0:
-                emb.add_field(name="​", value="​", inline=True)
+                emb.add_field(name="\u200b", value="\u200b", inline=True)
 
         # Die Leiter: kurz, in EINER Zeile je Stufe, mit dem Preisband.
         leiter = []

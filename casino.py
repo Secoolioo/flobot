@@ -760,6 +760,18 @@ class Casino(FeatureBasis):
                              ):
         spin = random.randint(0, 36)
         payout, label = self._roulette_payout(target, bet, spin)
+        if payout is None:
+            # Ungueltiger Tipp. Alle VIER heutigen Aufrufer pruefen das vorher ab
+            # (casino.py:797, :2419, :2908 und feste Knopfwerte) - aber danach
+            # stand hier 'None > 0', also ein TypeError, sobald es einer vergisst.
+            # Der Einsatz ist hier schon abgebucht. Deshalb: Einsatz zurueck
+            # (payout = bet ist genau das, kein Gewinn und kein Verlust) und eine
+            # laute Zeile ins Log. Bewusst OHNE Aenderung der Rueckgabeform - die
+            # Aufrufer reichen 'file' direkt an Discord weiter, und ein None
+            # daran waere der naechste Absturz.
+            log.error("Roulette: ungueltiger Tipp %r hat die Pruefung des "
+                      "Aufrufers passiert - Einsatz kommt zurueck.", target)
+            payout = bet
         if payout:
             payout = _auszahlen(uid, payout)
         await economy.flush()

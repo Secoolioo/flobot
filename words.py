@@ -524,11 +524,11 @@ class Words(FeatureBasis):
         async with self._store._lock:
             self._saving = True
             try:
-                rows, buf = await asyncio.to_thread(
+                _rows, buf = await asyncio.to_thread(
                     self._build_top, words_dict, _zahl(buch.get("total")))
             except Exception:
                 log.exception("Woerter-Karte fehlgeschlagen - Text-Fallback")
-                rows, buf = [], None
+                _rows, buf = [], None
             finally:
                 self._saving = False
                 self._replay_backlog()

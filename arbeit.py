@@ -831,7 +831,10 @@ class SpassWordle(Schicht):
         eigen.titel = f"🟩 Wordle · {laenge} Buchstaben"
         return eigen
 
-    async def bauen(self, chef, autor, laenge=5):
+    # **_extra wie in der Basisklasse: ohne das wirft ein Aufruf mit einem
+    # weiteren Schluesselwort TypeError, waehrend alle anderen Schichten ihn
+    # schlucken - ein Unterschied, den der Aufrufer nicht sehen kann.
+    async def bauen(self, chef, autor, laenge=5, **_extra):
         laenge = int(laenge)
         eigen = self.fuer_laenge(laenge)
         spiel = Wordle.zufall(laenge)

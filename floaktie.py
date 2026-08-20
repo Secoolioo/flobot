@@ -1594,7 +1594,6 @@ class FloAktie(FeatureBasis):
         Tageskurse nur benutzt, wenn es GAR keine Ticks gab - dadurch zeigten
         '7 Tage', '30 Tage' und 'Gesamt' alle dasselbe Fenster, sobald die Ticks
         nur ein paar Tage zurueckreichten. Immer mind. 2 Punkte."""
-        st = self._state()
         now = time.time()
         cutoff = now - max(0.0, float(days)) * 86400
         ticks = [t for t in self._verlauf("ticks") if self._n(t.get("t", 0)) >= cutoff]
