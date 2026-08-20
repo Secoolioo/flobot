@@ -35,6 +35,10 @@ class Media(FeatureBasis):
               "?width=1024&height=1024&nologo=true&model=flux")
 
     # Befehle. "male/zeichne/generiere/bild/img <prompt>" bzw. "quote/zitat/meme <text>".
+    #
+    # generier(e|st|t)? statt generier\w*: das alte Muster fing auch
+    # "generierte", "generierten", "generierung" - und ein Bildauftrag kostet
+    # echtes Geld. "Flo generierte Bilder sind toll" war damit ein Auftrag.
     # ('spruch' bewusst NICHT hier - das ist der Spruch-des-Tages-Befehl aus fun.py,
     # der sonst von media verschluckt wuerde.)
     # Negative Vorschau auf Pronomen: "bild dir nichts ein", "zeichne dich nicht
@@ -43,7 +47,7 @@ class Media(FeatureBasis):
     # ging jede dieser Floskeln als Prompt an den externen Bildgenerator, samt
     # bis zu 75 s Wartezeit je Fehlalarm.
     _GEN_RE = re.compile(
-        r"^(?:male|zeichne|generier\w*|bild|img)\s+"
+        r"^(?:male|zeichne|generier(?:e|st|t)?|bild|img)\s+"
         r"(?!(?:dir|dich|mir|mich|sich|uns|euch|ihm|ihnen|und|ist|war|nicht)\b)"
         r"(.+)", re.I | re.S)
     _QUOTE_RE = re.compile(r"^(?:quote|zitat|meme)\b\s*(.*)", re.I | re.S)

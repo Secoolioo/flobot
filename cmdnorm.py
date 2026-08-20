@@ -194,7 +194,7 @@ class CmdNorm:
     DIALECT = {
         "spui": "spiel", "spuih": "spiel", "spü": "spiel", "spöi": "spiel",
         "spöl": "spiel", "spuis": "spiel", "spün": "spiel",
-        "hoit": "stop", "hoid": "stop", "aus": "stop",
+        "hoit": "stop", "hoid": "stop", "aus": "stop",   # 'aus' siehe NUR_ALLEIN
         "weida": "weiter", "weita": "weiter", "weda": "weiter",
         "schleich": "leave", "schleichdi": "leave", "gemma": "leave",
         "lauda": "lauter", "leisa": "leiser",
@@ -233,6 +233,15 @@ class CmdNorm:
         "ziagn": "ziehen", "ziagung": "ziehung", "zoggn": "casino",
         "zoihn": "zahl", "zoin": "zahl", "übaspringa": "skip",
     }
+
+    # Uebersetzungen, die NUR gelten, wenn das Wort ALLEIN steht.
+    #
+    # 'Flo aus!' heisst wirklich "stop" - aber 'aus' ist eben auch eine der
+    # haeufigsten deutschen Praepositionen. Nachgemessen wurde daraus:
+    #   'Flo aus welchem Grund machst du das?'  ->  'stop welchem Grund ...'
+    # Die Musik ging aus, und die Frage erreichte die KI nie. Deshalb greift
+    # diese Uebersetzung nur ohne Rest - dann ist die Absicht eindeutig.
+    NUR_ALLEIN = {"aus"}
 
     # Haeufige normale Woerter, die NICHT als vertippter Befehl gelten sollen
     # (Distanz 1 zu einem Befehl, aber im Chat gaengig).
@@ -291,9 +300,14 @@ class CmdNorm:
         # 'schenken'/'schenkt' Coin-Geschenke.
         "leiche", "bogen", "leite", "schwein", "takte", "stake", "tanke",
         "schenken", "schenkt",
-        # Bilder kosten echtes Geld bei der KI - 'build'/'zeichen'/'malle'
-        # duerfen keinen Auftrag ausloesen.
+        # Bilder kosten echtes Geld bei der KI - die duerfen keinen Auftrag
+        # ausloesen. Nachgemessen loesten SECHS alltaegliche Woerter einen aus:
+        # "Flo zeichnen wir mal was?" wurde zu "zeichne wir mal was" und Flo
+        # malte das. Dasselbe mit malen/malte/zeichnet/generieren.
         "build", "zeichen", "malle",
+        "zeichnen", "zeichnet", "zeichnete", "zeichneten",
+        "malen", "malte", "malten", "malst",
+        "generieren", "generierte", "generierten", "generierung",
         # 'komma' hat Flo in den Voice geholt.
         "komma",
         # Vornamen und sehr haeufige Chatwoerter auf harmlosen Zielen - falsch
@@ -387,6 +401,8 @@ class CmdNorm:
         # bewusst keine Fuzzy-Ziele: gemessen zog das sonst Vornamen mit rein
         # ('emma' -> leave, 'lisa' -> leiser) und 'normal' wurde zu 'nochmal'.
         target = self.ALIAS.get(core) or self.DIALECT.get(core)
+        if target is not None and core in self.NUR_ALLEIN and rest.strip():
+            return None                          # nur allein ein Befehl
         if target is None:
             if core in self.STOPWORDS:
                 return None                      # normales Wort in Ruhe lassen
@@ -401,6 +417,7 @@ instance = CmdNorm()
 KNOWN = CmdNorm.KNOWN
 ALIAS = CmdNorm.ALIAS
 DIALECT = CmdNorm.DIALECT
+NUR_ALLEIN = CmdNorm.NUR_ALLEIN
 STOPWORDS = CmdNorm.STOPWORDS
 _one_typo = instance._one_typo
 _fuzzy = instance._fuzzy

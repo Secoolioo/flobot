@@ -8222,7 +8222,14 @@ def test_cmdnorm_versteht_englisch_und_boarisch():
                 fehler.append(f"{name}[{schluessel}]: steht in KNOWN, Eintrag tot")
             if schluessel in cmdnorm.STOPWORDS:
                 fehler.append(f"{name}[{schluessel}]: steht in STOPWORDS")
-            if cmdnorm.normalize(f"{schluessel} x") != f"{ziel} x":
+            if schluessel in cmdnorm.NUR_ALLEIN:
+                # Diese gelten absichtlich nur OHNE Rest ('aus' ist sonst eine
+                # der haeufigsten deutschen Praepositionen).
+                if cmdnorm.normalize(schluessel) != ziel:
+                    fehler.append(f"{name}[{schluessel}] schreibt allein nicht auf {ziel} um")
+                if cmdnorm.normalize(f"{schluessel} x") is not None:
+                    fehler.append(f"{name}[{schluessel}] greift trotz NUR_ALLEIN mit Rest")
+            elif cmdnorm.normalize(f"{schluessel} x") != f"{ziel} x":
                 fehler.append(f"{name}[{schluessel}] schreibt nicht auf {ziel} um")
     assert not fehler, fehler
     assert not (set(cmdnorm.ALIAS) & set(cmdnorm.DIALECT)), "Schluessel doppelt"
@@ -8274,6 +8281,58 @@ def test_cmdnorm_versteht_englisch_und_boarisch():
     for wort in ("emma", "lisa", "normal", "weit", "hits", "geschäft",
                  "warning", "kommt", "schleicht"):
         assert cmdnorm.normalize(wort) is None, (wort, cmdnorm.normalize(wort))
+
+
+def test_bildauftrag_braucht_wirklich_einen_auftrag():
+    """Ein Bild kostet echtes Geld bei der KI. Nachgemessen loesten SECHS
+    voellig normale deutsche Woerter einen Auftrag aus:
+
+        'Flo zeichnen wir mal was?'  -> 'zeichne wir mal was'  -> Bild
+        'Flo malen wir mal was?'     -> 'male wir mal was'     -> Bild
+        'Flo generierte Bilder ...'  -> traf media._GEN_RE direkt
+
+    Zwei verschiedene Ursachen: cmdnorm korrigierte die Beugungen auf den
+    Befehl, und media._GEN_RE nahm mit 'generier\\w*' auch Vergangenheit und
+    Substantive ('generierte', 'generierung')."""
+    import cmdnorm
+    import media
+    muster = media.Media._GEN_RE
+
+    def loest_aus(satz):
+        return bool(muster.match(cmdnorm.normalize(satz) or satz))
+
+    for wort in ("zeichnen", "zeichnet", "zeichnete", "malen", "malte",
+                 "generieren", "generierte", "generierung"):
+        satz = f"{wort} wir mal was"
+        assert not loest_aus(satz), f"{satz!r} loest einen bezahlten Bildauftrag aus"
+
+    # Die echten Befehle muessen selbstverstaendlich weiter funktionieren.
+    for satz in ("zeichne einen drachen", "male einen hund", "generiere ein bild",
+                 "generier was", "img katze", "bild von einem auto"):
+        assert loest_aus(satz), f"{satz!r} wird nicht mehr erkannt"
+
+
+def test_cmdnorm_aus_ist_nur_allein_ein_befehl():
+    """'Flo aus!' heisst wirklich stop - aber 'aus' ist auch eine der
+    haeufigsten deutschen Praepositionen. Nachgemessen wurde aus
+
+        'Flo aus welchem Grund machst du das?'
+
+    ein 'stop welchem Grund ...': die Musik ging aus, und die Frage erreichte
+    die KI nie, weil der Befehl sie abgefangen hat."""
+    import cmdnorm
+    assert "aus" in cmdnorm.NUR_ALLEIN
+    for allein in ("aus", "aus!", "AUS", " aus "):
+        assert cmdnorm.normalize(allein) == "stop", allein
+    for satz in ("aus welchem Grund machst du das?", "aus Spass", "aus dem Nichts",
+                 "aus Versehen geloescht", "aus der Reihe"):
+        assert cmdnorm.normalize(satz) is None, (satz, cmdnorm.normalize(satz))
+    # Der Rest des Dialekt-Topfs bleibt unberuehrt.
+    assert cmdnorm.normalize("spui was") == "spiel was"
+    assert cmdnorm.normalize("hoit") == "stop"
+    # Und jeder NUR_ALLEIN-Eintrag muss auch wirklich im Dialekt-Topf stehen.
+    for wort in cmdnorm.NUR_ALLEIN:
+        assert wort in cmdnorm.DIALECT or wort in cmdnorm.ALIAS, wort
 
 
 def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
