@@ -11398,6 +11398,166 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+# --- Ende-zu-Ende-Rauchtest -------------------------------------------------
+class _RauchKanal:
+    """Kanal-Attrappe, die alles annimmt, was ein Modul senden koennte."""
+
+    def __init__(self, cid=555):
+        self.id = cid
+        self.name = "rauchtest"
+        self.gesendet = []
+
+    async def send(self, content=None, embed=None, view=None, **_kw):
+        self.gesendet.append((content, embed, view))
+        return SimpleNamespace(id=len(self.gesendet), channel=self,
+                               edit=self._nichts, delete=self._nichts,
+                               add_reaction=self._nichts)
+
+    async def _nichts(self, *_a, **_k):
+        return None
+
+    def typing(self):
+        class Tippt:
+            async def __aenter__(self_):
+                return self_
+
+            async def __aexit__(self_, *_a):
+                return False
+        return Tippt()
+
+    def permissions_for(self, _m):
+        return SimpleNamespace(view_channel=True, send_messages=True,
+                               manage_messages=True, embed_links=True,
+                               attach_files=True, read_message_history=True)
+
+
+def _rauch_nachricht(text, uid=778899001122334455, kanal=None):
+    """Eine Nachricht, wie sie bot.on_message an die Module weiterreicht."""
+    kanal = kanal or _RauchKanal()
+    rechte = SimpleNamespace(administrator=True, manage_guild=True,
+                             manage_messages=True, ban_members=True,
+                             kick_members=True, moderate_members=True)
+    autor = SimpleNamespace(id=uid, bot=False, display_name="Rauchtester",
+                            name="rauch", mention=f"<@{uid}>",
+                            guild_permissions=rechte, roles=[],
+                            display_avatar=SimpleNamespace(url="http://x/a.png"))
+    guild = SimpleNamespace(
+        id=77, name="Rauchserver", owner_id=42, members=[autor],
+        text_channels=[kanal], voice_channels=[], roles=[],
+        me=SimpleNamespace(id=1, guild_permissions=rechte),
+        get_member=lambda _i: None, icon=None)
+    return SimpleNamespace(author=autor, content=text, mentions=[], guild=guild,
+                           channel=kanal, id=999, attachments=[], reference=None,
+                           reply=kanal.send, delete=kanal._nichts,
+                           add_reaction=kanal._nichts, created_at=None)
+
+
+def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
+    """Die grosse Luecke: fast alle Tests pruefen EINZELTEILE. Ob ein Befehl als
+    Ganzes noch durchlaeuft - Erkennung, Handler, Antwort - stand nirgends.
+    Genau dort brechen Umbauten.
+
+    Hier geht jeder wichtige Befehl durch das ECHTE handle() seines Moduls, mit
+    einer Nachricht, wie bot.on_message sie weiterreicht. Der Test prueft nicht,
+    WAS herauskommt (das machen die Einzeltests), sondern DASS etwas
+    herauskommt und nichts fliegt."""
+    import ai
+    import arbeit
+    import casino
+    import fun
+    import games
+    import guildcfg
+    import handel
+    import lotto
+    import luxus
+    import merchant
+    import moderation
+    import profil
+    import schulden
+    import steal
+    import terraria
+    import words
+
+    # fun/chaos braucht die KI - ohne einen Client bleibt es aus und der
+    # Rauchtest wuerde die Befehle stillschweigend ueberspringen.
+    alt_client = ai.instance._client
+    ai.instance._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=None)))
+    for modul in (economy, words, schulden, profil, luxus, handel, steal, lotto,
+                  floaktie, arbeit, fun, games, casino, moderation, guildcfg,
+                  terraria, merchant):
+        try:
+            modul.setup()
+        except Exception as exc:  # noqa: BLE001
+            raise AssertionError(f"{modul.__name__}.setup() fliegt: {exc}") from exc
+
+    PROBEN = (
+        (economy, ("level", "coins", "top", "daily", "shop", "inventar", "titel",
+                   "rang", "kontostand", "bestenliste")),
+        (words, ("woerter", "wort pizza", "wordcount")),
+        (schulden, ("schulden", "kreide", "leih 100", "insolvenz", "schuldenbuch")),
+        (profil, ("profil", "avatar", "banner", "steckbrief")),
+        (luxus, ("luxus", "thron", "prestige")),
+        (handel, ("handel", "transaktionen", "verlauf")),
+        (steal, ("steal", "klau", "raub")),
+        (lotto, ("lotto", "jackpot", "lose", "ziehung")),
+        (floaktie, ("aktie", "kurs", "chart", "floaktie", "aktienkurs")),
+        (arbeit, ("work", "arbeit", "lohnzettel", "wordle", "tageswort", "schicht")),
+        (fun, ("roast", "hype", "spruch", "horoskop", "rizz", "aura", "weisheit")),
+        (games, ("quiz", "zahlenraten", "coinflip", "wuerfel", "slots", "reaktion")),
+        (casino, ("casino", "blackjack", "roulette 100 rot", "mines 100", "stats",
+                  "crash 100", "keno 100 1 2 3", "hilo 100", "turm 100")),
+        (moderation, ("warns", "warnungen", "warnliste")),
+        (guildcfg, ("einstellungen", "config", "settings")),
+        (terraria, ("terraria", "twiki")),
+        (merchant, ("haendler", "merchant", "kraemer")),
+    )
+
+    stumm, geflogen = [], []
+    try:
+        for modul, befehle in PROBEN:
+            for befehl in befehle:
+                try:
+                    antwort = asyncio.run(modul.handle(_rauch_nachricht(befehl)))
+                except Exception as exc:  # noqa: BLE001 - genau das suchen wir
+                    geflogen.append(f"{modul.__name__} '{befehl}': "
+                                    f"{type(exc).__name__}: {str(exc)[:120]}")
+                    continue
+                if antwort is None:
+                    stumm.append(f"{modul.__name__} '{befehl}'")
+    finally:
+        ai.instance._client = alt_client
+
+    assert not geflogen, "Befehle stuerzen ab:\n  " + "\n  ".join(geflogen)
+    assert not stumm, ("Befehle werden nicht mehr erkannt (handle gibt None, "
+                       "der Befehl faellt zur KI durch):\n  " + "\n  ".join(stumm))
+
+
+def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
+    """Der Rauchtest nuetzt nichts, wenn er ein Modul vergisst, das bot.py
+    aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten."""
+    quelle = open("bot.py", encoding="utf-8").read()
+    anfang = quelle.index("_HANDLED_SENTINELS = tuple(")
+    kette = set(re.findall(r"\((?:\w+_ENABLED)[^)]*\), (\w+)\.handle",
+                           quelle[anfang:]))
+    assert len(kette) >= 15, f"Kette nicht gefunden (nur {kette})"
+    eigen = inspect.getsource(test_rauchtest_jeder_befehl_laeuft_wirklich_durch)
+    # Module, die der Rauchtest bewusst NICHT anfasst - mit Begruendung.
+    ausgenommen = {
+        "music",      # braucht eine echte Voice-Verbindung
+        "media",      # erzeugt Bilder ueber einen fremden Dienst (kostet)
+        "food",       # braucht ein Foto im Anhang
+        "voicegags",  # braucht Voice
+        "giveaway",   # legt echte Coins fest und startet Timer
+        "admin",      # nur Besitzer, veraendert fremde Konten
+        "bayern",     # schaltet eine Server-Einstellung um
+    }
+    fehlt = sorted(m for m in kette
+                   if m not in ausgenommen and f"({m}, (" not in eigen)
+    assert not fehlt, (f"bot.py ruft diese Module auf, der Rauchtest kennt sie "
+                       f"aber nicht: {fehlt}")
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():
