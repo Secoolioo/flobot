@@ -8267,6 +8267,49 @@ def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
                                                      cmdnorm.normalize(falsch))
 
 
+def test_purge_zaehlt_keine_erwaehnung_als_anzahl():
+    """'Flo lösch @spammer' hat MAX_PURGE Nachrichten geloescht - ohne Rueckfrage.
+
+    Die Erwaehnung steht im Text als '<@1453881901738889351>', und die Suche
+    nach der Anzahl (re.search(r"\d+", rest)) fand die ID. Ausgerechnet die
+    harmlos aussehende Form war die gefaehrlichste: 'loesch alle' fragt einmal
+    nach, 'loesch @wer' loeschte sofort. Unwiderruflich.
+
+    Gilt genauso fuer Kanaele <#123>, Rollen <@&123>, Custom-Emojis
+    <:name:123> und Zeitmarken <t:123:R> - alles Ziffern."""
+    import moderation
+    marke = moderation._MARKE_RE
+
+    def anzahl(rest):
+        """Genau die zwei Zeilen aus moderation.py, die die Anzahl bestimmen."""
+        ohne = marke.sub(" ", rest)
+        treffer = re.search(r"\d+", ohne)
+        return int(treffer.group()) if treffer else None
+
+    # Was frueher zur Massenloeschung fuehrte, ergibt jetzt KEINE Anzahl.
+    for gefaehrlich in ("<@1453881901738889351>",
+                        "<@!1453881901738889351>",
+                        "<@&987654321012345678>",
+                        "<:blob:123456789012345678>",
+                        "<a:party:123456789012345678>",
+                        "<t:1787228079:R>",
+                        "<#1453881901738889351>"):
+        assert anzahl(gefaehrlich) is None, (gefaehrlich, anzahl(gefaehrlich))
+
+    # Eine echte Zahl wird weiterhin gelesen - auch NEBEN einer Erwaehnung.
+    assert anzahl("20") == 20
+    assert anzahl("lösch 20 bitte") == 20
+    assert anzahl("<#1453881901738889351> 5") == 5
+    assert anzahl("alle") is None
+
+    # Und der Code nutzt wirklich den bereinigten Text - nicht den rohen.
+    quelle = inspect.getsource(moderation.Moderation)
+    i = quelle.index("rest_ohne_marken = ")
+    danach = quelle[i:i + 400]
+    assert 're.search(r"\\d+", rest_ohne_marken)' in danach, (
+        "die Anzahl wird wieder aus dem rohen Text gelesen")
+
+
 def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
     """Die Bestaetigung band nur an die SLOT-NUMMER. Wuerfelt der Shop um 2 Uhr
     neu, kaufte 'nochmal derselbe Befehl' danach den Titel auf derselben

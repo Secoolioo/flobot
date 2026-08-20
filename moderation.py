@@ -74,6 +74,10 @@ _ALL_RE = re.compile(r"\b(?:alles?|all|everything|komplett|ganz)\b", re.IGNORECA
 # 'ganz' fehlt hier bewusst: allein steht es im Deutschen fast immer als
 # Verstaerker ('ganz kurz', 'ganz schnell'), nicht als Menge. Die Bedeutung
 # tragen 'alles' und 'komplett'.
+# Alles, was Discord als <...> in den Text schreibt: Erwaehnungen, Kanaele,
+# Rollen, Custom-Emojis, Zeitmarken. Steckt voller Ziffern.
+_MARKE_RE = re.compile(r"<[^>]{1,64}>")
+
 _ALL_START_RE = re.compile(r"^(?:alles?|all|everything|komplett)\b",
                            re.IGNORECASE)
 
@@ -613,7 +617,15 @@ class Moderation(FeatureBasis):
             return ("Mir fehlt hier das Recht **Nachrichten verwalten** "
                     "(und Verlauf lesen) – dann kann ich nichts löschen.")
 
-        num_match = re.search(r"\d+", rest)
+        # Discord-Marken RAUS, bevor nach einer Zahl gesucht wird. Eine
+        # Erwaehnung ist im Text '<@1453881901738889351>' - die Ziffern darin
+        # wurden als Anzahl gelesen. Gemessen: 'Flo loesch @spammer' loeschte
+        # damit MAX_PURGE Nachrichten, ohne Rueckfrage. Ausgerechnet die
+        # harmlos aussehende Form war die gefaehrlichste: 'loesch alle' fragt
+        # nach, 'loesch @wer' nicht. Betrifft genauso <#kanal>, <@&rolle>,
+        # Custom-Emojis <:name:123> und Zeitmarken <t:123:R>.
+        rest_ohne_marken = _MARKE_RE.sub(" ", rest)
+        num_match = re.search(r"\d+", rest_ohne_marken)
         # Eine EXPLIZIT genannte Zahl hat Vorrang: 'loesch 20 ganz schnell' loescht
         # 20, nicht den ganzen Channel.
         #
@@ -625,7 +637,7 @@ class Moderation(FeatureBasis):
         #   'loesch ganz kurz bitte'
         # Unwiderruflich, ohne Rueckfrage, mit der Meldung "N Nachrichten geloescht".
         want_all = cmd.lower().startswith("nuke") or (
-            bool(_ALL_START_RE.match(rest)) and num_match is None)
+            bool(_ALL_START_RE.match(rest_ohne_marken.strip())) and num_match is None)
 
         if want_all:
             # Ein ganzer Channel ist nicht wiederherstellbar - einmal nachfragen.
@@ -652,6 +664,12 @@ class Moderation(FeatureBasis):
                 # +1, damit die Befehls-Nachricht selbst nicht als eine der n zaehlt.
                 deleted = await channel.purge(limit=n + 1, check=lambda m: not self._keep(m))
                 count = max(0, len(deleted) - (0 if self._keep(message) else 1))
+            elif rest.strip() and rest_ohne_marken.strip() != rest.strip():
+                # Da stand eine Erwaehnung und sonst keine Zahl.
+                return (f"Ich lösche nach **Anzahl**, nicht nach Person: "
+                        f"`{self._bot_name} lösch 20`. "
+                        f"(Für eine einzelne Person: die Nachricht anpinnen "
+                        f"oder von Hand löschen.)")
             else:
                 return (f"Wie viele? z. B. `{self._bot_name} lösch 20` oder "
                         f"`{self._bot_name} lösch alle`.")
