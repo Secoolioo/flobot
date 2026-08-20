@@ -14,12 +14,12 @@ Der Schluessel wird NIE vollstaendig ausgegeben - auch nicht im Fehlerfall.
 import json
 import os
 import re
-import socket
-import ssl
 import sys
 import time
 import urllib.error
 import urllib.request
+
+from arzt import Arzt
 
 try:
     from dotenv import load_dotenv
@@ -35,45 +35,19 @@ STANDARD_VISION = "qwen/qwen3.6-27b"
 TIMEOUT = 20
 
 
-class KiCheck:
+class KiCheck(Arzt):
     """Prueft die KI-Strecke Schritt fuer Schritt: Konfig, Netz, Modell, Aufruf."""
 
+    NAME = "Flo - KI-Diagnose"
+
     def __init__(self):
+        super().__init__()
         self.base = ""
         self.modell = ""
         self.vision = ""
         self.key = ""
-        self.probleme = []      # (Ueberschrift, Was tun)
         self.modelle = None     # Liste vom Anbieter, None = nicht abrufbar
         self.cf_code = ""       # Cloudflare-Fehlercode, falls einer kam
-
-    # --- Ausgabe ------------------------------------------------------------
-    def titel(self, text):
-        print(f"\n\033[1m{text}\033[0m")
-
-    def ok(self, text):
-        print(f"  \033[32mOK\033[0m    {text}")
-
-    def warn(self, text):
-        print(f"  \033[33m!\033[0m     {text}")
-
-    def fehler(self, text):
-        print(f"  \033[31mFEHLER\033[0m {text}")
-
-    def merke(self, ueberschrift, was_tun):
-        """Sammelt Befunde fuer den Abschluss - jeden nur einmal. Ohne das steht
-        derselbe Rat doppelt da, wenn Modell-Liste UND Chat-Aufruf scheitern."""
-        if (ueberschrift, was_tun) not in self.probleme:
-            self.probleme.append((ueberschrift, was_tun))
-
-    @staticmethod
-    def maskiere(key):
-        """Zeigt genug zum Wiedererkennen, aber nie den Schluessel selbst."""
-        if not key:
-            return "(leer)"
-        if len(key) <= 12:
-            return f"{key[:2]}...{key[-2:]} ({len(key)} Zeichen)"
-        return f"{key[:4]}...{key[-4:]} ({len(key)} Zeichen)"
 
     # --- Schritt 1: Konfiguration ------------------------------------------
     def konfig_lesen(self):
@@ -92,16 +66,10 @@ class KiCheck:
         self.vision = os.getenv("LLM_VISION_MODEL", "").strip() or STANDARD_VISION
         self.key = os.getenv("LLM_API_KEY", "").strip()
 
-        print(f"        Anbieter : {self.base}")
-        print(f"        Modell   : {self.modell}")
-        print(f"        Vision   : {self.vision}")
-        print(f"        Schluessel: {self.maskiere(self.key)}")
-
-        proxy = next((os.environ[v] for v in ("HTTPS_PROXY", "https_proxy",
-                                              "HTTP_PROXY", "http_proxy")
-                      if os.environ.get(v)), "")
-        if proxy:
-            self.warn(f"Ein Proxy ist gesetzt: {proxy} - alle Anfragen laufen darueber.")
+        self.info(f"Anbieter : {self.base}")
+        self.info(f"Modell   : {self.modell}")
+        self.info(f"Vision   : {self.vision}")
+        self.info(f"Schluessel: {self.maskiere(self.key)}")
 
         lokal = any(h in self.base for h in ("localhost", "127.0.0.1", ":11434"))
         if not self.key and not lokal:
@@ -119,93 +87,23 @@ class KiCheck:
     def netz_pruefen(self):
         """Trennt sauber: 'kommt nicht raus' vs. 'Anbieter lehnt ab'."""
         self.titel("2. Netz zum Anbieter")
-        try:
-            teil = self.base.split("://", 1)[1]
-        except IndexError:
-            self.fehler(f"LLM_BASE_URL sieht nicht wie eine URL aus: {self.base}")
-            self.merke("Basis-URL kaputt", "LLM_BASE_URL in der .env pruefen.")
-            return False
-        # Ein Port in der URL schlaegt das Schema. Ohne das haette jeder lokale
-        # Anbieter (Ollama :11434, LM Studio :1234) faelschlich "kommt nicht raus"
-        # gemeldet, weil nur nach http/https entschieden wurde.
-        # Direkt umwandeln statt vorher zu pruefen: es gibt Ziffern, die eine
-        # Pruefung durchlassen und int() trotzdem nicht mag.
-        hostteil = teil.split("/", 1)[0]
-        host, _, portteil = hostteil.rpartition(":")
-        try:
-            port = int(portteil)
-            if not host:
-                raise ValueError
-        except ValueError:
-            host, port = hostteil, (443 if self.base.startswith("https") else 80)
+        proxy = next((os.environ[v] for v in ("HTTPS_PROXY", "https_proxy",
+                                              "HTTP_PROXY", "http_proxy")
+                      if os.environ.get(v)), "")
+        if proxy:
+            self.warn(f"Ein Proxy ist gesetzt: {proxy} - alles laeuft darueber.")
+        return self.erreichbar(self.base, name="Anbieter")
 
-        try:
-            adressen = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-            self.ok(f"DNS: {host} -> {adressen[0][4][0]}")
-        except socket.gaierror as exc:
-            self.fehler(f"DNS geht nicht: {host} ({exc})")
-            self.merke("DNS kaputt",
-                       "Auf dem Server pruefen:  ping -c1 1.1.1.1   und   cat etc/resolv.conf")
-            return False
-
-        try:
-            with socket.create_connection((host, port), timeout=8) as roh:
-                if port == 443:
-                    ctx = ssl.create_default_context()
-                    with ctx.wrap_socket(roh, server_hostname=host) as tls:
-                        self.ok(f"TLS steht ({tls.version()})")
-                else:
-                    self.ok("TCP steht (unverschluesselt)")
-        except ssl.SSLCertVerificationError as exc:
-            self.fehler(f"TLS-Zertifikat wird abgelehnt: {exc}")
-            self.merke("TLS schlaegt fehl",
-                       "Meist die Systemzeit oder alte CA-Zertifikate. Pruefen: date  "
-                       "und  apt install --reinstall ca-certificates")
-            return False
-        except (socket.timeout, OSError) as exc:
-            self.fehler(f"Keine Verbindung zu {host}:{port} ({exc})")
-            self.merke("Kommt nicht raus",
-                       "Ausgehende Firewall oder kein Internet. Pruefen:  curl -sS -m5 -o "
-                       "nul -w '%{http_code}' https://api.groq.com")
-            return False
-        return True
-
-    # --- HTTP-Helfer --------------------------------------------------------
     def _anfrage(self, pfad, daten=None, ua=None, zeit=None):
-        """Gibt (status, body_text, kopfzeilen) zurueck. Wirft nicht - Fehler
-        sind hier Daten. 'ua' setzt eine abweichende Client-Signatur; genau die
+        """Wie Arzt.anfrage, aber mit dem Schluessel des Anbieters und relativ
+        zur Basis-URL. 'ua' setzt eine abweichende Client-Signatur - genau die
         prueft Cloudflare bei Fehler 1010."""
-        url = f"{self.base}{pfad}"
-        kopf = {"Authorization": f"Bearer {self.key or 'ollama'}",
-                "Content-Type": "application/json"}
+        kopf = {"Authorization": f"Bearer {self.key or 'ollama'}"}
         if ua:
             kopf["User-Agent"] = ua
-        rumpf = json.dumps(daten).encode() if daten is not None else None
-        req = urllib.request.Request(url, data=rumpf, headers=kopf,
-                                     method="POST" if daten is not None else "GET")
-        try:
-            with urllib.request.urlopen(req, timeout=zeit or TIMEOUT) as antwort:
-                return (antwort.status, antwort.read().decode("utf-8", "replace"),
-                        dict(antwort.headers))
-        except urllib.error.HTTPError as exc:
-            return (exc.code, exc.read().decode("utf-8", "replace"),
-                    dict(exc.headers or {}))
-        except urllib.error.URLError as exc:
-            return 0, str(exc.reason), {}
-        except (socket.timeout, TimeoutError):
-            return 0, f"Zeitueberschreitung nach {zeit or TIMEOUT}s", {}
+        return self.anfrage(f"{self.base}{pfad}", daten=daten, kopf=kopf, zeit=zeit)
 
-    @staticmethod
-    def _meldung(body):
-        """Zieht die Klartext-Meldung aus einer JSON-Fehlerantwort."""
-        try:
-            d = json.loads(body)
-        except (ValueError, TypeError):
-            return (body or "").strip()[:300]
-        f = d.get("error", d)
-        if isinstance(f, dict):
-            return str(f.get("message") or f.get("detail") or f)[:300]
-        return str(f)[:300]
+    _meldung = staticmethod(Arzt.meldung)
 
     # --- Schritt 3: gibt es das Modell ueberhaupt noch? --------------------
     def modelle_pruefen(self):
@@ -242,14 +140,15 @@ class KiCheck:
         fehlt_vision = self.vision not in self.modelle
         if not (fehlt_chat or fehlt_vision):
             return
-        print("\n        Verfuegbar beim Anbieter (Auswahl):")
+        self.info("")
+        self.info("Verfuegbar beim Anbieter (Auswahl):")
         for m in self.modelle:
             klein = m.lower()
             if any(x in klein for x in ("whisper", "tts", "guard", "embed")):
                 continue
             marke = "  (kann Bilder)" if any(
                 x in klein for x in ("vision", "scout", "maverick", "vl", "multimodal")) else ""
-            print(f"          {m}{marke}")
+            self.info(f"  {m}{marke}")
 
     # --- Schritt 4: der echte Aufruf ---------------------------------------
     def aufruf_pruefen(self):
@@ -300,7 +199,7 @@ class KiCheck:
             }.get(cf, "Cloudflare lehnt die Anfrage ab.")
             self.fehler(f"{was}: {erklaerung} (Cloudflare-Fehler {cf}, HTTP {status})")
             if strahl:
-                print(f"        Cloudflare Ray-ID: {strahl}")
+                self.info(f"Cloudflare Ray-ID: {strahl}")
             self.merke(f"Cloudflare blockt vor Groq (Fehler {cf})",
                        "Der Schluessel ist NICHT schuld - die Anfrage kommt nie bei "
                        "Groq an. Siehe Signatur-Test unten.")
@@ -393,27 +292,20 @@ class KiCheck:
                 with urllib.request.urlopen(req, timeout=8) as a:
                     ip = a.read().decode("utf-8", "replace").strip()
                 if ip:
-                    print(f"        Oeffentliche IP dieses Servers: {ip}")
-                    print("        (die ist gesperrt, nicht der Schluessel)")
+                    self.info(f"Oeffentliche IP dieses Servers: {ip}")
+                    self.info("(die ist gesperrt, nicht der Schluessel)")
                     return
             except Exception:  # noqa: BLE001 - reine Zusatzinfo, darf scheitern
                 continue
 
     # --- Abschluss ----------------------------------------------------------
     def bericht(self):
-        self.titel("Ergebnis")
-        if not self.probleme:
-            print("  Keine Probleme gefunden - die KI-Strecke ist in Ordnung.")
-            print("\n  Meckert Flo trotzdem, zeigt das hier den echten Grund:")
-            print("    journalctl -u flobot --since -1h --no-pager | grep -A18 'LLM-Aufruf'")
-            return 0
-        for i, (ueberschrift, was_tun) in enumerate(self.probleme, 1):
-            print(f"  {i}. \033[1m{ueberschrift}\033[0m")
-            print(f"     -> {was_tun}")
-        return 1
+        return super().bericht(schluss=(
+            "\n  Meckert Flo trotzdem, zeigt das hier den echten Grund:\n"
+            "    bash k l"))
 
     def lauf(self):
-        print("\033[1mFlo - KI-Diagnose\033[0m")
+        self._schreib(f"\033[1m{self.NAME}\033[0m", self.NAME)
         if not self.konfig_lesen():
             return self.bericht()
         if not self.netz_pruefen():

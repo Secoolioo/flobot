@@ -5,6 +5,7 @@
 #     bash k n        vorher git pull
 #     bash k l        nur die letzten KI-Fehler aus dem Journal
 #     bash k m        Musik/Spotify pruefen (yt-dlp, ffmpeg, Token, Track)
+#     bash k a        ALLES pruefen und einen Bericht in diagnose.txt schreiben
 #     bash k r        Dienst neu starten
 #     bash k setup    einmalig: danach reicht ueberall  k
 #
@@ -64,6 +65,10 @@ case "${1:-}" in
     l|log)
         logs
         ;;
+    a|alles)
+        "$PY" tools_check.py
+        logs "Letzte Meldungen im Journal" "$KIMUSTER|$MUSIKMUSTER"
+        ;;
     m|musik)
         "$PY" tools_musik_check.py
         logs "Letzte Musik-Meldungen im Journal" "$MUSIKMUSTER"
@@ -88,6 +93,6 @@ case "${1:-}" in
         "$PY" tools_ki_check.py
         logs
         trenner
-        echo "k n = neu holen | k l = Log | k m = Musik | k r = Neustart"
+        echo "k a = ALLES | k n = neu holen | k l = Log | k m = Musik | k r = Neustart"
         ;;
 esac

@@ -10,3 +10,5 @@ backups/
 .pytest_cache/
 # Messprotokolle/Logs aus Testlaeufen - nicht committen:
 *.log
+# Bericht von 'bash k a' - gehoert dem Server, nicht dem Repo:
+diagnose.txt

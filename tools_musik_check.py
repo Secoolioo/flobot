@@ -17,11 +17,10 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
-import urllib.error
-import urllib.request
+
+from arzt import Arzt
 
 try:
     from dotenv import load_dotenv
@@ -33,38 +32,15 @@ PROBE_TRACK = "4cOdK2wGLETKBW3PvgPWqT"
 TIMEOUT = 15
 
 
-class MusikCheck:
+class MusikCheck(Arzt):
     """Prueft die Musik-Strecke Schritt fuer Schritt."""
 
+    NAME = "Flo - Musik-Diagnose"
+
     def __init__(self):
+        super().__init__()
         self.sp_id = ""
         self.sp_secret = ""
-        self.probleme = []
-
-    # --- Ausgabe (gleiche Optik wie die KI-Diagnose) ------------------------
-    def titel(self, text):
-        print(f"\n\033[1m{text}\033[0m")
-
-    def ok(self, text):
-        print(f"  \033[32mOK\033[0m    {text}")
-
-    def warn(self, text):
-        print(f"  \033[33m!\033[0m     {text}")
-
-    def fehler(self, text):
-        print(f"  \033[31mFEHLER\033[0m {text}")
-
-    def merke(self, ueberschrift, was_tun):
-        if (ueberschrift, was_tun) not in self.probleme:
-            self.probleme.append((ueberschrift, was_tun))
-
-    @staticmethod
-    def maskiere(wert):
-        if not wert:
-            return "(leer)"
-        if len(wert) <= 12:
-            return f"{wert[:2]}...{wert[-2:]} ({len(wert)} Zeichen)"
-        return f"{wert[:4]}...{wert[-4:]} ({len(wert)} Zeichen)"
 
     # --- Schritt 1: Voraussetzungen ----------------------------------------
     def werkzeuge_pruefen(self):
@@ -115,45 +91,20 @@ class MusikCheck:
             self.merke("yt-dlp ist veraltet",
                        "venv/bin/pip install -U yt-dlp   danach: systemctl restart flobot")
 
-    # --- HTTP-Helfer --------------------------------------------------------
     def _anfrage(self, url, daten=None, kopf=None):
-        """(status, body). Wirft nicht - Fehler sind Daten."""
-        rumpf = None
-        if daten is not None:
-            rumpf = "&".join(f"{k}={v}" for k, v in daten.items()).encode()
-        req = urllib.request.Request(url, data=rumpf, headers=kopf or {},
-                                     method="POST" if daten is not None else "GET")
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as antwort:
-                return antwort.status, antwort.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as exc:
-            return exc.code, exc.read().decode("utf-8", "replace")
-        except urllib.error.URLError as exc:
-            return 0, str(exc.reason)
-        except (socket.timeout, TimeoutError):
-            return 0, f"Zeitueberschreitung nach {TIMEOUT}s"
+        """Kompatibilitaets-Huelle um Arzt.anfrage: gibt nur (status, body)."""
+        status, body, _kopf = self.anfrage(url, form=daten, kopf=kopf)
+        return status, body
 
-    @staticmethod
-    def _meldung(body):
-        try:
-            d = json.loads(body)
-        except (ValueError, TypeError):
-            return (body or "").strip()[:300]
-        for schluessel in ("error_description", "error", "message"):
-            wert = d.get(schluessel)
-            if isinstance(wert, dict):
-                wert = wert.get("message") or wert.get("status")
-            if wert:
-                return str(wert)[:300]
-        return str(d)[:300]
+    _meldung = staticmethod(Arzt.meldung)
 
     # --- Schritt 2: Spotify -------------------------------------------------
     def spotify_pruefen(self):
         self.titel("2. Spotify")
         self.sp_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
         self.sp_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
-        print(f"        Client-ID    : {self.maskiere(self.sp_id)}")
-        print(f"        Client-Secret: {self.maskiere(self.sp_secret)}")
+        self.info(f"Client-ID    : {self.maskiere(self.sp_id)}")
+        self.info(f"Client-Secret: {self.maskiere(self.sp_secret)}")
 
         if not (self.sp_id and self.sp_secret):
             self.fehler("Zugangsdaten fehlen - Spotify-Links koennen gar nicht "
@@ -289,19 +240,11 @@ class MusikCheck:
 
     # --- Abschluss ----------------------------------------------------------
     def bericht(self):
-        self.titel("Ergebnis")
-        if not self.probleme:
-            print("  Keine Probleme gefunden - Musik und Spotify sind in Ordnung.")
-            print("\n  Geht es trotzdem nicht, zeigt das den Grund:")
-            print("    bash k m")
-            return 0
-        for i, (ueberschrift, was_tun) in enumerate(self.probleme, 1):
-            print(f"  {i}. \033[1m{ueberschrift}\033[0m")
-            print(f"     -> {was_tun}")
-        return 1
+        return super().bericht(schluss=(
+            "\n  Geht es trotzdem nicht, zeigt das den Grund:\n    bash k m"))
 
     def lauf(self):
-        print("\033[1mFlo - Musik-Diagnose\033[0m")
+        self._schreib(f"\033[1m{self.NAME}\033[0m", self.NAME)
         self.werkzeuge_pruefen()
         self.spotify_pruefen()
         self.youtube_pruefen()

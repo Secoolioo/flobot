@@ -7,11 +7,13 @@ test_logic.py):  python test_games_logic.py
 import asyncio
 import inspect
 import io
+import json
 import os
 import random
 import re
 import shlex
 import shutil
+import sys
 import tempfile
 import time
 from types import SimpleNamespace
@@ -11213,6 +11215,187 @@ def test_ki_vorgaben_von_bot_und_arzt_sind_gleich():
         assert tot != ai.FloAI.DEFAULT_MODEL, f"{tot} ist bei Groq abgeschaltet"
     # Das Chat-Modell MUSS Werkzeuge koennen - ask_flo reicht 'tools' mit.
     assert "tools=[self.WEATHER_TOOL]" in inspect.getsource(ai.FloAI.ask_flo)
+
+
+# --- Die Aerzte (tools_*_check.py) ------------------------------------------
+class _FalscherAnbieter:
+    """Spielt einen LLM-Anbieter samt Cloudflare davor. Kein echtes Netz."""
+
+    def __init__(self, fall="ok",
+                 modelle=("openai/gpt-oss-120b", "qwen/qwen3.6-27b")):
+        import http.server
+        import threading
+        self.fall = fall
+        self.modelle = list(modelle)
+        aussen = self
+
+        class Griff(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def _raus(self, code, text, typ="application/json"):
+                roh = text.encode()
+                self.send_response(code)
+                self.send_header("Content-Type", typ)
+                if code == 403 and aussen.fall.startswith("cf"):
+                    self.send_header("cf-ray", "abc123-FRA")
+                self.send_header("Content-Length", str(len(roh)))
+                self.end_headers()
+                self.wfile.write(roh)
+
+            def _antwort(self):
+                f = aussen.fall
+                ua = self.headers.get("User-Agent", "")
+                if f == "cf_signatur" and "curl" in ua:
+                    f = "ok"
+                if f == "cf_ip" or f == "cf_signatur":
+                    return self._raus(403, "<html>error code: 1010</html>", "text/html")
+                if f == "ok":
+                    if "/models" in self.path:
+                        return self._raus(200, json.dumps({"data": [
+                            {"id": m} for m in aussen.modelle]}))
+                    return self._raus(200, json.dumps(
+                        {"choices": [{"message": {"content": "ok"}}]}))
+                code = {"401": 401, "404": 404, "429": 429, "500": 503}[f]
+                return self._raus(code, json.dumps({"error": {"message": "kaputt"}}))
+
+            do_GET = do_POST = _antwort
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Griff)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.server.shutdown()
+
+
+def _ki_arzt_lauf(anbieter, schluessel="gsk_streng_geheim_1234567890"):
+    """Laesst den KI-Arzt gegen den falschen Anbieter laufen. Gibt (text, arzt)."""
+    import tools_ki_check
+    merker = {k: os.environ.get(k) for k in
+              ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_USER_AGENT",
+               "HTTPS_PROXY", "https_proxy")}
+    os.environ["LLM_BASE_URL"] = anbieter.url
+    os.environ["LLM_API_KEY"] = schluessel
+    os.environ.pop("LLM_USER_AGENT", None)
+    for v in ("HTTPS_PROXY", "https_proxy"):
+        os.environ.pop(v, None)
+    puffer = io.StringIO()
+    alt_aus = sys.stdout
+    sys.stdout = puffer
+    try:
+        arzt = tools_ki_check.KiCheck()
+        arzt.lauf()
+    finally:
+        sys.stdout = alt_aus
+        for k, v in merker.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return re.sub(r"\x1b\[[0-9;]*m", "", puffer.getvalue()), arzt
+
+
+def test_arzt_verraet_niemals_ein_geheimnis():
+    """Der Arzt wird auf einem Handy fotografiert und in Chats geschickt. Ein
+    Schluessel darf da NIE vollstaendig auftauchen - auch nicht im Fehlerfall
+    und auch nicht in der Berichtsdatei."""
+    import arzt
+    a = arzt.Arzt()
+    assert a.maskiere("") == "(leer)"
+    for geheim in ("gsk_streng_geheim_1234567890", "kurz", "abcdefghijkl"):
+        maskiert = a.maskiere(geheim)
+        assert geheim not in maskiert, maskiert
+        assert str(len(geheim)) in maskiert          # Laenge hilft beim Vergleichen
+
+    schluessel = "gsk_streng_geheim_1234567890"
+    with _FalscherAnbieter("401") as anbieter:
+        text, ki_arzt = _ki_arzt_lauf(anbieter, schluessel)
+    assert schluessel not in text, "Schluessel steht im Klartext auf dem Bildschirm"
+    assert schluessel not in "\n".join(ki_arzt.zeilen), "Schluessel steht im Bericht"
+    assert "gsk_...7890" in text, text[:400]
+
+
+def test_ki_arzt_ordnet_jeden_anbieterfehler_richtig_ein():
+    """Fuer jede Ursache ein anderer Rat - sonst tauscht man wieder den Schluessel,
+    obwohl das Modell abgeschaltet wurde."""
+    erwartet = {
+        "401": "Schluessel",
+        "404": "Modell",
+        "429": "Kontingent",
+        "500": "Stoerung",
+    }
+    for fall, stichwort in erwartet.items():
+        with _FalscherAnbieter(fall) as anbieter:
+            text, arzt = _ki_arzt_lauf(anbieter)
+        raete = " ".join(u for u, _ in arzt.probleme)
+        assert stichwort.lower() in raete.lower(), (fall, raete)
+
+    # Und wenn alles geht, gibt es KEINEN Befund.
+    with _FalscherAnbieter("ok") as anbieter:
+        text, arzt = _ki_arzt_lauf(anbieter)
+    assert not arzt.probleme, arzt.probleme
+    assert "funktioniert" in text
+
+
+def test_ki_arzt_unterscheidet_signatur_von_ip_sperre():
+    """Cloudflare-Fehler 1010 hat ZWEI voellig verschiedene Ursachen, und die
+    Behandlung ist entgegengesetzt: bei der Signatur hilft eine Zeile in der
+    .env, bei einer IP-Sperre hilft gar kein Code. Raten waere hier teuer."""
+    with _FalscherAnbieter("cf_signatur") as anbieter:
+        text, arzt = _ki_arzt_lauf(anbieter)
+    raete = " ".join(f"{u} {w}" for u, w in arzt.probleme)
+    assert "LLM_USER_AGENT" in raete, raete
+    assert "IP" not in " ".join(u for u, _ in arzt.probleme)
+
+    with _FalscherAnbieter("cf_ip") as anbieter:
+        text, arzt = _ki_arzt_lauf(anbieter)
+    raete = " ".join(f"{u} {w}" for u, w in arzt.probleme)
+    assert "IP" in raete and "gesperrt" in raete, raete
+    # Und der Cloudflare-Code muss als solcher benannt sein, nicht als API-Fehler.
+    assert "Cloudflare" in text and "1010" in text
+
+
+def test_jede_aussenabhaengigkeit_hat_einen_arzt():
+    """Alle echten Ausfaelle kamen von AUSSEN: Groq hat ein Modell abgeschaltet,
+    YouTube bindet die Adresse an den Client, Cloudflare sperrte die Signatur.
+    Interne Tests fangen so etwas nie. Was dagegen hilft, ist: jede
+    Aussenabhaengigkeit muss mit einem Befehl pruefbar sein."""
+    import tools_check
+    import tools_ki_check
+    import tools_musik_check
+    quelle = (open("tools_check.py", encoding="utf-8").read()
+              + open("tools_ki_check.py", encoding="utf-8").read()
+              + open("tools_musik_check.py", encoding="utf-8").read())
+    for was, marke in (("Discord-Token", "DISCORD_TOKEN"),
+                       ("LLM-Schluessel", "LLM_API_KEY"),
+                       ("LLM-Modell", "/models"),
+                       ("Spotify", "accounts.spotify.com"),
+                       ("YouTube/yt-dlp", "yt_dlp"),
+                       ("ffmpeg", "ffmpeg"),
+                       ("Datenordner", "DATA_DIR"),
+                       ("Plattenplatz", "disk_usage"),
+                       ("Dienst", "systemctl"),
+                       ("Repo-Stand", "rev-list")):
+        assert marke in quelle, f"{was} wird von keinem Arzt geprueft ({marke})"
+
+    # Alle drei Aerzte muessen dieselbe Basis nutzen - sonst laufen Maskierung
+    # und Berichtsformat wieder auseinander.
+    import arzt
+    for klasse in (tools_ki_check.KiCheck, tools_musik_check.MusikCheck,
+                   tools_check.GesamtCheck):
+        assert issubclass(klasse, arzt.Arzt), klasse
+        assert callable(getattr(klasse, "lauf", None)), klasse
+
+    # Und 'k' muss sie auch wirklich anbieten.
+    arztruf = open("k", encoding="utf-8").read()
+    for datei in ("tools_ki_check.py", "tools_musik_check.py", "tools_check.py"):
+        assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
 def _als_coro(wert):
