@@ -54,7 +54,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import numfmt
 from store import JsonStore
 
@@ -378,7 +378,7 @@ class Profil(FeatureBasis):
             if getattr(m, "id", 0) != eigene_id:
                 return m, ""
         if getattr(message, "mentions", None):
-            return message.mentions[0], ""
+            return erstes_ziel(message) or message.mentions[0], ""
 
         # Vor der ID-Suche alles in spitzen Klammern wegschneiden: dort stecken
         # Kanaele (<#123>), Rollen (<@&123>) und Custom-Emojis (<:name:123>).

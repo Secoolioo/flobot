@@ -33,7 +33,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 import render
@@ -1000,7 +1000,7 @@ class Casino(FeatureBasis):
 
     async def _duel_command(self, message, args):
         uid = message.author.id
-        target = next((m for m in message.mentions if not m.bot), None)
+        target = erstes_ziel(message)
         if target is None:
             await self._send(message, embed=self._info(
                 f"Wen forderst du heraus? `{self._bot_name} duell @wer <einsatz>`"))
@@ -1033,7 +1033,7 @@ class Casino(FeatureBasis):
             return None
 
     async def _stats_command(self, message):
-        target = next((m for m in message.mentions if not m.bot), None) or message.author
+        target = erstes_ziel(message) or message.author
         prof = ((self._stats.data.get("stats") or {}).get(str(target.id))
                 if self._stats is not None else None)
         # Kein dict (Text/Zahl aus einer kaputten Datei) zaehlt wie

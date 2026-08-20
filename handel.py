@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 import render
@@ -186,7 +186,7 @@ class Handel(FeatureBasis):
         parts = cmd.lower().split()
         if not parts or parts[0] not in self._CMDS:
             return None
-        target = next((m for m in message.mentions if not m.bot), None) or message.author
+        target = erstes_ziel(message) or message.author
         u = (self._store.data.get("users") or {}).get(str(target.id)) \
             if self._store is not None else None
         # Nicht nur leer, sondern auch KEIN dict: die Typ-Schablone des Store

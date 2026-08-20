@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import guildcfg
 import leaderboard_img
 import numfmt
@@ -1099,7 +1099,7 @@ class Economy(FeatureBasis):
         # Zielnutzer: erste Erwaehnung, die ein MENSCH ist - sonst der Autor.
         # Wer Flo per @Mention anspricht, hat den Bot in message.mentions
         # stehen; '@Flo level' zeigte deshalb die Karte des Bots.
-        target = next((m for m in message.mentions if not m.bot), None) or message.author
+        target = erstes_ziel(message) or message.author
 
         if first in ("level", "lvl", "rank", "rang"):
             return await self._card_image(target)

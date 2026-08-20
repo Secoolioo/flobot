@@ -54,7 +54,7 @@ from datetime import date, datetime
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 from store import JsonStore
@@ -1059,7 +1059,7 @@ class Arbeit(FeatureBasis):
 
         Faellt das Zeichnen aus, geht der alte Text-Weg raus: eine fehlende
         Schrift darf niemandem seine Zahlen vorenthalten."""
-        ziel = next((m for m in message.mentions if not m.bot), None) or message.author
+        ziel = erstes_ziel(message) or message.author
         prof = self._nutzer(ziel.id)
         heute = self._tageskonto(prof)
         geschafft = int(prof.get("geschafft", 0))

@@ -18,7 +18,7 @@ import aiohttp
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import render
 
 log = logging.getLogger("dcbot.media")
@@ -150,7 +150,7 @@ class Media(FeatureBasis):
         # (die Karte setzt selbst typografische Anfuehrungszeichen).
         quote = re.sub(r"<@!?\d+>", " ", text).strip().strip('"„“”\'').strip()
         # `flo quote @wer <text>` -> das Zitat der ERWAEHNTEN Person in den Mund legen.
-        erwaehnt = next((m for m in message.mentions if not m.bot), None)
+        erwaehnt = erstes_ziel(message)
         if erwaehnt is not None:
             target = erwaehnt
         # Als Antwort auf eine Nachricht ohne eigenen Text -> deren Inhalt + Autor zitieren.

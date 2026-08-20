@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 from store import JsonStore
@@ -172,10 +172,7 @@ def _echtes_ziel(message):
     stehen. Ohne diesen Filter zeigte '@Flo schulden' die Paar-Tafel mit Flo
     als Gegenueber, und '@Flo schulden erlassen @Kumpel' richtete sich gegen
     den Bot."""
-    for m in (getattr(message, "mentions", None) or []):
-        if not getattr(m, "bot", False):
-            return m
-    return None
+    return erstes_ziel(message)
 
 
 def _zahl(wert, standard=0):

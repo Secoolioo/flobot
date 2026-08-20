@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import casino
 import economy
 import guildcfg
@@ -914,7 +914,7 @@ class Games(FeatureBasis):
             return await self._start_guess(message)
         if first in ("ssp", "schnickschnack", "rps", "sss"):
             # Mit @Gegner + Einsatz wird's ein PvP-Duell um den Pot.
-            gegner = next((m for m in message.mentions if not m.bot), None)
+            gegner = erstes_ziel(message)
             if gegner is not None and gegner.id != message.author.id:
                 return await self._ssp_duell(message, gegner, args)
             return await self._ssp(message, args)
@@ -1834,7 +1834,7 @@ class Games(FeatureBasis):
         return True
 
     async def _quizduell(self, message, args):
-        gegner = next((m for m in message.mentions if not m.bot), None)
+        gegner = erstes_ziel(message)
         if gegner is None or gegner.id == message.author.id:
             return f"So: `{self._bot_name} quizduell @wer 100` – schnellste richtige Antwort gewinnt."
         if not economy.is_enabled():

@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import guildcfg
 from store import JsonStore
 
@@ -225,7 +225,11 @@ class Moderation(FeatureBasis):
         eine rohe 15-20-stellige ID. Gibt (member_or_user|None, id|None, rest_ohne_ziel).
         Bei reiner ID kann member None sein (z. B. fuer Ban/Unban von Nicht-Mitgliedern)."""
         me_id = message.guild.me.id
-        mentioned = [u for u in message.mentions if u.id != me_id]
+        # Nur WIRKLICH getippte Erwaehnungen. Bei einer Antwort-mit-Ping steht
+        # der Autor der beantworteten Nachricht in message.mentions, ohne dass
+        # ihn jemand geschrieben hat - eine Antwort auf Bob mit 'Flo ban spam'
+        # hat damit BOB gebannt.
+        mentioned = [u for u in echte_erwaehnungen(message) if u.id != me_id]
         if mentioned:
             target = mentioned[0]
             rest = _MENTION_RE.sub("", rest).strip()

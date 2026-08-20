@@ -8362,6 +8362,90 @@ def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
                                                      cmdnorm.normalize(falsch))
 
 
+def test_antwort_mit_ping_ist_kein_ziel():
+    """In Discord haengt eine Antwort den Autor der beantworteten Nachricht an
+    message.mentions - auch wenn niemand ein @ getippt hat (der Client pingt
+    beim Antworten standardmaessig). Wer die Liste roh nimmt, trifft den
+    Falschen:
+
+        (Antwort auf Bobs Nachricht) 'Flo ban spam'  -> bannt BOB
+        (Antwort auf Bobs Nachricht) 'Flo klau'      -> beklaut BOB
+
+    economy._pay hatte das schon geloest (mit Kommentar), zwoelf andere Stellen
+    nicht - darunter Moderation, Raub, Schuldbuch und die Admin-Coins."""
+    import basis
+    bob = SimpleNamespace(id=111, bot=False)
+    alice = SimpleNamespace(id=222, bot=False)
+    flo = SimpleNamespace(id=999, bot=True)
+
+    # 1. Antwort-mit-Ping, kein getipptes @ -> KEIN Ziel.
+    antwort = SimpleNamespace(mentions=[bob], content="Flo ban spam")
+    assert basis.echte_erwaehnungen(antwort) == []
+    assert basis.erstes_ziel(antwort) is None
+
+    # 2. Wirklich getippt -> Ziel.
+    getippt = SimpleNamespace(mentions=[bob], content="Flo ban <@111> spam")
+    assert basis.erstes_ziel(getippt) is bob
+    # Auch die Nickname-Form <@!id>.
+    assert basis.erstes_ziel(
+        SimpleNamespace(mentions=[bob], content="ban <@!111>")) is bob
+
+    # 3. Reihenfolge folgt dem TEXT, nicht der (unsortierten) Liste.
+    reihe = SimpleNamespace(mentions=[bob, alice],
+                            content="pay <@222> 100 statt <@111>")
+    assert [u.id for u in basis.echte_erwaehnungen(reihe)] == [222, 111]
+
+    # 4. Bots und ausgeschlossene IDs fliegen raus.
+    mitbot = SimpleNamespace(mentions=[flo, bob], content="<@999> ban <@111>")
+    assert basis.erstes_ziel(mitbot) is bob
+    assert basis.erstes_ziel(mitbot, ohne=(111,)) is None
+
+    # 5. Dieselbe Person doppelt getippt zaehlt einmal.
+    doppelt = SimpleNamespace(mentions=[bob], content="<@111> und <@111>")
+    assert len(basis.echte_erwaehnungen(doppelt)) == 1
+
+    # 6. Kaputte Nachricht kippt nicht um.
+    assert basis.echte_erwaehnungen(SimpleNamespace()) == []
+    assert basis.erstes_ziel(SimpleNamespace(mentions=None, content=None)) is None
+
+
+def test_kein_modul_zielt_wieder_auf_die_rohe_mention_liste():
+    """Der Riegel zur Fehlerklasse oben: wer ein ZIEL bestimmt, muss
+    basis.echte_erwaehnungen nehmen. message.mentions roh ist nur dort in
+    Ordnung, wo es NICHT ums Zielen geht (z. B. 'ist Flo erwaehnt?').
+
+    Geprueft wird der SYNTAXBAUM, nicht der Text - sonst schlagen Docstrings an,
+    die message.mentions bloss erwaehnen (das ist mir hier prompt passiert)."""
+    import ast
+    import glob
+    erlaubt = {
+        ("bot.py", 1637),        # nur: ist Flo ueberhaupt angesprochen?
+        ("economy.py", 1572),    # nur: ist ueberhaupt jemand genannt?
+        ("economy.py", 1577),    # _pay holt das Ziel danach aus dem Text
+        ("economy.py", 1584),    # Rueckfall, nachdem der Text nichts hergab
+        ("fun.py", 204),         # nur: ist ueberhaupt jemand genannt?
+        ("profil.py", 381),      # Rueckfall hinter erstes_ziel(...)
+    }
+    schuldige = []
+    for datei in sorted(glob.glob("*.py")):
+        if datei.startswith("test_") or datei == "basis.py":
+            continue
+        quelle = open(datei, encoding="utf-8").read()
+        for knoten in ast.walk(ast.parse(quelle)):
+            if not (isinstance(knoten, ast.Attribute) and knoten.attr == "mentions"):
+                continue
+            basis_knoten = knoten.value
+            if not (isinstance(basis_knoten, ast.Name) and basis_knoten.id == "message"):
+                continue
+            if (datei, knoten.lineno) in erlaubt:
+                continue
+            zeile = quelle.splitlines()[knoten.lineno - 1].strip()
+            schuldige.append(f"{datei}:{knoten.lineno}  {zeile[:70]}")
+    assert not schuldige, (
+        "Diese Stellen zielen auf die rohe Mention-Liste - bei einer "
+        "Antwort-mit-Ping treffen sie den Falschen:\n  " + "\n  ".join(schuldige))
+
+
 def test_purge_zaehlt_keine_erwaehnung_als_anzahl():
     """'Flo lösch @spammer' hat MAX_PURGE Nachrichten geloescht - ohne Rueckfrage.
 

@@ -20,7 +20,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 
 log = logging.getLogger("dcbot.fun")
 
@@ -172,7 +172,7 @@ class Fun(FeatureBasis):
         """Wen meint der Befehl? Erste Mention (ausser Flo selbst, das steht bei
         Trigger-per-@Mention mit drin), 'mich' -> Autor, sonst der Rest-Text."""
         me_id = message.guild.me.id if message.guild is not None else None
-        echte = [u for u in message.mentions if u.id != me_id]
+        echte = [u for u in echte_erwaehnungen(message) if u.id != me_id]
         if echte:
             return echte[0].display_name
         low = rest.lower()

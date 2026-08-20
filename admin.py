@@ -23,7 +23,7 @@ import re
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 from store import JsonStore
@@ -119,7 +119,7 @@ class Admin(FeatureBasis):
 
     async def _user_of(self, message, uid):
         """Bestmoegliches User-Objekt zur ID (Mention > Guild-Cache > API)."""
-        for m in message.mentions:
+        for m in echte_erwaehnungen(message):
             if m.id == uid:
                 return m
         if message.guild is not None:

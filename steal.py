@@ -24,7 +24,7 @@ import time
 import discord
 
 import ai
-from basis import FeatureBasis
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 from store import JsonStore
 
@@ -185,7 +185,8 @@ class Steal(FeatureBasis):
         autor = message.author
 
         # --- Ziel bestimmen: erste @-Mention, die nicht der Autor / kein Bot ist.
-        mentions = list(getattr(message, "mentions", []) or [])
+        # Nur getippte Erwaehnungen - eine Antwort-mit-Ping ist KEIN Ziel.
+        mentions = echte_erwaehnungen(message)
         ziele = [m for m in mentions if m.id != autor.id and not getattr(m, "bot", False)]
         if not ziele:
             # Selbst-Klau / Bot-Ziel bekommen einen eigenen frechen Text.
