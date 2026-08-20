@@ -5,10 +5,13 @@ test_logic.py):  python test_games_logic.py
 """
 
 import asyncio
+import inspect
 import io
 import os
 import random
 import re
+import shlex
+import shutil
 import tempfile
 import time
 from types import SimpleNamespace
@@ -9069,6 +9072,138 @@ def test_musik_spotify_landet_nie_in_der_textsuche():
             ("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT", "play"),
             ("https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3", "spotify_album")):
         assert p(f"spiel {u}")[0] == erwartet, u
+
+
+def test_musik_ffmpeg_bekommt_die_client_kennung():
+    """DER Grund, warum gar nichts mehr lief. Am Server nachgemessen:
+
+        [https] HTTP error 403 Forbidden
+        Song '...' brach nach 0 von 178 s ab
+
+    YouTube unterschreibt eine Stream-Adresse fuer GENAU den Client, der sie
+    angefragt hat - in der Adresse steht 'c=ANDROID_VR'. ffmpeg meldete sich
+    aber mit seiner eigenen Kennung ('Lavf/...'), weil die http_headers von
+    yt-dlp nirgends weitergereicht wurden. YouTube antwortet darauf mit 403,
+    und jeder Song bricht nach 0 Sekunden ab."""
+    import music
+    ua = "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12)"
+
+    # Ohne Kopfzeilen darf gar nichts vorangestellt werden (SoundCloud, Dateien).
+    assert music.Track(title="x", stream_url="u").ffmpeg_vorspann() == ""
+
+    t = music.Track(title="x", stream_url="u", kopfzeilen={
+        "User-Agent": ua, "Accept-Language": "de-DE,de;q=0.9",
+        "Range": "bytes=0-", "Host": "boese.example", "Accept-Encoding": "gzip"})
+    vorspann = t.ffmpeg_vorspann()
+    zerlegt = shlex.split(vorspann)          # genau so zerlegt discord.py sie
+    assert "-user_agent" in zerlegt and ua in zerlegt, zerlegt
+    assert "Accept-Language: de-DE,de;q=0.9\r\n" in " ".join(zerlegt)
+    # Range/Host/Accept-Encoding gehoeren zur ANFRAGE, nicht zum Client -
+    # durchgereicht brechen sie die Verbindung.
+    for verboten in ("bytes=0-", "boese.example", "gzip"):
+        assert verboten not in vorspann, verboten
+
+    # Eine Kennung mit Leerzeichen und Anfuehrungszeichen darf die Kommandozeile
+    # nicht zerlegen - sonst waere das eine Befehls-Einschleusung.
+    gemein = 'Mozilla/5.0 "x" ; rm -rf /'
+    zerlegt = shlex.split(music.Track(title="x", stream_url="u",
+                                      kopfzeilen={"User-Agent": gemein}).ffmpeg_vorspann())
+    assert zerlegt == ["-user_agent", gemein], zerlegt
+
+    # _extract MUSS die Kopfzeilen von yt-dlp uebernehmen - sonst ist der ganze
+    # Vorspann wertlos.
+    quelle = inspect.getsource(music.Music._extract)
+    assert "http_headers" in quelle, "_extract nimmt die Kopfzeilen nicht mit"
+
+    # Und beim Abspielen muessen sie VOR '-i' landen (danach ignoriert ffmpeg sie).
+    start = inspect.getsource(music.GuildPlayer.start)
+    assert "ffmpeg_vorspann()" in start, "_start reicht die Kennung nicht durch"
+    assert start.index("ffmpeg_vorspann()") < start.index("before_options")
+
+
+def test_musik_ffmpeg_holt_damit_wirklich_ton():
+    """Der Ernstfall mit ECHTEM ffmpeg: ein Server, der sich wie YouTube
+    verhaelt (Ton nur fuer die richtige Client-Kennung, sonst 403). Die reine
+    Options-Pruefung oben beweist noch nicht, dass ffmpeg sie auch annimmt."""
+    import music
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return                               # ohne ffmpeg laeuft die Musik ohnehin nicht
+    import http.server
+    import subprocess
+    import threading
+
+    ua = "TestClient/1.0 (Android 12)"
+    # 0,4 s Stille als WAV - klein, ohne Fremddaten, von ffmpeg selbst erzeugt.
+    erzeugt = subprocess.run(
+        [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+         "-i", "anullsrc=r=48000:cl=stereo", "-t", "0.4", "-f", "wav", "-"],
+        capture_output=True, timeout=60)
+    if erzeugt.returncode != 0 or len(erzeugt.stdout) < 1000:
+        return                               # ffmpeg zu alt/beschnitten
+    ton = erzeugt.stdout
+
+    class Griff(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.headers.get("User-Agent", "") != ua:
+                leib = b"403 Forbidden"
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(leib)))
+                self.end_headers()
+                self.wfile.write(leib)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(ton)))
+            self.end_headers()
+            self.wfile.write(ton)
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Griff)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    adresse = f"http://127.0.0.1:{server.server_address[1]}/videoplayback?c=ANDROID_VR"
+
+    def wieviel_ton(track):
+        """Baut die ffmpeg-Zeile genau so wie GuildPlayer._start."""
+        vorne = [t for t in (track.ffmpeg_vorspann(), music._FFMPEG_BEFORE) if t]
+        argv = [ffmpeg, "-hide_banner", "-loglevel", "error",
+                *shlex.split(" ".join(vorne)), "-i", track.stream_url,
+                "-f", "s16le", "-ar", "48000", "-ac", "2", "-"]
+        return len(subprocess.run(argv, capture_output=True, timeout=60).stdout)
+
+    try:
+        ohne = wieviel_ton(music.Track(title="x", stream_url=adresse))
+        mit = wieviel_ton(music.Track(title="x", stream_url=adresse,
+                                      kopfzeilen={"User-Agent": ua}))
+    finally:
+        server.shutdown()
+    assert ohne == 0, f"ohne Kennung kam unerwartet Ton ({ohne} Bytes)"
+    assert mit > 10000, f"mit Kennung kam kein Ton ({mit} Bytes)"
+
+
+def test_musik_spotify_erneuert_sich_ueber_youtube_nicht_ueber_spotify():
+    """Im Log stand: '[DRM] The requested site is known to use DRM protection'.
+
+    Grund: nach dem Aufloesen trug play() die URSPRUENGLICHE Eingabe als Quelle
+    ein - bei einem Spotify-Link also die Spotify-Adresse. yt-dlp kann Spotify
+    aber gar nicht oeffnen, es kennt nur die YouTube-Suche dahinter. Jede
+    Wiederbelebung eines abgebrochenen Spotify-Songs war damit chancenlos, und
+    der Best-Match-Hinweis war auch weg - der naechste Versuch haette blind den
+    ersten Treffer genommen (Sped-Up-Remix statt Song)."""
+    import music
+    quelle = inspect.getsource(music.Music.handle)
+    stelle = quelle.index("_SPOTIFY_TRACK_RE.search(arg)")
+    danach = quelle[stelle:stelle + 2000]
+    assert "track.query = f\"ytsearch1:" in danach, (
+        "die Spotify-Adresse landet wieder als Erneuerungs-Quelle im Track")
+    assert "track.match_hint" in danach, "der Best-Match-Hinweis geht verloren"
+    # Und die Erneuerung muss den Hinweis wirklich mitnehmen.
+    assert "resolved.match_hint = track.match_hint" in inspect.getsource(
+        music.Music._resolve_track)
 
 
 def test_musik_weiter_holt_die_liegengebliebene_queue():

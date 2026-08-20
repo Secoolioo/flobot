@@ -4,6 +4,7 @@
 #     bash k          alles pruefen (Konfig, Netz, Modell, echter Aufruf + Log)
 #     bash k n        vorher git pull
 #     bash k l        nur die letzten KI-Fehler aus dem Journal
+#     bash k m        Musik/Spotify pruefen (yt-dlp, ffmpeg, Token, Track)
 #     bash k r        Dienst neu starten
 #     bash k setup    einmalig: danach reicht ueberall  k
 #
@@ -17,9 +18,11 @@ PY="venv/bin/python"
 
 trenner() { printf '\033[2m%s\033[0m\n' "----------------------------------------"; }
 
+# $1 = Ueberschrift, $2 = Suchmuster
 logs() {
     trenner
-    printf '\033[1mLetzte KI-Fehler im Journal\033[0m\n'
+    printf '\033[1m%s\033[0m\n' "${1:-Letzte KI-Fehler im Journal}"
+    muster="${2:-KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate}"
     if ! command -v journalctl >/dev/null 2>&1; then
         echo "  (journalctl gibt es hier nicht)"
         return
@@ -31,16 +34,19 @@ logs() {
     # und was dauerhaft in die .env gehoert ("wechsle selbst auf ...", "Signatur
     # ... funktioniert"). Ohne sie verschweigt der Arzt die Heilung.
     treffer="$(journalctl -u flobot --since -6h --no-pager 2>/dev/null \
-        | grep -E "KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate" \
+        | grep -E "$muster" \
         | tail -8)"
     if [ -n "$treffer" ]; then
         # journalctl setzt FUENF Felder davor: "Aug 19 14:25:20 Ubuntu python3[8422]:"
         # - mit vier blieb "python3[8422]:" stehen und frass die Zeilenbreite.
         echo "$treffer" | sed 's/^[^ ]* [^ ]* [^ ]* [^ ]* [^ ]* //' | cut -c1-200
     else
-        echo "  Keine KI-Fehler in den letzten 6 Stunden."
+        echo "  Nichts dazu in den letzten 6 Stunden."
     fi
 }
+
+# Musik: die Zeilen, an denen man einen Abspiel-Fehler wirklich erkennt.
+MUSIKMUSTER="Spotify|Musik-Feature|yt-dlp|403 Forbidden|DRM|brach nach|bricht immer wieder|Track konnte nicht|Voice-Connect|Stream-Adresse"
 
 case "${1:-}" in
     n|neu)
@@ -50,6 +56,10 @@ case "${1:-}" in
         ;;
     l|log)
         logs
+        ;;
+    m|musik)
+        "$PY" tools_musik_check.py
+        logs "Letzte Musik-Meldungen im Journal" "$MUSIKMUSTER"
         ;;
     r|neustart)
         systemctl restart flobot && echo "flobot neu gestartet." && sleep 3 && logs
@@ -71,6 +81,6 @@ case "${1:-}" in
         "$PY" tools_ki_check.py
         logs
         trenner
-        echo "k n = neu holen | k l = Log | k r = Neustart"
+        echo "k n = neu holen | k l = Log | k m = Musik | k r = Neustart"
         ;;
 esac

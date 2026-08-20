@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import re
+import shlex
 import shutil
 import time
 import urllib.parse
@@ -530,6 +531,36 @@ class Track:
     # seine Adressen zeitlich - eine, die lange in der Warteschlange lag, ist
     # beim Start tot. Dann spielt Flo "etwas", es kommt aber nie Ton.
     geloest_um: float = 0.0
+    # Die HTTP-Kopfzeilen, mit denen yt-dlp die Adresse geholt hat. YouTube
+    # unterschreibt eine Stream-Adresse fuer GENAU den Client, der sie angefragt
+    # hat (in der Adresse steht z. B. 'c=ANDROID_VR'). Meldet sich beim Abholen
+    # jemand anders - und ffmpeg meldet sich von Haus aus als 'Lavf/...' -,
+    # antwortet YouTube mit 403 und der Song bricht "nach 0 von 178 s" ab.
+    kopfzeilen: dict = field(default_factory=dict)
+
+    # Kopfzeilen, die ffmpeg selbst setzen muss - die durchzureichen bricht die
+    # Verbindung (Range/Host gehoeren zur Anfrage, nicht zum Client).
+    _NICHT_WEITERGEBEN = ("range", "host", "accept-encoding", "connection",
+                          "content-length")
+
+    def ffmpeg_vorspann(self):
+        """Die -user_agent/-headers-Optionen, mit denen ffmpeg die Adresse holen
+        MUSS. Leer, wenn es nichts durchzureichen gibt."""
+        if not self.kopfzeilen:
+            return ""
+        teile = []
+        rest = []
+        for name, wert in self.kopfzeilen.items():
+            if not wert or name.lower() in self._NICHT_WEITERGEBEN:
+                continue
+            if name.lower() == "user-agent":
+                teile += ["-user_agent", shlex.quote(str(wert))]
+            else:
+                rest.append(f"{name}: {wert}")
+        if rest:
+            # ffmpeg erwartet die Zeilen mit CRLF getrennt und abgeschlossen.
+            teile += ["-headers", shlex.quote("".join(f"{z}\r\n" for z in rest))]
+        return " ".join(teile)
 
 
 @dataclass
@@ -640,11 +671,15 @@ class GuildPlayer:
             # (Der Watchdog-Neustart laeuft mit keep_speed=True und zaehlt hier
             # bewusst NICHT zurueck, sonst koennte er sich ewig selbst verlaengern.)
             self._neustart_versuche = 0
-        before = _FFMPEG_BEFORE
+        # Reihenfolge der Eingangs-Optionen (alles VOR '-i', sonst ignoriert
+        # ffmpeg sie): erst die Client-Kennung, dann der Seek, dann der Rest.
+        vorne = [track.ffmpeg_vorspann()]
         if seek > 0.5:
             # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
             # weiterlaeuft statt von vorne (Tempo/Reverb aendern nur den Klang, nicht die Pos.)
-            before = f"-ss {seek:.2f} {_FFMPEG_BEFORE}"
+            vorne.append(f"-ss {seek:.2f}")
+        vorne.append(_FFMPEG_BEFORE)
+        before = " ".join(t for t in vorne if t)
         opts = _FFMPEG_OPTS
         af = _build_audio_filter(self.speed)
         if af is not None:
@@ -1700,6 +1735,7 @@ class Music(FeatureBasis):
             duration=info.get("duration"),
             thumbnail=info.get("thumbnail") or "",
             geloest_um=time.monotonic(),
+            kopfzeilen=dict(info.get("http_headers") or {}),
         )
 
     def _norm_match(self, s):
@@ -2961,10 +2997,18 @@ class Music(FeatureBasis):
                                        color=_COL_ERR)
                 # Besten YouTube-Treffer per Dauer/Titel waehlen (statt blind den
                 # ersten - der ist bei Spotify-Songs oft ein Sped-Up/Loop/Cover).
-                track = await self._resolve_input(f"ytsearch1:{meta['query']}", {
-                    "query": meta["query"], "dur": meta.get("dur"),
-                    "title": meta["name"], "artist": meta.get("artist", ""),
-                })
+                hinweis = {"query": meta["query"], "dur": meta.get("dur"),
+                           "title": meta["name"], "artist": meta.get("artist", "")}
+                track = await self._resolve_input(f"ytsearch1:{meta['query']}", hinweis)
+                # Womit sich dieser Track SPAETER erneuern laesst - und das ist
+                # NICHT der Spotify-Link. yt-dlp kann Spotify gar nicht oeffnen
+                # ("[DRM] The requested site is known to use DRM protection"),
+                # es kennt nur die YouTube-Suche dahinter. Ohne diese zwei Zeilen
+                # schrieb der Block weiter unten die Spotify-Adresse als Quelle
+                # ein, und jede Wiederbelebung eines abgebrochenen Spotify-Songs
+                # war von vornherein chancenlos.
+                track.query = f"ytsearch1:{meta['query']}"
+                track.match_hint = hinweis
             elif action == "play":
                 # Kurzlinks aus der SoundCloud-App (on.soundcloud.com) koennen
                 # auch auf ein SET zeigen - das sieht man erst NACH dem
