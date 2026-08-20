@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 228 Tests
+python3 test_games_logic.py    # 235 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -172,11 +172,21 @@ nachplapperte.
 Beim Start prüft Flo einmal wirklich nach (`ai.selbsttest()`). Vorher hing die
 Meldung „KI-Feature aktiv" allein daran, dass ein Schlüssel in der `.env` stand.
 
+**Groq mistet aus.** Am 17.06.2026 wurden `llama-3.3-70b-versatile` und
+`llama-3.1-8b-instant` im Frei- und Entwicklertarif abgeschaltet — genau das war
+die Ursache eines Ausfalls hier. Die Vorgaben zeigen deshalb auf Groqs eigene
+Nachfolger-Empfehlungen: `openai/gpt-oss-120b` fürs Chatten (kann Werkzeuge, das
+braucht `ask_flo` fürs Wetter) und `qwen/qwen3.6-27b` fürs Bild-Lesen (gpt-oss
+kann keine Bilder; qwen3.6 nimmt Text, Bild und Video, max. 5 Bilder und 20 MB
+pro Anfrage). Passiert es wieder, wechselt Flo selbst und schreibt die neue
+Zeile für die `.env` ins Log.
+
 | `.env` | was |
 |---|---|
 | `LLM_API_KEY` | Schlüssel beim Anbieter (Groq) |
 | `LLM_BASE_URL` | Standard `https://api.groq.com/openai/v1` |
-| `LLM_MODEL`, `LLM_VISION_MODEL` | Chat- und Bild-Modell |
+| `LLM_MODEL` | Chat-Modell (Standard `openai/gpt-oss-120b`) |
+| `LLM_VISION_MODEL` | Bild-Modell (Standard `qwen/qwen3.6-27b`) |
 | `LLM_USER_AGENT` | Client-Signatur — nur nötig, wenn Cloudflare blockt |
 | `LLM_TEMPERATURE` | 0 = brav, ~1.2 = chaotisch (Standard 0.9) |
 

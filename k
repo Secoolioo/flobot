@@ -18,11 +18,18 @@ PY="venv/bin/python"
 
 trenner() { printf '\033[2m%s\033[0m\n' "----------------------------------------"; }
 
+# Die Log-Zeilen, an denen man einen KI-Fehler ODER eine Selbstheilung erkennt.
+# "KI:" MUSS drinbleiben: das sind die Zeilen, die sagen was Flo selbst repariert
+# hat und was dauerhaft in die .env gehoert. Ein Test in test_games_logic.py
+# haelt diese Liste gegen alle log-Meldungen in ai.py, damit hier nichts
+# durchfaellt, wenn dort eine neue Zeile dazukommt.
+KIMUSTER="KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate"
+
 # $1 = Ueberschrift, $2 = Suchmuster
 logs() {
     trenner
     printf '\033[1m%s\033[0m\n' "${1:-Letzte KI-Fehler im Journal}"
-    muster="${2:-KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate}"
+    muster="${2:-$KIMUSTER}"
     if ! command -v journalctl >/dev/null 2>&1; then
         echo "  (journalctl gibt es hier nicht)"
         return

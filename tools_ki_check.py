@@ -29,8 +29,8 @@ except ImportError:  # pragma: no cover - dann eben ohne .env
 # Muss zu ai.py passen. Bewusst hier kopiert, damit das Skript auch dann laeuft,
 # wenn ai.py selbst kaputt ist (Importfehler).
 STANDARD_BASE = "https://api.groq.com/openai/v1"
-STANDARD_MODELL = "llama-3.3-70b-versatile"
-STANDARD_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+STANDARD_MODELL = "openai/gpt-oss-120b"
+STANDARD_VISION = "qwen/qwen3.6-27b"
 
 TIMEOUT = 20
 

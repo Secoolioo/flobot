@@ -62,9 +62,14 @@ class FloAI:
     # --- Standardwerte (per .env ueberschreibbar) ----------------------------
     # Groq hat einen kostenlosen Tarif (mit Ratenlimits, ohne Kreditkarte).
     DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
-    DEFAULT_MODEL = "llama-3.3-70b-versatile"
-    # Bild-Lesen (Vision): multimodales Groq-Modell, gleicher kostenloser Key.
-    DEFAULT_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+    # Groq hat llama-3.3-70b-versatile und llama-3.1-8b-instant am 17.06.2026
+    # ausgemustert (Frei- und Entwicklertarif) und empfiehlt selbst diese zwei
+    # als Nachfolger. gpt-oss-120b kann Werkzeug-Aufrufe - das BRAUCHT ask_flo,
+    # es reicht 'tools' mit (Wetter).
+    DEFAULT_MODEL = "openai/gpt-oss-120b"
+    # Bild-Lesen (Vision): gpt-oss kann KEINE Bilder, qwen3.6 ist multimodal
+    # (Text, Bild, Video; hoechstens 5 Bilder und 20 MB je Anfrage).
+    DEFAULT_VISION_MODEL = "qwen/qwen3.6-27b"
 
     MAX_STEPS = 5          # max. Tool-Runden pro Frage (Schutz vor Endlosschleifen)
     MAX_TOKENS = 800       # Antwortlaenge (Discord erlaubt max. 2000 Zeichen)
@@ -121,7 +126,10 @@ class FloAI:
     # ist die Notheilung. Findet sie nichts, wird die ganze Liste geloggt.
     _SIEHT_BILDER = ("scout", "maverick", "vision", "-vl", "vl-", "vl_",
                      "multimodal", "omni", "llava", "pixtral", "internvl",
-                     "minicpm-v", "moondream", "idefics", "image", "bild")
+                     "minicpm-v", "moondream", "idefics", "image", "bild",
+                     # Nachgeschlagen, nicht geraten: qwen3.6/3.8-27b sind
+                     # multimodal, heissen aber weder 'vision' noch '-vl'.
+                     "qwen3.6", "qwen3.8")
 
     # Open-Meteo liefert WMO-Wettercodes; hier in deutschen Klartext uebersetzt.
     WMO_CODES = {

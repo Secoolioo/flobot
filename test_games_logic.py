@@ -10998,8 +10998,10 @@ def test_ki_der_arzt_verschluckt_keine_meldung():
     hier = os.path.dirname(os.path.abspath(ai.__file__))
     arzt = open(os.path.join(hier, "k"), encoding="utf-8").read()
 
-    muster = re.search(r'grep -E "([^"]+)"', arzt)
-    assert muster, "in 'k' steht kein grep -E mehr"
+    # Das Muster steht in 'k' als KIMUSTER=... (der grep nimmt es ueber eine
+    # Variable auf, deshalb hier die Zuweisung lesen und nicht den grep).
+    muster = re.search(r'KIMUSTER="([^"]+)"', arzt)
+    assert muster, "in 'k' gibt es kein KIMUSTER mehr"
     filter_re = re.compile(muster.group(1))
 
     quelle = open(ai.__file__, encoding="utf-8").read()
@@ -11031,6 +11033,14 @@ def test_ki_findet_bildmodelle_auch_anderer_familien():
             (["llava-1.6-34b", "gpt-oss-120b"], "llava-1.6-34b"),
             (["qwen2-vl-72b", "gpt-oss-120b"], "qwen2-vl-72b")):
         assert flo._modell_waehlen(liste, True) == erwartet, liste
+    # Die ECHTE Groq-Liste (nachgeschlagen, nicht erfunden): gpt-oss kann keine
+    # Bilder, qwen3.6 ist multimodal - heisst aber weder "vision" noch "-vl".
+    # Genau daran waere die Heilung sonst vorbeigelaufen.
+    groq = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b",
+            "whisper-large-v3", "meta-llama/llama-guard-4-12b"]
+    assert flo._modell_waehlen(groq, False) == "openai/gpt-oss-120b"
+    assert flo._modell_waehlen(groq, True) == "qwen/qwen3.6-27b"
+
     # Ein reines Textmodell darf NICHT als Bild-Ersatz durchgehen - es wuerde
     # das Bild-Format ablehnen. Lieber ehrlich nichts finden.
     assert flo._modell_waehlen(["gpt-oss-120b", "whisper-large-v3"], True) == ""
@@ -11073,6 +11083,12 @@ def test_ki_vorgaben_von_bot_und_arzt_sind_gleich():
     assert tools_ki_check.STANDARD_BASE == ai.FloAI.DEFAULT_BASE_URL
     assert tools_ki_check.STANDARD_MODELL == ai.FloAI.DEFAULT_MODEL
     assert tools_ki_check.STANDARD_VISION == ai.FloAI.DEFAULT_VISION_MODEL
+    # Und die Vorgaben duerfen nicht auf ausgemusterte Modelle zeigen. Groq hat
+    # die beiden am 17.06.2026 abgeschaltet - das war die Ursache des Ausfalls.
+    for tot in ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+        assert tot != ai.FloAI.DEFAULT_MODEL, f"{tot} ist bei Groq abgeschaltet"
+    # Das Chat-Modell MUSS Werkzeuge koennen - ask_flo reicht 'tools' mit.
+    assert "tools=[self.WEATHER_TOOL]" in inspect.getsource(ai.FloAI.ask_flo)
 
 
 def _als_coro(wert):
