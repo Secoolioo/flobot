@@ -6387,6 +6387,15 @@ def test_webpanel_nur_fuer_den_besitzer():
         wp = webpanel.WebPanel()
         wp._enabled = True
         wp._user, wp._pass, wp._auth = "u", "p", auth
+        # /api/update fuehrt ein ECHTES 'git pull --ff-only' im Bot-Verzeichnis
+        # aus. Ohne dieses Double zieht ein Testlauf auf dem Server also Code -
+        # und die README verspricht ausdruecklich, dass ein Testlauf dort
+        # ungefaehrlich ist. Nachgewiesen an der Zeile
+        # "Panel-Update: git pull ok (schon aktuell)" im Testprotokoll.
+        async def kein_git(_request):
+            return webpanel.web.json_response(
+                {"ok": True, "changed": False, "log": "(Test-Double)"})
+        wp._update_lauf = kein_git
         async with TestClient(TestServer(wp._build_app())) as c:
             cfg = await (await c.get("/api/config")).json()
             codes = {}
@@ -6427,6 +6436,33 @@ def test_webpanel_nur_fuer_den_besitzer():
     # Die Oberflaeche fragt /api/config, bevor sie den Anmeldebildschirm zeigt.
     html = open("webpanel.html", encoding="utf-8").read()
     assert "/api/config" in html and "S.authNoetig" in html
+
+
+def test_kein_test_loest_ein_echtes_git_aus():
+    """Ein Testlauf darf das Repo NICHT anfassen.
+
+    Gefunden im Audit und am Protokoll belegt: ein Test schickte
+    POST /api/update, und dahinter laeuft ein echtes 'git pull --ff-only' im
+    Bot-Verzeichnis ("Panel-Update: git pull ok (schon aktuell)" stand im
+    Testprotokoll). Auf dem Server haette ein Testlauf damit Code gezogen -
+    waehrend die README ausdruecklich verspricht, dass er ungefaehrlich ist.
+
+    Deshalb hier ein Riegel: wer /api/update im Test anspricht, muss vorher
+    _update_lauf ersetzen."""
+    import ast
+    baum = ast.parse(open(__file__, encoding="utf-8").read())
+    schuldige = []
+    for knoten in ast.walk(baum):
+        if not isinstance(knoten, ast.FunctionDef) or not knoten.name.startswith("test_"):
+            continue
+        quelle = ast.unparse(knoten)
+        if "/api/update" not in quelle:
+            continue
+        if "_update_lauf" not in quelle:
+            schuldige.append(knoten.name)
+    assert not schuldige, (
+        f"Diese Tests loesen ein echtes git pull aus: {schuldige}. "
+        f"Vorher wp._update_lauf durch ein Double ersetzen.")
 
 
 def test_webpanel_nimmt_keine_fremden_formulare_an():
@@ -11977,7 +12013,7 @@ def test_tts_nutzertext_ist_niemals_eine_option():
 
         # Erst pruefen, dass das Double ueberhaupt lief - sonst beweist der
         # naechste assert nichts.
-        assert pfad is not None or True, "Double wurde nicht ausgefuehrt"
+        assert pfad is not None, "Double wurde nicht ausgefuehrt"
 
         inhalt = open(opfer, encoding="utf-8", errors="replace").read()
         assert inhalt == '{"wichtige": "Wirtschaftsdaten"}', (
