@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 256 Tests
+python3 test_games_logic.py    # 264 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -868,6 +868,7 @@ jeweils mit Kommentar, warum der Wert so gewählt ist.
 ---
 
 ## Weitere Dokumente
+| `AUDIT.md` | Vollständige Durchsicht der Codebase: was gefunden, was behoben, was widerlegt |
 
 | Datei | Inhalt |
 |---|---|
