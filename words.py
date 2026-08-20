@@ -89,7 +89,13 @@ class Words(FeatureBasis):
 
         self._dirty = False
         self._flush_task = None
-        self._backfill_running = False
+        # Set statt bool: bot.py startet den Backfill JE SERVER gleichzeitig.
+        # Mit einem prozessweiten Flag gewann der erste, alle anderen stiegen
+        # sofort wieder aus - und weil auch scan['done'] global war, bekam
+        # Server 2 seinen Verlauf NIE. Die beiden anderen Nutzer des Flags
+        # pruefen nur auf Wahrheitswert ('laeuft ueberhaupt einer?') und
+        # funktionieren mit dem Set unveraendert weiter.
+        self._backfill_running = set()
         # Waehrend json.dumps im Thread laeuft, darf NIEMAND das words-dict anfassen
         # (sonst 'dictionary changed size during iteration'). Neue Nachrichten landen
         # solange im _backlog und werden direkt nach dem Speichern nachgezaehlt.
@@ -344,7 +350,14 @@ class Words(FeatureBasis):
         """True, solange der einmalige History-Einleser noch nicht durch ist."""
         if not self._enabled or self._store is None or not BACKFILL:
             return False
-        return not self._store.data.get("scan", {}).get("done", False)
+        # Frueher hing das am GLOBALEN scan['done'] - damit war fuer bot.py
+        # alles erledigt, sobald EIN Server durch war, und weitere Server
+        # wurden nie angestossen. Ob ein bestimmter Server noch dran ist,
+        # entscheidet backfill() selbst (und steigt sofort aus, wenn nicht).
+        scan = self._store.data.get("scan", {})
+        if scan.get("fertig"):
+            return True                      # es gibt Server-Stand -> je Server pruefen
+        return not scan.get("done", False)
 
     async def backfill(self, guild):
         """Liest einmalig die komplette Channel-History ein (nur beim ersten Start;
@@ -354,12 +367,21 @@ class Words(FeatureBasis):
         Doppel-Zaehl-Schutz: beim ersten Start wird ein Zeitstempel-Snowflake
         ('before') eingefroren - der Backfill liest nur Nachrichten DAVOR, das
         Live-Zaehlen uebernimmt alles danach."""
-        if not self._enabled or self._store is None or not BACKFILL or self._backfill_running:
+        gid = str(int(getattr(guild, "id", 0) or 0))
+        if (not self._enabled or self._store is None or not BACKFILL
+                or gid in self._backfill_running):
             return
         scan = self._store.data.setdefault("scan", {"before": 0, "done": False, "channels": {}})
-        if scan.get("done"):
+        # 'fertig' je Server. Das alte, GLOBALE scan['done'] bleibt als Anzeige
+        # stehen, entscheidet hier aber nichts mehr - sonst sperrt der erste
+        # fertige Server alle anderen aus. Eine Migration braucht es nicht: die
+        # Checkpoints in scan['channels'] stehen je KANAL, und Kanal-IDs sind
+        # ueber Server hinweg eindeutig. Ein zweiter Lauf ueberspringt also
+        # alles, was schon 'done' ist - er kostet nichts.
+        fertig = scan.setdefault("fertig", {})
+        if fertig.get(gid):
             return
-        self._backfill_running = True
+        self._backfill_running.add(gid)
         try:
             if not scan.get("before"):   # Sicherheitsnetz - setup() stempelt normal schon
                 scan["before"] = discord.utils.time_snowflake(discord.utils.utcnow())
@@ -405,7 +427,8 @@ class Words(FeatureBasis):
                                 channel.name, exc)
                     await self._save_store()
             if all_ok:
-                scan["done"] = True
+                fertig[gid] = True
+                scan["done"] = True          # nur noch Anzeige (siehe oben)
                 await self._save_store()
                 log.info("Wort-Zaehler: Backfill fertig - %d Nachrichten gelesen, "
                          "%d Woerter im Index.", total,
@@ -413,7 +436,7 @@ class Words(FeatureBasis):
         except Exception:
             log.exception("Wort-Zaehler: Backfill-Fehler (naechster Start macht weiter)")
         finally:
-            self._backfill_running = False
+            self._backfill_running.discard(gid)
 
     # --- Befehle ----------------------------------------------------------------
     async def _send(self, message, *, embed=None, file=None):

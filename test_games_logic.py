@@ -8372,6 +8372,60 @@ def test_cmdnorm_laesst_alltag_und_vornamen_in_ruhe():
                                                      cmdnorm.normalize(falsch))
 
 
+def test_backfill_laeuft_fuer_jeden_server():
+    """bot.py startet den Verlauf-Nachbau JE SERVER gleichzeitig
+    (bot.py:2042-2044). _backfill_running war aber ein prozessweites Bool: der
+    erste Server gewann, alle anderen stiegen sofort wieder aus. Und weil auch
+    scan['done'] global war, bekam Server 2 seinen Verlauf NIE - der Kommentar
+    im Code behauptete sogar, es liefe sauber je Guild."""
+    import words
+    w = words.instance
+    alt_zustand = (w._enabled, w._store, w._backfill_running, w._save_store,
+                   w._buch, words.BACKFILL)
+    w._enabled = True
+    words.BACKFILL = True
+    w._store = SimpleNamespace(
+        data={"scan": {"before": 1, "done": False, "channels": {}}, "guilds": {}},
+        save=lambda: None)
+
+    async def save():
+        pass
+
+    w._save_store = save
+    w._buch = lambda _gid: {"words": {}}
+    w._backfill_running = set()
+    gelaufen = []
+
+    def guild(gid, kanal_id):
+        perms = SimpleNamespace(view_channel=True, read_message_history=True)
+        kanal = SimpleNamespace(id=kanal_id, name=f"c{kanal_id}",
+                                permissions_for=lambda _m: perms)
+
+        async def history(**_k):
+            gelaufen.append(gid)
+            return
+            yield                                  # macht daraus einen Generator
+
+        kanal.history = history
+        return SimpleNamespace(id=gid, me=SimpleNamespace(), text_channels=[kanal])
+
+    async def beide():
+        await asyncio.gather(w.backfill(guild(1, 11)), w.backfill(guild(2, 22)))
+
+    try:
+        asyncio.run(beide())
+        assert sorted(set(gelaufen)) == [1, 2], (
+            f"nur Server {sorted(set(gelaufen))} hat seinen Verlauf bekommen")
+        assert w._store.data["scan"]["fertig"] == {"1": True, "2": True}
+        # Beim naechsten Start ist nichts mehr zu tun.
+        gelaufen.clear()
+        asyncio.run(beide())
+        assert not gelaufen, "Backfill laeuft unnoetig erneut"
+    finally:
+        (w._enabled, w._store, w._backfill_running, w._save_store,
+         w._buch, words.BACKFILL) = alt_zustand
+
+
 def test_giveaway_panel_behaelt_seinen_loeschschutz():
     """_protect gibt beim Schuetzen das VORIGE Panel desselben Slots frei - so
     ist es gedacht ("es kann nur EINS je Slot aktuell sein"). Aber ALLE

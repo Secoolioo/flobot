@@ -18,8 +18,8 @@ Stand: 2026-08-20 · ~54.000 Zeilen · 207 Prüfer-Agenten
 | davon **echt offen** | 35 |
 | davon **bereits behoben** | 10 |
 | davon Fehllesung / kein Fehler / unerreichbar | 5 / 1 / 1 |
-| Behoben in diesem Durchgang | **21** |
-| Tests | 235 → **264** |
+| Behoben in diesem Durchgang | **24** |
+| Tests | 235 → **266** |
 
 ### Das Wichtigste
 
@@ -51,7 +51,7 @@ fragt einmal nach, `lösch @wer` nicht.
 
 | Werkzeug | Ergebnis |
 |---|---|
-| `python3 test_games_logic.py` | **264 Tests grün** |
+| `python3 test_games_logic.py` | **266 Tests grün** |
 | `python3 test_logic.py` | 6 Tests grün |
 | `python3 bot.py --check` | alle Module laden, kein Traceback |
 | `ruff` (F, E9, B, ASYNC, PLE) | 96 Meldungen → analysiert, §3 |
@@ -78,6 +78,8 @@ wurden für diesen Audit nachinstalliert.
 | High | `store.py:61` | Typ-Reset warf den alten Inhalt weg, ohne ihn zu sichern | ✅ Kopie `.kaputt-<zeit>` + Reproduktion |
 | High | `merchant.py:489` | Göttlich-Titel gegen schlechteren tauschbar, unwiderruflich | ✅ beidseitig gedeckelt + Test |
 | High | `games.py:488` | `defer()` lag außerhalb des `try` → beide Einsätze weg | ✅ ins `try` gezogen |
+| High | `giveaway.py:569` | jede Assistenten-Frage nahm dem **laufenden Panel** den Löschschutz | ✅ eigener Slot + Test |
+| High | `words.py:92` | Verlauf-Nachbau lief nur für **einen** Server | ✅ je Server + Test |
 | High | `test_games_logic.py` | Testlauf löste ein **echtes `git pull`** aus | ✅ Double + AST-Riegel |
 | Medium | `cmdnorm/media` | 6 Alltagswörter lösten **bezahlte** Bildaufträge aus | ✅ Stopwords + Muster eingegrenzt |
 | Medium | `cmdnorm.py:197` | `Flo aus welchem Grund…` stoppte die Musik | ✅ neuer Topf `NUR_ALLEIN` |
@@ -118,8 +120,6 @@ keiner davon verursacht Datenverlust oder Coin-Verlust:
 | Bereich | Was | Warum nicht sofort |
 |---|---|---|
 | `floaktie.py:1539` | Voice-Dividende umgeht die Tageskappe für Voice-Coins | Wirtschafts-Balance, kein Verlust — braucht eine Entscheidung, ob die Kappe überhaupt gelten soll |
-| `words.py:92` | Backfill-Zustand ist prozessweit statt je Server | betrifft nur den einmaligen Verlauf-Nachbau auf Server 2+ |
-| `giveaway.py:569` | Giveaway-Panel verliert seinen Löschschutz an die nächste Nachricht | Panel kann weggeräumt werden, Coins bleiben hinterlegt |
 | `casino.py:3155` | Blackjack-Deal: schlägt der Edit fehl, bleibt die Runde offen | Text-Weg (`flo karte`) spielt sie zu Ende; Geld ist nicht weg |
 | `music.py:691` | `start()` schreibt den Zustand vor `voice.play()` | betrifft nur den Fehlerfall beim Verbindungsaufbau |
 | `admin.py:91/318` | @-Erwähnung als Ziel funktioniert bei keinem Admin-Befehl | nur Besitzer-Befehle, ID-Form funktioniert |
