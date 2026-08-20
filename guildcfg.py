@@ -56,8 +56,10 @@ class Einstellung:
     env: str = ""             # .env-Variable, die den Standard vorgibt
     hinweis: str = ""
     gruppe: str = "Allgemein"
-    minimum: float = None
-    maximum: float = None
+    # None = keine Grenze. Die Pruefung in setzen() fragt darauf ab
+    # (guildcfg.py:207), die Deklaration sagt es jetzt auch.
+    minimum: "float | None" = None
+    maximum: "float | None" = None
     # Standard nur auf dem Hauptserver AN (z. B. Server-Icon, Aktien-Zaehlung).
     nur_haupt: bool = False
 
