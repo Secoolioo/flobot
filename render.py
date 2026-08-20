@@ -1000,6 +1000,39 @@ class Render:
     # === Quote-Meme ("Flo quote") ===========================================
     _RESAMPLE = getattr(Image, "Resampling", Image).LANCZOS
 
+    # Hoechstens so viele Pixel nimmt Flo von einem fremden Bild an.
+    #
+    # Der Groessendeckel in food.py zaehlt BYTES, und das ist die falsche
+    # Groesse: ein PNG mit einer Flaeche ist winzig gepackt und riesig entpackt.
+    # Nachgemessen mit 9450x9450 (89,3 Mio Pixel, 276 kB auf der Platte):
+    # 5,9 Sekunden Rechenzeit und +341 MB Spitzenspeicher in EINEM Aufruf. Auf
+    # einem 1-2-GB-Server holt der OOM-Killer dafuer den ganzen Dienst - Musik,
+    # laufende Casino-Runden, Giveaways. Ausgeloest von jedem, der ein Foto
+    # postet. PILs eigene Bremse hilft nicht: sie WARNT ab 89.478.485 Pixeln und
+    # wirft erst beim Doppelten, dazwischen liegt genau dieser Fall.
+    MAX_PIXEL = 40_000_000
+
+    @classmethod
+    def _oeffne_bild(cls, daten, w, h):
+        """Oeffnet ein fremdes Bild sicher und passend zur Zielgroesse.
+
+        Gibt None zurueck, wenn es zu gross oder kaputt ist. Image.open liest nur
+        den Kopf - die Pixel entstehen erst beim Zugriff. Genau dazwischen wird
+        hier geprueft."""
+        try:
+            im = Image.open(io.BytesIO(daten))
+            if im.width * im.height > cls.MAX_PIXEL:
+                return None
+            # JPEG kann direkt kleiner dekodieren. Kostet nichts und spart bei
+            # grossen Handyfotos den Grossteil von Zeit und Speicher.
+            try:
+                im.draft("RGB", (max(1, w * 2), max(1, h * 2)))
+            except Exception:  # noqa: BLE001 - kann nicht jedes Format
+                pass
+            return im
+        except Exception:  # noqa: BLE001 - kaputtes Bild ist kein Weltuntergang
+            return None
+
 
     # Pruefflaeche fuer den Glyph-Test. 48x48 bei (6,6) war ZU KLEIN: der
     # Unterstrich einer 40-px-Schrift landet bei y=51..55 und fiel damit ganz aus
@@ -1151,9 +1184,11 @@ class Render:
     # === Ernaehrungs-Karte ("Kalorien-Channel") ===============================
     def _round_img(self, data, w, h, radius = 0):
         """Bild-Bytes -> RGBA, auf w x h gefittet, optional mit runden Ecken."""
+        roh = self._oeffne_bild(data, w, h)
+        if roh is None:
+            return None
         try:
-            im = ImageOps.fit(Image.open(io.BytesIO(data)).convert("RGB"), (w, h),
-                              method=self._RESAMPLE)
+            im = ImageOps.fit(roh.convert("RGB"), (w, h), method=self._RESAMPLE)
         except Exception:  # noqa: BLE001
             return None
         out = im.convert("RGBA")

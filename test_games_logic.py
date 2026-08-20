@@ -11444,6 +11444,55 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_grosses_bild_reisst_den_bot_nicht_ins_oom():
+    """Der Groessendeckel in food.py:142 zaehlt BYTES - und das ist die falsche
+    Groesse. Ein PNG mit einer einfarbigen Flaeche ist winzig gepackt und
+    riesig entpackt.
+
+    Nachgemessen mit 9450x9450 (89,3 Mio Pixel, 276 kB auf der Platte):
+    5,9 Sekunden und +341 MB Spitzenspeicher in EINEM Aufruf. Auf einem
+    1-2-GB-Server holt der OOM-Killer dafuer den ganzen Dienst - Musik,
+    laufende Casino-Runden, Giveaways. Ausgeloest von jedem, der ein Foto in
+    den Kalorien-Kanal postet.
+
+    PILs eigene Bremse hilft nicht: sie WARNT ab 89.478.485 Pixeln und wirft
+    erst beim Doppelten - der Fall liegt genau dazwischen."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return
+    import warnings
+    import render
+
+    def bild_bytes(breite, hoehe):
+        roh = Image.new("RGB", (breite, hoehe), (7, 7, 7))
+        puffer = io.BytesIO()
+        roh.save(puffer, "PNG", optimize=True)
+        return puffer.getvalue()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")       # DecompressionBombWarning
+        # Knapp UNTER PILs eigener Fehlergrenze - genau die Luecke.
+        bombe = bild_bytes(9450, 9450)
+        assert len(bombe) < 12_000_000, (
+            "Die Bombe waere schon am Byte-Deckel in food.py haengengeblieben - "
+            "dann prueft dieser Test nicht mehr, was er soll.")
+        start = time.time()
+        assert render.instance._round_img(bombe, 900, 600, radius=24) is None, (
+            "Ein Bild mit 89 Mio Pixeln wird immer noch verarbeitet")
+        assert time.time() - start < 2.0, "Die Ablehnung dauert zu lange"
+
+        # Und ein grosses, aber ECHTES Handyfoto muss weiter durchgehen -
+        # sonst haetten wir das Feature kaputtgemacht statt es zu schuetzen.
+        echt = render.instance._round_img(bild_bytes(4000, 3000), 900, 600, radius=24)
+        assert echt is not None, "12-Megapixel-Foto wird faelschlich abgelehnt"
+        assert echt.size == (900, 600), echt.size
+
+    # Der Deckel muss ueber der Groesse echter Kameras liegen, aber weit unter
+    # dem, was den Speicher sprengt.
+    assert 20_000_000 <= render.Render.MAX_PIXEL <= 60_000_000, render.Render.MAX_PIXEL
+
+
 def test_casino_rueckgaben_werden_nicht_besteuert():
     """Wer Schulden hat, gibt von JEDER Einnahme 20 % an seine Glaeubiger ab.
     Eine Rueckgabe ist aber keine Einnahme: Baccarat-Push, Timeout auf Stufe 0,
