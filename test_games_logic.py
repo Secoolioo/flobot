@@ -11444,6 +11444,51 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_casino_rueckgaben_werden_nicht_besteuert():
+    """Wer Schulden hat, gibt von JEDER Einnahme 20 % an seine Glaeubiger ab.
+    Eine Rueckgabe ist aber keine Einnahme: Baccarat-Push, Timeout auf Stufe 0,
+    "Anzeige fehlgeschlagen - Einsatz zurueck". Ohne das Flag bekam der
+    Schuldner von 1.000 zurueckgegebenen Coins nur 800 - obwohl er weder
+    gewonnen noch verloren hatte.
+
+    Das Flag rueckgabe=True gibt es seit langem und ist in casino.py:155
+    ausdruecklich dafuer dokumentiert - es wurde an sieben Stellen nur nicht
+    benutzt."""
+    import schulden
+    economy.setup()
+    schulden.setup()
+    casino.setup()
+    schuldner, glaeubiger = 660011, 660022
+    economy.add_coins(schuldner, 50_000)
+    economy.add_coins(glaeubiger, 1_000)
+    schulden.instance.buch.anlegen(glaeubiger, schuldner, 20_000, grund="Test")
+
+    vorher = economy.get_coins(schuldner)
+    casino._auszahlen(schuldner, 1_000, "test", rueckgabe=True)
+    mit_flag = economy.get_coins(schuldner) - vorher
+    vorher = economy.get_coins(schuldner)
+    casino._auszahlen(schuldner, 1_000, "test")
+    ohne_flag = economy.get_coins(schuldner) - vorher
+
+    assert mit_flag == 1_000, f"Rueckgabe kam nicht voll an: {mit_flag}"
+    assert ohne_flag < 1_000, (
+        "Die Tilgung greift gar nicht mehr - dann ist dieser Test wertlos "
+        "geworden und muss angepasst werden, nicht das Flag entfernt.")
+
+    # --- Die Regel, damit es nicht wieder passiert -------------------------
+    # In casino.py ist die Rueckgabe des Einsatzes IMMER daran zu erkennen, dass
+    # das Ergebnis wieder nach 'bet' geht: "bet = _auszahlen(uid, bet)". Genau
+    # diese Form muss das Flag tragen.
+    quelle = open("casino.py", encoding="utf-8").read()
+    fehlt = []
+    for treffer in re.finditer(r"^\s*bet = _auszahlen\(([^\n]*)\)", quelle, re.M):
+        if "rueckgabe" not in treffer.group(1):
+            zeile = quelle[:treffer.start()].count("\n") + 1
+            fehlt.append(f"casino.py:{zeile}  {treffer.group(0).strip()}")
+    assert not fehlt, ("Einsatz-Rueckgabe ohne rueckgabe=True - der Schuldner "
+                       "verliert davon 20 %:\n  " + "\n  ".join(fehlt))
+
+
 def test_botsicht_antwort_kommt_wirklich_raus():
     """Antworten aus der BotSicht scheiterten AUSNAHMSLOS. Der Code reichte ein
     discord.Object als 'reference' weiter, discord.py ruft darauf aber

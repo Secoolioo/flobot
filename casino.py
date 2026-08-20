@@ -588,7 +588,7 @@ class Casino(FeatureBasis):
             # Anzeige fehlgeschlagen -> Runde abbrechen und Einsatz zurueckgeben,
             # sonst waere er stumm weg (die View wurde nie sichtbar/registriert).
             view.stop()
-            bet = _auszahlen(uid, bet)
+            bet = _auszahlen(uid, bet, rueckgabe=True)
             await economy.flush()
         return HANDLED
 
@@ -986,7 +986,7 @@ class Casino(FeatureBasis):
             # Anzeige fehlgeschlagen -> Runde abbrechen, Einsatz zurueck.
             view.settled = True
             view.stop()
-            bet = _auszahlen(uid, bet)
+            bet = _auszahlen(uid, bet, rueckgabe=True)
             await economy.flush()
         return HANDLED
 
@@ -1146,7 +1146,11 @@ class Casino(FeatureBasis):
         else:
             payout = 0
         if payout:
-            payout = _auszahlen(uid, payout)
+            # Push (Unentschieden ohne Tie-Tipp) gibt nur den Einsatz zurueck -
+            # das ist KEINE Einnahme und darf die 20-%-Tilgung nicht ausloesen.
+            # Gemessen: ein Schuldner bekam von 1.000 nur 800 zurueck, obwohl er
+            # weder gewonnen noch verloren hatte.
+            payout = _auszahlen(uid, payout, "baccarat", rueckgabe=(payout == bet))
         await economy.flush()
         await self.record(uid, "baccarat", bet, payout)
         color, res_name, res_val = self._outcome(bet, payout)
@@ -1651,7 +1655,7 @@ class _MinesAgainBtn(discord.ui.Button):
             nv.stop()
             if _mines_views.get((v.channel_id, v.uid)) is nv:
                 _mines_views.pop((v.channel_id, v.uid), None)
-            bet = _auszahlen(v.uid, bet)
+            bet = _auszahlen(v.uid, bet, rueckgabe=True)
             await economy.flush()
             return
         _protect(interaction.message)
@@ -2002,7 +2006,11 @@ class _SerienView(discord.ui.View):
             self.settled = True
             wert = self._timeout_wert()
             if wert:
-                wert = _auszahlen(self.uid, wert, "mines-timeout")
+                # Ist der Wert genau der Einsatz, wurde nichts gewonnen - dann
+                # ist es eine Rueckgabe. "mines-timeout" stand NICHT im
+                # Tilgungs-Tabu, also frass die Tilgung 20 % vom Einsatz.
+                wert = _auszahlen(self.uid, wert, "mines-timeout",
+                                  rueckgabe=(wert == self.bet))
             await economy.flush()
             await record(self.uid, self.spiel, self.bet, wert)
             self._disable_all()
@@ -2388,7 +2396,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Blackjack-Formular: Anzeige fehlgeschlagen")
                 if not ended:
                     view.stop()
-                    bet = _auszahlen(uid, bet)
+                    bet = _auszahlen(uid, bet, rueckgabe=True)
                     await economy.flush()
                 return
             view.message = msg
@@ -2489,7 +2497,7 @@ class _BetModal(discord.ui.Modal):
                 log.exception("Mines-Formular: Anzeige fehlgeschlagen - Einsatz zurueck")
                 view.settled = True
                 view.stop()
-                bet = _auszahlen(uid, bet)
+                bet = _auszahlen(uid, bet, rueckgabe=True)
                 await economy.flush()
                 return
             view.message = msg
