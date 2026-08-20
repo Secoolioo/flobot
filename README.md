@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 235 Tests
+python3 test_games_logic.py    # 256 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -660,6 +660,39 @@ Buchende Knöpfe sind während der Anfrage gesperrt, damit ein Doppelklick nicht
 doppelt bucht; `/api/update` lässt nur einen `git pull` gleichzeitig zu.
 
 ---
+
+### Zugang
+
+Das Panel verlangt einen **Login** — dort werden Coins vergeben, Titel verteilt
+und der Bot neu gestartet. Das soll nur der Besitzer können.
+
+| `.env` | was |
+|---|---|
+| `WEBPANEL_USER` | Benutzername (Standard `Secoolio`) |
+| `WEBPANEL_PASS` | Passwort — **selbst setzen** |
+| `WEBPANEL_AUTH=0` | Login abschalten (nur für rein lokale Aufbauten) |
+| `WEBPANEL_HOST` | `127.0.0.1` = nur lokal erreichbar |
+
+Ist **kein** `WEBPANEL_PASS` gesetzt, würfelt Flo beim Start eines und schreibt
+es **einmal** ins Log:
+
+```
+Web-Panel: kein WEBPANEL_PASS gesetzt. Zugang fuer diesen Start -
+           Benutzer 'Secoolio', Passwort: kJ8x…
+Dauerhaft machen:  WEBPANEL_PASS=kJ8x…  in die .env
+```
+
+Ein festes Standardpasswort im Quelltext wäre das Schlimmste von beidem: es
+sieht nach Schutz aus und ist keiner. Solange nichts in der `.env` steht, gilt
+bei jedem Neustart ein neues — sichtbar mit `k l`.
+
+**Server-Einstellungen bleiben davon unberührt:** jeder Server stellt sich
+weiterhin selbst ein (`Flo einstellungen` in Discord, für alle mit
+*Server verwalten*). Das Panel ist nur der Weg des Besitzers dorthin.
+
+Zusätzlich nimmt das Panel bei verändernden Anfragen ausschließlich
+`application/json` an. Ein Browser-Formular kann das nicht senden — damit läuft
+ein `<form>` auf einer fremden Seite ins Leere, selbst wenn der Login aus ist.
 
 ## BotSicht
 

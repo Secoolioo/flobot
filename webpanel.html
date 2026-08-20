@@ -758,7 +758,14 @@ function toast(msg,type){ type=type||"ok"; var t=ce("div","toast "+type); t.inne
 /* ============ API ============ */
 function api(path,opts){ opts=opts||{}; opts.headers=opts.headers||{};
   if(S.token) opts.headers["Authorization"]="Bearer "+S.token;
-  if(opts.body){ opts.headers["Content-Type"]="application/json"; opts.body=JSON.stringify(opts.body); }
+  /* Content-Type IMMER bei veraendernden Anfragen setzen, nicht nur wenn ein
+     Body da ist: der Riegel im Panel (webpanel._guard) verlangt ihn, weil ein
+     Browser-Formular von einer fremden Seite kein application/json senden kann.
+     Ein POST ohne Body gibt es heute nicht - aber der naechste waere sonst ein
+     stiller 415, und niemand wuesste warum. */
+  var aendernd = ["POST","PUT","PATCH","DELETE"].indexOf((opts.method||"GET").toUpperCase())>=0;
+  if(aendernd) opts.headers["Content-Type"]="application/json";
+  if(opts.body){ opts.body=JSON.stringify(opts.body); }
   /* quiet: ohne Fortschrittsbalken. Die BotSicht fragt im Sekundentakt nach -
      der Balken oben wuerde sonst dauerhaft blinken. */
   var leise=!!opts.quiet; if(!leise) pgStart();

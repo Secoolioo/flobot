@@ -12,7 +12,10 @@ Features (JSON-API + schicke Single-Page-Oberflaeche webpanel.html):
   Features schalten, per Knopf aktualisieren (git pull) und neu starten
 
 SICHERHEIT - bitte lesen:
-Das Panel laeuft standardmaessig OHNE LOGIN (WEBPANEL_AUTH=0, so gewuenscht). Wer
+Das Panel verlangt standardmaessig einen LOGIN (WEBPANEL_AUTH=1): es darf nur
+der Besitzer bedienen - dort werden Coins vergeben und der Bot neu gestartet.
+Ist kein WEBPANEL_PASS gesetzt, wuerfelt Flo beim Start eines und schreibt es
+EINMAL ins Log; ein festes Standardpasswort im Quelltext waere kein Schutz. Wer
 die Adresse erreicht, kann damit alles: Coins vergeben, Ansagen im Namen des Bots
 posten, den Kurs setzen, den Bot aktualisieren und neu starten.
 
@@ -22,7 +25,8 @@ Das ist Absicht - genau dafuer ist die Ansicht da -, hebt aber den Einsatz: der
 Port gehoert NUR ins eigene Netz bzw. hinter die Firewall, niemals offen ins
 Internet. Wer das nicht sicherstellen kann, setzt WEBPANEL_AUTH=1.
 
-    WEBPANEL_AUTH=1      Login wieder verlangen (WEBPANEL_USER/WEBPANEL_PASS)
+    WEBPANEL_AUTH=0      Login abschalten (nur fuer rein lokale Aufbauten)
+    WEBPANEL_USER/PASS   Zugangsdaten fuer den Login
     WEBPANEL_HOST=127.0.0.1   nur lokal erreichbar
     WEBPANEL_ENABLED=0   Panel ganz aus
 
@@ -143,18 +147,29 @@ class WebPanel(FeatureBasis):
             log.warning("WEBPANEL_PORT=%s ist kein gueltiger Port - nehme 9123.", self._port)
             self._port = 9123
         self._user = os.getenv("WEBPANEL_USER", "Secoolio") or "Secoolio"
-        self._pass = os.getenv("WEBPANEL_PASS", "Secoolio") or "Secoolio"
-        # Login standardmaessig AUS (so gewuenscht). Mit WEBPANEL_AUTH=1 wieder an.
-        self._auth = os.getenv("WEBPANEL_AUTH", "0").strip().lower() in (
+        self._pass = os.getenv("WEBPANEL_PASS", "").strip()
+        # Login standardmaessig AN: das Panel darf ausdruecklich nur der
+        # Besitzer bedienen. Ausschalten geht bewusst weiterhin (WEBPANEL_AUTH=0),
+        # etwa fuer einen rein lokalen Aufbau.
+        self._auth = os.getenv("WEBPANEL_AUTH", "1").strip().lower() in (
             "1", "true", "yes", "on")
         self._enabled = True
         log.info("Web-Panel bereit (startet in on_ready auf %s:%d).", self._host, self._port)
         if not self._auth:
-            # Bewusst nur INFO und einzeilig: der Betrieb im eigenen Netz ohne
-            # Login ist so gewollt. Eine WARNUNG bei jedem Neustart waere blosses
-            # Genoergel - der Hinweis, wie man ihn zurueckholt, reicht.
-            log.info("Web-Panel ohne Login (WEBPANEL_AUTH=0, so eingestellt) - "
-                     "zurueckholen mit WEBPANEL_AUTH=1 in der .env.")
+            log.warning("Web-Panel OHNE Login (WEBPANEL_AUTH=0) - jeder, der "
+                        "%s:%d erreicht, kann Coins vergeben und den Bot "
+                        "neu starten.", self._host, self._port)
+        elif not self._pass:
+            # Kein Passwort gesetzt. Ein FESTES Standardpasswort waere hier das
+            # Schlimmste von beidem: es sieht nach Schutz aus und ist keiner,
+            # weil es im Quelltext steht. Also eins wuerfeln und EINMAL ins Log
+            # schreiben - der Besitzer traegt es in die .env ein, dann bleibt es.
+            self._pass = secrets.token_urlsafe(18)
+            log.warning("Web-Panel: kein WEBPANEL_PASS gesetzt. Zugang fuer "
+                        "diesen Start - Benutzer '%s', Passwort: %s",
+                        self._user, self._pass)
+            log.warning("Dauerhaft machen:  WEBPANEL_PASS=%s  in die .env "
+                        "(sonst gilt bei jedem Neustart ein neues).", self._pass)
         return True
 
     def is_enabled(self):
@@ -400,10 +415,28 @@ class WebPanel(FeatureBasis):
             return False
         return True
 
+    #: Anfragen, die etwas VERAENDERN. Nur die brauchen den Formular-Riegel.
+    _AENDERND = ("POST", "PUT", "PATCH", "DELETE")
+
     def _guard(self, request):
         if not self._valid(request):
             raise web.HTTPUnauthorized(text='{"ok":false,"error":"unauthorized"}',
                                        content_type="application/json")
+        # Riegel gegen Formulare von fremden Seiten. Das Login-Cookie ist zwar
+        # SameSite=Lax und wird bei einem fremden POST gar nicht erst
+        # mitgeschickt - aber mit WEBPANEL_AUTH=0 gibt es kein Cookie, das
+        # schuetzen koennte, und dann reicht ein
+        #     <form action="http://192.168.x.x:9123/api/user/coins"
+        #           method="post" enctype="text/plain">
+        # auf irgendeiner Seite, die der Besitzer im selben Netz oeffnet.
+        # Ein Browser-Formular kann KEIN application/json senden - genau daran
+        # ist es zu erkennen. Die Oberflaeche selbst schickt immer JSON.
+        if request.method in self._AENDERND:
+            typ = (request.headers.get("Content-Type", "") or "").split(";")[0].strip()
+            if typ.lower() != "application/json":
+                raise web.HTTPUnsupportedMediaType(
+                    text='{"ok":false,"error":"application/json erwartet"}',
+                    content_type="application/json")
 
     # --- Seiten -----------------------------------------------------------
     async def _index(self, request):

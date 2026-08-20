@@ -41,6 +41,10 @@ HANDLED = object()
 # Der Server, auf dem Flo "zu Hause" ist. Nur dort sind Sachen wie das
 # automatische Server-Icon von Haus aus an - ein frisch eingeladener Server
 # soll nicht ungefragt sein Icon getauscht bekommen.
+# Der gigachat des Heimatservers. Steht hier als Name statt als nackte Zahl
+# mitten im Katalog - und an EINER Stelle, falls er sich mal aendert.
+GIGACHAT_CHANNEL = 1453881901738889351
+
 HAUPT_GUILD = int(os.getenv("GUILD_ID", "0") or "0")
 
 
@@ -130,11 +134,18 @@ KATALOG = [
                 minimum=1, maximum=500),
 
     # --- Arbeit & Wort des Tages -----------------------------------------
-    Einstellung("wordle_channel", "Wort-des-Tages-Kanal", "channel", 0,
-                "WORDLE_CHANNEL_ID",
-                "Wohin das tägliche Wordle geht. Aus = Flo sucht sich einen "
-                "Kanal, der 'gigachat' oder 'wordle' heißt, sonst den "
-                "Ansagen-Kanal.", "Arbeit"),
+    # Standard ist der gigachat des Heimatservers - dort soll das Wort des
+    # Tages hin, ohne dass jemand erst etwas einstellen muss. Auf einem FREMDEN
+    # Server gibt es diesen Kanal nicht; arbeit.kanal_fuer faellt dann von
+    # selbst auf die Namenssuche ('gigachat', 'wordle', ...) und danach auf den
+    # Ansagen-Kanal zurueck. Ueberschreibbar per .env (WORDLE_CHANNEL_ID) und
+    # je Server ueber 'Flo einstellung wordle_channel'.
+    Einstellung("wordle_channel", "Wort-des-Tages-Kanal", "channel",
+                GIGACHAT_CHANNEL, "WORDLE_CHANNEL_ID",
+                "Wohin das tägliche Wordle geht. Standard ist der gigachat; "
+                "kennt dieser Server ihn nicht, sucht Flo einen Kanal namens "
+                "'gigachat' oder 'wordle' und nimmt sonst den Ansagen-Kanal.",
+                "Arbeit"),
     Einstellung("wordle_min_voice", "Wordle ab … Leuten im Voice", "zahl", 3, "",
                 "Flo legt das Wort des Tages erst raus, wenn so viele Leute in "
                 "einem Sprachkanal sitzen — nicht nach der Uhr. Ist an einem "

@@ -6372,10 +6372,14 @@ def test_webpanel_zeigt_aktien_aktivitaet():
         fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
 
 
-def test_webpanel_ohne_login():
-    """Das Panel laeuft standardmaessig OHNE Login (so gewuenscht) - aber der
-    Riegel muss sich mit WEBPANEL_AUTH=1 wieder einschalten lassen, und die
-    Oberflaeche muss vorher wissen, was Sache ist (/api/config)."""
+def test_webpanel_nur_fuer_den_besitzer():
+    """Im Panel werden Coins vergeben, Titel verteilt und der Bot neu gestartet -
+    das darf nur der Besitzer. Deshalb ist der Login jetzt der STANDARD.
+
+    Wichtiger als der Schalter ist aber das Passwort: ein festes
+    Standardpasswort im Quelltext waere das Schlimmste von beidem - es sieht
+    nach Schutz aus und ist keiner. Ohne WEBPANEL_PASS wuerfelt Flo deshalb
+    eins und schreibt es EINMAL ins Log."""
     import webpanel
     from aiohttp.test_utils import TestClient, TestServer
 
@@ -6392,30 +6396,72 @@ def test_webpanel_ohne_login():
                 codes[pfad] = r.status
             return cfg, codes
 
-    # Ohne Login-Pflicht: /api/config sagt das, und nichts gibt mehr 401.
+    # Mit Login (Standard) ist alles dicht.
+    cfg, codes = asyncio.run(lauf(True))
+    assert cfg["ok"] is True and cfg["auth"] is True
+    assert all(v == 401 for v in codes.values()), codes
+
+    # Abschalten geht weiterhin - fuer einen rein lokalen Aufbau.
     cfg, codes = asyncio.run(lauf(False))
-    assert cfg["ok"] is True and cfg["auth"] is False
+    assert cfg["auth"] is False
     assert all(v != 401 for v in codes.values()), codes
     assert codes["/api/overview"] == 200
 
-    # Mit WEBPANEL_AUTH=1 ist alles wieder dicht.
-    cfg, codes = asyncio.run(lauf(True))
-    assert cfg["auth"] is True
-    assert all(v == 401 for v in codes.values()), codes
-
-    # Der Standard ist AUS - und /api/config ist selbst nie geschuetzt, sonst
-    # koennte die Oberflaeche gar nicht erst herausfinden, ob sie einen Login
-    # anzeigen muss.
     quelle = open("webpanel.py", encoding="utf-8").read()
-    assert 'os.getenv("WEBPANEL_AUTH", "0")' in quelle
+    # 1. Der Standard ist AN.
+    assert 'os.getenv("WEBPANEL_AUTH", "1")' in quelle, "der Login ist nicht mehr Standard"
+    # 2. KEIN festes Passwort im Quelltext. Genau das war vorher der Fall
+    #    (WEBPANEL_PASS", "Secoolio") - ein Login mit bekanntem Passwort ist
+    #    kein Login.
+    assert 'os.getenv("WEBPANEL_PASS", "")' in quelle, (
+        "es steht wieder ein festes Standardpasswort im Quelltext")
+    assert "secrets.token_urlsafe" in quelle, (
+        "ohne gesetztes Passwort muss eins gewuerfelt werden")
+    # 3. Wer den Login ABschaltet, soll es laut im Log sehen.
+    assert "OHNE Login" in quelle
+    # 4. /api/config ist selbst nie geschuetzt - sonst koennte die Oberflaeche
+    #    gar nicht herausfinden, ob sie einen Anmeldebildschirm zeigen muss.
     i = quelle.index("async def _api_config")
     assert "_guard" not in quelle[i:i + 400]
-    # Und es wird laut gewarnt, wenn ohne Login gestartet wird.
-    assert "OHNE LOGIN" in quelle
 
     # Die Oberflaeche fragt /api/config, bevor sie den Anmeldebildschirm zeigt.
     html = open("webpanel.html", encoding="utf-8").read()
     assert "/api/config" in html and "S.authNoetig" in html
+
+
+def test_webpanel_nimmt_keine_fremden_formulare_an():
+    """Ohne Login (WEBPANEL_AUTH=0) gibt es kein Cookie, das schuetzen koennte.
+    Dann reicht ein
+
+        <form action="http://192.168.x.x:9123/api/user/coins"
+              method="post" enctype="text/plain">
+
+    auf irgendeiner Seite, die der Besitzer im selben Netz oeffnet - der Browser
+    schickt den POST mit. Ein Browser-Formular kann aber KEIN
+    application/json senden, und genau daran ist es zu erkennen."""
+    import webpanel
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async def lauf():
+        wp = webpanel.WebPanel()
+        wp._enabled = True
+        wp._auth = False                      # der ungeschuetzte Fall
+        async with TestClient(TestServer(wp._build_app())) as c:
+            # So sendet ein Formular von einer fremden Seite.
+            formular = await c.post("/api/user/coins", data="id=1&amount=999",
+                                    headers={"Content-Type": "text/plain"})
+            # So sendet die eigene Oberflaeche.
+            echt = await c.post("/api/user/coins", json={})
+            return formular.status, echt.status
+
+    formular, echt = asyncio.run(lauf())
+    assert formular == 415, f"fremdes Formular kam durch (HTTP {formular})"
+    assert echt != 415, f"die eigene Oberflaeche wird blockiert (HTTP {echt})"
+
+    # Und die Oberflaeche MUSS den Content-Type auch ohne Body setzen - sonst
+    # waere der naechste POST ohne Body ein stiller 415.
+    html = open("webpanel.html", encoding="utf-8").read()
+    assert "if(aendernd) opts.headers[\"Content-Type\"]=\"application/json\";" in html
 
 
 def test_webpanel_token_deckel():
