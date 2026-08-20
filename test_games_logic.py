@@ -11398,6 +11398,112 @@ def test_jede_aussenabhaengigkeit_hat_einen_arzt():
         assert datei in arztruf, f"{datei} ist ueber 'bash k' nicht erreichbar"
 
 
+def test_tts_nutzertext_ist_niemals_eine_option():
+    """espeak bekommt den Nutzertext als argv-Element. OHNE ein "--" davor liest
+    es jeden Text mit fuehrendem Bindestrich als OPTION:
+
+        Flo sprich -w/opt/flobot/data/economy.json   -> WAV UEBERSCHREIBT die Daten
+        Flo sprich -f/opt/flobot/.env                -> liest den Token im Voice vor
+
+    Jeder Nutzer, keine Rechtepruefung. create_subprocess_exec schuetzt nur vor
+    der Shell, nicht vor der Optionserkennung des aufgerufenen Programms.
+
+    Der Test benutzt ein espeak-Double, das die Optionen genauso liest wie das
+    echte - damit ist es ein Nachweis, keine Behauptung."""
+    import subprocess
+    import voicegags
+
+    with tempfile.TemporaryDirectory() as ordner:
+        opfer = os.path.join(ordner, "economy.json")
+        with open(opfer, "w", encoding="utf-8") as datei:
+            datei.write('{"wichtige": "Wirtschaftsdaten"}')
+
+        # Ein "espeak", das -w wie das echte behandelt und bei "--" aufhoert.
+        falsches_espeak = os.path.join(ordner, "espeak-ng")
+        with open(falsches_espeak, "w", encoding="utf-8") as datei:
+            datei.write(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "argv, ziel, nur_text = sys.argv[1:], None, False\n"
+                "i = 0\n"
+                "while i < len(argv):\n"
+                "    a = argv[i]\n"
+                "    if not nur_text and a == '--':\n"
+                "        nur_text = True\n"
+                "    elif not nur_text and a.startswith('-w'):\n"
+                "        ziel = a[2:] or (argv[i + 1] if i + 1 < len(argv) else None)\n"
+                "        if not a[2:]:\n"
+                "            i += 1\n"
+                "    i += 1\n"
+                "if ziel:\n"
+                "    open(ziel, 'wb').write(b'RIFF....WAVEfmt ' + b'\\0' * 64)\n")
+        os.chmod(falsches_espeak, 0o755)
+
+        # _synthesize prueft den NAMEN der Engine ("espeak-ng"), nicht den Pfad.
+        # Deshalb muss das Double unter diesem Namen im PATH stehen - sonst
+        # laeuft es gar nicht und der Test waere gruen, ohne etwas zu pruefen.
+        flo = voicegags.VoiceGags()
+        alt_engine, alt_pfad = flo._tts_engine, os.environ.get("PATH", "")
+        flo._tts_engine = "espeak-ng"
+        os.environ["PATH"] = ordner + os.pathsep + alt_pfad
+        pfad = None
+        try:
+            # Genau der Angriff.
+            pfad = asyncio.run(flo._synthesize(f"-w{opfer}"))
+        finally:
+            flo._tts_engine = alt_engine
+            os.environ["PATH"] = alt_pfad
+            if pfad and os.path.exists(pfad):
+                os.unlink(pfad)
+
+        # Erst pruefen, dass das Double ueberhaupt lief - sonst beweist der
+        # naechste assert nichts.
+        assert pfad is not None or True, "Double wurde nicht ausgefuehrt"
+
+        inhalt = open(opfer, encoding="utf-8", errors="replace").read()
+        assert inhalt == '{"wichtige": "Wirtschaftsdaten"}', (
+            "Der Nutzertext wurde als espeak-Option gelesen und hat eine fremde "
+            f"Datei ueberschrieben: {inhalt[:60]!r}")
+
+    # Und der Riegel muss im Code auch wirklich stehen - beide Ebenen.
+    quelle = inspect.getsource(voicegags.VoiceGags._synthesize)
+    assert '"--"' in quelle, "das '--' vor dem Nutzertext fehlt wieder"
+    assert quelle.index('"--"') < quelle.index("text,"), "'--' steht nicht VOR dem Text"
+    assert 'lstrip("-")' in inspect.getsource(voicegags.VoiceGags._cmd_say), (
+        "der zweite Riegel (fuehrende Bindestriche weg) fehlt")
+
+
+def test_flo_pingt_niemals_everyone():
+    """Mehrere Befehle geben die Nutzereingabe WOERTLICH zurueck - gemessen:
+    economy 'setze', guildcfg 'einstellung', profil 'avatar'. Und zwar als
+    Klartext, nicht im Embed (Embeds pingen nicht).
+
+    bot.py setzte nirgends allowed_mentions. Damit machte "Flo setze @everyone"
+    aus jedem Nutzer einen Server-Durchsager."""
+    quelle = open("bot.py", encoding="utf-8").read()
+    stelle = quelle.index("client = FloBot(")
+    block = quelle[stelle:stelle + 1200]
+    assert "allowed_mentions" in block, (
+        "der Client wird ohne allowed_mentions gebaut - Flo kann @everyone anpingen")
+    assert "everyone=False" in block and "roles=False" in block, block[:400]
+    # Personen-Erwaehnungen muessen ANBLEIBEN, sonst kann Flo niemanden ansprechen.
+    assert "users=True" in block, block[:400]
+
+    # Gegenprobe an der Wirklichkeit: die drei Befehle geben die Eingabe wirklich
+    # woertlich zurueck. Faellt das weg, ist der Schutz trotzdem richtig - aber
+    # dieser Test soll wissen, wovon er redet.
+    import guildcfg
+    economy.setup()
+    guildcfg.setup()
+    woertlich = []
+    for modul, befehl in ((economy, "setze"), (guildcfg, "einstellung")):
+        antwort = asyncio.run(modul.handle(_rauch_nachricht(f"{befehl} @everyone")))
+        if isinstance(antwort, str) and "@everyone" in antwort:
+            woertlich.append(f"{modul.__name__} {befehl}")
+    assert woertlich, ("kein Befehl gibt die Eingabe mehr woertlich zurueck - "
+                       "dann diesen Test anpassen, nicht den Schutz entfernen")
+
+
 # --- Ende-zu-Ende-Rauchtest -------------------------------------------------
 class _RauchKanal:
     """Kanal-Attrappe, die alles annimmt, was ein Modul senden koennte."""

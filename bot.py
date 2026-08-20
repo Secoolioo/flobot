@@ -2076,6 +2076,15 @@ client = FloBot(
     intents=intents,
     status=discord.Status.idle,
     activity=discord.CustomActivity(name=WEISHEITEN[0]),
+    # Flo darf NIE @everyone/@here oder eine Rolle anpingen - auch dann nicht,
+    # wenn der Text aus einer Nutzereingabe stammt. Mehrere Befehle geben die
+    # Eingabe woertlich zurueck (economy 'setze', guildcfg 'einstellung',
+    # profil 'avatar'), und ohne diese Zeile machte "Flo setze @everyone" aus
+    # jedem Nutzer einen Server-Durchsager. Personen-Erwaehnungen bleiben an:
+    # die braucht Flo, um jemanden anzusprechen. Zentral hier statt in jedem
+    # Modul - sonst vergisst es das naechste.
+    allowed_mentions=discord.AllowedMentions(
+        everyone=False, roles=False, users=True, replied_user=True),
 )
 
 # Modul-Aliasse: die Feature-Module (casino, games, economy, luxus, voicegags)

@@ -324,7 +324,10 @@ class VoiceGags(FeatureBasis):
         if not self._tts_engine:
             return ("TTS ist nicht eingerichtet. Installier `espeak-ng` "
                     "(`apt install espeak-ng`) oder das Python-Paket `gTTS`.")
-        text = text.strip()
+        # Fuehrende Bindestriche weg, BEVOR der Text an ein fremdes Programm geht
+        # (siehe _synthesize). Zweiter Riegel neben dem "--" dort: gTTS und
+        # kuenftige Engines haben ihre eigene Optionserkennung.
+        text = text.strip().lstrip("-").strip()
         if not text:
             return f"Was soll ich sagen? `{self._bot_name} sprich Hallo zusammen`"
         if len(text) > 300:
@@ -359,8 +362,16 @@ class VoiceGags(FeatureBasis):
         if self._tts_engine in ("espeak-ng", "espeak"):
             fd, path = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
+            # "--" beendet die Optionen. OHNE das liest espeak jeden Text mit
+            # fuehrendem Bindestrich als OPTION - und das ist keine Theorie:
+            #   Flo sprich -w/opt/flobot/data/economy.json
+            #     -> espeak schreibt sein WAV DORTHIN und zerstoert die Daten
+            #   Flo sprich -f/opt/flobot/.env
+            #     -> espeak LIEST DIE DATEI VOR, also den Discord-Token im Voice
+            # Jeder Nutzer, keine Rechtepruefung. create_subprocess_exec schuetzt
+            # nur vor der Shell, nicht vor der Optionserkennung des Programms.
             proc = await asyncio.create_subprocess_exec(
-                self._tts_engine, "-v", "de", "-s", "150", "-w", path, text,
+                self._tts_engine, "-v", "de", "-s", "150", "-w", path, "--", text,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             await proc.wait()
