@@ -7977,6 +7977,21 @@ def test_musik_stall_wird_erkannt_und_song_neu_gestartet():
     import music
     player, voice, aufraeumen = _musik_umgebung()
     guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+
+    # Der Watchdog holt beim Neustart eine FRISCHE Stream-Adresse - hier ging
+    # dabei bisher ein ECHTER yt-dlp-Aufruf ins Netz. Das ist in einem Test
+    # nichts verloren: er wurde damit langsam, abhaengig von YouTube, und als
+    # das Durchprobieren der player_client dazukam, brachte er ploetzlich einen
+    # fremden Song zurueck statt zu scheitern. Hier zaehlt nur der Watchdog.
+    alt_resolve = music._resolve_track
+
+    async def frisch(track):
+        neu_track = music.Track(title=track.title, stream_url="http://stream/neu",
+                                query=track.query, duration=track.duration,
+                                requested_by=track.requested_by)
+        return neu_track
+
+    music._resolve_track = frisch
     try:
         player.start(_track("A"))
         voice.takt(50)                       # laeuft normal
@@ -8000,6 +8015,7 @@ def test_musik_stall_wird_erkannt_und_song_neu_gestartet():
             "Warteschlange wurde beim Neustart geopfert"
         assert voice.is_playing(), "nach dem Neustart laeuft nichts"
     finally:
+        music._resolve_track = alt_resolve
         aufraeumen()
 
 
