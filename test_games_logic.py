@@ -6573,6 +6573,94 @@ def test_musik_probiert_andere_youtube_clients_durch():
         assert not unbekannt, f"diese player_client gibt es nicht (mehr): {unbekannt}"
 
 
+def test_musik_weicht_auf_soundcloud_aus_wenn_youtube_dicht_ist():
+    """Am Server gemessen: ALLE acht player_client antworten mit "Sign in to
+    confirm you're not a bot" - die IP ist markiert, da hilft kein Client mehr.
+    Ohne Ausweg waere Musik damit tot, bis der Betreiber Cookies exportiert.
+
+    SoundCloud kennt YouTubes Bot-Pruefung nicht. Also sucht Flo denselben Song
+    dort, statt eine Fehlermeldung zu posten - das ist der einzige Weg, der OHNE
+    Zutun des Betreibers noch Musik liefert."""
+    import music
+
+    class NurSoundCloud:
+        gefragt = []
+
+        def __init__(self, opts):
+            self.sc = opts.get("default_search") == "scsearch"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, ziel, download=False):
+            NurSoundCloud.gefragt.append(ziel)
+            if not self.sc:
+                raise Exception("Sign in to confirm you're not a bot. Use --cookies")
+            return {"entries": [{"title": "Semmel Song (SC)", "url": "http://sc/s",
+                                 "webpage_url": "http://soundcloud.com/x",
+                                 "duration": 175,
+                                 "http_headers": {"User-Agent": "sc"}}]}
+
+    m = music.instance
+    alt_ydl, alt_client = music.yt_dlp, m._guter_client
+    music.yt_dlp = type("M", (), {"YoutubeDL": NurSoundCloud})
+    try:
+        # 1. Reine Textsuche
+        NurSoundCloud.gefragt, m._guter_client = [], ""
+        track = asyncio.run(m._extract("ytsearch1:semmel song robert F"))
+        assert track.title == "Semmel Song (SC)", track.title
+        assert "soundcloud.com" in track.webpage_url
+        assert track.kopfzeilen.get("User-Agent") == "sc", "Kopfzeilen fehlen"
+        assert NurSoundCloud.gefragt[-1] == "scsearch1:semmel song robert F"
+
+        # 2. Spotify-Weg: der Suchtext MUSS durchgereicht werden - mit einer
+        #    nackten Video-Adresse koennte SoundCloud nichts anfangen.
+        NurSoundCloud.gefragt, m._guter_client = [], ""
+        track = asyncio.run(m._resolve_input("ytsearch1:egal",
+                                             {"query": "Robert F Semmel"}))
+        assert track.title == "Semmel Song (SC)"
+        assert "scsearch1:Robert F Semmel" in NurSoundCloud.gefragt, NurSoundCloud.gefragt
+
+        # 3. Eine nackte YouTube-Adresse hat keinen Suchtext - dort darf NICHT
+        #    blind irgendetwas von SoundCloud gespielt werden.
+        assert music.Music._suchtext("https://youtu.be/abc") == ""
+        for eingabe, erwartet in (("ytsearch1:a b", "a b"), ("ytsearch5:x", "x"),
+                                  ("nur text", "nur text")):
+            assert music.Music._suchtext(eingabe) == erwartet, eingabe
+    finally:
+        music.yt_dlp, m._guter_client = alt_ydl, alt_client
+
+
+def test_arzt_prueft_youtube_bis_zur_abspielbaren_adresse():
+    """Der Musik-Arzt meldete "Suche geht", waehrend im Bot JEDER Song an
+    YouTubes Bot-Pruefung scheiterte. Grund: er lief mit extract_flat, las also
+    nur die Trefferliste und fasste den Player nie an.
+
+    Eine Diagnose, die den Ausfall nicht sieht, ist schlimmer als keine - sie
+    schickt einen auf die falsche Faehrte (hier: ein sinnloses yt-dlp-Update)."""
+    import inspect as _i
+    import tools_musik_check
+    quelle = _i.getsource(tools_musik_check.MusikCheck.youtube_pruefen)
+    # Auf die OPTION prüfen, nicht auf das Wort - im Kommentar darueber steht
+    # bewusst "KEIN extract_flat", und daran darf der Test sich nicht aufhaengen.
+    code_zeilen = [z for z in quelle.splitlines()
+                   if not z.lstrip().startswith("#")]
+    assert "'extract_flat'" not in "\n".join(code_zeilen), (
+        "die Pruefung liest wieder nur die Trefferliste statt den Player")
+    assert "'stream'" in quelle or '"stream"' in quelle, (
+        "es wird nicht geprueft, ob eine abspielbare Adresse herauskommt")
+    # Cookies und festgenagelter Client muessen mitgeprueft werden - sonst misst
+    # der Arzt etwas anderes als der Bot tut.
+    assert "YTDLP_COOKIES" in quelle and "YTDLP_PLAYER_CLIENT" in quelle
+    # Und die Ausweichquelle gehoert zur Diagnose: sie entscheidet, ob ueberhaupt
+    # noch Musik moeglich ist.
+    assert hasattr(tools_musik_check.MusikCheck, "_soundcloud_pruefen")
+    assert "scsearch" in _i.getsource(tools_musik_check.MusikCheck._soundcloud_pruefen)
+
+
 def test_musik_cookies_erreichen_jeden_yt_dlp_aufruf():
     """Am echten Server bestaetigt: YouTube antwortet "Sign in to confirm you're
     not a bot". Ist die IP einmal markiert, hilft kein player_client mehr - dann

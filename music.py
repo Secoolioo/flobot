@@ -1934,11 +1934,53 @@ class Music(FeatureBasis):
             reihe.insert(0, self._guter_client)
         return reihe
 
-    async def _extract(self, query_or_url):
+    @staticmethod
+    def _suchtext(eingabe):
+        """Der reine Suchtext aus einer yt-dlp-Eingabe - oder "" bei einer URL.
+
+        Aus 'ytsearch1:rick astley' wird 'rick astley'. Den braucht die
+        Ausweichquelle: SoundCloud kann mit einer YouTube-Adresse nichts
+        anfangen, mit dem Suchtext dahinter schon."""
+        roh = (eingabe or "").strip()
+        if "://" in roh:
+            return ""
+        treffer = re.match(r"^yt(?:search)?\d*:(.+)$", roh, re.IGNORECASE)
+        return (treffer.group(1) if treffer else roh).strip()
+
+    async def _soundcloud_ausweich(self, text):
+        """Denselben Song bei SoundCloud suchen. SoundCloud kennt YouTubes
+        Bot-Pruefung nicht - ist die Server-IP dort markiert, ist das der
+        einzige Weg, der OHNE Zutun des Betreibers noch Musik liefert."""
+        if not text:
+            return None
+        loop = asyncio.get_running_loop()
+
+        def work():
+            opts = dict(_YDL_OPTS)
+            opts.update(self._cookie_optionen())
+            opts["default_search"] = "scsearch"
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
+                info = ydl.extract_info(f"scsearch1:{text}", download=False)
+            if info and "entries" in info:
+                treffer = [e for e in info["entries"] if e]
+                if not treffer:
+                    raise ValueError("keine Treffer")
+                info = treffer[0]
+            return info
+
+        try:
+            return await loop.run_in_executor(None, work)
+        except Exception as exc:  # noqa: BLE001 - Ausweich darf scheitern
+            log.warning("Musik: SoundCloud-Ausweich fuer %r ging auch nicht (%s).",
+                        text[:60], f"{exc}".replace("\n", " ")[:120])
+            return None
+
+    async def _extract(self, query_or_url, ausweich_text=None):
         """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf.
 
-        Scheitert es an YouTubes Bot-Pruefung, wird mit einem anderen
-        player_client nachgesetzt statt aufzugeben."""
+        Scheitert es an YouTubes Bot-Pruefung, wird erst mit einem anderen
+        player_client nachgesetzt - und wenn YouTube gar nichts mehr durchlaesst,
+        derselbe Song bei SoundCloud gesucht, statt aufzugeben."""
         loop = asyncio.get_running_loop()
 
         def work(client, format_lax=False):
@@ -1995,6 +2037,17 @@ class Music(FeatureBasis):
                         break
                 letzter = exc
                 if art not in self._CLIENT_HILFT or nr == len(versuche) - 1:
+                    if art == "botcheck":
+                        # YouTube ist dicht. Bevor der Nutzer eine Fehlermeldung
+                        # bekommt: denselben Song bei SoundCloud suchen.
+                        text = ausweich_text or self._suchtext(query_or_url)
+                        info = await self._soundcloud_ausweich(text)
+                        if info:
+                            log.warning("Musik: YouTube blockt komplett - spiele "
+                                        "%r von SoundCloud.",
+                                        (info.get("title") or text)[:60])
+                            letzter = None
+                            break
                     if art == "botcheck" and not self._cookie_optionen():
                         log.error("Musik: YouTube laesst KEINEN player_client mehr "
                                   "durch. Letzter Ausweg sind Cookies eines "
@@ -2114,14 +2167,19 @@ class Music(FeatureBasis):
                 vid = None
             if vid:
                 try:
-                    return await self._extract(vid)
+                    # Der Suchtext wandert MIT: scheitert YouTube ganz, kann die
+                    # SoundCloud-Ausweichquelle sonst nichts anfangen mit einer
+                    # nackten Video-Adresse.
+                    return await self._extract(vid, ausweich_text=hint["query"])
                 except Exception:  # noqa: BLE001
                     # Der Docstring verspricht den Rueckfall - der fehlte hier:
                     # war das beste Video nicht ladbar (gesperrt, geloescht),
                     # flog der ganze Song raus, statt den Ersttreffer zu nehmen.
                     log.warning("Best-Match-Video nicht ladbar, nehme den "
                                 "normalen Treffer: %s", vid)
-        return await self._extract(extract_input)
+        return await self._extract(
+            extract_input,
+            ausweich_text=(hint or {}).get("query") or self._suchtext(extract_input))
 
     async def _resolve_track(self, track):
         """Loest einen vorgemerkten Track auf. track.query = komplette yt-dlp-Eingabe

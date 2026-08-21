@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 276 Tests
+python3 test_games_logic.py    # 278 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -256,8 +256,16 @@ Nachgesetzt wird **nur** bei Bot-Prüfung, Format- und Veraltet-Fehlern — bei
 einem gelöschten oder gesperrten Video hilft kein anderer Client, dort gibt er
 sofort auf statt den Nutzer warten zu lassen.
 
-**Kommt kein Client mehr durch**, ist die IP markiert. Dann bleibt nur ein
-angemeldeter Zugang (so auch yt-dlps eigene FAQ):
+**Kommt kein Client mehr durch**, ist die IP markiert. Dann sucht Flo denselben
+Song bei **SoundCloud** — das kennt YouTubes Bot-Prüfung nicht und ist der
+einzige Weg, der ohne Zutun des Betreibers noch Musik liefert:
+
+```
+Musik: YouTube blockt komplett - spiele 'Semmel Song' von SoundCloud.
+```
+
+Findet SoundCloud den Song nicht, bleibt nur ein angemeldeter Zugang
+(so auch yt-dlps eigene FAQ):
 
 ```
 YTDLP_COOKIES=/opt/flobot/cookies.txt

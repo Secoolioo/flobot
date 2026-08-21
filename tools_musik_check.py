@@ -207,14 +207,26 @@ class MusikCheck(Arzt):
         except ImportError:
             self.warn("uebersprungen - yt-dlp fehlt.")
             return
+        # KEIN extract_flat. Damit las die Pruefung nur die Trefferliste und
+        # fasste den Player nie an - sie meldete "Suche geht", waehrend im Bot
+        # jeder Song an YouTubes Bot-Pruefung scheiterte. Eine Diagnose, die den
+        # Ausfall nicht sieht, ist schlimmer als keine: sie schickt einen auf die
+        # falsche Faehrte (hier: ein sinnloses yt-dlp-Update).
+        # Geprueft wird deshalb wie im Betrieb - bis zur abspielbaren Adresse.
         code = ("import json,yt_dlp\n"
                 "o={'quiet':True,'no_warnings':True,'skip_download':True,"
-                "'extract_flat':'in_playlist','noplaylist':True}\n"
+                "'noplaylist':True,'format':'bestaudio/best'}\n"
+                "f=__import__('os').getenv('YTDLP_COOKIES','').strip()\n"
+                "if f: o['cookiefile']=f\n"
+                "c=__import__('os').getenv('YTDLP_PLAYER_CLIENT','').strip()\n"
+                "if c: o['extractor_args']={'youtube':{'player_client':[c]}}\n"
                 "with yt_dlp.YoutubeDL(o) as y:\n"
                 "    i=y.extract_info('ytsearch1:rick astley never gonna give you up',"
                 "download=False)\n"
                 "e=[x for x in (i or {}).get('entries') or [] if x]\n"
-                "print(json.dumps({'titel': e[0].get('title') if e else ''}))\n")
+                "d=e[0] if e else {}\n"
+                "print(json.dumps({'titel': d.get('title') or '',"
+                " 'stream': bool(d.get('url'))}))\n")
         try:
             fertig = subprocess.run([sys.executable, "-c", code], capture_output=True,
                                     text=True, timeout=60)
@@ -223,12 +235,24 @@ class MusikCheck(Arzt):
             self.merke("YouTube antwortet nicht",
                        "venv/bin/pip install -U yt-dlp, dann nochmal.")
             return
-        titel = ""
+        titel, stream = "", False
         if fertig.returncode == 0:
             try:
-                titel = json.loads(fertig.stdout.strip().splitlines()[-1]).get("titel", "")
+                d = json.loads(fertig.stdout.strip().splitlines()[-1])
+                titel, stream = d.get("titel", ""), bool(d.get("stream"))
             except (ValueError, IndexError):
-                titel = ""
+                titel, stream = "", False
+        if titel and not stream:
+            # Treffer gefunden, aber keine abspielbare Adresse - genau der Fall,
+            # den die alte Pruefung als "geht" gemeldet hat.
+            self.fehler(f"Treffer da ({titel[:50]}), aber KEINE abspielbare "
+                        "Adresse - genau das merkt der Bot beim Abspielen.")
+            self.merke("YouTube liefert keinen Stream",
+                       "Meist YouTubes Bot-Pruefung. Flo weicht dann selbst auf "
+                       "SoundCloud aus; dauerhaft hilft nur "
+                       "YTDLP_COOKIES=/opt/flobot/cookies.txt (Wegwerf-Account!).")
+            self._soundcloud_pruefen()
+            return
         if titel:
             self.ok(f"Suche geht: {titel[:70]}")
             return
@@ -237,6 +261,33 @@ class MusikCheck(Arzt):
         self.merke("YouTube geht nicht",
                    "Fast immer veraltetes yt-dlp:  venv/bin/pip install -U yt-dlp   "
                    "danach: systemctl restart flobot")
+
+    def _soundcloud_pruefen(self):
+        """Geht wenigstens die Ausweichquelle? Ohne sie ist Musik ganz tot."""
+        code = ("import json,yt_dlp\n"
+                "o={'quiet':True,'no_warnings':True,'skip_download':True,"
+                "'noplaylist':True,'format':'bestaudio/best',"
+                "'default_search':'scsearch'}\n"
+                "with yt_dlp.YoutubeDL(o) as y:\n"
+                "    i=y.extract_info('scsearch1:rick astley never gonna give you up',"
+                "download=False)\n"
+                "e=[x for x in (i or {}).get('entries') or [] if x]\n"
+                "d=e[0] if e else {}\n"
+                "print(json.dumps({'titel': d.get('title') or '',"
+                " 'stream': bool(d.get('url'))}))\n")
+        try:
+            fertig = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                                    text=True, timeout=60)
+            d = json.loads(fertig.stdout.strip().splitlines()[-1])
+        except Exception:  # noqa: BLE001
+            d = {}
+        if d.get("stream"):
+            self.ok(f"SoundCloud geht ({str(d.get('titel'))[:45]}) - Flo weicht "
+                    "dorthin aus, Musik laeuft also weiter.")
+        else:
+            self.fehler("Auch SoundCloud liefert nichts - dann geht gar keine Musik.")
+            self.merke("Keine Musikquelle erreichbar",
+                       "Netz/Firewall pruefen und dann YTDLP_COOKIES setzen.")
 
     # --- Abschluss ----------------------------------------------------------
     def bericht(self):
