@@ -186,7 +186,10 @@ class KiCheck(Arzt):
         status, body, kopf = self._anfrage("/chat/completions", {
             "model": self.modell,
             "messages": [{"role": "user", "content": "Sag nur: ok"}],
-            "max_tokens": 5,
+            # Reichlich Platz: gpt-oss & Co. denken erst und schreiben dann.
+            # Mit 5 Token ging das Budget komplett ins Nachdenken, es kam
+            # eine LEERE Antwort zurueck - und die Diagnose meldete "OK".
+            "max_tokens": 200,
             "temperature": 0,
         })
         dauer = time.monotonic() - start
@@ -195,6 +198,14 @@ class KiCheck(Arzt):
                 antwort = json.loads(body)["choices"][0]["message"]["content"]
             except (ValueError, KeyError, IndexError, TypeError):
                 antwort = "(Antwort ohne Text)"
+            if not (antwort or "").strip():
+                self.warn(f"Antwort nach {dauer:.1f}s, aber OHNE Text. Das Modell "
+                          f"hat sein Budget verbraucht, ohne etwas zu sagen.")
+                self.merke("Modell antwortet ohne Text",
+                           "Meist ein Denk-Modell mit zu knappem Budget. "
+                           "LLM_REASONING_EFFORT=low in die .env, dann: "
+                           "systemctl restart flobot")
+                return False
             self.ok(f"Antwort nach {dauer:.1f}s: {antwort.strip()!r}")
             self.ok("Die KI-Strecke funktioniert. Wenn Flo trotzdem meckert, "
                     "liegt es nicht am Anbieter - siehe Log unten.")

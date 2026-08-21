@@ -6382,6 +6382,73 @@ def test_webpanel_zeigt_aktien_aktivitaet():
         fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
 
 
+def test_ki_leere_antwort_bleibt_nicht_spurlos():
+    """Am echten Server aufgefallen: die Diagnose meldete
+
+        4. Echter Chat-Aufruf
+          OK    Antwort nach 0.4s: ''
+
+    Also OK - bei einer LEEREN Antwort. gpt-oss & Co. denken erst und schreiben
+    dann; mit einem knappen Token-Budget geht alles ins Denken. Im Betrieb sagt
+    Flo dann "Dazu faellt mir gerade nichts ein" und im Log stand NICHTS - das
+    sieht wie Unlust aus und ist in Wahrheit eine zu enge Grenze."""
+    import ai
+    import logging
+
+    puffer = io.StringIO()
+    griff = logging.StreamHandler(puffer)
+    protokoll = logging.getLogger("dcbot.ai")
+    protokoll.addHandler(griff)
+    alt_stufe = protokoll.level
+    protokoll.setLevel(logging.INFO)
+    try:
+        flo, _ = _ki_frisch([_KiAntwort("")])          # Modell sagt nichts
+        antwort = asyncio.run(flo.ask_flo("hi"))
+    finally:
+        protokoll.removeHandler(griff)
+        protokoll.setLevel(alt_stufe)
+
+    assert antwort == "Dazu faellt mir gerade nichts ein.", antwort
+    text = puffer.getvalue()
+    assert "leere Antwort" in text, f"die leere Antwort bleibt spurlos: {text!r}"
+    # Muss mit 'k l' auffindbar sein - also dieselbe Marke wie alle KI-Fehler.
+    assert "KI-Fehler:" in text
+
+    # Und der Arzt darf eine leere Antwort nicht mehr als OK durchwinken.
+    import tools_ki_check
+    quelle = inspect.getsource(tools_ki_check.KiCheck.aufruf_pruefen)
+    assert "OHNE Text" in quelle, "der Arzt meldet eine leere Antwort wieder als OK"
+    assert '"max_tokens": 5,' not in inspect.getsource(tools_ki_check), (
+        "die Probe gibt dem Modell wieder zu wenig Platz")
+
+
+def test_ki_denk_aufwand_nur_wenn_gesetzt():
+    """reasoning_effort kennen nur Denk-Modelle. Immer mitzuschicken wuerde jede
+    Anfrage an ein normales Modell mit HTTP 400 abwuergen - der Schalter darf
+    also nur in die Anfrage, wenn jemand ihn ausdruecklich gesetzt hat."""
+    import ai
+    alt_env = os.environ.get("LLM_REASONING_EFFORT")
+    try:
+        for wert, erwartet in (("", None), ("low", "low"), ("HIGH", "high"),
+                               ("quatsch", None)):
+            if wert:
+                os.environ["LLM_REASONING_EFFORT"] = wert
+            else:
+                os.environ.pop("LLM_REASONING_EFFORT", None)
+            flo, anbieter = _ki_frisch([_KiAntwort("ok")])
+            flo._denk_aufwand = ""
+            flo._denk_aufwand = (wert.lower() if wert.lower() in
+                                 ("low", "medium", "high") else "")
+            asyncio.run(flo.ask_flo("hi"))
+            gesendet = anbieter.letzte_kwargs.get("reasoning_effort")
+            assert gesendet == erwartet, (wert, gesendet, erwartet)
+    finally:
+        if alt_env is None:
+            os.environ.pop("LLM_REASONING_EFFORT", None)
+        else:
+            os.environ["LLM_REASONING_EFFORT"] = alt_env
+
+
 def test_arzt_meldet_sich_wie_der_bot():
     """Am echten Server passiert: Cloudflare sperrte die nackte Python-Kennung,
     der Bot lief laengst - und die Diagnose meldete trotzdem Alarm und empfahl
@@ -11435,12 +11502,14 @@ class _KiAnbieter:
         self.signatur = signatur
         self.modelle_gefragt = 0
         self.aufrufe = []          # je Aufruf das benutzte Modell
+        self.letzte_kwargs = {}    # womit zuletzt aufgerufen wurde
         self.chat = SimpleNamespace(
             completions=SimpleNamespace(create=self._create))
         self.models = SimpleNamespace(list=self._models)
 
     async def _create(self, **kw):
         self.aufrufe.append(kw.get("model"))
+        self.letzte_kwargs = dict(kw)
         naechste = self._folge.pop(0) if self._folge else _KiAntwort()
         if isinstance(naechste, Exception):
             raise naechste

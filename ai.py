@@ -250,6 +250,7 @@ class FloAI:
         self._basis_url = ""
         self._signatur = ""
         self._signatur_offen = ""   # gewechselt, aber noch nicht bewaehrt
+        self._denk_aufwand = ""     # LLM_REASONING_EFFORT, leer = nicht mitschicken
         self._default_city = "Regensburg"
         self._bot_name = "Flo"
         # Hoehere Temperatur = lockerer, spontaner, weniger Lehrbuch. Per LLM_TEMPERATURE
@@ -276,6 +277,20 @@ class FloAI:
         self._vision_model = os.getenv("LLM_VISION_MODEL", self.DEFAULT_VISION_MODEL).strip() or self.DEFAULT_VISION_MODEL
         self._default_city = os.getenv("DEFAULT_WEATHER_CITY", "Regensburg").strip() or "Regensburg"
         self._bot_name = os.getenv("BOT_NAME", "Flo").strip() or "Flo"
+        # Antwortlaenge und Denk-Aufwand einstellbar. Beides braucht man erst,
+        # seit Denk-Modelle im Spiel sind: die verbrauchen einen Teil des Budgets,
+        # BEVOR ein Wort herauskommt. reasoning_effort wird nur mitgeschickt,
+        # wenn es gesetzt ist - ein Modell, das den Schalter nicht kennt, wuerde
+        # die Anfrage sonst mit 400 ablehnen.
+        try:
+            self.MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", str(self.MAX_TOKENS)))
+        except ValueError:
+            log.warning("LLM_MAX_TOKENS ist keine Zahl - nutze %d.", self.MAX_TOKENS)
+        self._denk_aufwand = os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
+        if self._denk_aufwand and self._denk_aufwand not in ("low", "medium", "high"):
+            log.warning("LLM_REASONING_EFFORT=%r kennt kein Modell - ignoriere es.",
+                        self._denk_aufwand)
+            self._denk_aufwand = ""
         try:
             self.TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", str(self.TEMPERATURE)))
         except ValueError:
@@ -455,6 +470,8 @@ class FloAI:
         offene_signaturen = [ua for ua in self.SIGNATUREN if ua != self._signatur]
         while True:
             kw["model"] = self._vision_model if vision else self._model
+            if self._denk_aufwand:
+                kw["reasoning_effort"] = self._denk_aufwand
             try:
                 antwort = await self._client.chat.completions.create(**kw)
             except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet, nicht verschluckt
@@ -963,7 +980,19 @@ class FloAI:
                                             f"Antworte dem Nutzer jetzt normal in Worten - "
                                             f"KEINE Werkzeug-Syntax, kein <function=...>.")})
                         continue
-                    return self._sanitize_output(content) or "Dazu faellt mir gerade nichts ein."
+                    sauber = self._sanitize_output(content)
+                    if not sauber:
+                        # Bisher spurlos: der Nutzer las "faellt mir nichts ein",
+                        # im Log stand NICHTS. Bei Denk-Modellen (gpt-oss & Co.)
+                        # passiert das, wenn das Token-Budget schon beim Denken
+                        # aufgebraucht ist - dann sieht es wie Unlust aus und ist
+                        # in Wahrheit eine zu enge Grenze.
+                        log.warning("KI-Fehler: leere Antwort (Modell %s, "
+                                    "max_tokens %d) - evtl. LLM_REASONING_EFFORT=low "
+                                    "oder LLM_MAX_TOKENS hoeher setzen.",
+                                    self._model, self.MAX_TOKENS)
+                        return "Dazu faellt mir gerade nichts ein."
+                    return sauber
 
                 # Assistant-Nachricht mit den Tool-Aufrufen sauber zurueckschreiben.
                 messages.append(

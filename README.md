@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 270 Tests
+python3 test_games_logic.py    # 272 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -191,6 +191,8 @@ Zeile für die `.env` ins Log.
 | `LLM_VISION_MODEL` | Bild-Modell (Standard `qwen/qwen3.6-27b`) |
 | `LLM_USER_AGENT` | Client-Signatur — nur nötig, wenn Cloudflare blockt |
 | `LLM_TEMPERATURE` | 0 = brav, ~1.2 = chaotisch (Standard 0.9) |
+| `LLM_MAX_TOKENS` | Antwortlänge (Standard 800) |
+| `LLM_REASONING_EFFORT` | `low`/`medium`/`high` — nur für Denk-Modelle wie `gpt-oss`. Antwortet Flo öfter „fällt mir nichts ein", steht das Budget im Denken statt im Reden |
 
 ---
 
