@@ -1602,6 +1602,7 @@ class Music(FeatureBasis):
     def __init__(self):
         # --- Konfiguration (in setup() aus der .env gelesen) ---------------------
         self._enabled = False
+        self._guter_client = ""   # player_client, der zuletzt durchkam
         self._spotify_id = ""
         self._spotify_secret = ""
         # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
@@ -1869,12 +1870,54 @@ class Music(FeatureBasis):
                 return art, cls._YT_SAETZE[art]
         return "unbekannt", cls._YT_SAETZE["unbekannt"]
 
+    # YouTube prueft seit Jahren, ob da ein echter Browser sitzt. Welcher
+    # "player_client" ohne Login durchkommt, aendert sich alle paar Monate -
+    # genau deshalb steht hier KEIN fester Name im Code, sondern eine Reihe.
+    # Kommt der Standard nicht durch, probiert Flo die Reihe durch und merkt
+    # sich, was ging. Ein Name, den die installierte yt-dlp-Fassung gar nicht
+    # kennt, wird vorher aussortiert (sonst waere die Ausweichliste selbst der
+    # naechste Fehler).
+    _CLIENT_REIHE = ("android_vr", "ios", "tv_simply", "tv", "mweb",
+                     "web_safari", "android")
+    # Nur bei diesen Gruenden hilft ein anderer Client. Bei "geloescht",
+    # "gesperrt" oder "nichts gefunden" waere jeder weitere Versuch nur Wartezeit
+    # fuer den Nutzer.
+    _CLIENT_HILFT = ("botcheck", "format", "veraltet", "unbekannt")
+
+    @staticmethod
+    def _bekannte_clients():
+        """Die player_client-Namen, die DIESE yt-dlp-Fassung wirklich kennt."""
+        try:
+            from yt_dlp.extractor.youtube import _base
+            return set(_base.INNERTUBE_CLIENTS)
+        except Exception:  # noqa: BLE001 - dann eben ungefiltert
+            return None
+
+    def client_reihe(self):
+        """Reihenfolge der Ausweich-Clients. YTDLP_PLAYER_CLIENT setzt sie fest."""
+        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
+        if fest:
+            return [fest]
+        bekannt = self._bekannte_clients()
+        reihe = [c for c in self._CLIENT_REIHE if bekannt is None or c in bekannt]
+        # Was zuletzt funktioniert hat, zuerst.
+        if self._guter_client and self._guter_client in reihe:
+            reihe.remove(self._guter_client)
+            reihe.insert(0, self._guter_client)
+        return reihe
+
     async def _extract(self, query_or_url):
-        """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf."""
+        """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf.
+
+        Scheitert es an YouTubes Bot-Pruefung, wird mit einem anderen
+        player_client nachgesetzt statt aufzugeben."""
         loop = asyncio.get_running_loop()
 
-        def work():
-            with yt_dlp.YoutubeDL(_YDL_OPTS) as ydl:  # type: ignore[union-attr]
+        def work(client):
+            opts = dict(_YDL_OPTS)
+            if client:
+                opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
                 info = ydl.extract_info(query_or_url, download=False)
             if info and "entries" in info:  # Suche/Playlist -> ersten Treffer nehmen
                 entries = [e for e in info["entries"] if e]
@@ -1883,7 +1926,31 @@ class Music(FeatureBasis):
                 info = entries[0]
             return info
 
-        info = await loop.run_in_executor(None, work)
+        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
+        # Erst so, wie yt-dlp es selbst fuer richtig haelt (ausser es ist
+        # festgenagelt), dann die Ausweichliste.
+        versuche = ([fest] if fest else [None, *self.client_reihe()])
+        letzter = None
+        for nr, client in enumerate(versuche):
+            try:
+                info = await loop.run_in_executor(None, work, client)
+            except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet
+                art, _satz = self.yt_fehler_deuten(exc)
+                letzter = exc
+                if art not in self._CLIENT_HILFT or nr == len(versuche) - 1:
+                    raise
+                log.warning("Musik: YouTube blockt (%s) mit client=%s - versuche %s.",
+                            art, client or "Standard",
+                            versuche[nr + 1] or "Standard")
+                continue
+            if client and client != self._guter_client:
+                self._guter_client = client
+                log.warning("Musik: YouTube ging erst mit player_client=%r. "
+                            "Dauerhaft machen mit  YTDLP_PLAYER_CLIENT=%s  in der "
+                            ".env.", client, client)
+            break
+        else:  # pragma: no cover - die Schleife bricht immer per return/raise ab
+            raise letzter or RuntimeError("keine Aufloesung moeglich")
         stream_url = info.get("url")
         if not stream_url:
             raise ValueError("kein abspielbarer Stream gefunden")

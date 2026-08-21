@@ -6449,6 +6449,95 @@ def test_ki_denk_aufwand_nur_wenn_gesetzt():
             os.environ["LLM_REASONING_EFFORT"] = alt_env
 
 
+def test_musik_probiert_andere_youtube_clients_durch():
+    """YouTube prueft, ob da ein echter Browser sitzt. Welcher "player_client"
+    ohne Login durchkommt, aendert sich alle paar Monate - ein fester Name im
+    Code ist deshalb in drei Monaten wieder tot. Flo probiert die Reihe durch,
+    merkt sich was ging und sagt im Log, was in die .env gehoert.
+
+    Genauso wichtig: bei einem geloeschten Video hilft KEIN anderer Client -
+    dann waere jeder weitere Versuch nur Wartezeit fuer den Nutzer."""
+    import music
+
+    class FakeYDL:
+        geht_ab = None
+        fehler = "Sign in to confirm you're not a bot"
+        versuche = []
+
+        def __init__(self, opts):
+            self.client = (opts.get("extractor_args", {})
+                           .get("youtube", {}).get("player_client", [None])[0])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, ziel, download=False):
+            FakeYDL.versuche.append(self.client)
+            if FakeYDL.geht_ab is not None and self.client == FakeYDL.geht_ab:
+                return {"title": "Song", "url": "http://x/s", "webpage_url": "http://x",
+                        "duration": 10, "http_headers": {"User-Agent": "u"}}
+            raise Exception(FakeYDL.fehler)
+
+    m = music.instance
+    alt_ydl, alt_client = music.yt_dlp, m._guter_client
+    alt_env = os.environ.pop("YTDLP_PLAYER_CLIENT", None)
+    music.yt_dlp = type("M", (), {"YoutubeDL": FakeYDL})
+    try:
+        # 1. Standard blockt, 'ios' geht -> durchprobieren, merken, melden.
+        FakeYDL.versuche, FakeYDL.geht_ab, m._guter_client = [], "ios", ""
+        track = asyncio.run(m._extract("ytsearch1:egal"))
+        assert FakeYDL.versuche == [None, "android_vr", "ios"], FakeYDL.versuche
+        assert m._guter_client == "ios"
+        assert track.title == "Song"
+        # Die Kopfzeilen muessen dabei erhalten bleiben (sonst 403 bei ffmpeg).
+        assert track.kopfzeilen.get("User-Agent") == "u"
+
+        # 2. Beim naechsten Mal steht der, der ging, vorne.
+        FakeYDL.versuche = []
+        asyncio.run(m._extract("ytsearch1:egal"))
+        assert FakeYDL.versuche == [None, "ios"], FakeYDL.versuche
+
+        # 3. Geloeschtes Video: sofort aufgeben, nicht acht Mal fragen.
+        FakeYDL.versuche, FakeYDL.geht_ab, m._guter_client = [], None, ""
+        FakeYDL.fehler = "Video unavailable. This video has been removed"
+        try:
+            asyncio.run(m._extract("http://x"))
+        except Exception:
+            pass
+        assert FakeYDL.versuche == [None], (
+            f"probiert bei einem geloeschten Video weiter: {FakeYDL.versuche}")
+
+        # 4. Bot-Check und nichts geht: alle durch, dann mit dem ECHTEN Grund raus.
+        FakeYDL.versuche = []
+        FakeYDL.fehler = "Sign in to confirm you're not a bot"
+        try:
+            asyncio.run(m._extract("http://x"))
+            raise AssertionError("haette scheitern muessen")
+        except Exception as exc:
+            assert music.Music.yt_fehler_deuten(exc)[0] == "botcheck"
+        assert len(FakeYDL.versuche) == 1 + len(m.client_reihe()), FakeYDL.versuche
+
+        # 5. Festgenagelt per .env -> genau einer, kein Durchprobieren.
+        os.environ["YTDLP_PLAYER_CLIENT"] = "tv"
+        FakeYDL.versuche, FakeYDL.geht_ab = [], "tv"
+        asyncio.run(m._extract("http://x"))
+        assert FakeYDL.versuche == ["tv"], FakeYDL.versuche
+    finally:
+        music.yt_dlp, m._guter_client = alt_ydl, alt_client
+        os.environ.pop("YTDLP_PLAYER_CLIENT", None)
+        if alt_env is not None:
+            os.environ["YTDLP_PLAYER_CLIENT"] = alt_env
+
+    # Kein Client-Name im Code, den die installierte yt-dlp-Fassung nicht kennt.
+    bekannt = music.Music._bekannte_clients()
+    if bekannt:
+        unbekannt = [c for c in music.Music._CLIENT_REIHE if c not in bekannt]
+        assert not unbekannt, f"diese player_client gibt es nicht (mehr): {unbekannt}"
+
+
 def test_musik_sagt_WARUM_ein_song_nicht_geht():
     """"Den Song konnte ich nicht laden. Probier einen anderen Link" - derselbe
     Satz fuer JEDEN Grund, und der echte verschwand im Traceback. Ob YouTube
