@@ -6382,6 +6382,59 @@ def test_webpanel_zeigt_aktien_aktivitaet():
         fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
 
 
+def test_arzt_meldet_sich_wie_der_bot():
+    """Am echten Server passiert: Cloudflare sperrte die nackte Python-Kennung,
+    der Bot lief laengst - und die Diagnose meldete trotzdem Alarm und empfahl
+    einen .env-Eintrag, den niemand braucht.
+
+        Python (Standard)  -> blockiert     <- der ARZT
+        openai-Paket       -> kommt DURCH   <- der BOT
+
+    Ein Arzt, der sich anders meldet als der Patient, misst etwas anderes.
+    Also schickt er jetzt dieselbe Kennung wie Flo - abgelesen beim echten
+    Client, nicht geraten (sie haengt an der Paketversion)."""
+    import tools_ki_check
+    a = tools_ki_check.KiCheck()
+    a.base = "https://api.example.invalid/v1"
+
+    quelle = inspect.getsource(tools_ki_check.KiCheck._anfrage)
+    assert "self.bot_signatur()" in quelle, (
+        "der Arzt benutzt wieder nicht die Kennung des Bots")
+
+    # LLM_USER_AGENT hat Vorrang - das ist der Hebel, den die Diagnose empfiehlt.
+    alt_env = os.environ.get("LLM_USER_AGENT")
+    try:
+        os.environ["LLM_USER_AGENT"] = "Testkennung/1.0"
+        a._bot_ua = None
+        assert a.bot_signatur() == "Testkennung/1.0"
+        # Ohne Vorgabe wird sie beim echten openai-Client abgelesen.
+        os.environ.pop("LLM_USER_AGENT")
+        a._bot_ua = None
+        gelesen = a.bot_signatur()
+        try:
+            import openai  # noqa: F401
+        except ImportError:
+            return                              # ohne das Paket nicht pruefbar
+        assert gelesen, "keine Kennung ermittelt"
+        assert "urllib" not in gelesen.lower(), (
+            f"der Arzt meldet sich als urllib ({gelesen}) - genau das war der Fehler")
+    finally:
+        if alt_env is None:
+            os.environ.pop("LLM_USER_AGENT", None)
+        else:
+            os.environ["LLM_USER_AGENT"] = alt_env
+        a._bot_ua = None
+
+    # Und: kommt Flos Kennung durch, darf NICHTS empfohlen werden.
+    pruef = inspect.getsource(tools_ki_check.KiCheck.signatur_pruefen)
+    assert "NICHT betroffen" in pruef, (
+        "der Arzt unterscheidet nicht mehr zwischen 'Bot gesperrt' und "
+        "'nur die nackte Python-Kennung gesperrt'")
+    assert pruef.index("NICHT betroffen") < pruef.index("LLM_USER_AGENT="), (
+        "die Empfehlung kommt, bevor geprueft wird, ob der Bot ueberhaupt "
+        "betroffen ist")
+
+
 def test_arzt_findet_das_panel_passwort():
     """Das Panel wuerfelt ohne WEBPANEL_PASS ein Passwort und schreibt es EINMAL
     beim Start ins Log. Ohne einen Weg dorthin ist es praktisch unauffindbar:

@@ -47,7 +47,8 @@ class KiCheck(Arzt):
         self.vision = ""
         self.key = ""
         self.modelle = None     # Liste vom Anbieter, None = nicht abrufbar
-        self.cf_code = ""       # Cloudflare-Fehlercode, falls einer kam
+        self.cf_code = ""
+        self._bot_ua = None     # wird einmal ermittelt       # Cloudflare-Fehlercode, falls einer kam
 
     # --- Schritt 1: Konfiguration ------------------------------------------
     def konfig_lesen(self):
@@ -70,6 +71,8 @@ class KiCheck(Arzt):
         self.info(f"Modell   : {self.modell}")
         self.info(f"Vision   : {self.vision}")
         self.info(f"Schluessel: {self.maskiere(self.key)}")
+        aus_env = " (aus LLM_USER_AGENT)" if os.getenv("LLM_USER_AGENT", "").strip() else ""
+        self.info(f"Kennung   : {self.bot_signatur() or '(keine)'}{aus_env}")
 
         lokal = any(h in self.base for h in ("localhost", "127.0.0.1", ":11434"))
         if not self.key and not lokal:
@@ -94,13 +97,39 @@ class KiCheck(Arzt):
             self.warn(f"Ein Proxy ist gesetzt: {proxy} - alles laeuft darueber.")
         return self.erreichbar(self.base, name="Anbieter")
 
+    def bot_signatur(self):
+        """Die Client-Signatur, mit der FLO redet - nicht die von urllib.
+
+        Das ist der Kern: ein Arzt, der sich anders meldet als der Patient,
+        misst etwas anderes. Genau das ist passiert - Cloudflare sperrte die
+        nackte Python-Kennung, der Bot kam laengst durch, und die Diagnose
+        empfahl trotzdem einen .env-Eintrag, den niemand braucht.
+
+        Die Kennung haengt an der installierten Paketversion (mal
+        'OpenAI/Python 1.40.0', mal 'python-httpx2/2.12.0'), deshalb wird sie
+        beim echten Client ABGELESEN statt geraten."""
+        if self._bot_ua is not None:
+            return self._bot_ua
+        gesetzt = os.getenv("LLM_USER_AGENT", "").strip()
+        if gesetzt:
+            self._bot_ua = gesetzt
+            return self._bot_ua
+        try:
+            from openai import OpenAI
+            klient = OpenAI(api_key="x", base_url=self.base)
+            self._bot_ua = klient._client.headers.get("user-agent", "") or ""
+        except Exception:  # noqa: BLE001 - dann eben ohne, aber nie mit Absturz
+            self._bot_ua = ""
+        return self._bot_ua
+
     def _anfrage(self, pfad, daten=None, ua=None, zeit=None):
         """Wie Arzt.anfrage, aber mit dem Schluessel des Anbieters und relativ
-        zur Basis-URL. 'ua' setzt eine abweichende Client-Signatur - genau die
-        prueft Cloudflare bei Fehler 1010."""
+        zur Basis-URL. Ohne 'ua' wird die Signatur des BOTS benutzt, damit die
+        Diagnose denselben Weg geht wie er."""
         kopf = {"Authorization": f"Bearer {self.key or 'ollama'}"}
-        if ua:
-            kopf["User-Agent"] = ua
+        kennung = ua or self.bot_signatur()
+        if kennung:
+            kopf["User-Agent"] = kennung
         return self.anfrage(f"{self.base}{pfad}", daten=daten, kopf=kopf, zeit=zeit)
 
     _meldung = staticmethod(Arzt.meldung)
@@ -242,7 +271,7 @@ class KiCheck(Arzt):
     # messen: dieselbe Anfrage mit verschiedenen Signaturen. Kommt eine durch,
     # ist es die Signatur (im Code zu beheben). Kommt keine durch, ist es die IP.
     SIGNATUREN = (
-        ("Python (Standard)", "Python-urllib/3.11"),
+        ("Python (nackt)", "Python-urllib/3.11"),
         ("openai-Paket", "OpenAI/Python 1.40.0"),
         ("curl", "curl/8.5.0"),
         ("Browser", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -269,6 +298,18 @@ class KiCheck(Arzt):
                 zusatz = f", Cloudflare {cf}" if cf else ""
                 self.warn(f"{name:18s} -> blockiert (HTTP {status}{zusatz})")
 
+        # Kommt FLOS eigene Kennung durch, ist der Bot nicht betroffen - dann
+        # waere ein .env-Eintrag eine falsche Faehrte. Genau das ist passiert:
+        # Cloudflare sperrte die nackte Python-Kennung des Arztes, der Bot lief
+        # laengst, und die Diagnose empfahl trotzdem etwas.
+        eigene = self.bot_signatur()
+        if eigene and any(u == eigene or n == "openai-Paket" for n, u in durch):
+            self.ok(f"Flos eigene Kennung ({eigene}) kommt durch - der Bot ist "
+                    f"NICHT betroffen.")
+            self.merke("Nur die nackte Python-Kennung ist gesperrt",
+                       "Nichts zu tun - Flo meldet sich anders und kommt durch.")
+            self._ip_zeigen()
+            return
         if durch:
             name, ua = durch[0]
             self.ok(f"Es liegt an der SIGNATUR - mit '{name}' geht es.")
