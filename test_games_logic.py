@@ -13910,6 +13910,120 @@ def test_k_kennt_den_youtube_befehl():
     assert os.path.exists(os.path.join(hier, "tools_youtube_setup.py"))
 
 
+def test_kein_titel_verbietet_das_roasten():
+    """DER Grund, warum Flo zahm wurde - und er hatte nichts mit dem Modell zu tun.
+
+    Die Tonfall-Texte in titles.py waren eine Zahmheits-Rampe: je seltener der
+    Titel, desto braver sollte Flo sein. Ganz oben stand woertlich "Kein
+    Roasten, keine fiesen Sprueche" und "Absolut kein Spott". Wer lange dabei
+    ist - also genau die Stammgaeste - bekam per Bauart einen lieben Flo.
+
+    Seltenheit darf aendern, WIE geroastet wird, niemals OB."""
+    import titles
+    verboten = ("kein roasten", "absolut kein spott", "kein fuenkchen spott",
+                "spott hat hier nichts zu suchen", "kein spott",
+                "das fiese roasten laesst du grossteils weg",
+                "leg den ganzen aggro-modus komplett ab",
+                "fahr die aggression einen tick runter")
+    schuldige = []
+    for key, stufe in titles.Titles.RARITY.items():
+        ton = (stufe.get("tone") or "").lower()
+        for satz in verboten:
+            if satz in ton:
+                schuldige.append(f"{key}: '{satz}'")
+    assert not schuldige, (
+        "Diese Stufen verbieten Flo das Roasten:\n  " + "\n  ".join(schuldige))
+    # Und jede Stufe MUSS einen Tonfall haben - eine leere Stufe waere still
+    # wieder der neutrale, brave Standard.
+    for key, stufe in titles.Titles.RARITY.items():
+        assert (stufe.get("tone") or "").strip(), f"{key} hat gar keinen Tonfall"
+
+
+def test_flo_laesst_sich_nichts_gefallen_und_hat_haltung():
+    """Flo soll kontern statt zu schlucken - und eine politische Haltung haben.
+
+    Beides steht in eigenen Bloecken, damit man es findet und abschalten kann,
+    statt es im Persona-Absatz zu vergraben."""
+    import ai
+    alt = os.environ.pop("BOT_POLITIK", None)
+    alt_persona = os.environ.pop("BOT_PERSONA", None)
+    try:
+        p = ai.instance._system_prompt(author="Tester", title="")
+        # Konter: er entschuldigt sich nicht und gibt zurueck.
+        assert "NICHTS gefallen" in p, "Flo schluckt Beleidigungen wieder"
+        assert "doppelt zurueck" in p
+        # Haltung ist da und ist als solche erkennbar.
+        assert "RECHTS" in p, "die politische Haltung fehlt"
+        # ... und laesst sich je Server/Betreiber abschalten.
+        os.environ["BOT_POLITIK"] = "aus"
+        assert "RECHTS" not in ai.instance._system_prompt(), (
+            "BOT_POLITIK=aus schaltet die Haltung nicht ab")
+        for wert in ("0", "off", "false", "nein"):
+            os.environ["BOT_POLITIK"] = wert
+            assert not ai.instance._politik_an(), wert
+    finally:
+        os.environ.pop("BOT_POLITIK", None)
+        for name, wert in (("BOT_POLITIK", alt), ("BOT_PERSONA", alt_persona)):
+            if wert is not None:
+                os.environ[name] = wert
+
+
+def test_die_grenze_steht_vorne_und_bleibt_vollstaendig():
+    """Die eine Grenze ist nicht verhandelbar - auch nicht beim Entzahmen.
+
+    Zwei Dinge zugleich: (1) Alle sechs Merkmale, echte Drohungen, private Daten
+    und die Notlagen-Regel MUESSEN im Prompt stehen. Wer Flo haerter macht, darf
+    sie nicht nebenbei mit wegraeumen. (2) Sie steht direkt hinter der Persona
+    und nicht ganz am Ende - ganz hinten wirkte sie wie das letzte Wort und
+    faerbte alles davor zahm ein."""
+    import ai
+    p = ai.instance._system_prompt(author="Tester", title="")
+    for merkmal in ("Herkunft", "Hautfarbe", "Religion", "Geschlecht",
+                    "sexuelle Orientierung", "Behinderung"):
+        assert merkmal in p, f"die Grenze nennt {merkmal} nicht mehr"
+    for regel in ("echten Drohungen", "privaten Daten", "Nazi-Verherrlichung"):
+        assert regel in p, f"die Grenze nennt '{regel}' nicht mehr"
+    # Wer wirklich am Boden ist, wird nicht weitergeroastet.
+    assert "am Boden" in p and "Spass sofort weg" in p, (
+        "die Notlagen-Regel ist verschwunden - genau die darf nie fallen")
+
+    # Position: Grenze frueh, Vollgas-Erinnerung als letztes Wort.
+    assert p.index("Herkunft") < len(p) * 0.5, (
+        "die Grenze ist wieder ans Ende gerutscht und faerbt alles zahm")
+    assert p.rstrip().endswith("Nur die eine Grenze von oben bleibt."), (
+        f"das Schlusswort steht nicht am Ende: ...{p[-80:]!r}")
+
+
+def test_verweigerte_roasts_bleiben_nicht_still():
+    """Wenn das Modell kneift, sah der Server nur einen von fuenf Fertig-Spruechen.
+
+    Im Log stand NICHTS. Genau daran war nicht zu erkennen, dass Flo nicht
+    langweilig geworden ist, sondern dass das Modell verweigert - und ohne diese
+    Zeile sucht der Betreiber den Fehler ewig an der falschen Stelle."""
+    import logging
+    import fun
+    strom = io.StringIO()
+    haken = logging.StreamHandler(strom)
+    log = logging.getLogger("dcbot.fun")
+    log.addHandler(haken)
+    alt = log.level
+    log.setLevel(logging.WARNING)
+    try:
+        assert fun.instance._looks_like_refusal(
+            "Sorry, aber ich kann nicht beleidigend werden.") is True
+        assert fun.instance._looks_like_refusal("Du bist ein Vollpfosten.") is False
+    finally:
+        log.removeHandler(haken)
+        log.setLevel(alt)
+    text = strom.getvalue()
+    assert "verweigert" in text, f"die Verweigerung blieb still: {text!r}"
+    # 'bash k' filtert nach KIMUSTER - die Zeile muss da durchkommen.
+    hier = os.path.dirname(os.path.abspath(__file__))
+    muster = open(os.path.join(hier, "k"), encoding="utf-8").read()
+    assert "KI-Fehler" in muster and "KI-Fehler" in text, (
+        "'bash k' zeigt verweigerte Roasts nicht an")
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():

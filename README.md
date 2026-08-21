@@ -192,7 +192,33 @@ Zeile für die `.env` ins Log.
 | `LLM_USER_AGENT` | Client-Signatur — nur nötig, wenn Cloudflare blockt |
 | `LLM_TEMPERATURE` | 0 = brav, ~1.2 = chaotisch (Standard 0.9) |
 | `LLM_MAX_TOKENS` | Antwortlänge (Standard 800) |
-| `LLM_REASONING_EFFORT` | `low`/`medium`/`high` — nur für Denk-Modelle wie `gpt-oss`. Antwortet Flo öfter „fällt mir nichts ein", steht das Budget im Denken statt im Reden |
+| `LLM_REASONING_EFFORT` | `low`/`medium`/`high` — nur für Denk-Modelle wie `gpt-oss`. Antwortet Flo öfter „fällt mir nichts ein", steht das Budget im Denken statt im Reden. **Bei `gpt-oss` setzt Flo von sich aus `low`**, weil die Modelle sich beim Nachdenken selbst zahm reden |
+| `BOT_PERSONA` | ersetzt die komplette Persönlichkeit. **Achtung:** ist die gesetzt, wirkt keine Änderung an der Standard-Persona mehr |
+| `BOT_POLITIK` | `aus` nimmt Flo die politische Haltung |
+
+### Wenn Flo zahm wird
+
+Passiert das, ist es fast nie „das Modell ist halt so". Der Reihe nach:
+
+1. **Der Titel.** Die Tonfall-Texte in `titles.py` waren früher eine
+   *Zahmheits-Rampe*: je seltener der Titel, desto braver Flo — ganz oben stand
+   wörtlich „Kein Roasten, keine fiesen Sprüche". Ausgerechnet die Stammgäste
+   bekamen dadurch einen lieben Flo. Heute ändert die Seltenheit nur noch, **wie**
+   geroastet wird, nie **ob**; ein Test hält das fest.
+2. **`BOT_PERSONA` in der `.env`.** Steht die dort, ersetzt sie alles.
+3. **Das Modell.** `openai/gpt-oss-*` prüft sich vor jeder Antwort selbst und
+   verweigert deutlich öfter. Alternative: `LLM_MODEL=qwen/qwen3.6-27b`. Erst
+   `bash k` laufen lassen — dort steht die echte Modell-Liste des Anbieters.
+4. **Verweigert das Modell einen Roast**, nimmt Flo einen Fertig-Spruch — das
+   sah aus wie Langeweile und stand früher in *keinem* Log. Heute schon:
+   `bash k` zeigt `KI-Fehler: Roast verweigert`.
+
+> Flos Haltung ist derb und politisch **rechts** — das ist eine Meinung und so
+> gewollt. Die eine Grenze bleibt davon unberührt und ist nicht abschaltbar:
+> keine Hetze gegen Herkunft, Hautfarbe, Religion, Geschlecht, sexuelle
+> Orientierung oder Behinderung, keine Nazi-Verherrlichung, keine echten
+> Drohungen, keine privaten Daten — und wer wirklich am Boden ist, wird nicht
+> weitergeroastet. Ein Test prüft, dass diese Liste vollständig bleibt.
 
 ---
 

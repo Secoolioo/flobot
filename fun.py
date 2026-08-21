@@ -145,8 +145,19 @@ class Fun(FeatureBasis):
         self._last_dmroast = 0.0       # serverweiter Cooldown fuer den DM-Konter
         self._dm_cooldowns = {}        # uid -> letzter DM-Konter (pro Person)
 
-    def _looks_like_refusal(self, text):
-        return bool(text) and bool(_REFUSAL_RE.search(text))
+    def _looks_like_refusal(self, text, was="Roast"):
+        """Hat das Modell gekniffen statt zu roasten?
+
+        Wird das still abgefangen, sieht der Server nur einen von fuenf
+        Fertig-Spruechen und haelt Flo fuer langweilig geworden - genau so ist
+        es passiert. Deshalb steht jede Verweigerung ab jetzt im Log und damit
+        in 'bash k'."""
+        if not text or not _REFUSAL_RE.search(text):
+            return False
+        log.warning("KI-Fehler: %s verweigert (Modell zu zahm) - nehme einen "
+                    "Fertig-Spruch. Antwort war: %r", was,
+                    text.replace("\n", " ")[:120])
+        return True
 
     def setup(self):
         """Aktiv, wenn die KI laeuft (Roast/Hype/Spruch brauchen das LLM)."""

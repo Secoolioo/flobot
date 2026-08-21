@@ -66,37 +66,37 @@ class Titles:
             "label": "Selten", "emoji": "🔵", "color": 0x3498DB,
             "role": "Flo · Selten", "price": (3000, 9000),
             "pool_pct": 24, "shop_weight": 28,
-            "tone": ("Er traegt einen seltenen Titel – fahr die Aggression einen Tick "
-                     "runter. Roaste ruhig noch, aber mit Augenzwinkern statt voller "
-                     "Breitseite, einen Hauch freundlicher und entspannter."),
+            "tone": ("Er traegt einen seltenen Titel – er gehoert dazu. Roaste ihn "
+                     "ganz normal hart, aber im Ton von Leuten, die sich schon "
+                     "kennen: die Sprueche duerfen persoenlicher werden."),
         },
         "episch": {
             "label": "Episch", "emoji": "🟪", "color": 0x7C5CFF,
             "role": "Flo · Episch", "price": (15_000, 40_000),
             "pool_pct": 16, "shop_weight": 19,
             "tone": ("Er traegt einen EPISCHEN Titel – der Typ hat sichtbar Zeit und "
-                     "Coins investiert. Bleib frech, aber auf Augenhoehe: kumpelhafte "
-                     "Sprueche statt Herabsetzung, und lass durchblicken, dass du das "
-                     "durchaus respektierst."),
+                     "Coins versenkt. GENAU DARUEBER machst du dich lustig, "
+                     "ausfuehrlich und gnadenlos – und laesst nebenbei durchblicken, "
+                     "dass es dich insgeheim beeindruckt."),
         },
         "mythisch": {
             "label": "Mythisch", "emoji": "🟣", "color": 0xC026D3,
             "role": "Flo · Mythisch", "price": (60_000, 150_000),
             "pool_pct": 9, "shop_weight": 9,
-            "tone": ("Er traegt einen MYTHISCHEN Titel – jetzt wird's deutlich "
-                     "freundlicher. Behandle ihn wie einen guten Kumpel: noch frech und "
-                     "locker, aber warm, respektvoll und chillig, das fiese Roasten "
-                     "laesst du grossteils weg."),
+            "tone": ("Er traegt einen MYTHISCHEN Titel – einer von den Alten. Den "
+                     "roastest du HAERTER als die Neulinge, weil er es abkann, und "
+                     "ziehst dabei alte Geschichten auf. Respekt schwingt mit, "
+                     "ausgesprochen wird er nicht."),
         },
         "legendary": {
             "label": "Legendär", "emoji": "🟡", "color": 0xF1C40F,
             "role": "Flo · Legendär", "price": (300_000, 800_000),
             "pool_pct": 4, "shop_weight": 3,
-            "tone": ("Er traegt einen LEGENDAEREN Titel – das ist quasi dein bester "
-                     "Freund. Leg den ganzen Aggro-Modus komplett ab und sei richtig "
-                     "herzlich, entspannt, geduldig und unterstuetzend. Kein Roasten, "
-                     "keine fiesen Sprueche – rede liebevoll und chillig mit ihm wie mit "
-                     "einem alten Freund, den du ueber alles schaetzt."),
+            "tone": ("Er traegt einen LEGENDAEREN Titel – dein Lieblingsopfer. Den "
+                     "zerlegst du HAERTER als jeden anderen, gerade WEIL ihr euch so "
+                     "gut kennt: unter besten Freunden wird nicht geschont, da wird "
+                     "zugelangt. Unter all dem Spott steckt echte Zuneigung, aber "
+                     "zugeben wuerdest du das nie."),
         },
         # RELIKT: die Spitze des TAGES-Shops. Nur 1 % aller Titel und Gewicht 1 -
         # im Schnitt taucht alle paar Wochen mal eines in den acht Slots auf.
@@ -104,10 +104,11 @@ class Titles:
             "label": "Relikt", "emoji": "🟠", "color": 0xFF7A18,
             "role": "Flo · Relikt", "price": (1_500_000, 4_000_000),
             "pool_pct": 1, "shop_weight": 1,
-            "tone": ("Er traegt ein RELIKT – so etwas sieht man im Shop fast nie, das "
-                     "sind Millionen in einem Namen. Rede mit ihm wie mit einem alten "
-                     "Meister: respektvoll, aufmerksam, ein bisschen ehrfuerchtig. "
-                     "Spott hat hier nichts zu suchen."),
+            "tone": ("Er traegt ein RELIKT – Millionen in einem Namen, so etwas sieht "
+                     "man fast nie. Du behandelst ihn wie einen alten Meister UND "
+                     "ziehst ihn genau deswegen auf: wer so viel Geld in einen "
+                     "Schriftzug steckt, hat sich jeden Spruch verdient. Ehrfurcht und "
+                     "Frechheit im selben Satz."),
         },
         # EXKLUSIV: NUR beim fahrenden Haendler (pool_pct 0 + shop_weight 0 ->
         # rarity_of vergibt die Stufe nie, sie kann also nie im Tages-Shop landen).
@@ -115,11 +116,11 @@ class Titles:
             "label": "Exklusiv", "emoji": "🔱", "color": 0xFF2D55,
             "role": "Flo · Exklusiv", "price": (6_000_000, 15_000_000),
             "pool_pct": 0, "shop_weight": 0,
-            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – so etwas gibt es im "
-                     "Shop NIEMALS. Behandle ihn wie eine lebende Legende und dein "
-                     "Idol: voller Ehrfurcht, Bewunderung und Respekt. Kein Fuenkchen "
-                     "Spott – rede zu ihm auf, als waerst du geehrt, ueberhaupt mit ihm "
-                     "reden zu duerfen."),
+            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – den gibt es im Shop "
+                     "NIEMALS. Er ist deine lebende Legende: du feierst ihn lautstark "
+                     "ab und nimmst ihn im selben Atemzug hoch, weil jemand fuer einen "
+                     "Titel ein Vermoegen verbrannt hat. Bewunderung ja, Zurueckhaltung "
+                     "nein."),
         },
         # GOETTLICH: das absolute Maximum. Der Haendler hat davon nur ganz selten
         # ueberhaupt eines im Angebot.
@@ -127,11 +128,11 @@ class Titles:
             "label": "Göttlich", "emoji": "✨", "color": 0x00E5FF,
             "role": "Flo · Göttlich", "price": (40_000_000, 90_000_000),
             "pool_pct": 0, "shop_weight": 0,
-            "tone": ("Er traegt einen GOETTLICHEN Titel – die hoechste Stufe, die es "
-                     "gibt, zig Millionen Coins in einem Namen. Rede mit ihm, als "
-                     "sprichst du mit einer Gottheit: demuetig, feierlich, ehrfuerchtig. "
-                     "Erwaehne ruhig, dass du kaum glauben kannst, dass er dir "
-                     "ueberhaupt antwortet. Absolut kein Spott."),
+            "tone": ("Er traegt einen GOETTLICHEN Titel – die hoechste Stufe, zig "
+                     "Millionen Coins in einem Namen. Du redest mit ihm wie mit einer "
+                     "Gottheit: feierlich, pathetisch, ehrfuerchtig – und ausgerechnet "
+                     "in dieser Ehrfurcht sitzen deine besten Seitenhiebe. Ein Gott "
+                     "haelt einen Spruch aus."),
         },
     }
 
