@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 268 Tests
+python3 test_games_logic.py    # 269 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -130,7 +130,9 @@ Calls und toten Tagen durch und prüft acht Kriterien (siehe unten).
 bash k setup     einmalig - danach reicht ueberall:  k
 k                Konfig, Netz, Modell, echter Aufruf + letzte Fehler
 k n              vorher git pull
-k l              nur das Log
+k l              nur das Log (KI)
+k p              Panel-Zugang + das gewuerfelte Passwort
+k m              Musik/Spotify pruefen
 k r              Dienst neu starten
 ```
 

@@ -5,6 +5,7 @@
 #     bash k n        vorher git pull
 #     bash k l        nur die letzten KI-Fehler aus dem Journal
 #     bash k m        Musik/Spotify pruefen (yt-dlp, ffmpeg, Token, Track)
+#     bash k p        Panel-Zugang: das gewuerfelte Passwort aus dem Log
 #     bash k a        ALLES pruefen und einen Bericht in diagnose.txt schreiben
 #     bash k r        Dienst neu starten
 #     bash k setup    einmalig: danach reicht ueberall  k
@@ -25,6 +26,12 @@ trenner() { printf '\033[2m%s\033[0m\n' "---------------------------------------
 # haelt diese Liste gegen alle log-Meldungen in ai.py, damit hier nichts
 # durchfaellt, wenn dort eine neue Zeile dazukommt.
 KIMUSTER="KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate"
+
+# Das Panel schreibt sein gewuerfeltes Passwort EINMAL beim Start ins Log.
+# Ohne eigenen Weg dorthin waere es praktisch unauffindbar - "k l" sucht
+# nur KI-Zeilen, und im vollen Journal geht es zwischen den Zugriffs-
+# zeilen des Panels unter.
+PANELMUSTER="Web-Panel|WEBPANEL"
 
 # $1 = Ueberschrift, $2 = Suchmuster
 logs() {
@@ -68,6 +75,11 @@ case "${1:-}" in
     a|alles)
         "$PY" tools_check.py
         logs "Letzte Meldungen im Journal" "$KIMUSTER|$MUSIKMUSTER"
+        ;;
+    p|panel|passwort)
+        logs "Web-Panel: Zugang und Zustand" "$PANELMUSTER"
+        trenner
+        echo "Passwort dauerhaft machen:  WEBPANEL_PASS=...  in die .env"
         ;;
     m|musik)
         "$PY" tools_musik_check.py

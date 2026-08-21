@@ -6382,6 +6382,28 @@ def test_webpanel_zeigt_aktien_aktivitaet():
         fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
 
 
+def test_arzt_findet_das_panel_passwort():
+    """Das Panel wuerfelt ohne WEBPANEL_PASS ein Passwort und schreibt es EINMAL
+    beim Start ins Log. Ohne einen Weg dorthin ist es praktisch unauffindbar:
+    'k l' sucht nur KI-Zeilen, und im vollen Journal geht die eine Zeile
+    zwischen den Zugriffszeilen des Panels unter. Genau das ist passiert."""
+    import re
+    import webpanel
+    arzt = open("k", encoding="utf-8").read()
+    muster = re.search(r'PANELMUSTER="([^"]+)"', arzt)
+    assert muster, "in 'k' gibt es kein PANELMUSTER"
+    filter_re = re.compile(muster.group(1))
+    assert "p|panel|passwort)" in arzt, "es gibt keinen Unterbefehl fuer das Panel"
+
+    # Jede Panel-Meldung, die beim Start faellt, muss damit auffindbar sein.
+    quelle = inspect.getsource(webpanel.WebPanel.setup)
+    meldungen = re.findall(r'log\.[a-z]+\(\s*"([^"]*)', quelle)
+    wichtig = [m for m in meldungen if "Web-Panel" in m or "WEBPANEL" in m]
+    assert wichtig, "setup() meldet gar nichts ueber das Panel"
+    fehlt = [m for m in wichtig if not filter_re.search(m)]
+    assert not fehlt, f"'k p' zeigt diese Zeilen nicht: {fehlt}"
+
+
 def test_webpanel_nur_fuer_den_besitzer():
     """Im Panel werden Coins vergeben, Titel verteilt und der Bot neu gestartet -
     das darf nur der Besitzer. Deshalb ist der Login jetzt der STANDARD.
