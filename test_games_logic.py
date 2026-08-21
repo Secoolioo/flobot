@@ -6538,6 +6538,56 @@ def test_musik_probiert_andere_youtube_clients_durch():
         assert not unbekannt, f"diese player_client gibt es nicht (mehr): {unbekannt}"
 
 
+def test_musik_cookies_erreichen_jeden_yt_dlp_aufruf():
+    """Am echten Server bestaetigt: YouTube antwortet "Sign in to confirm you're
+    not a bot". Ist die IP einmal markiert, hilft kein player_client mehr - dann
+    bleibt nur ein angemeldeter Zugang, so steht es auch in yt-dlps eigener FAQ.
+
+    music.py ruft yt-dlp an DREI Stellen (Einzeltrack, Suche, Playlist). Kaemen
+    die Cookies nur bei einer an, ginge ein Link - und die Suche weiter nicht.
+    Genau so eine halbe Reparatur faellt niemandem auf."""
+    import re
+    import music
+    quelle = open(music.__file__, encoding="utf-8").read()
+    stellen = [m.start() for m in re.finditer(r"yt_dlp\.YoutubeDL\(", quelle)]
+    assert len(stellen) >= 3, f"nur {len(stellen)} yt-dlp-Aufrufe gefunden"
+    ohne = [i for i, pos in enumerate(stellen, 1)
+            if "_cookie_optionen()" not in quelle[max(0, pos - 700):pos]]
+    assert not ohne, f"diese yt-dlp-Aufrufe bekommen keine Cookies: {ohne}"
+
+    # Verhalten der Konfiguration - inklusive der ehrlichen Warnung.
+    alt_datei = os.environ.pop("YTDLP_COOKIES", None)
+    alt_browser = os.environ.pop("YTDLP_COOKIES_FROM_BROWSER", None)
+    try:
+        assert music.Music._cookie_optionen() == {}
+        # Ein falscher Pfad darf NICHT still verschluckt werden.
+        os.environ["YTDLP_COOKIES"] = "/gibt/es/nicht.txt"
+        assert music.Music._cookie_optionen() == {}, (
+            "eine fehlende Cookie-Datei wird als gesetzt behandelt")
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            pfad = f.name
+        try:
+            os.environ["YTDLP_COOKIES"] = pfad
+            assert music.Music._cookie_optionen() == {"cookiefile": pfad}
+            os.environ["YTDLP_COOKIES_FROM_BROWSER"] = "firefox"
+            assert music.Music._cookie_optionen() == {
+                "cookiefile": pfad, "cookiesfrombrowser": ("firefox",)}
+        finally:
+            os.unlink(pfad)
+    finally:
+        for name, wert in (("YTDLP_COOKIES", alt_datei),
+                           ("YTDLP_COOKIES_FROM_BROWSER", alt_browser)):
+            os.environ.pop(name, None)
+            if wert is not None:
+                os.environ[name] = wert
+
+    # Der Hinweis auf den Ausweg muss im Code stehen - sonst sucht der Betreiber
+    # ihn nie. Und die Warnung vor dem Haupt-Account gehoert dazu.
+    assert "WEGWERF" in quelle, "die Warnung vor dem Haupt-Account fehlt"
+    assert "YTDLP_COOKIES=" in quelle
+
+
 def test_musik_sagt_WARUM_ein_song_nicht_geht():
     """"Den Song konnte ich nicht laden. Probier einen anderen Link" - derselbe
     Satz fuer JEDEN Grund, und der echte verschwand im Traceback. Ob YouTube

@@ -1885,6 +1885,34 @@ class Music(FeatureBasis):
     _CLIENT_HILFT = ("botcheck", "format", "veraltet", "unbekannt")
 
     @staticmethod
+    def _cookie_optionen():
+        """Cookies fuer yt-dlp, falls eingerichtet.
+
+        YouTubes Bot-Pruefung laesst sich mit keinem player_client mehr umgehen,
+        wenn die IP einmal markiert ist. Dann bleibt nur ein angemeldeter
+        Zugang - das ist auch der offizielle Rat von yt-dlp selbst.
+
+            YTDLP_COOKIES=/opt/flobot/cookies.txt
+            YTDLP_COOKIES_FROM_BROWSER=firefox        (nur mit Browser auf dem Server)
+
+        WARNUNG, die man nicht verschweigen darf: nimm dafuer einen
+        WEGWERF-Account. YouTube sperrt Konten, deren Cookies von einem Server
+        aus benutzt werden - der Haupt-Account waere dann weg.
+        """
+        opts = {}
+        datei = os.getenv("YTDLP_COOKIES", "").strip()
+        if datei:
+            if os.path.isfile(datei):
+                opts["cookiefile"] = datei
+            else:
+                log.warning("YTDLP_COOKIES zeigt auf %r - da liegt keine Datei. "
+                            "Cookies werden NICHT benutzt.", datei)
+        browser = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+        if browser:
+            opts["cookiesfrombrowser"] = (browser,)
+        return opts
+
+    @staticmethod
     def _bekannte_clients():
         """Die player_client-Namen, die DIESE yt-dlp-Fassung wirklich kennt."""
         try:
@@ -1915,6 +1943,7 @@ class Music(FeatureBasis):
 
         def work(client):
             opts = dict(_YDL_OPTS)
+            opts.update(self._cookie_optionen())
             if client:
                 opts["extractor_args"] = {"youtube": {"player_client": [client]}}
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
@@ -1938,6 +1967,11 @@ class Music(FeatureBasis):
                 art, _satz = self.yt_fehler_deuten(exc)
                 letzter = exc
                 if art not in self._CLIENT_HILFT or nr == len(versuche) - 1:
+                    if art == "botcheck" and not self._cookie_optionen():
+                        log.error("Musik: YouTube laesst KEINEN player_client mehr "
+                                  "durch. Letzter Ausweg sind Cookies eines "
+                                  "WEGWERF-Kontos: YTDLP_COOKIES=/opt/flobot/"
+                                  "cookies.txt in die .env. Siehe 'k m'.")
                     raise
                 log.warning("Musik: YouTube blockt (%s) mit client=%s - versuche %s.",
                             art, client or "Standard",
@@ -2013,6 +2047,7 @@ class Music(FeatureBasis):
         besten Matches - oder None, wenn nichts brauchbar war."""
         loop = asyncio.get_running_loop()
         opts = dict(_YDL_OPTS)
+        opts.update(self._cookie_optionen())
         opts["noplaylist"] = True
         opts["extract_flat"] = "in_playlist"
 
@@ -2100,6 +2135,7 @@ class Music(FeatureBasis):
         SoundCloud liefert immer die komplette Track-Adresse."""
         loop = asyncio.get_running_loop()
         opts = dict(_YDL_OPTS)
+        opts.update(self._cookie_optionen())
         opts["noplaylist"] = False
         opts["extract_flat"] = "in_playlist"
         opts["playlistend"] = MAX_QUEUE

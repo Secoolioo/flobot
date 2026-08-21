@@ -104,7 +104,7 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 275 Tests
+python3 test_games_logic.py    # 276 Tests
 python3 test_logic.py          #   6 Tests
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
@@ -236,6 +236,47 @@ bekannte „Queue voll, spielt aber nicht". Dagegen jetzt zweierlei:
 
 Dazu heilt der Wächter zwei weitere Sackgassen: ein Song, der während eines
 Voice-Ausfalls endet, und ein Geister-Track nach `stop`.
+
+---
+
+## Wenn YouTube blockt
+
+YouTube prüft, ob ein echter Browser dahintersitzt. Welcher „player_client"
+ohne Login durchkommt, **ändert sich alle paar Monate** — deshalb steht im Code
+kein fester Name, sondern eine Reihe:
+
+```
+Musik: YouTube blockt (botcheck) mit client=Standard - versuche android_vr.
+Musik: YouTube ging erst mit player_client='ios'.
+       Dauerhaft machen mit  YTDLP_PLAYER_CLIENT=ios  in der .env.
+```
+
+Flo merkt sich, was funktioniert hat, und fängt beim nächsten Song damit an.
+Nachgesetzt wird **nur** bei Bot-Prüfung, Format- und Veraltet-Fehlern — bei
+einem gelöschten oder gesperrten Video hilft kein anderer Client, dort gibt er
+sofort auf statt den Nutzer warten zu lassen.
+
+**Kommt kein Client mehr durch**, ist die IP markiert. Dann bleibt nur ein
+angemeldeter Zugang (so auch yt-dlps eigene FAQ):
+
+```
+YTDLP_COOKIES=/opt/flobot/cookies.txt
+```
+
+> ⚠️ **Nimm dafür einen Wegwerf-Account.** YouTube sperrt Konten, deren Cookies
+> von einem Server aus benutzt werden — der Haupt-Account wäre dann weg.
+
+Die Datei erzeugst du im Browser mit einer Cookie-Export-Erweiterung (Format
+*Netscape*), lädst sie auf den Server und trägst den Pfad ein. Zeigt der Pfad
+ins Leere, sagt Flo das im Log statt es still zu ignorieren.
+
+| `.env` | was |
+|---|---|
+| `YTDLP_PLAYER_CLIENT` | einen Client festnageln (spart das Durchprobieren) |
+| `YTDLP_COOKIES` | Pfad zur `cookies.txt` |
+| `YTDLP_COOKIES_FROM_BROWSER` | z. B. `firefox` — nur mit Browser auf dem Server |
+
+Prüfen lässt sich das alles mit `k m`.
 
 ---
 
