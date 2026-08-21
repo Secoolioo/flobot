@@ -1816,7 +1816,7 @@ class FloAktie(FeatureBasis):
             value=(f"{akt:.1f} Punkte · {tempo} · "
                    f"Zielkurs **{self._fmt(self.ziel_kurs(akt))}** · "
                    f"Deckel **{self._fmt(self._deckel_kurs())}**\n"
-                   f"{self._mess_zeile()}\n"
+                   f"{self._mess_zeile(getattr(getattr(member, 'guild', None), 'id', None))}\n"
                    f"_Jeder im Call zählt 1, jeder Livestream +{STREAM_BONUS:g}, "
                    f"jede Kamera +{VIDEO_BONUS:g}, Chat zählt mit – aber nur, "
                    f"solange jemand im Call ist. {hinweis}_"),
@@ -1870,7 +1870,32 @@ class FloAktie(FeatureBasis):
         tatsaechlich bleiben nach einer Stunde 40 % uebrig, es sind -60 %/h."""
         return (((1.0 + pro_min) ** 60) - 1.0) * 100.0
 
-    def _mess_zeile(self):
+    @staticmethod
+    def zaehlt_hier(gid):
+        """Bewegt DIESER Server den Kurs? (guildcfg 'aktie_zaehlt')
+
+        Auf einem neuen Server ist das bewusst AUS - es gibt genau eine Aktie,
+        und ein frisch dazugekommener Server soll sie nicht ungefragt mitbewegen.
+        Nur: das Panel sagte trotzdem "Niemand im Call", waehrend acht Leute
+        dasassen. Es misst naemlich den Server, der zaehlt - und das ist ein
+        anderer. Fuer den Fragenden sah das schlicht wie ein kaputter Bot aus."""
+        if not gid:
+            return True                    # DM/unbekannt: nichts behaupten
+        try:
+            import guildcfg
+            return bool(guildcfg.an(gid, "aktie_zaehlt"))
+        except Exception:  # noqa: BLE001 - ohne guildcfg gilt der Standard
+            return True
+
+    def _mess_zeile(self, gid=None):
+        if gid is not None and not self.zaehlt_hier(gid):
+            return ("⚠️ **Dieser Server zählt nicht für die Aktie.** Was hier im "
+                    "Call passiert, bewegt den Kurs nicht – gemessen wird der "
+                    "Heimatserver.\n"
+                    "Einschalten: `Flo einstellung aktie_zaehlt an`")
+        return self._mess_zeile_gemessen()
+
+    def _mess_zeile_gemessen(self):
         """Zeigt SCHWARZ AUF WEISS, wer den Kurs gerade traegt.
 
         Ohne diese Zeile ist nicht nachvollziehbar, warum die Aktivitaet nicht

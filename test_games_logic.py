@@ -1898,6 +1898,66 @@ def test_webpanel_api():
     restore_eco()
 
 
+def test_aktie_sagt_wenn_dieser_server_gar_nicht_zaehlt():
+    """Gemeldet mit Screenshot: acht Leute im Call, mehrere mit Kamera und
+    Livestream - und das Panel sagt "Niemand im Call", Aktivitaet 0.0.
+
+    Es war nicht die Zaehlung. Es gibt genau EINE Aktie, und ein neu
+    dazugekommener Server bewegt sie bewusst erst, wenn man es dort einschaltet
+    (guildcfg 'aktie_zaehlt'). Gemessen wurde also ein ANDERER Server - und dort
+    sass tatsaechlich niemand. Fuer den Fragenden sah das wie ein kaputter Bot
+    aus, denn er sah ja seinen vollen Call.
+
+    Das Panel muss den Unterschied benennen: "niemand da" und "du zaehlst hier
+    nicht mit" sind zwei voellig verschiedene Aussagen."""
+    import floaktie
+    import guildcfg
+    a = floaktie.instance
+    alt_store, alt_on = a._store, a._enabled
+    a._store = _FakeStore({"base": 10.0, "act_ema": 0.0, "grund_akt": 0.0,
+                           "shares": {}, "ticks": [], "hist": []})
+    a._enabled = True
+    a._zuletzt_mess = (0, 0, 0, 0)          # wie im Screenshot: nichts gemessen
+    a._zuletzt_gezaehlt = []
+    fremd = 4242424242
+    alt_an = guildcfg.an
+    try:
+        # Der Schalter wird hier direkt gesteuert - geprueft wird das PANEL,
+        # nicht guildcfg (das hat eigene Tests und einen eigenen Speicher).
+        zaehlt = {"wert": False}
+        alt_an = guildcfg.an
+        guildcfg.an = lambda gid, key: (zaehlt["wert"] if key == "aktie_zaehlt"
+                                        else alt_an(gid, key))
+
+        # Ein Server, der NICHT zaehlt, bekommt die Wahrheit zu sehen.
+        zeile = a._mess_zeile(fremd)
+        assert "zählt nicht für die Aktie" in zeile, zeile
+        assert "aktie_zaehlt an" in zeile, "der Weg zur Loesung fehlt"
+        assert "Niemand im Call" not in zeile, (
+            "sagt weiterhin 'Niemand im Call', obwohl der Server nur nicht zaehlt")
+
+        # Ein Server, der zaehlt, bekommt die Messung - und da stimmt
+        # 'Niemand im Call' ja auch.
+        zaehlt["wert"] = True
+        try:
+            assert "Niemand im Call" in a._mess_zeile(fremd)
+            # Und mit Leuten drin steht dort, wer den Kurs traegt.
+            a._zuletzt_mess = (3, 1, 2, 5)
+            a._zuletzt_gezaehlt = ["Anna", "Bert", "Cem"]
+            voll = a._mess_zeile(fremd)
+            assert "3 im Call" in voll and "Anna" in voll, voll
+            assert "Livestream" in voll and "Kamera" in voll, voll
+        finally:
+            zaehlt["wert"] = False
+
+        # Ohne Server-Bezug (DM) wird nichts behauptet.
+        a._zuletzt_mess, a._zuletzt_gezaehlt = (0, 0, 0, 0), []
+        assert "Niemand im Call" in a._mess_zeile(None)
+    finally:
+        guildcfg.an = alt_an
+        a._store, a._enabled = alt_store, alt_on
+
+
 def test_aktie_steigt_auch_auf_einem_lebendigen_server():
     """Gemeldet: "10 Leute im Call und sie steigt nur 0,05 %".
 
