@@ -61,7 +61,11 @@ logs() {
 }
 
 # Musik: die Zeilen, an denen man einen Abspiel-Fehler wirklich erkennt.
-MUSIKMUSTER="Spotify|Musik-Feature|yt-dlp|403 Forbidden|DRM|brach nach|bricht immer wieder|Track konnte nicht|Voice-Connect|Stream-Adresse"
+# "Musik-Selbsttest" und "Musik-Fehler" MUESSEN mit rein: der Selbsttest sagt
+# beim Start, ob ueberhaupt Ton herauskommt, und "Musik-Fehler" nennt den
+# eingeordneten Grund. Ohne sie zeigte "k m" ausgerechnet die zwei
+# Zeilen nicht, die die Frage beantworten. Ein Test haelt das fest.
+MUSIKMUSTER="Musik-Fehler|Musik-Selbsttest|Musik-Feature|Spotify|yt-dlp|403 Forbidden|DRM|brach nach|bricht immer wieder|Track konnte nicht|Voice-Connect|Stream-Adresse"
 
 case "${1:-}" in
     n|neu)

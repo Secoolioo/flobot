@@ -6449,6 +6449,68 @@ def test_ki_denk_aufwand_nur_wenn_gesetzt():
             os.environ["LLM_REASONING_EFFORT"] = alt_env
 
 
+def test_musik_sagt_WARUM_ein_song_nicht_geht():
+    """"Den Song konnte ich nicht laden. Probier einen anderen Link" - derselbe
+    Satz fuer JEDEN Grund, und der echte verschwand im Traceback. Ob YouTube
+    einen Login sehen will, das Video geloescht ist, das Land gesperrt oder
+    yt-dlp schlicht zu alt - von aussen nicht zu unterscheiden.
+
+    Die Reihenfolge der Muster ist der schwierige Teil, beide Faelle sind
+    nachgemessen:
+      - "Sign in to confirm your AGE" ist KEIN Bot-Check
+      - "Video unavailable. ... not made this video available in your country"
+        ist eine LAENDER-Sperre, keine Loeschung
+    """
+    import music
+    faelle = (
+        ("Sign in to confirm you're not a bot. Use --cookies-from-browser", "botcheck"),
+        ("Sign in to confirm your age. This video may be inappropriate for some users.", "alter"),
+        ("Video unavailable. This video has been removed by the uploader", "weg"),
+        ("Private video. Sign in if you have been granted access", "weg"),
+        ("Video unavailable. The uploader has not made this video available "
+         "in your country.", "land"),
+        ("[DRM] The requested site is known to use DRM protection.", "drm"),
+        ("Unable to download API page: HTTP Error 429: Too Many Requests", "limit"),
+        ("nsig extraction failed: please report this issue", "veraltet"),
+        ("Unable to download webpage: Temporary failure in name resolution", "netz"),
+        ("keine Treffer", "nichts"),
+        ("Requested format is not available", "format"),
+        ("etwas voellig anderes", "unbekannt"),
+    )
+    for text, erwartet in faelle:
+        art, satz = music.Music.yt_fehler_deuten(Exception(text))
+        assert art == erwartet, (text[:60], art, erwartet)
+        assert satz and satz == music.Music._YT_SAETZE[art]
+    # Jede Art braucht einen eigenen Satz - sonst ist die Einordnung wertlos.
+    saetze = list(music.Music._YT_SAETZE.values())
+    assert len(set(saetze)) == len(saetze), "zwei Gruende teilen sich einen Satz"
+    # Und jede Art aus der Musterliste muss auch einen Satz haben.
+    for art, _muster in music.Music._YT_GRUENDE:
+        assert art in music.Music._YT_SAETZE, art
+
+    # Die Aufrufstelle muss den Grund benutzen UND ihn greppbar loggen.
+    quelle = inspect.getsource(music.Music.handle)
+    assert "yt_fehler_deuten(exc)" in quelle, "handle() nutzt die Einordnung nicht"
+    assert "Musik-Fehler:" in quelle, "der Grund landet nicht greppbar im Log"
+
+
+def test_arzt_findet_die_musik_meldungen():
+    """Wie beim Panel: der Arzt muss die Zeilen auch ZEIGEN. "Musik-Selbsttest ok"
+    und "Musik-Fehler: ..." fielen beide durch das Suchmuster in 'k' - also
+    ausgerechnet die zwei, die die Frage beantworten."""
+    import re
+    arzt = open("k", encoding="utf-8").read()
+    muster = re.search(r'MUSIKMUSTER="([^"]+)"', arzt)
+    assert muster, "in 'k' gibt es kein MUSIKMUSTER"
+    filter_re = re.compile(muster.group(1))
+    for zeile in ("Musik-Selbsttest ok (Song, 57600 Bytes Ton in 0.6s).",
+                  "Musik-Selbsttest: ffmpeg bekommt keinen Ton (403).",
+                  "Musik-Fehler: botcheck bei 'irgendwas' - Sign in to confirm",
+                  "Musik-Feature aktiv (YouTube: ja, Spotify: ja).",
+                  "Musik-Selbsttest: Spotify-Token ok."):
+        assert filter_re.search(zeile), f"'k m' zeigt diese Zeile nicht: {zeile}"
+
+
 def test_arzt_meldet_sich_wie_der_bot():
     """Am echten Server passiert: Cloudflare sperrte die nackte Python-Kennung,
     der Bot lief laengst - und die Diagnose meldete trotzdem Alarm und empfahl

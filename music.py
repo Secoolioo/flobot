@@ -1806,6 +1806,69 @@ class Music(FeatureBasis):
 
     # --- yt-dlp / Spotify Helfer ---------------------------------------------
 
+    # Was yt-dlp im Fehlerfall sagt -> was der Nutzer wissen muss. Vorher gab es
+    # fuer JEDEN Grund denselben Satz ("Den Song konnte ich nicht laden"), und der
+    # Grund verschwand in einem Traceback. Ob YouTube gerade nach einem Login
+    # fragt, das Video geloescht ist, oder yt-dlp schlicht veraltet ist, war von
+    # aussen nicht zu unterscheiden - man konnte nur raten.
+    #
+    # Reihenfolge zaehlt: die spezifischen Muster stehen vorn.
+    _YT_GRUENDE = (
+        # 'alter' MUSS vor 'botcheck' stehen: YouTube sagt bei beidem
+        # "Sign in to confirm ..." - nachgemessen landete die Altersfreigabe
+        # sonst beim Bot-Check und der Nutzer bekam den falschen Rat.
+        ("alter", ("age-restricted", "age restricted", "confirm your age",
+                   "inappropriate for some users")),
+        ("botcheck", ("not a bot", "confirm you're not a bot",
+                      "confirm youre not a bot", "sign in to confirm",
+                      "cookies-from-browser", "use --cookies")),
+        ("land", ("available in your country", "geo restricted", "geo-restricted",
+                  "blocked it in your country", "not available from your location",
+                  "who has blocked it in your country")),
+        ("weg", ("video unavailable", "private video", "has been removed",
+                 "no longer available", "account associated with this video "
+                 "has been terminated", "this video is unavailable")),
+        ("drm", ("drm protection", "drm-protected")),
+        ("limit", ("http error 429", "too many requests", "rate limit")),
+        ("veraltet", ("please report this issue", "confirm you are on the latest",
+                      "unable to extract", "failed to parse json",
+                      "unable to download api page", "nsig extraction failed",
+                      "signature extraction failed")),
+        ("netz", ("unable to download webpage", "connection", "timed out",
+                  "timeout", "temporary failure in name resolution",
+                  "network is unreachable", "tunnel connection failed")),
+        ("nichts", ("keine treffer", "no video results", "no results")),
+        ("format", ("requested format is not available",
+                    "no video formats found")),
+    )
+
+    _YT_SAETZE = {
+        "botcheck": "YouTube will gerade einen Login sehen und haelt mich fuer "
+                    "einen Bot. Das liegt nicht an dir und geht meist von selbst "
+                    "wieder weg.",
+        "alter": "Das Video ist altersbeschraenkt - da komme ich ohne Konto nicht ran.",
+        "weg": "Das Video gibt es nicht mehr (geloescht oder privat).",
+        "land": "Das Video ist in Deutschland gesperrt.",
+        "drm": "Diese Seite ist kopiergeschuetzt, da komme ich nicht ran.",
+        "limit": "YouTube drosselt mich gerade. Gib mir ein paar Minuten.",
+        "veraltet": "Mein YouTube-Modul ist zu alt fuer die aktuelle Seite - "
+                    "der Chef muss `pip install -U yt-dlp` machen.",
+        "netz": "Ich komme gerade nicht ins Netz. Versuch es gleich nochmal.",
+        "nichts": "Dazu habe ich nichts gefunden. Probier andere Suchwoerter.",
+        "format": "Von dem Video gibt es keine abspielbare Tonspur.",
+        "unbekannt": "Den Song konnte ich nicht laden. Probier einen anderen Link "
+                     "oder Suchbegriff.",
+    }
+
+    @classmethod
+    def yt_fehler_deuten(cls, exc):
+        """(art, satz) zu einer yt-dlp-Ausnahme. Nie werfen - im Zweifel 'unbekannt'."""
+        text = f"{exc}".lower()
+        for art, muster in cls._YT_GRUENDE:
+            if any(m in text for m in muster):
+                return art, cls._YT_SAETZE[art]
+        return "unbekannt", cls._YT_SAETZE["unbekannt"]
+
     async def _extract(self, query_or_url):
         """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf."""
         loop = asyncio.get_running_loop()
@@ -3121,10 +3184,15 @@ class Music(FeatureBasis):
                 track = await self._extract(arg)
             else:  # search
                 track = await self._extract(f"ytsearch1:{arg}")
-        except Exception:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
-            log.exception("Track konnte nicht aufgeloest werden: %s", arg)
-            return self._embed("Den Song konnte ich nicht laden. Probier einen anderen Link "
-                               "oder Suchbegriff.", color=_COL_ERR)
+        except Exception as exc:  # noqa: BLE001 - yt-dlp wirft viele verschiedene Fehler
+            art, satz = self.yt_fehler_deuten(exc)
+            # EINE greppbare Zeile mit dem echten Grund - der Traceback nur noch
+            # fuer den Fall, den wir nicht einordnen konnten.
+            log.warning("Musik-Fehler: %s bei %r - %s", art, arg,
+                        f"{exc}".replace("\n", " ")[:220])
+            if art == "unbekannt":
+                log.exception("Musik-Fehler im Detail")
+            return self._embed(satz, color=_COL_ERR)
 
         track.requested_by = message.author.display_name
         # Merken, WOMIT dieser Track aufgeloest wurde. Ohne das kann Flo eine
