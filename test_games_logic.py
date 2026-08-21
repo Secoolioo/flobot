@@ -6531,6 +6531,41 @@ def test_musik_probiert_andere_youtube_clients_durch():
         if alt_env is not None:
             os.environ["YTDLP_PLAYER_CLIENT"] = alt_env
 
+    # 6. DIE LAGE VOM SERVER: alle Clients Bot-Check, ausser einem - und der
+    #    kommt zwar durch, hat aber keine reine Tonspur ("Requested format is
+    #    not available"). Ihn deswegen fallenzulassen waere der Fehler: er ist
+    #    der EINZIGE, den YouTube noch durchlaesst. Also Video nehmen und den
+    #    Ton herausziehen (ffmpeg wirft das Bild ohnehin weg, -vn).
+    class FakeNurAndroid(FakeYDL):
+        def __init__(self, opts):
+            super().__init__(opts)
+            self.fmt = opts.get("format")
+
+        def extract_info(self, ziel, download=False):
+            FakeYDL.versuche.append((self.client, self.fmt))
+            if self.client != "android":
+                raise Exception("Sign in to confirm you're not a bot. Use --cookies")
+            if "worst" not in (self.fmt or ""):
+                raise Exception("Requested format is not available. Use --list-formats")
+            return {"title": "Semmel Song", "url": "http://x/s",
+                    "webpage_url": "http://x", "duration": 180,
+                    "http_headers": {"User-Agent": "u"}}
+
+    music.yt_dlp = type("M", (), {"YoutubeDL": FakeNurAndroid})
+    FakeYDL.versuche, m._guter_client = [], ""
+    try:
+        track = asyncio.run(m._extract("ytsearch1:semmel song robert F"))
+    finally:
+        music.yt_dlp = type("M", (), {"YoutubeDL": FakeYDL})
+    assert track.title == "Semmel Song"
+    assert m._guter_client == "android", m._guter_client
+    assert track.kopfzeilen.get("User-Agent") == "u", "Kopfzeilen gehen verloren"
+    # Derselbe Client wurde ein zweites Mal gefragt - mit weicherem Format.
+    letzte_zwei = FakeYDL.versuche[-2:]
+    assert [c for c, _f in letzte_zwei] == ["android", "android"], FakeYDL.versuche
+    assert "worst" in letzte_zwei[1][1], letzte_zwei
+    m._guter_client = ""
+
     # Kein Client-Name im Code, den die installierte yt-dlp-Fassung nicht kennt.
     bekannt = music.Music._bekannte_clients()
     if bekannt:

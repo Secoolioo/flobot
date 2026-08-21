@@ -1941,9 +1941,16 @@ class Music(FeatureBasis):
         player_client nachgesetzt statt aufzugeben."""
         loop = asyncio.get_running_loop()
 
-        def work(client):
+        def work(client, format_lax=False):
             opts = dict(_YDL_OPTS)
             opts.update(self._cookie_optionen())
+            if format_lax:
+                # Manche Clients kommen durch die Bot-Pruefung, liefern aber keine
+                # reine Tonspur ("Requested format is not available"). Dann lieber
+                # ein Video nehmen und den Ton daraus ziehen, als den Client
+                # wegzuwerfen - er ist ja gerade der einzige, der ueberhaupt
+                # durchkommt. ffmpeg verwirft das Bild sowieso (-vn).
+                opts["format"] = "bestaudio/best/worst"
             if client:
                 opts["extractor_args"] = {"youtube": {"player_client": [client]}}
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
@@ -1965,6 +1972,27 @@ class Music(FeatureBasis):
                 info = await loop.run_in_executor(None, work, client)
             except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet
                 art, _satz = self.yt_fehler_deuten(exc)
+                if art == "format":
+                    # Dieser Client IST durchgekommen - nur das Format passte
+                    # nicht. Ihn jetzt fallenzulassen waere der Fehler: er ist
+                    # vielleicht der einzige, den YouTube noch durchlaesst.
+                    try:
+                        info = await loop.run_in_executor(None, work, client, True)
+                    except Exception as exc2:  # noqa: BLE001
+                        art, _satz = self.yt_fehler_deuten(exc2)
+                        exc = exc2
+                    else:
+                        log.warning("Musik: client=%s hat keine reine Tonspur - "
+                                    "nehme das Video und ziehe den Ton heraus.",
+                                    client or "Standard")
+                        letzter = None
+                        if client and client != self._guter_client:
+                            self._guter_client = client
+                            log.warning("Musik: YouTube ging erst mit "
+                                        "player_client=%r. Dauerhaft machen mit  "
+                                        "YTDLP_PLAYER_CLIENT=%s  in der .env.",
+                                        client, client)
+                        break
                 letzter = exc
                 if art not in self._CLIENT_HILFT or nr == len(versuche) - 1:
                     if art == "botcheck" and not self._cookie_optionen():
