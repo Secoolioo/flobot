@@ -128,9 +128,10 @@ MAHN_STUFE_3 = 14
 MIN_POSTEN = int(os.getenv("SCHULDEN_MIN", "50") or "50")
 MAX_POSTEN_JE_PAAR = 5
 MAX_POSTEN_JE_PERSON = 25
-# Gesamtschuld hoechstens so viel mal das eigene Vermoegen - verhindert
-# Schuldenberge, die nie tilgbar sind.
-MAX_SCHULD_FAKTOR = float(os.getenv("SCHULDEN_MAX_FAKTOR", "3") or "3")
+# Eine Obergrenze fuer die GESAMTSCHULD gibt es bewusst nicht (mehr). Man darf
+# ausdruecklich mehr schulden, als man besitzt - genau wie im echten Leben.
+# Gebremst wird ueber die Zahl der Posten, die Sperre unter Score 20, den
+# Verfall nach 60 Tagen und die automatische Tilgung aus jeder Einnahme.
 # Ohne jede Bewegung verfaellt ein Posten nach so vielen Tagen (kein ewiges
 # Druckmittel). So viele Tage vorher bekommt der Glaeubiger eine letzte DM.
 VERFALL_TAGE = int(os.getenv("SCHULDEN_VERFALL_TAGE", "60") or "60")
@@ -267,11 +268,14 @@ class Posten:
 class Kreditwuerdigkeit:
     """Score 0-100 je Person, NUR aus dem eigenen Verhalten.
 
-    Wer puenktlich zurueckzahlt, darf mehr leihen; wer Posten verfallen laesst,
-    weniger. Bewusst nachvollziehbar statt clever: jede Bewegung ist ein
-    Eintrag mit Zeitpunkt, und was aelter als 90 Tage ist, zaehlt nur noch
-    halb - ein Ausrutscher von vor einem halben Jahr soll niemanden ewig
-    verfolgen."""
+    Der Score rechnet NICHT mehr an Betraegen mit. Er hat genau zwei Aufgaben:
+    er ist die Ampel im Leih-Angebot und im Profil (WEM traue ich?), und unter
+    20 gibt es gar nichts Neues mehr. Wie viel jemand verleihen darf, haengt
+    allein an seinem Kontostand.
+
+    Bewusst nachvollziehbar statt clever: jede Bewegung ist ein Eintrag mit
+    Zeitpunkt, und was aelter als 90 Tage ist, zaehlt nur noch halb - ein
+    Ausrutscher von vor einem halben Jahr soll niemanden ewig verfolgen."""
 
     START = 50
     HALBWERT_TAGE = 90
@@ -319,27 +323,26 @@ class Kreditwuerdigkeit:
         s = self.score(uid)
         return "🟢" if s >= 60 else ("🟡" if s >= 30 else "🔴")
 
-    def leih_limit(self, glaeubiger, schuldner):
-        """Obergrenze fuer EINEN neuen Posten.
-
-        Schuetzt den Verleiher vor sich selbst: je Posten hoechstens
-        Score-Prozent des eigenen Vermoegens. Bei Score 50 also die Haelfte,
-        bei 100 alles, bei 20 ein Fuenftel. Der Score der SCHULDNER-Seite
-        entscheidet, das Vermoegen der Glaeubiger-Seite."""
-        habe = max(0, economy.get_coins(glaeubiger))
-        anteil = habe * (self.score(schuldner) / 100.0)
-        return max(MIN_POSTEN, int(anteil))
-
     def gesperrt(self, uid):
-        """(gesperrt, Grund) - unter Score 20 gibt es nichts Neues."""
-        if self.score(uid) < 20:
-            return True, ("deine Kreditwürdigkeit ist gerade zu niedrig "
-                          "(unter 20). Tilge erst etwas.")
+        """(gesperrt, Grund) - unter Score 20 gibt es nichts Neues.
+
+        Der Grund steht in der DRITTEN Person ("hat ...", nicht "deine ..."):
+        gesperrt ist immer der Schuldner, den Befehl tippt aber meistens der
+        Glaeubiger. In der zweiten Person suchte der Verleiher den Fehler bei
+        sich selbst."""
+        wert = self.score(uid)
+        if wert < 20:
+            # Nicht nur "tilge erst etwas": wer gar keine offene Schuld mehr
+            # hat, KANN nicht tilgen und stuende sonst in einer Sackgasse.
+            return True, (f"hat gerade eine zu niedrige Kreditwürdigkeit "
+                          f"(**{wert}**, gesperrt ist alles unter 20). Sie steigt "
+                          f"wieder durch pünktliches Tilgen – und alte Minuspunkte "
+                          f"zählen nach 90 Tagen nur noch halb.")
         bis = float(_zahl(self._buch.stats(uid).get("insolvenz_bis")))
         if bis > time.time():
             tage = max(1, int((bis - time.time()) / TAG))
-            return True, (f"nach einer Privatinsolvenz sind {tage} Tag(e) lang "
-                          f"keine neuen Schulden möglich.")
+            return True, (f"hatte gerade eine Privatinsolvenz – noch {tage} Tag(e) "
+                          f"lang gibt es keine neuen Schulden.")
         return False, ""
 
 
@@ -1063,8 +1066,14 @@ class Schulden(FeatureBasis):
 
     # --- Befehl: leihen ----------------------------------------------------
     def _lies_betrag(self, message, rest):
-        """Betrag aus dem Rest-Text (auch '5k', '2,5 mio')."""
+        """Betrag aus dem Rest-Text (auch '5k', '2,5 mio').
+
+        Die Frist muss RAUS, bevor gesucht wird - sonst ist bei
+        'leih @wer bis 3 wochen 10k' die 3 der Betrag und Flo antwortet mit
+        "unter 50 lohnt die Buchfuehrung nicht". _lies_grund schneidet dieselben
+        zwei Muster laengst heraus; hier fehlte es."""
         ohne_ping = re.sub(r"<@!?\d+>", " ", rest or "")
+        ohne_ping = _FRIST_TAG_RE.sub(" ", _FRIST_RE.sub(" ", ohne_ping))
         for token in ohne_ping.split():
             wert = economy.parse_amount(token)
             if wert:
@@ -1108,16 +1117,26 @@ class Schulden(FeatureBasis):
                                          "pump", "auf")]
         return " ".join(woerter).strip(" ,.-")[:100]
 
-    def _darf_anlegen(self, glaeubiger, schuldner, betrag):
-        """(ok, Fehlertext). Alle Grenzen an EINER Stelle."""
+    def _darf_anlegen(self, glaeubiger, schuldner, betrag, *, mit_geld=True):
+        """(ok, Fehlertext). Alle Grenzen an EINER Stelle.
+
+        Es gibt bewusst KEINE Obergrenze mehr fuer die Gesamtschuld: man darf
+        mehr schulden, als man besitzt. Die einzige Betragsgrenze ist der
+        Kontostand des Verleihers - und die gilt nur, wenn wirklich Geld
+        fliesst. Beim Schuldschein fliesst keines: dort wird nur beurkundet,
+        was ohnehin schon passiert ist, und ob der Glaeubiger sein Geld gerade
+        im Casino stehen hat, geht die Sache nichts an."""
         if int(glaeubiger) == int(schuldner):
             return False, "Bei dir selbst geht das nicht. 😄"
         if betrag < MIN_POSTEN:
             return False, (f"Unter **{fmt(MIN_POSTEN)}** {economy.COIN} lohnt die "
                            f"Buchführung nicht – das ist ein Trinkgeld, kein Kredit.")
+        # Gesperrt ist immer der SCHULDNER - der Befehl kommt aber meistens vom
+        # Glaeubiger. Ohne den Namen las sich das als "DEINE Kreditwuerdigkeit
+        # ist zu niedrig", und der Verleiher suchte den Fehler bei sich.
         gesperrt, warum = self.score.gesperrt(schuldner)
         if gesperrt:
-            return False, f"Geht gerade nicht: {warum}"
+            return False, (f"Geht gerade nicht: <@{int(schuldner)}> {warum}")
         offen_paar = [p for p in self.buch.zwischen(glaeubiger, schuldner)
                       if p.glaeubiger == int(glaeubiger)]
         if len(offen_paar) >= MAX_POSTEN_JE_PAAR:
@@ -1126,21 +1145,17 @@ class Schulden(FeatureBasis):
         if len(self.buch.posten_von(schuldner)) >= MAX_POSTEN_JE_PERSON:
             return False, (f"Diese Person hat schon **{MAX_POSTEN_JE_PERSON}** offene "
                            f"Posten – mehr wird niemand mehr los.")
-        _h, soll, _n = self.buch.summen(schuldner)
-        vermoegen = max(0, economy.get_coins(schuldner))
-        deckel = int(max(vermoegen, MIN_POSTEN * 10) * MAX_SCHULD_FAKTOR)
-        if soll + betrag > deckel:
-            return False, (f"Das sprengt die Grenze: mehr als das "
-                           f"**{int(MAX_SCHULD_FAKTOR)}-fache** des eigenen Vermögens "
-                           f"darf niemand schulden (Deckel gerade "
-                           f"**{fmt(deckel)}** {economy.COIN}, offen schon "
-                           f"**{fmt(soll)}**).")
-        limit = self.score.leih_limit(glaeubiger, schuldner)
-        if betrag > limit:
-            return False, (f"So viel würde ich dir nicht leihen lassen. Bei einer "
-                           f"Kreditwürdigkeit von **{self.score.score(schuldner)}** "
-                           f"{self.score.ampel(schuldner)} sind höchstens "
-                           f"**{fmt(limit)}** {economy.COIN} drin.")
+        if mit_geld:
+            # KEIN MIN_POSTEN-Boden hier: mit Boden duerfte jemand mit 30 Coins
+            # ein Angebot ueber 50 stellen, das beim Klick zwingend an der
+            # Kontostands-Pruefung scheitert. Ein Angebot, das nie angenommen
+            # werden kann, ist schlimmer als eine sofortige Absage.
+            limit = max(0, economy.get_coins(glaeubiger))
+            if betrag > limit:
+                return False, (f"Mehr als du hast, kannst du nicht verleihen: auf "
+                               f"deinem Konto liegen **{fmt(limit)}** {economy.COIN}. "
+                               f"Dein ganzes Geld darfst du verleihen – aber eben "
+                               f"nicht mehr.")
         return True, ""
 
     async def _cmd_leih(self, message, rest):
@@ -1153,12 +1168,6 @@ class Schulden(FeatureBasis):
         if betrag is None:
             return (f"Wie viel denn? "
                     f"`{self._bot_name} leih @{ziel.display_name} 5k`")
-        if economy.get_coins(message.author.id) < betrag:
-            return (f"Du hast nicht genug. Kontostand: "
-                    f"**{fmt(economy.get_coins(message.author.id))}** {economy.COIN}.")
-        ok, fehler = self._darf_anlegen(message.author.id, ziel.id, betrag)
-        if not ok:
-            return fehler
         return await self._anfrage_stellen(
             message, ziel, betrag, grund=self._lies_grund(rest),
             faellig=self._lies_frist(rest), mit_geld=True)
@@ -1172,9 +1181,6 @@ class Schulden(FeatureBasis):
         betrag = self._lies_betrag(message, rest)
         if betrag is None:
             return f"Wie viel denn? `{self._bot_name} schuldschein @{ziel.display_name} 5k`"
-        ok, fehler = self._darf_anlegen(message.author.id, ziel.id, betrag)
-        if not ok:
-            return fehler
         return await self._anfrage_stellen(
             message, ziel, betrag, grund=self._lies_grund(rest),
             faellig=self._lies_frist(rest), mit_geld=False)
@@ -1185,9 +1191,18 @@ class Schulden(FeatureBasis):
 
         Bestaetigen muss IMMER der, dem daraus eine Schuld entsteht - also der
         Empfaenger beim Kredit und der Schuldner beim Schuldschein. Erst der
-        Klick bewegt Geld und legt den Posten an; ohne Klick passiert nichts."""
+        Klick bewegt Geld und legt den Posten an; ohne Klick passiert nichts.
+
+        Die Grenzen werden HIER geprueft und nicht in den einzelnen Befehlen:
+        'pay @wer 5k als leihgabe' kommt aus economy und ist an den Befehlen
+        vorbeigelaufen - das Angebot wurde oeffentlich gepostet und platzte
+        erst nach dem Klick des anderen."""
         if getattr(ziel, "bot", False):
             return "Bots leihen sich nichts. 🤖"
+        ok, fehler = self._darf_anlegen(message.author.id, ziel.id, betrag,
+                                        mit_geld=mit_geld)
+        if not ok:
+            return fehler
         view = _AnfrageView(self, message.author, ziel, betrag, grund=grund,
                             faellig=faellig, mit_geld=mit_geld)
         emb = discord.Embed(
@@ -1208,6 +1223,15 @@ class Schulden(FeatureBasis):
             name="Kreditwürdigkeit",
             value=f"{self.score.ampel(ziel.id)} **{self.score.score(ziel.id)}**/100",
             inline=True)
+        # Wer zustimmt, stimmt der Tilgungsautomatik zu. Das stand bisher
+        # nirgends in dem Embed, in dem man klickt - und seit es keinen
+        # Gesamtdeckel mehr gibt, koennen die Betraege beliebig gross werden.
+        emb.add_field(
+            name="Was das für dich heißt",
+            value=(f"Ab dem Klick gehen **{int(TILGUNG_PCT * 100)} %** jeder "
+                   f"Einnahme automatisch an <@{message.author.id}>, bis der "
+                   f"Posten getilgt ist."),
+            inline=False)
         emb.set_footer(text=("Ohne Bestätigung passiert nichts. Das Angebot läuft "
                              f"nach {ANFRAGE_TIMEOUT // 60} Minuten ab."))
         try:
@@ -1222,14 +1246,18 @@ class Schulden(FeatureBasis):
         """Der Klick auf 'Annehmen'. (ok, Text)."""
         glaeubiger = besteller.id
         schuldner = ziel.id
-        ok, fehler = self._darf_anlegen(glaeubiger, schuldner, betrag)
+        # Der Kontostand ZUERST: seit dem Umbau prueft _darf_anlegen dieselbe
+        # Zahl, wuerde aber "Mehr als du hast..." antworten - und angeklickt hat
+        # der ANDERE. Diese Meldung hier nennt den Richtigen beim Namen.
+        if mit_geld and economy.get_coins(glaeubiger) < betrag:
+            return False, (f"**{besteller.display_name}** hat inzwischen nicht "
+                           f"mehr genug auf dem Konto.")
+        ok, fehler = self._darf_anlegen(glaeubiger, schuldner, betrag,
+                                        mit_geld=mit_geld)
         if not ok:
             return False, fehler
         if mit_geld:
             # Erst JETZT fliesst Geld - vorher stand nur ein Angebot im Raum.
-            if economy.get_coins(glaeubiger) < betrag:
-                return False, (f"**{besteller.display_name}** hat inzwischen nicht "
-                               f"mehr genug auf dem Konto.")
             economy.add_coins(glaeubiger, -betrag, reason="pay")
             economy.add_coins(schuldner, betrag, reason="pay")
             await economy.flush()
@@ -1383,8 +1411,19 @@ class Schulden(FeatureBasis):
             return f"**{ziel.display_name}** hat bei dir nichts offen."
         rest_text = " ".join(message.content.split()[1:])
         betrag = None
-        if not any(w in rest_text.lower() for w in ("alles", "komplett", "ganz", "all")):
-            betrag = self._lies_betrag(message, rest_text)
+        # GANZE WOERTER vergleichen, nicht Teilstrings: "all" steckt in
+        # "ballern", "halle", "Fussball". 'schulden erlassen @x 500 fuers
+        # ballern' hat damit die KOMPLETTE Forderung gestrichen statt 500 -
+        # ohne Rueckfrage und ohne Weg zurueck.
+        woerter = set(re.findall(r"\w+", rest_text.lower()))
+        alles_gemeint = bool(woerter & {"alles", "komplett", "ganz", "all"})
+        betrag = self._lies_betrag(message, rest_text)
+        # Steht eine Zahl im Text, gewinnt IMMER die Zahl. Wer einen Betrag
+        # tippt, meint diesen Betrag - auch wenn irgendwo "ganz" danebensteht.
+        if betrag is None and not alles_gemeint:
+            return (f"Wie viel willst du **{ziel.display_name}** erlassen? "
+                    f"`{self._bot_name} schulden erlassen @{ziel.display_name} 5k` "
+                    f"– oder `... alles`.")
         weg, rest = self.erlassen(message.author.id, ziel.id, betrag)
         if weg <= 0:
             return f"**{ziel.display_name}** hat bei dir nichts offen."
@@ -1605,8 +1644,11 @@ class Schulden(FeatureBasis):
                 f"**Automatisch:** {int(TILGUNG_PCT * 100)} % jeder echten Einnahme "
                 "gehen an die Gläubiger – anteilig an alle, überfällige Posten "
                 "zuerst, innerhalb einer Person der älteste zuerst.\n"
-                f"**Kreditwürdigkeit** (0–100) steigt mit pünktlichem Zahlen und "
-                f"begrenzt, wie viel dir jemand leihen kann.\n"
+                f"**Wie viel geht?** Verleihen kannst du **alles, was auf deinem "
+                f"Konto liegt** – nicht mehr, aber auch keinen Coin weniger. "
+                f"**Schulden** darfst du ausdrücklich mehr, als du besitzt.\n"
+                f"**Kreditwürdigkeit** (0–100) begrenzt keine Beträge. Sie ist die "
+                f"Ampel im Angebot (wem traue ich?) und sperrt unter **20** ganz.\n"
                 f"**Verfall:** ohne jede Bewegung ist ein Posten nach "
                 f"{VERFALL_TAGE} Tagen weg."),
             color=FARBE)

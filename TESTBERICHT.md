@@ -405,8 +405,9 @@ Deckel 0/100, Verjährung: Einträge älter als 90 Tage zählen halb.
 ```
 
 Wirkung (alles über guildcfg abschaltbar):
-- **Leih-Limit** = Funktion des Scores (z. B. Score × 2 % des eigenen
-  Vermögens des Gläubigers als Obergrenze je Posten) — schützt Verleiher.
+- **Leih-Limit** = der Kontostand des Gläubigers, unabhängig vom Score. Wer
+  verleihen will, darf sein ganzes Geld verleihen (beim Schuldschein fließt
+  keines, dort gilt die Grenze nicht).
 - Anzeige im Profil-Lookup (`Flo check`) als Ampel (🟢/🟡/🔴) mit Zahl.
 - Unter Score 20: neue Schuldscheine/Leihen gesperrt, bis getilgt wurde.
 
@@ -414,8 +415,9 @@ Wirkung (alles über guildcfg abschaltbar):
 
 - nie gegen Bots, nie gegen sich selbst, Betrag ≥ 50 (unter Kleinkram lohnt
   die Buchführung nicht), je Paar max. 5 offene Posten, je Person max. 25.
-- Gesamtschuld einer Person gedeckelt (z. B. 3× ihr aktuelles Vermögen) —
-  verhindert absurde Schuldenberge, die nie tilgbar sind.
+- **Kein** Deckel auf die Gesamtschuld: man darf mehr schulden, als man
+  besitzt. Gebremst wird über die Postenzahl, die Sperre unter Score 20, den
+  Verfall und die Tilgungsautomatik.
 - **Verfall statt Ewigkeit:** ein Posten ohne jede Bewegung seit 60 Tagen
   wird `verfallen` (Gläubiger bekommt eine letzte DM 7 Tage vorher). Kein
   ewiges Druckmittel, die Historie bleibt sichtbar.

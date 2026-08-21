@@ -707,14 +707,30 @@ Grund auf `-rueck` oder `-rueckgabe`) — ein zurückgegebener Einsatz ist keine
 Einnahme. Eine Zahlung an jemanden, dem man etwas schuldet, wird angerechnet;
 was darüber hinausgeht, ist ein Geschenk und erzeugt **keine** Gegenforderung.
 
+**Wie viel geht?** Genau eine Regel: **verleihen kannst du alles, was auf deinem
+Konto liegt** — dein ganzes Geld, aber keinen Coin mehr. **Schulden** darfst du
+ausdrücklich *mehr, als du besitzt*: wer pleite ist, braucht das Geld; wer reich
+ist, nicht. Früher war beides am „Vermögen" festgemacht (Score-Prozent des
+Verleihers je Posten, Gesamtschuld höchstens das Dreifache des eigenen
+Vermögens) — zwei Regeln, die niemand erraten konnte und die genau den Fall
+verboten, um den es beim Leihen geht.
+
+Beim **Schuldschein** fließt kein Geld, dort gilt die Kontostand-Grenze nicht:
+„Kumpel schuldet mir noch 5.000 vom Kinoabend" beurkundet etwas, das längst
+passiert ist.
+
 **Kreditwürdigkeit** (0–100, Start 50): pünktlich getilgt +5, freiwillige
 Sondertilgung +2, überfällig −10 (einmal je Posten), ausgefallen −15. Was älter
-als 90 Tage ist, zählt halb. Der Score deckelt, wie viel jemand in *einem* Posten
-geliehen bekommt (Score-Prozent des Vermögens des Verleihers), steht im
-Profil-Lookup als Ampel, und unter 20 gibt es gar nichts Neues.
+als 90 Tage ist, zählt halb. Sie **begrenzt keine Beträge** — sie ist die Ampel
+im Angebot und im Profil-Lookup (*wem* traue ich?), und unter 20 gibt es gar
+nichts Neues.
 
 **Grenzen:** mindestens 50 Coins, höchstens 5 offene Posten je Paar und 25 je
-Person, Gesamtschuld höchstens das Dreifache des eigenen Vermögens.
+Person. Gebremst wird nicht über einen Deckel, sondern über die Zahl der Posten,
+die Sperre unter 20, den Verfall nach 60 Tagen und die automatische Tilgung.
+
+> Im Angebot steht seit dem Umbau ausdrücklich, worauf man klickt: ab der
+> Zustimmung gehen **20 % jeder Einnahme** automatisch an den Gläubiger.
 
 **Verfall statt Ewigkeit:** ein Posten ohne jede Bewegung ist nach 60 Tagen weg
 (der Gläubiger bekommt 7 Tage vorher eine DM). Die Historie bleibt sichtbar.

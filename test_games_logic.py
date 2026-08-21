@@ -3186,14 +3186,22 @@ def test_schulden_grenzen_und_kreditwuerdigkeit():
             {"t": time.time() - 200 * 86400, "d": -20, "g": "alt"}]
         assert sch.score.score(2) == 40
 
-        # Der Score deckelt, wie viel jemand geliehen bekommt. (Damit hier
-        # wirklich der Score greift und nicht der Vermoegens-Deckel des
-        # Schuldners, ist der Schuldner reich.)
-        economy.instance._profile(2)["coins"] = 500_000_000
-        limit = sch.score.leih_limit(1, 2)
-        assert limit == int(10_000_000 * 0.40), limit
-        ok, fehler = sch._darf_anlegen(1, 2, limit + 1)
-        assert not ok and "Kreditwürdigkeit" in fehler, fehler
+        # Der Score deckelt KEINE Betraege mehr. Die einzige Betragsgrenze ist
+        # der Kontostand des Verleihers - sein GANZES Geld darf er verleihen.
+        assert not hasattr(sch.score, "leih_limit"), (
+            "leih_limit lebt wieder in der Kreditwuerdigkeit - genau dort ist "
+            "die alte Score-Regel schon einmal eingewandert")
+        habe = economy.get_coins(1)
+        assert habe == 10_000_000, habe
+        # Genau alles geht - das ist der ganze Punkt der Aenderung.
+        assert sch._darf_anlegen(1, 2, habe)[0] is True, "das eigene Geld ist tabu"
+        # Ein Coin mehr nicht, und die Meldung nennt den Kontostand statt Score.
+        ok, fehler = sch._darf_anlegen(1, 2, habe + 1)
+        assert not ok, "man kann mehr verleihen als man hat"
+        import numfmt
+        assert "Konto" in fehler and numfmt.fmt(habe) in fehler, fehler
+        assert "Kreditwürdigkeit" not in fehler, (
+            f"die Absage redet weiter vom Score: {fehler}")
 
         # Unter 20 ist ganz Schluss.
         sch.buch.score_daten()["2"] = [{"t": time.time(), "d": -40, "g": "test"}]
@@ -3203,16 +3211,169 @@ def test_schulden_grenzen_und_kreditwuerdigkeit():
         restore()
 
 
-def test_schulden_gesamtdeckel():
-    """Niemand darf mehr als das Dreifache seines Vermoegens schulden - sonst
-    entstehen Schuldenberge, die nie tilgbar sind."""
-    restore, sch = _schulden_setup({1: 100_000_000, 2: 1_000_000})
+def test_leihgabe_wird_geprueft_BEVOR_sie_oeffentlich_steht():
+    """'Flo pay @wer 5k als leihgabe' lief an allen Grenzen vorbei.
+
+    Der Weg kommt aus economy und ruft _anfrage_stellen direkt auf - die
+    Pruefungen sassen aber in _cmd_leih. Ergebnis: das Angebot wurde oeffentlich
+    gepostet, der andere klickte, und ERST dann platzte es. Jetzt prueft
+    _anfrage_stellen selbst, also fuer alle drei Wege gleich."""
+    restore, sch = _schulden_setup({1: 1_000, 2: 1_000})
+    try:
+        gepostet = []
+
+        async def reply(*a, **kw):
+            gepostet.append(kw)
+            return SimpleNamespace(id=1, guild=None)
+
+        msg = _fake_msg(1, "pay <@2> 50k als leihgabe")
+        msg.reply = reply
+        ziel = SimpleNamespace(id=2, bot=False, display_name="Kumpel")
+
+        # 50k, aber nur 1k auf dem Konto -> Absage, und NICHTS im Kanal.
+        antwort = asyncio.run(sch._anfrage_stellen(
+            msg, ziel, 50_000, grund="", faellig=0, mit_geld=True))
+        assert not gepostet, "das Angebot stand oeffentlich, bevor es geprueft war"
+        assert "Konto" in str(antwort), antwort
+
+        # Was durchgeht, wird gepostet - und das Embed muss sagen, worauf man
+        # klickt: die 20 % jeder Einnahme standen bisher nirgends dort.
+        antwort = asyncio.run(sch._anfrage_stellen(
+            msg, ziel, 1_000, grund="", faellig=0, mit_geld=True))
+        assert len(gepostet) == 1, gepostet
+        emb = gepostet[0]["embed"]
+        text = " ".join([emb.title or "", emb.description or ""]
+                        + [f"{f.name} {f.value}" for f in emb.fields])
+        assert "%" in text and "Einnahme" in text, (
+            f"das Angebot verschweigt die Tilgungsautomatik: {text}")
+    finally:
+        restore()
+
+
+def test_schuldschein_braucht_kein_bargeld():
+    """Beim Schuldschein fliesst KEIN Geld - dort darf der Kontostand nichts
+    blockieren.
+
+    'Kumpel schuldet mir noch 5.000 vom Kinoabend' ist eine Beurkundung von
+    etwas, das laengst passiert ist. Ob mein Geld gerade im Casino oder in
+    Aktien steckt, geht die Sache nichts an. Beim Leihen ist es umgekehrt:
+    da fliesst echtes Geld, das ich haben muss."""
+    restore, sch = _schulden_setup({1: 0, 2: 5_000})
+    try:
+        # Kontostand 0 - als Schuldschein trotzdem in Ordnung.
+        assert sch._darf_anlegen(1, 2, 5_000, mit_geld=False)[0] is True, (
+            "der Schuldschein wird am Bargeld des Ausstellers gemessen")
+        # Mit echtem Geldfluss geht dasselbe nicht.
+        ok, fehler = sch._darf_anlegen(1, 2, 5_000, mit_geld=True)
+        assert not ok and "Konto" in fehler, fehler
+        # Die anderen Grenzen gelten beim Schuldschein weiter.
+        assert sch._darf_anlegen(1, 2, 10, mit_geld=False)[0] is False
+        assert sch._darf_anlegen(1, 1, 5_000, mit_geld=False)[0] is False
+    finally:
+        restore()
+
+
+def test_schulden_sperre_nennt_den_richtigen():
+    """"Deine Kreditwuerdigkeit ist zu niedrig" bekam der FALSCHE zu lesen.
+
+    Gesperrt ist immer der Schuldner - getippt hat 'Flo leih @kumpel 5k' aber
+    der Verleiher. Der las, SEIN Score sei kaputt, und suchte den Fehler bei
+    sich. Nach dem Umbau ist die Sperre die einzige verbliebene Wirkung des
+    Scores; dann muss sie wenigstens den Richtigen benennen."""
+    restore, sch = _schulden_setup({1: 100_000, 2: 100_000})
+    try:
+        sch.buch.score_daten()["2"] = [{"t": time.time(), "d": -40, "g": "test"}]
+        gesperrt, warum = sch.score.gesperrt(2)
+        assert gesperrt
+        assert "deine" not in warum.lower(), (
+            f"der Grund redet den Falschen an: {warum}")
+        ok, fehler = sch._darf_anlegen(1, 2, 5_000)
+        assert not ok
+        assert "<@2>" in fehler, f"der Gesperrte wird nicht genannt: {fehler}"
+        # Und der Weg zurueck muss dastehen - sonst ist es eine Sackgasse.
+        assert "Tilgen" in fehler or "tilgen" in fehler, fehler
+    finally:
+        restore()
+
+
+def test_leih_liest_den_betrag_und_nicht_die_frist():
+    """'Flo leih @wer bis 3 wochen 10k' hat die **3** als Betrag gelesen.
+
+    Die Antwort war dann "unter 50 lohnt die Buchfuehrung nicht" - eine
+    Fehlermeldung, die mit der Eingabe nichts zu tun hat und niemanden auf den
+    richtigen Weg bringt. _lies_grund schneidet die Frist laengst heraus,
+    _lies_betrag tat es nicht."""
+    restore, sch = _schulden_setup({1: 100_000, 2: 0})
+    try:
+        for text, erwartet in (
+                ("<@2> bis 3 wochen 10k", 10_000),
+                ("<@2> bis 2 monaten 5000", 5_000),
+                ("<@2> bis in 7 tagen 2,5k", 2_500),
+                ("<@2> bis freitag 1k", 1_000),
+                ("<@2> 10k", 10_000),
+                ("<@2> 10k bis 3 wochen", 10_000)):
+            assert sch._lies_betrag(None, text) == erwartet, (
+                f"{text!r} -> {sch._lies_betrag(None, text)}, erwartet {erwartet}")
+        # Die Frist selbst muss weiter erkannt werden.
+        assert sch._lies_frist("<@2> bis 3 wochen 10k") > time.time()
+    finally:
+        restore()
+
+
+def test_erlassen_streicht_nicht_versehentlich_alles():
+    """'schulden erlassen @x 500 fuers ballern' hat ALLES gestrichen.
+
+    Geprueft wurde mit 'all' als TEILSTRING - und 'all' steckt in 'ballern',
+    'halle', 'Fussball'. Aus 500 wurde die komplette Forderung, ohne Rueckfrage
+    und ohne Weg zurueck. Das ist der teuerste Tippfehler im ganzen Modul."""
+    restore, sch = _schulden_setup({1: 100_000, 2: 100_000})
+    try:
+        _schuld(sch, 1, 2, 20_000)
+
+        async def erlassen(text):
+            msg = _fake_msg(1, text)
+            msg.mentions = [SimpleNamespace(id=2, bot=False, display_name="Kumpel")]
+            return await sch._erlassen(msg)
+
+        # 'ballern' enthaelt 'all' - es duerfen trotzdem nur 500 weg sein.
+        asyncio.run(erlassen("schulden erlassen <@2> 500 fuers ballern"))
+        assert sch.buch.saldo(1, 2) == 19_500, sch.buch.saldo(1, 2)
+        # Steht eine Zahl da, gewinnt die Zahl - auch neben dem Wort 'ganz'.
+        asyncio.run(erlassen("schulden erlassen <@2> 500 ganz sicher"))
+        assert sch.buch.saldo(1, 2) == 19_000, sch.buch.saldo(1, 2)
+        # Ohne Zahl und ohne 'alles' wird nachgefragt statt alles zu streichen.
+        antwort = asyncio.run(erlassen("schulden erlassen <@2>"))
+        assert sch.buch.saldo(1, 2) == 19_000, "hat kommentarlos alles gestrichen"
+        assert "Wie viel" in str(antwort), antwort
+        # Ausdrueckliches 'alles' raeumt weiter komplett ab.
+        asyncio.run(erlassen("schulden erlassen <@2> alles"))
+        assert sch.buch.saldo(1, 2) == 0, sch.buch.saldo(1, 2)
+    finally:
+        restore()
+
+
+def test_schulden_darf_mehr_sein_als_man_besitzt():
+    """Man darf ausdruecklich MEHR schulden, als man hat.
+
+    Frueher war die Gesamtschuld auf das Dreifache des eigenen Vermoegens
+    gedeckelt. Das hat niemand erraten ("verstehe das vermoegen zeug nicht"),
+    und es hat den Fall verboten, um den es beim Leihen ueberhaupt geht: wer
+    pleite ist, braucht das Geld - wer reich ist, nicht.
+
+    Die einzige Grenze ist jetzt, was der VERLEIHER wirklich hat."""
+    # Der Schuldner ist absichtlich arm - genau daran waere es vorher
+    # gescheitert.
+    restore, sch = _schulden_setup({1: 100_000_000, 2: 1_000})
     try:
         _schuld(sch, 1, 2, 2_900_000)
-        ok, fehler = sch._darf_anlegen(1, 2, 200_000)
-        assert not ok and "Grenze" in fehler, fehler
-        # Knapp darunter geht noch.
-        assert sch._darf_anlegen(1, 2, 50_000)[0] is True
+        # Das 2900-fache seines Geldes steht schon offen - trotzdem geht mehr.
+        assert sch._darf_anlegen(1, 2, 200_000)[0] is True, (
+            "der alte Vermoegens-Deckel lebt noch")
+        # Auch das ganze Geld des Verleihers auf einmal.
+        assert sch._darf_anlegen(1, 2, 100_000_000)[0] is True
+        # Nur mehr als der Verleiher hat, geht nicht.
+        ok, fehler = sch._darf_anlegen(1, 2, 100_000_001)
+        assert not ok and "Konto" in fehler, fehler
     finally:
         restore()
 
