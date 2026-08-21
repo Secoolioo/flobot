@@ -256,6 +256,16 @@ Nachgesetzt wird **nur** bei Bot-Prüfung, Format- und Veraltet-Fehlern — bei
 einem gelöschten oder gesperrten Video hilft kein anderer Client, dort gibt er
 sofort auf statt den Nutzer warten zu lassen.
 
+Die Reihenfolge ist **nicht beliebig**: YouTube verlangt für die meisten
+Clients inzwischen ein sogenanntes **PO Token**, das yt-dlp gar nicht selbst
+erzeugen kann. Genau drei Clients kommen ohne aus — `tv`, `android_vr` und
+`web_embedded` — und nur die haben auf einem nackten Server überhaupt eine
+Chance. Deshalb stehen sie vorn.
+
+Der Client-Wechsel gilt für **Abspielen, Suche und Playlists** gleichermaßen.
+Das ist kein Detail: wird schon die *Suche* geblockt, kommt `Flo spiel <titel>`
+nie bis zum Abspielen — ein Wechsel nur beim Abspielen hätte gar nichts genützt.
+
 **Kommt kein Client mehr durch**, ist die IP markiert. Dann sucht Flo denselben
 Song bei **SoundCloud** — das kennt YouTubes Bot-Prüfung nicht und ist der
 einzige Weg, der ohne Zutun des Betreibers noch Musik liefert:
@@ -264,27 +274,58 @@ einzige Weg, der ohne Zutun des Betreibers noch Musik liefert:
 Musik: YouTube blockt komplett - spiele 'Semmel Song' von SoundCloud.
 ```
 
-Findet SoundCloud den Song nicht, bleibt nur ein angemeldeter Zugang
-(so auch yt-dlps eigene FAQ):
+Wer das *nicht* will, weil ein stiller Umweg das eigentliche Problem verdeckt,
+schaltet es mit `MUSIC_SOUNDCLOUD_FALLBACK=0` ab und bekommt stattdessen eine
+ehrliche Fehlermeldung.
+
+### YouTube wieder ans Laufen bringen: `k y`
 
 ```
-YTDLP_COOKIES=/opt/flobot/cookies.txt
+k y                        was geht, was nicht, was tun
+k y browser firefox        Cookies aus einem Browser auf DIESEM Rechner
+k y datei /pfad/cookies.txt  eine exportierte cookies.txt einrichten
 ```
 
-> ⚠️ **Nimm dafür einen Wegwerf-Account.** YouTube sperrt Konten, deren Cookies
-> von einem Server aus benutzt werden — der Haupt-Account wäre dann weg.
+`k y` probiert jeden Client wirklich durch und sagt dann in einem Satz, woran
+es liegt. Es unterscheidet dabei ausdrücklich **„YouTube blockt deine IP"** von
+**„der Server kommt gar nicht erst ins Netz"** — das sind zwei völlig
+verschiedene Reparaturen, und die falsche kostet einen Abend.
 
-Die Datei erzeugst du im Browser mit einer Cookie-Export-Erweiterung (Format
-*Netscape*), lädst sie auf den Server und trägst den Pfad ein. Zeigt der Pfad
-ins Leere, sagt Flo das im Log statt es still zu ignorieren.
+Es gibt drei Wege zurück:
+
+| Weg | wie | Aufwand |
+|---|---|---|
+| **Cookies** eines angemeldeten Kontos | `k y browser firefox` oder `k y datei …` | klein |
+| **PO-Token-Anbieter** | `pip install -U bgutil-ytdlp-pot-provider` + dessen Server | mittel, aber ohne Konto |
+| **Eigener Ausgang** | `YTDLP_PROXY=socks5://127.0.0.1:1080` | je nachdem |
+
+> ⚠️ **Nimm für Cookies einen Wegwerf-Account.** YouTube sperrt Konten, deren
+> Cookies von einem Server aus benutzt werden — der Haupt-Account wäre dann weg.
+
+Beim Export ist die Reihenfolge entscheidend, sonst sind die Cookies sofort
+tot: **privates Fenster** öffnen → bei YouTube anmelden → im *selben* Tab
+`youtube.com/robots.txt` aufrufen → Cookies exportieren (Format *Netscape*) →
+das Fenster schließen, **ohne sich abzumelden**. YouTube dreht Cookies in
+offenen Tabs sonst laufend weiter.
+
+Eine `cookies.txt` muss **nicht** in die `.env`: liegt sie neben `bot.py` oder
+in `data/`, findet Flo sie von selbst — praktisch, wenn man an einer
+noVNC-Konsole ohne Copy-Paste sitzt. Eine *leere* Datei wird dabei übergangen,
+statt yt-dlp mit einem leeren Zugang loslaufen zu lassen.
+
+> 🔒 `cookies.txt` ist eine **Anmeldung bei Google**. Sie steht in `.gitignore`,
+> und ein Test hält das fest.
 
 | `.env` | was |
 |---|---|
 | `YTDLP_PLAYER_CLIENT` | einen Client festnageln (spart das Durchprobieren) |
-| `YTDLP_COOKIES` | Pfad zur `cookies.txt` |
+| `YTDLP_COOKIES` | Pfad zur `cookies.txt` (sonst wird sie gesucht) |
 | `YTDLP_COOKIES_FROM_BROWSER` | z. B. `firefox` — nur mit Browser auf dem Server |
+| `YTDLP_PO_TOKEN` | PO Tokens von Hand, mehrere per Komma |
+| `YTDLP_PROXY` | eigener Ausgang **nur** für yt-dlp (Discord/KI bleiben direkt) |
+| `MUSIC_SOUNDCLOUD_FALLBACK` | `0` = lieber eine ehrliche Fehlermeldung |
 
-Prüfen lässt sich das alles mit `k m`.
+Prüfen lässt sich das alles mit `k y` und `k m`.
 
 ---
 
@@ -553,7 +594,15 @@ Safe 7, der Rest 5.
 
 ### Wort des Tages
 
-Einmal am Tag legt Flo ein Wordle in den dafür eingestellten Kanal. Das ist ein
+Einmal am Tag legt Flo ein Wordle in den dafür eingestellten Kanal.
+
+> **Von Hand auslösen:** Im Web-Panel steht unter *Server → Sofort auslösen* ein
+> Knopf **„Wort des Tages jetzt starten"**. Er umgeht die Voice-Schwelle und den
+> gewürfelten Termin — für den Fall, dass der Server sichtbar voll ist und
+> trotzdem nichts kommt. Läuft an dem Tag schon eine Runde, wird sie **nicht**
+> neu gestartet, sondern nur der Aushang noch einmal ausgehängt: niemandem
+> werden seine Versuche genommen. Ist das Wort schon gelöst, sagt der Knopf das,
+> statt ein zweites Rätsel hinzuwerfen. Das ist ein
 **Wettrennen**: wer es als Erster knackt, nimmt den ganzen Topf, danach ist die
 Runde durch und das Wort wird aufgelöst. Jeder rät für sich — die eigenen
 Versuche sieht nur man selbst.

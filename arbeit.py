@@ -1464,6 +1464,48 @@ class Arbeit(FeatureBasis):
                 log.exception("Wort des Tages fuer %s fehlgeschlagen", guild)
         return raus
 
+    async def jetzt_starten(self, guild):
+        """Das Wort des Tages SOFORT auslegen - ohne Voice-Schwelle und Termin.
+
+        Das ist der Knopf im Web-Panel. Es gibt gute Gruende, warum sonst
+        gewartet wird (ein Raetsel in einen leeren Server zu werfen ist
+        verschenkt), aber wenn der Betreiber sieht, dass der Server voll ist und
+        trotzdem nichts kommt, muss er es von Hand ausloesen koennen.
+
+        WICHTIG - laeuft heute schon eine Runde, wird sie NICHT neu gestartet,
+        sondern nur der Aushang noch einmal ausgehaengt. Ein Neustart wuerde
+        allen Mitspielern ihre Versuche wegnehmen; und der haeufigste Grund fuer
+        "es kam kein Wort" ist ohnehin nicht, dass keines gezogen wurde,
+        sondern dass die Nachricht nicht ankam oder im falschen Kanal landete.
+
+        Gibt (embed, view, datei, frisch) zurueck. 'frisch' sagt, ob wirklich
+        eine neue Runde begonnen hat. Wirft ValueError mit einem deutschen
+        Grund, wenn es nicht geht."""
+        if not self._enabled:
+            raise ValueError("Das Wort des Tages ist ausgeschaltet.")
+        gid = getattr(guild, "id", 0)
+        if not gid:
+            raise ValueError("Server nicht gefunden.")
+        raetsel = self.raetsel(gid)
+        frisch = not raetsel.laeuft
+        if frisch:
+            raetsel.starten()
+            # Den Termin mit abhaken. faellig() steigt zwar schon beim Datum
+            # aus, aber ein halb gesetzter Plan im Store waere eine Falle fuer
+            # den naechsten, der hier etwas aendert.
+            raetsel.daten["plan_tag"] = _heute()
+            raetsel.daten["plan_zeit"] = 0
+            self._speichern()
+            log.info("Wort des Tages auf %s VON HAND gestartet (%d Buchstaben).",
+                     getattr(guild, "name", gid), len(raetsel.wort))
+        elif raetsel.entschieden:
+            raise ValueError("Das Wort von heute ist schon geloest.")
+        else:
+            log.info("Wort des Tages auf %s noch einmal ausgehaengt "
+                     "(Runde laeuft bereits).", getattr(guild, "name", gid))
+        embed, datei = await self.tages_ansage(gid)
+        return embed, TagesView(gid), datei, frisch
+
     async def tages_ansage(self, gid):
         """Der Aushang zum Start: Embed + leeres Brett als Bild.
 
@@ -2258,4 +2300,5 @@ tick = instance.tick
 register_views = instance.register_views
 kanal_fuer = instance.kanal_fuer
 raetsel = instance.raetsel
+jetzt_starten = instance.jetzt_starten
 leute_im_voice = instance.leute_im_voice

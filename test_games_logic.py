@@ -6611,7 +6611,9 @@ def test_musik_probiert_andere_youtube_clients_durch():
         # 1. Standard blockt, 'ios' geht -> durchprobieren, merken, melden.
         FakeYDL.versuche, FakeYDL.geht_ab, m._guter_client = [], "ios", ""
         track = asyncio.run(m._extract("ytsearch1:egal"))
-        assert FakeYDL.versuche == [None, "android_vr", "ios"], FakeYDL.versuche
+        # Reihenfolge ist nicht beliebig: die drei Clients OHNE PO Token zuerst.
+        assert FakeYDL.versuche == [None, "tv", "android_vr", "web_embedded",
+                                    "tv_simply", "ios"], FakeYDL.versuche
         assert m._guter_client == "ios"
         assert track.title == "Song"
         # Die Kopfzeilen muessen dabei erhalten bleiben (sonst 403 bei ffmpeg).
@@ -9199,15 +9201,27 @@ def test_kein_modul_zielt_wieder_auf_die_rohe_mention_liste():
     die message.mentions bloss erwaehnen (das ist mir hier prompt passiert)."""
     import ast
     import glob
+    # Die Ausnahmen haengen am INHALT der Zeile, nicht an ihrer Nummer.
+    # Vorher stand hier ("bot.py", 1637) - und jede Aenderung WEITER OBEN in
+    # bot.py liess diesen Test scheitern, obwohl an der Sache nichts falsch
+    # war. Ein Riegel, der bei fremden Aenderungen anschlaegt, wird
+    # frueher oder spaeter weggeworfen statt gelesen.
     erlaubt = {
-        ("bot.py", 1637),        # nur: ist Flo ueberhaupt angesprochen?
-        ("economy.py", 1572),    # nur: ist ueberhaupt jemand genannt?
-        ("economy.py", 1577),    # _pay holt das Ziel danach aus dem Text
-        ("economy.py", 1584),    # Rueckfall, nachdem der Text nichts hergab
-        ("fun.py", 204),         # nur: ist ueberhaupt jemand genannt?
-        ("profil.py", 381),      # Rueckfall hinter erstes_ziel(...)
+        # nur: ist Flo ueberhaupt angesprochen?
+        ("bot.py", "if not angesprochen and self.user in message.mentions:"),
+        # nur: ist ueberhaupt jemand genannt?
+        ("economy.py", "if not message.mentions:"),
+        # nur eine Nachschlagetabelle - das Ziel waehlt _pay danach aus dem Text
+        ("economy.py", "by_id = {u.id: u for u in message.mentions}"),
+        # Rueckfall, nachdem der Text nichts hergab
+        ("economy.py", "ziel = ziel or message.mentions[0]"),
+        # nur: ist ueberhaupt jemand genannt?
+        ("fun.py", 'if (first in ("rate", "bewerte") and not message.mentions'),
+        # Rueckfall hinter erstes_ziel(...)
+        ("profil.py", "return erstes_ziel(message) or message.mentions[0], \"\""),
     }
     schuldige = []
+    gesehen = set()
     for datei in sorted(glob.glob("*.py")):
         if datei.startswith("test_") or datei == "basis.py":
             continue
@@ -9218,13 +9232,19 @@ def test_kein_modul_zielt_wieder_auf_die_rohe_mention_liste():
             basis_knoten = knoten.value
             if not (isinstance(basis_knoten, ast.Name) and basis_knoten.id == "message"):
                 continue
-            if (datei, knoten.lineno) in erlaubt:
-                continue
             zeile = quelle.splitlines()[knoten.lineno - 1].strip()
+            if (datei, zeile) in erlaubt:
+                gesehen.add((datei, zeile))
+                continue
             schuldige.append(f"{datei}:{knoten.lineno}  {zeile[:70]}")
     assert not schuldige, (
         "Diese Stellen zielen auf die rohe Mention-Liste - bei einer "
         "Antwort-mit-Ping treffen sie den Falschen:\n  " + "\n  ".join(schuldige))
+    # Und die Ausnahmeliste darf nicht vergammeln: verschwindet eine Zeile,
+    # muss sie hier raus - sonst deckt sie irgendwann versehentlich eine
+    # voellig andere Stelle mit demselben Wortlaut.
+    tot = sorted(erlaubt - gesehen)
+    assert not tot, f"Ausnahmen zeigen ins Leere, bitte entfernen: {tot}"
 
 
 def test_purge_zaehlt_keine_erwaehnung_als_anzahl():
@@ -13314,6 +13334,419 @@ def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
                    if m not in ausgenommen and f"({m}, (" not in eigen)
     assert not fehlt, (f"bot.py ruft diese Module auf, der Rauchtest kennt sie "
                        f"aber nicht: {fehlt}")
+
+
+def test_wordle_von_hand_nimmt_niemandem_seine_versuche():
+    """Der Knopf im Panel muss auch dann sicher sein, wenn schon gespielt wird.
+
+    Der haeufigste Grund fuer "es kam kein Wort des Tages" ist NICHT, dass
+    keines gezogen wurde - sondern dass die Nachricht nicht ankam oder im
+    falschen Kanal landete. Wuerde der Knopf dann die Runde neu starten, waeren
+    alle Versuche aller Mitspieler weg. Er haengt deshalb nur den Aushang neu
+    aus."""
+    arbeit, restore = _arbeit_frisch()
+    try:
+        guild = SimpleNamespace(id=4242, name="Heimat", text_channels=[],
+                                voice_channels=[], system_channel=None)
+        # 1. Nichts gestartet, KEINER im Voice, kein Termin -> trotzdem los.
+        #    Genau das ist der Zweck des Knopfes.
+        assert not arbeit.instance.faellig(guild), "waere ohnehin schon faellig"
+        embed, view, datei, frisch = asyncio.run(
+            arbeit.instance.jetzt_starten(guild))
+        assert frisch is True
+        raetsel = arbeit.instance.raetsel(4242)
+        assert raetsel.laeuft, "es laeuft danach gar keine Runde"
+        wort = raetsel.wort
+        assert wort, "kein Wort gezogen"
+        assert embed is not None and view is not None
+
+        # 2. Jemand hat schon geraten. Zweiter Druck darf das NICHT wegwerfen.
+        raetsel.daten["spieler"]["7"] = ["HAUS"]
+        raetsel.daten["versuche"] = 1
+        embed2, view2, datei2, frisch2 = asyncio.run(
+            arbeit.instance.jetzt_starten(guild))
+        assert frisch2 is False, "startet die laufende Runde neu"
+        assert arbeit.instance.raetsel(4242).wort == wort, "das Wort wurde getauscht"
+        assert arbeit.instance.raetsel(4242).daten["spieler"].get("7") == ["HAUS"], (
+            "die Versuche der Mitspieler wurden geloescht")
+        assert embed2 is not None and view2 is not None
+
+        # 3. Ist das Wort von heute schon geloest, ist der Knopf sinnlos - und
+        #    muss das SAGEN statt still ein zweites Raetsel hinzuwerfen.
+        arbeit.instance.raetsel(4242).daten["gewinner"] = 7
+        try:
+            asyncio.run(arbeit.instance.jetzt_starten(guild))
+            raise AssertionError("haette abgelehnt werden muessen")
+        except ValueError as exc:
+            assert "geloest" in str(exc).lower(), exc
+
+        # 4. Ganz ausgeschaltet -> ebenfalls ein klarer Satz, kein Absturz.
+        arbeit.instance._enabled = False
+        try:
+            asyncio.run(arbeit.instance.jetzt_starten(guild))
+            raise AssertionError("haette abgelehnt werden muessen")
+        except ValueError as exc:
+            assert "ausgeschaltet" in str(exc).lower(), exc
+    finally:
+        restore()
+
+
+def test_wordle_knopf_im_panel_loest_wirklich_aus():
+    """Der Knopf im Web-Panel muss den Bot erreichen - und ein bekannter Grund
+    ("schon geloest", "Kanal fehlt") muss als lesbarer Satz ankommen, nicht als
+    nichtssagender Serverfehler."""
+    import asyncio as _asyncio
+    import webpanel
+    from aiohttp.test_utils import TestClient, TestServer
+
+    gerufen = []
+
+    class FakeBot:
+        async def wordle_jetzt(self, gid, cid=0):
+            gerufen.append((gid, cid))
+            if gid == 999:
+                raise ValueError("Das Wort von heute ist schon geloest.")
+            return "Wort des Tages in #gigachat gestartet."
+
+    async def lauf():
+        wp = webpanel.WebPanel()
+        wp._enabled = True
+        wp._auth = 0
+        wp._client = FakeBot()
+        async with TestClient(TestServer(wp._build_app())) as c:
+            gut = await c.post("/api/wordle/start",
+                               json={"guild": 1453867645660303527,
+                                     "channel_id": "1453881901738889351"})
+            bekannt = await c.post("/api/wordle/start", json={"guild": 999})
+            krumm = await c.post("/api/wordle/start",
+                                 json={"guild": 1, "channel_id": "keine-zahl"})
+            ohne = await c.post("/api/wordle/start", json={})
+            return ([gut.status, await gut.json()],
+                    [bekannt.status, await bekannt.json()],
+                    [krumm.status, await krumm.json()],
+                    ohne.status)
+
+    alt_gid = os.environ.pop("GUILD_ID", None)
+    try:
+        gut, bekannt, krumm, ohne = _asyncio.run(lauf())
+    finally:
+        if alt_gid is not None:
+            os.environ["GUILD_ID"] = alt_gid
+
+    assert gut[0] == 200, gut
+    assert gut[1]["ok"] is True and "gigachat" in gut[1]["text"], gut
+    assert gerufen[0] == (1453867645660303527, 1453881901738889351), gerufen
+
+    # Ein bekannter Grund ist KEIN Serverfehler - sonst steht im Panel nur
+    # "senden fehlgeschlagen" und niemand weiss, warum.
+    assert bekannt[0] == 400, bekannt
+    assert "geloest" in bekannt[1]["error"].lower(), bekannt
+
+    # Eine krumme Kanal-ID darf nicht still im Standard-Kanal landen. Der
+    # Bot darf dafuer GAR NICHT erst gerufen werden - sonst haenge der Aushang
+    # im falschen Kanal, und zurueckholen laesst sich das nicht.
+    assert krumm[0] == 400, krumm
+    assert [g for g, _c in gerufen] == [1453867645660303527, 999], (
+        f"die krumme Kanal-ID hat den Bot erreicht: {gerufen}")
+
+    # Ohne Server und ohne GUILD_ID: ablehnen statt raten.
+    assert ohne == 400, ohne
+
+
+def test_wordle_knopf_steht_wirklich_im_panel():
+    """Ein Endpunkt ohne Knopf hilft niemandem: der Betreiber sitzt am Handy im
+    Panel und soll das Wort dort ausloesen koennen, nicht per curl."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    html = open(os.path.join(hier, "webpanel.html"), encoding="utf-8").read()
+    assert "/api/wordle/start" in html, "das Panel ruft den Endpunkt nirgends auf"
+    assert "wdlGo" in html, "es gibt keinen Knopf"
+    assert html.count('id="wdlGo"') == 1, "der Knopf steht doppelt im Panel"
+    # Der Knopf muss den GEWAEHLTEN Server mitschicken - sonst landet das Wort
+    # auf dem Hauptserver, egal welchen man im Panel geoeffnet hat.
+    block = html.split("/api/wordle/start")[0][-400:]
+    assert "guild:g.id" in block.replace(" ", ""), block[-200:]
+
+    py = open(os.path.join(hier, "webpanel.py"), encoding="utf-8").read()
+    assert '"/api/wordle/start"' in py, "die Route fehlt"
+    assert "_api_wordle_start" in py
+    # Schreibender Zugriff MUSS durch dieselbe Pruefung wie alles andere.
+    rumpf = py.split("async def _api_wordle_start")[1].split("\n    async def")[0]
+    assert "self._guard(request)" in rumpf, "der Endpunkt umgeht den Schutz"
+
+
+def test_musik_extractor_args_verliert_kein_po_token():
+    """player_client UND po_token landen beide unter dem Schluessel "youtube".
+
+    Wer nur eines davon setzt, LOESCHT das andere - genau das war der Fehler:
+    sobald ein Client durchprobiert wurde, war das PO Token weg. Und ohne PO
+    Token weist YouTube inzwischen fast jeden Client ab. Der Fehler haette also
+    ausgerechnet dann zugeschlagen, wenn die Rettung schon eingerichtet war."""
+    import music
+    alt = os.environ.pop("YTDLP_PO_TOKEN", None)
+    try:
+        assert music.Music._extractor_args(None) == {}
+        assert music.Music._extractor_args("tv") == {
+            "youtube": {"player_client": ["tv"]}}
+
+        os.environ["YTDLP_PO_TOKEN"] = "web.gvs+AAA, tv.gvs+BBB"
+        # Leerzeichen und Komma sauber trennen - abgeschriebene Tokens haben das.
+        assert music.Music._pot_tokens() == ["web.gvs+AAA", "tv.gvs+BBB"]
+        beides = music.Music._extractor_args("tv")["youtube"]
+        assert beides["player_client"] == ["tv"], "Client verloren"
+        assert beides["po_token"] == ["web.gvs+AAA", "tv.gvs+BBB"], (
+            "PO Token beim Client-Wechsel verloren")
+        # Auch ohne Client muss das Token durchkommen (Suche/Playlist).
+        assert music.Music._extractor_args(None) == {
+            "youtube": {"po_token": ["web.gvs+AAA", "tv.gvs+BBB"]}}
+    finally:
+        os.environ.pop("YTDLP_PO_TOKEN", None)
+        if alt is not None:
+            os.environ["YTDLP_PO_TOKEN"] = alt
+
+
+def test_musik_probiert_zuerst_die_clients_ohne_po_token():
+    """YouTube verlangt fuer die meisten Clients ein "PO Token", das yt-dlp gar
+    nicht selbst erzeugen kann. Genau drei kommen ohne aus - nur die haben auf
+    einem nackten Server ueberhaupt eine Chance.
+
+    Standen die hinten, lief Flo erst durch vier Clients, die ohne Token
+    NIE gehen konnten, bevor er den einen probierte, der geht. Fuer den Nutzer
+    ist das der Unterschied zwischen "spielt" und "spielt nicht"."""
+    import music
+    alt = os.environ.pop("YTDLP_PLAYER_CLIENT", None)
+    try:
+        reihe = music.instance.client_reihe()
+        for name in music.Music._OHNE_POT:
+            assert name in reihe, f"{name} fehlt in der Reihe"
+        vorne = reihe[:len(music.Music._OHNE_POT)]
+        assert set(vorne) == set(music.Music._OHNE_POT), (
+            f"die Clients ohne PO Token stehen nicht vorne: {reihe}")
+        # Und es muessen Namen sein, die DIESE yt-dlp-Fassung wirklich kennt.
+        bekannt = music.Music._bekannte_clients()
+        if bekannt:
+            unbekannt = [c for c in reihe if c not in bekannt]
+            assert not unbekannt, f"yt-dlp kennt diese Clients nicht: {unbekannt}"
+    finally:
+        if alt is not None:
+            os.environ["YTDLP_PLAYER_CLIENT"] = alt
+
+
+def test_musik_findet_cookies_auch_ohne_env_eintrag():
+    """Cookies sollen wirken, sobald die Datei da liegt - ohne .env-Zeile.
+
+    Der Betreiber sitzt womoeglich am Handy an einer noVNC-Konsole ohne
+    Copy-Paste. Eine Datei ablegen kann er dort, eine .env-Zeile tippen kaum.
+    Eine LEERE Datei darf dabei nicht zaehlen: sonst rennt yt-dlp mit einem
+    leeren Zugang los und alles scheitert - mit einer irrefuehrenden Meldung."""
+    import music
+    ordner = tempfile.mkdtemp()
+    alt_data = os.environ.get("DATA_DIR")
+    alt_datei = os.environ.pop("YTDLP_COOKIES", None)
+    alt_browser = os.environ.pop("YTDLP_COOKIES_FROM_BROWSER", None)
+    os.environ["DATA_DIR"] = ordner
+    try:
+        assert music.Music._cookie_datei_finden() in ("", None) or True
+        pfad = os.path.join(ordner, "cookies.txt")
+        open(pfad, "w").close()                       # leer
+        assert music.Music._cookie_datei_finden() != pfad, (
+            "eine leere cookies.txt wird als gueltiger Zugang behandelt")
+        with open(pfad, "w", encoding="utf-8") as f:
+            f.write("# Netscape HTTP Cookie File\n"
+                    ".youtube.com\tTRUE\t/\tTRUE\t0\tX\ty\n")
+        assert music.Music._cookie_datei_finden() == pfad
+        assert music.Music._cookie_optionen()["cookiefile"] == pfad
+
+        # Ein falscher Eintrag in der .env darf den Fund nicht verhindern -
+        # sonst kostet ein Tippfehler die ganze Musik.
+        os.environ["YTDLP_COOKIES"] = "/gibt/es/nicht.txt"
+        assert music.Music._cookie_optionen()["cookiefile"] == pfad
+    finally:
+        os.environ.pop("YTDLP_COOKIES", None)
+        os.environ.pop("YTDLP_COOKIES_FROM_BROWSER", None)
+        os.environ.pop("DATA_DIR", None)
+        for name, wert in (("DATA_DIR", alt_data), ("YTDLP_COOKIES", alt_datei),
+                           ("YTDLP_COOKIES_FROM_BROWSER", alt_browser)):
+            if wert is not None:
+                os.environ[name] = wert
+        shutil.rmtree(ordner, ignore_errors=True)
+
+
+def test_musik_proxy_erreicht_jeden_yt_dlp_aufruf():
+    """Ein eigener Ausgang (YTDLP_PROXY) ist einer der zwei Wege zurueck zu
+    YouTube, wenn die Server-IP gesperrt ist. Kaeme er nur beim Abspielen an
+    und nicht bei der Suche, ginge ein Link - und "flo spiel <titel>" nicht.
+    Genau diese halbe Reparatur faellt beim Testen nicht auf."""
+    import re
+    import music
+    quelle = open(music.__file__, encoding="utf-8").read()
+    stellen = [m.start() for m in re.finditer(r"yt_dlp\.YoutubeDL\(", quelle)]
+    assert len(stellen) >= 4, f"nur {len(stellen)} yt-dlp-Aufrufe gefunden"
+    ohne = [i for i, pos in enumerate(stellen, 1)
+            if "_netz_optionen()" not in quelle[max(0, pos - 900):pos]]
+    assert not ohne, f"diese yt-dlp-Aufrufe gehen am Proxy vorbei: {ohne}"
+
+    alt = os.environ.pop("YTDLP_PROXY", None)
+    try:
+        assert music.Music._netz_optionen() == {}
+        os.environ["YTDLP_PROXY"] = "socks5://127.0.0.1:1080"
+        assert music.Music._netz_optionen() == {"proxy": "socks5://127.0.0.1:1080"}
+    finally:
+        os.environ.pop("YTDLP_PROXY", None)
+        if alt is not None:
+            os.environ["YTDLP_PROXY"] = alt
+
+
+def test_musik_soundcloud_ausweich_laesst_sich_abschalten():
+    """Weicht Flo stillschweigend auf SoundCloud aus, merkt niemand, dass
+    YouTube klemmt - und der Betreiber repariert es nie. Wer das nicht will,
+    soll eine ehrliche Fehlermeldung bekommen koennen."""
+    import music
+    alt = os.environ.pop("MUSIC_SOUNDCLOUD_FALLBACK", None)
+    try:
+        assert music.Music._ausweich_erlaubt(), "Ausweich ist nicht die Vorgabe"
+        for wert in ("0", "false", "no", "off", "aus", "AUS", " Off "):
+            os.environ["MUSIC_SOUNDCLOUD_FALLBACK"] = wert
+            assert not music.Music._ausweich_erlaubt(), f"{wert!r} schaltet nicht ab"
+        for wert in ("1", "ja", "an", "true"):
+            os.environ["MUSIC_SOUNDCLOUD_FALLBACK"] = wert
+            assert music.Music._ausweich_erlaubt(), f"{wert!r} schaltet faelschlich ab"
+        # Und abgeschaltet darf wirklich NICHTS von SoundCloud kommen.
+        os.environ["MUSIC_SOUNDCLOUD_FALLBACK"] = "0"
+        assert asyncio.run(music.instance._soundcloud_ausweich("egal")) is None
+    finally:
+        os.environ.pop("MUSIC_SOUNDCLOUD_FALLBACK", None)
+        if alt is not None:
+            os.environ["MUSIC_SOUNDCLOUD_FALLBACK"] = alt
+
+
+def test_musik_suche_wechselt_auch_den_client():
+    """"flo spiel <titel>" sucht erst und spielt dann. Wird die SUCHE geblockt,
+    kommt es nie bis zum Abspielen - der Client-Wechsel beim Abspielen nuetzt
+    dann gar nichts. Genau das fehlte: die Suche hat einmal blind gefragt und
+    aufgegeben."""
+    import music
+
+    class FakeYDL:
+        geht_ab = "tv"
+        versuche = []
+
+        def __init__(self, opts):
+            self.client = (opts.get("extractor_args", {})
+                           .get("youtube", {}).get("player_client", [None])[0])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, ziel, download=False):
+            FakeYDL.versuche.append(self.client)
+            if self.client != FakeYDL.geht_ab:
+                raise Exception("Sign in to confirm you're not a bot")
+            return {"entries": [{"title": "Semmel Song", "id": "abc123",
+                                 "duration": 180}]}
+
+    m = music.instance
+    alt_ydl, alt_client = music.yt_dlp, m._guter_client
+    alt_env = os.environ.pop("YTDLP_PLAYER_CLIENT", None)
+    music.yt_dlp = type("M", (), {"YoutubeDL": FakeYDL})
+    try:
+        FakeYDL.versuche, m._guter_client = [], ""
+        treffer = asyncio.run(m._youtube_search_best("semmel song",
+                                                     want_title="Semmel Song"))
+        assert treffer == "https://www.youtube.com/watch?v=abc123", treffer
+        assert FakeYDL.versuche[0] is None, "fragt nicht zuerst yt-dlps Vorgabe"
+        assert "tv" in FakeYDL.versuche, (
+            f"die Suche probiert keine anderen Clients: {FakeYDL.versuche}")
+        assert m._guter_client == "tv", "merkt sich den Client der Suche nicht"
+    finally:
+        music.yt_dlp, m._guter_client = alt_ydl, alt_client
+        if alt_env is not None:
+            os.environ["YTDLP_PLAYER_CLIENT"] = alt_env
+
+
+def test_youtube_arzt_kennt_dieselben_clients_wie_der_bot():
+    """Der Arzt (tools_youtube_setup.py) laeuft absichtlich OHNE den Bot zu
+    importieren - er muss auch dann noch helfen, wenn music.py kaputt ist.
+    Der Preis dafuer ist eine zweite Liste, und zwei Listen driften.
+
+    Sagt der Arzt "player_client=tv geht", der Bot probiert tv aber gar nicht,
+    schickt die Diagnose den Betreiber in die Irre. Deshalb dieser Abgleich."""
+    import music
+    import tools_youtube_setup as arzt
+    assert tuple(arzt.OHNE_POT) == tuple(music.Music._OHNE_POT), (
+        f"Arzt: {arzt.OHNE_POT}  Bot: {music.Music._OHNE_POT}")
+    zusammen = tuple(arzt.OHNE_POT) + tuple(arzt.MIT_POT)
+    assert zusammen == tuple(music.Music._CLIENT_REIHE), (
+        f"Arzt probiert eine andere Reihe als der Bot:\n"
+        f"  Arzt: {zusammen}\n  Bot:  {music.Music._CLIENT_REIHE}")
+    # Der Arzt darf yt-dlps Ausgaben nicht durchlassen - der Bericht wird auf
+    # einem Handy gelesen und ist mit acht Tracebacks unbrauchbar.
+    for name in ("debug", "info", "warning", "error"):
+        assert hasattr(arzt.Stumm, name), f"Stumm kann kein {name}()"
+
+
+def test_youtube_arzt_verwechselt_netzfehler_nicht_mit_bot_sperre():
+    """"YouTube blockt deine IP" und "der Server kommt nicht ins Netz" brauchen
+    voellig verschiedene Reparaturen. Rateraten der Arzt falsch, richtet der
+    Betreiber stundenlang Cookies ein, obwohl die Firewall zu ist."""
+    import tools_youtube_setup as arzt
+    a = arzt.YoutubeSetup()
+    assert a.grund(Exception("Sign in to confirm you're not a bot")) == "Bot-Sperre"
+    assert a.grund(Exception("Unable to connect to proxy: 403")) == \
+        "Proxy laesst nicht durch"
+    assert a.grund(Exception("The read operation timed out")) == "kein Netz zu YouTube"
+
+    a.gruende = ["Proxy laesst nicht durch", "kein Netz zu YouTube"]
+    a.urteil()
+    text = "\n".join(a.zeilen)
+    assert "KEINE Bot-Sperre" in text, text
+    assert "WEGWERF" not in text, "raet zu Cookies, obwohl das Netz das Problem ist"
+
+    b = arzt.YoutubeSetup()
+    b.gruende = ["Bot-Sperre", "Bot-Sperre"]
+    b.urteil()
+    text = "\n".join(b.zeilen)
+    assert "blockt diese IP" in text, text
+    assert "WEGWERF" in text, "warnt nicht vor dem eigenen Google-Konto"
+
+
+def test_youtube_cookies_landen_niemals_im_repo():
+    """Eine cookies.txt IST eine Anmeldung bei Google. Landet sie im Repo, ist
+    das Konto oeffentlich - der schlimmste denkbare Ausgang dieser Reparatur.
+    Deshalb steht sie in .gitignore, und deshalb prueft das hier ein Test."""
+    import subprocess
+    hier = os.path.dirname(os.path.abspath(__file__))
+    text = open(os.path.join(hier, ".gitignore"), encoding="utf-8").read()
+    muster = [z.strip() for z in text.splitlines()
+              if z.strip() and not z.strip().startswith("#")]
+    for name in ("cookies.txt", "youtube.txt", "youtube_cookies.txt"):
+        assert name in muster, f"{name} steht nicht in .gitignore"
+    assert "data/" in muster, "data/ steht nicht in .gitignore"
+    # Und es darf gerade wirklich keine im Baum liegen.
+    for ordner in (hier, os.path.join(hier, "data")):
+        pfad = os.path.join(ordner, "cookies.txt")
+        if os.path.exists(pfad):
+            fertig = subprocess.run(["git", "check-ignore", pfad],
+                                    cwd=hier, capture_output=True)
+            assert fertig.returncode == 0, f"{pfad} wuerde committet werden!"
+
+
+def test_k_kennt_den_youtube_befehl():
+    """"k y" ist der Befehl, mit dem der Betreiber YouTube wieder ans Laufen
+    bringt. Steht er nicht im Hilfetext, findet ihn niemand - und ein Befehl,
+    den niemand findet, hilft niemandem."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    text = open(os.path.join(hier, "k"), encoding="utf-8").read()
+    assert "y|yt|youtube)" in text, "k kennt den Befehl 'y' nicht"
+    assert "tools_youtube_setup.py" in text
+    assert 'shift' in text.split("y|yt|youtube)")[1].split(";;")[0], (
+        "k reicht die weiteren Woerter nicht durch - 'k y browser firefox' "
+        "kaeme nie an")
+    assert '"$@"' in text.split("y|yt|youtube)")[1].split(";;")[0]
+    assert "k y" in text, "der Hilfetext nennt 'k y' nicht"
+    assert os.path.exists(os.path.join(hier, "tools_youtube_setup.py"))
 
 
 def _als_coro(wert):

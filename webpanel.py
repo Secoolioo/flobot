@@ -195,6 +195,7 @@ class WebPanel(FeatureBasis):
             web.get("/api/servers", self._api_servers),
             web.post("/api/server/sendepause", self._api_sendepause),
             web.post("/api/server/announce", self._api_announce),
+            web.post("/api/wordle/start", self._api_wordle_start),
             web.get("/api/avatar/{uid}", self._api_avatar),
             web.get("/api/features", self._api_features),
             web.post("/api/feature", self._api_feature),
@@ -1254,6 +1255,42 @@ class WebPanel(FeatureBasis):
             log.exception("Ansage via Panel fehlgeschlagen")
             return web.json_response({"ok": False, "error": "senden fehlgeschlagen"}, status=500)
         return web.json_response({"ok": True})
+
+    # --- API: Wort des Tages von Hand ausloesen ---------------------------
+    async def _api_wordle_start(self, request):
+        """Legt das Wort des Tages sofort aus, ohne auf Voice und Termin zu warten.
+
+        Normalerweise wartet Flo, bis wirklich Leute da sind - ein Raetsel in
+        einen leeren Server zu werfen waere verschenkt. Sitzt der Server aber
+        voll und es kommt trotzdem nichts, muss der Betreiber es von Hand
+        ausloesen koennen, ohne sich auf den Server einzuloggen."""
+        self._guard(request)
+        data = await self._json_objekt(request)
+        gid = self._as_int(data.get("guild"), 0) \
+            or self._as_int(os.getenv("GUILD_ID", "0") or "0", 0)
+        if not gid:
+            return web.json_response({"ok": False, "error": "kein Server"}, status=400)
+        cid = 0
+        if data.get("channel_id") not in (None, ""):
+            cid = self._uid(data.get("channel_id")) or 0
+            if not cid:
+                return web.json_response({"ok": False, "error": "Kanal-ID ungueltig"},
+                                         status=400)
+        starten = getattr(self._client, "wordle_jetzt", None)
+        if starten is None:
+            return web.json_response({"ok": False, "error": "Bot nicht bereit"},
+                                     status=503)
+        try:
+            satz = await starten(gid, cid)
+        except ValueError as exc:
+            # Ein bekannter Grund ("schon geloest", "Kanal fehlt") ist KEIN
+            # Serverfehler - der Betreiber soll den Satz lesen, nicht eine 500.
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        except Exception:  # noqa: BLE001
+            log.exception("Wort des Tages via Panel fehlgeschlagen")
+            return web.json_response({"ok": False, "error": "senden fehlgeschlagen"},
+                                     status=500)
+        return web.json_response({"ok": True, "text": satz})
 
     # --- API: Profilbilder ------------------------------------------------
     _AV_TTL = 3600      # eine Stunde: Discord-CDN-URLs sind stabil genug

@@ -1514,7 +1514,16 @@ function renderGuildCfg(d,name){ var c=$("#content"); var v=ce("div","view");
       'Im Chat geht dasselbe mit <code>Flo einstellungen</code>.</div></div>'+
     bloecke+
     '<div class="sec-h"><h2>Funktionen auf diesem Server</h2><div class="ln"></div></div>'+
-    '<div class="card reveal">'+(fzeilen||'<div class="cd">Keine Module geladen.</div>')+'</div>';
+    '<div class="card reveal">'+(fzeilen||'<div class="cd">Keine Module geladen.</div>')+'</div>'+
+    '<div class="sec-h"><h2>Sofort ausl\u00f6sen</h2><div class="ln"></div></div>'+
+    '<div class="card reveal"><div class="control-row"><div style="flex:1;min-width:0">'+
+      '<div class="cl">\ud83d\udd24 Wort des Tages jetzt starten</div>'+
+      '<div class="cd">Normalerweise wartet Flo, bis genug Leute im Voice sitzen, und w\u00fcrfelt '+
+      'dann einen Zeitpunkt. Hier geht es sofort \u2013 ohne Wartezeit. L\u00e4uft heute schon eine '+
+      'Runde, wird nur der Aushang noch einmal ausgeh\u00e4ngt; niemandem werden seine '+
+      'Versuche genommen.</div></div>'+
+      '<button class="btn btn-gold" style="width:auto;padding:12px 22px;margin:0" id="wdlGo">Starten</button></div>'+
+      '<div class="crow" style="margin-top:10px"><input class="inp" id="wdlChan" placeholder="Kanal-ID (leer = eingestellter Wordle-Kanal)"></div></div>';
   c.innerHTML=""; c.appendChild(v);
 
   $("#cfgBack").addEventListener("click",function(){ viewServers(); });
@@ -1548,6 +1557,15 @@ function renderGuildCfg(d,name){ var c=$("#content"); var v=ce("div","view");
         .then(function(r){ if(!r.ok)throw r; el.classList.toggle("on",!!r.on);
           toast("Funktion "+(r.on?"an":"aus")+" auf diesem Server",r.on?"ok":"info"); })
         .catch(function(e){ if(e&&e.auth)return; toast((e&&e.error)||"Umschalten fehlgeschlagen","err"); }); }); });
+
+  $("#wdlGo").addEventListener("click",function(){ var b=this;
+    var chan=$("#wdlChan").value.trim(); var body={guild:g.id}; if(chan)body.channel_id=chan;
+    b.disabled=true; b.textContent="Starte\u2026";
+    api("/api/wordle/start",{method:"POST",body:body}).then(function(r){ if(!r.ok)throw r;
+      b.disabled=false; b.textContent="Starten"; $("#wdlChan").value="";
+      toast(r.text||"Wort des Tages gestartet","ok"); })
+    .catch(function(e){ b.disabled=false; b.textContent="Starten"; if(e&&e.auth)return;
+      toast((e&&e.error)||"Start fehlgeschlagen","err"); }); });
 
   observeReveals(v); }
 

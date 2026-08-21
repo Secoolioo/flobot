@@ -1877,15 +1877,76 @@ class Music(FeatureBasis):
     # sich, was ging. Ein Name, den die installierte yt-dlp-Fassung gar nicht
     # kennt, wird vorher aussortiert (sonst waere die Ausweichliste selbst der
     # naechste Fehler).
-    _CLIENT_REIHE = ("android_vr", "ios", "tv_simply", "tv", "mweb",
-                     "web_safari", "android")
+    # Reihenfolge ist NICHT beliebig. YouTube verlangt inzwischen fuer die
+    # meisten Clients ein "PO Token", das yt-dlp selbst gar nicht erzeugen kann.
+    # Genau drei Clients kommen laut yt-dlp OHNE so ein Token aus - und nur die
+    # koennen auf einem nackten Server ueberhaupt noch klappen. Die stehen
+    # deshalb vorne, der Rest ist nur noch Resthoffnung.
+    _OHNE_POT = ("tv", "android_vr", "web_embedded")
+    _CLIENT_REIHE = ("tv", "android_vr", "web_embedded", "tv_simply", "ios",
+                     "mweb", "web_safari", "android")
     # Nur bei diesen Gruenden hilft ein anderer Client. Bei "geloescht",
     # "gesperrt" oder "nichts gefunden" waere jeder weitere Versuch nur Wartezeit
     # fuer den Nutzer.
     _CLIENT_HILFT = ("botcheck", "format", "veraltet", "unbekannt")
 
     @staticmethod
-    def _cookie_optionen():
+    def _pot_tokens():
+        """Manuell hinterlegte PO Tokens (YTDLP_PO_TOKEN), mehrere per Komma.
+
+        YouTube verlangt fuer die meisten player_clients ein "PO Token".
+        yt-dlp kann so eines NICHT selbst erzeugen - es muss von aussen kommen,
+        entweder aus dem Browser abgeschrieben oder von einem Anbieter-Plugin
+        (bgutil-ytdlp-pot-provider) erzeugt. Format je Token:
+
+            YTDLP_PO_TOKEN=web.gvs+XXXX,web_safari.gvs+YYYY
+        """
+        roh = os.getenv("YTDLP_PO_TOKEN", "").strip()
+        return [t.strip() for t in roh.split(",") if t.strip()]
+
+    @staticmethod
+    def pot_anbieter_da():
+        """Laeuft ein PO-Token-Anbieter-Plugin mit? Nur fuer die Diagnose."""
+        try:
+            import importlib.util
+            return any(importlib.util.find_spec(n) is not None
+                       for n in ("bgutil_ytdlp_pot_provider",
+                                 "yt_dlp_plugins.extractor.getpot_bgutil"))
+        except Exception:  # noqa: BLE001 - Diagnose darf nie etwas umwerfen
+            return False
+
+    @classmethod
+    def _extractor_args(cls, client):
+        """extractor_args fuer yt-dlp: player_client UND po_token zusammen.
+
+        Beides landet unter demselben Schluessel "youtube". Wer nur eines davon
+        setzt, loescht das andere - genau das war hier der Fehler."""
+        yt = {}
+        if client:
+            yt["player_client"] = [client]
+        tokens = cls._pot_tokens()
+        if tokens:
+            yt["po_token"] = tokens
+        return {"youtube": yt} if yt else {}
+
+    @staticmethod
+    def _netz_optionen():
+        """Ein eigener Ausgang NUR fuer yt-dlp (YTDLP_PROXY).
+
+        YouTubes Bot-Pruefung haengt an der IP, nicht am Bot. Wer einen zweiten
+        Weg ins Netz hat - VPN, ein kleiner Server woanders, ein Handy-Hotspot -
+        kommt damit wieder an YouTube heran, ohne irgendwo ein Konto zu
+        hinterlegen. Betrifft ausdruecklich nur die Musik-Aufloesung; Discord und
+        die KI laufen weiter direkt.
+
+            YTDLP_PROXY=http://benutzer:passwort@host:3128
+            YTDLP_PROXY=socks5://127.0.0.1:1080
+        """
+        proxy = os.getenv("YTDLP_PROXY", "").strip()
+        return {"proxy": proxy} if proxy else {}
+
+    @classmethod
+    def _cookie_optionen(cls):
         """Cookies fuer yt-dlp, falls eingerichtet.
 
         YouTubes Bot-Pruefung laesst sich mit keinem player_client mehr umgehen,
@@ -1901,16 +1962,43 @@ class Music(FeatureBasis):
         """
         opts = {}
         datei = os.getenv("YTDLP_COOKIES", "").strip()
+        if datei and not os.path.isfile(datei):
+            log.warning("YTDLP_COOKIES zeigt auf %r - da liegt keine Datei. "
+                        "Suche stattdessen selbst nach cookies.txt.", datei)
+            datei = ""
+        if not datei:
+            datei = cls._cookie_datei_finden()
         if datei:
-            if os.path.isfile(datei):
-                opts["cookiefile"] = datei
-            else:
-                log.warning("YTDLP_COOKIES zeigt auf %r - da liegt keine Datei. "
-                            "Cookies werden NICHT benutzt.", datei)
+            opts["cookiefile"] = datei
         browser = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
         if browser:
             opts["cookiesfrombrowser"] = (browser,)
         return opts
+
+    # Ohne .env-Gefummel: liegt hier eine cookies.txt, wird sie benutzt. Der
+    # Betreiber sitzt womoeglich am Handy - eine Datei ablegen kann er, eine
+    # .env-Zeile tippen kaum.
+    _COOKIE_ORTE = ("cookies.txt", "youtube.txt", "youtube_cookies.txt")
+
+    @classmethod
+    def _cookie_datei_finden(cls):
+        """Sucht eine Cookie-Datei an den Stellen, wo sie ein Mensch ablegen wuerde.
+
+        Gibt den Pfad zurueck oder "". Leere Dateien werden uebergangen - eine
+        angefangene, aber nie gefuellte cookies.txt darf nicht dafuer sorgen,
+        dass yt-dlp mit leerem Zugang losrennt und alles scheitert."""
+        hier = os.path.dirname(os.path.abspath(__file__))
+        ordner = [hier, os.path.join(hier, "data"),
+                  os.getenv("DATA_DIR", "").strip() or hier]
+        for ordner_pfad in ordner:
+            for name in cls._COOKIE_ORTE:
+                pfad = os.path.join(ordner_pfad, name)
+                try:
+                    if os.path.isfile(pfad) and os.path.getsize(pfad) > 0:
+                        return pfad
+                except OSError:
+                    continue
+        return ""
 
     @staticmethod
     def _bekannte_clients():
@@ -1947,17 +2035,26 @@ class Music(FeatureBasis):
         treffer = re.match(r"^yt(?:search)?\d*:(.+)$", roh, re.IGNORECASE)
         return (treffer.group(1) if treffer else roh).strip()
 
+    # Ausweich auf SoundCloud abschaltbar. Wer YouTube WILL, bekommt sonst
+    # stillschweigend etwas anderes - und merkt nicht, dass YouTube klemmt.
+    # MUSIC_SOUNDCLOUD_FALLBACK=0 heisst: lieber eine ehrliche Fehlermeldung.
+    @staticmethod
+    def _ausweich_erlaubt():
+        return os.getenv("MUSIC_SOUNDCLOUD_FALLBACK", "1").strip().lower() not in (
+            "0", "false", "no", "off", "aus")
+
     async def _soundcloud_ausweich(self, text):
         """Denselben Song bei SoundCloud suchen. SoundCloud kennt YouTubes
         Bot-Pruefung nicht - ist die Server-IP dort markiert, ist das der
         einzige Weg, der OHNE Zutun des Betreibers noch Musik liefert."""
-        if not text:
+        if not text or not self._ausweich_erlaubt():
             return None
         loop = asyncio.get_running_loop()
 
         def work():
             opts = dict(_YDL_OPTS)
             opts.update(self._cookie_optionen())
+            opts.update(self._netz_optionen())
             opts["default_search"] = "scsearch"
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
                 info = ydl.extract_info(f"scsearch1:{text}", download=False)
@@ -1975,6 +2072,34 @@ class Music(FeatureBasis):
                         text[:60], f"{exc}".replace("\n", " ")[:120])
             return None
 
+    async def _mit_clientwechsel(self, work, was="YouTube"):
+        """Fuehrt eine yt-dlp-Abfrage aus und wechselt bei Bot-Sperre den Client.
+
+        'work' bekommt den player_client (oder None fuer yt-dlps Vorgabe) und
+        laeuft im Executor. Die Suche und das Auflisten von Playlists brauchen
+        genau dieselbe Behandlung wie das Abspielen: wird die Suche geblockt,
+        kommt es nie bis zum Abspielen. Genau das fehlte hier."""
+        loop = asyncio.get_running_loop()
+        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
+        versuche = [fest] if fest else [None, *self.client_reihe()]
+        letzter = None
+        for nr, client in enumerate(versuche):
+            try:
+                ergebnis = await loop.run_in_executor(None, work, client)
+            except Exception as exc:  # noqa: BLE001 - wird eingeordnet
+                art, _satz = self.yt_fehler_deuten(exc)
+                letzter = exc
+                if art not in self._CLIENT_HILFT or nr == len(versuche) - 1:
+                    raise
+                log.warning("%s: blockt (%s) mit client=%s - versuche %s.",
+                            was, art, client or "Standard",
+                            versuche[nr + 1] or "Standard")
+                continue
+            if client and client != self._guter_client:
+                self._guter_client = client
+            return ergebnis
+        raise letzter or RuntimeError("keine Aufloesung moeglich")
+
     async def _extract(self, query_or_url, ausweich_text=None):
         """Loest einen YouTube-Link ODER Suchtext zu einem abspielbaren Track auf.
 
@@ -1986,6 +2111,7 @@ class Music(FeatureBasis):
         def work(client, format_lax=False):
             opts = dict(_YDL_OPTS)
             opts.update(self._cookie_optionen())
+            opts.update(self._netz_optionen())
             if format_lax:
                 # Manche Clients kommen durch die Bot-Pruefung, liefern aber keine
                 # reine Tonspur ("Requested format is not available"). Dann lieber
@@ -1993,8 +2119,9 @@ class Music(FeatureBasis):
                 # wegzuwerfen - er ist ja gerade der einzige, der ueberhaupt
                 # durchkommt. ffmpeg verwirft das Bild sowieso (-vn).
                 opts["format"] = "bestaudio/best/worst"
-            if client:
-                opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+            args = self._extractor_args(client)
+            if args:
+                opts["extractor_args"] = args
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
                 info = ydl.extract_info(query_or_url, download=False)
             if info and "entries" in info:  # Suche/Playlist -> ersten Treffer nehmen
@@ -2126,19 +2253,23 @@ class Music(FeatureBasis):
                                    want_artist=""):
         """Sucht mehrere YouTube-Treffer (flach) und liefert die Video-URL des
         besten Matches - oder None, wenn nichts brauchbar war."""
-        loop = asyncio.get_running_loop()
         opts = dict(_YDL_OPTS)
         opts.update(self._cookie_optionen())
+        opts.update(self._netz_optionen())
         opts["noplaylist"] = True
         opts["extract_flat"] = "in_playlist"
 
-        def work():
-            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
+        def work(client):
+            eigen = dict(opts)
+            args = self._extractor_args(client)
+            if args:
+                eigen["extractor_args"] = args
+            with yt_dlp.YoutubeDL(eigen) as ydl:  # type: ignore[union-attr]
                 return ydl.extract_info(
                     f"ytsearch{_SPOTIFY_SEARCH_N}:{query}", download=False)
 
         try:
-            info = await loop.run_in_executor(None, work)
+            info = await self._mit_clientwechsel(work, "YouTube-Suche")
         except Exception as exc:  # noqa: BLE001 - yt-dlp wirft viele Fehlerarten
             log.warning("YouTube-Best-Match-Suche fehlgeschlagen (%s): %s", query, exc)
             return None
@@ -2219,20 +2350,24 @@ class Music(FeatureBasis):
         flache Struktur. Der einzige Unterschied ist, dass YouTube pro Eintrag
         manchmal nur die Video-ID mitschickt - daraus bauen wir die volle URL.
         SoundCloud liefert immer die komplette Track-Adresse."""
-        loop = asyncio.get_running_loop()
         opts = dict(_YDL_OPTS)
         opts.update(self._cookie_optionen())
+        opts.update(self._netz_optionen())
         opts["noplaylist"] = False
         opts["extract_flat"] = "in_playlist"
         opts["playlistend"] = MAX_QUEUE
         opts["ignoreerrors"] = True  # einzelne kaputte Tracks ueberspringen, nicht crashen
 
-        def work():
-            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[union-attr]
+        def work(client):
+            eigen = dict(opts)
+            args = self._extractor_args(client)
+            if args:
+                eigen["extractor_args"] = args
+            with yt_dlp.YoutubeDL(eigen) as ydl:  # type: ignore[union-attr]
                 return ydl.extract_info(url, download=False)
 
         try:
-            info = await loop.run_in_executor(None, work)
+            info = await self._mit_clientwechsel(work, quelle)
         except Exception as exc:  # noqa: BLE001
             log.warning("%s nicht ladbar (%s): %s", quelle, url, exc)
             return None

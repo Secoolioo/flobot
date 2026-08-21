@@ -5,6 +5,9 @@
 #     bash k n        vorher git pull
 #     bash k l        nur die letzten KI-Fehler aus dem Journal
 #     bash k m        Musik/Spotify pruefen (yt-dlp, ffmpeg, Token, Track)
+#     bash k y        YouTube: was geht, was nicht, was tun
+#     bash k y browser firefox     Cookies aus einem Browser hier uebernehmen
+#     bash k y datei cookies.txt   exportierte cookies.txt einrichten
 #     bash k p        Panel-Zugang: das gewuerfelte Passwort aus dem Log
 #     bash k a        ALLES pruefen und einen Bericht in diagnose.txt schreiben
 #     bash k r        Dienst neu starten
@@ -89,6 +92,12 @@ case "${1:-}" in
         "$PY" tools_musik_check.py
         logs "Letzte Musik-Meldungen im Journal" "$MUSIKMUSTER"
         ;;
+    y|yt|youtube)
+        # Alle weiteren Woerter durchreichen:  k y browser firefox
+        shift
+        "$PY" tools_youtube_setup.py "$@"
+        logs "Letzte YouTube-Meldungen im Journal" "$MUSIKMUSTER"
+        ;;
     r|neustart)
         systemctl restart flobot && echo "flobot neu gestartet." && sleep 3 && logs
         ;;
@@ -109,6 +118,7 @@ case "${1:-}" in
         "$PY" tools_ki_check.py
         logs
         trenner
-        echo "k a = ALLES | k n = neu holen | k l = Log | k m = Musik | k r = Neustart"
+        echo "k a = ALLES | k n = neu holen | k l = Log | k m = Musik"
+        echo "k y = YouTube einrichten | k r = Neustart"
         ;;
 esac

@@ -1081,23 +1081,61 @@ class FloBot(discord.Client):
                          getattr(guild, "name", guild.id))
                 continue
             try:
-                kwargs = {"embed": embed, "view": view}
-                if datei is not None:
-                    kwargs["file"] = datei
-                view.message = await channel.send(**kwargs)
-                # Der Aushang muss den ganzen Tag stehen bleiben - in einem
-                # Aufraeum-Kanal waere er sonst weg, bevor jemand geraten hat.
-                self.protect_message(view.message)
-                # Wo die Ansage steht, muss arbeit wissen: das Raten laeuft
-                # ueber ein Eingabefeld, und dabei ist interaction.message
-                # immer None - ohne diese IDs koennte die Ansage nach dem Sieg
-                # nicht auf 'entschieden' umgestellt werden.
-                arbeit.raetsel(guild.id).ansage_merken(view.message)
+                await self.wordle_aushaengen(guild, channel, embed, view, datei)
             except Exception:
                 # BEWUSST breit: ein fehlendes Senderecht in genau einem Kanal
                 # darf den Loop nicht dauerhaft anhalten (siehe merchant_loop).
                 log.exception("Wort des Tages konnte in #%s nicht gesendet werden",
                               getattr(channel, "name", "?"))
+
+    async def wordle_aushaengen(self, guild, channel, embed, view, datei):
+        """Den Aushang zum Wort des Tages wirklich abschicken.
+
+        Steht hier und nicht im Loop, weil das Web-Panel dasselbe braucht -
+        mit einer zweiten Kopie waere frueher oder spaeter genau eine davon
+        ohne protect_message oder ohne ansage_merken."""
+        kwargs = {"embed": embed, "view": view}
+        if datei is not None:
+            kwargs["file"] = datei
+        view.message = await channel.send(**kwargs)
+        # Der Aushang muss den ganzen Tag stehen bleiben - in einem
+        # Aufraeum-Kanal waere er sonst weg, bevor jemand geraten hat.
+        self.protect_message(view.message)
+        # Wo die Ansage steht, muss arbeit wissen: das Raten laeuft
+        # ueber ein Eingabefeld, und dabei ist interaction.message
+        # immer None - ohne diese IDs koennte die Ansage nach dem Sieg
+        # nicht auf 'entschieden' umgestellt werden.
+        arbeit.raetsel(guild.id).ansage_merken(view.message)
+        return view.message
+
+    async def wordle_jetzt(self, gid, cid=0):
+        """Das Wort des Tages von Hand ausloesen (Knopf im Web-Panel).
+
+        Gibt einen deutschen Satz zurueck, der im Panel angezeigt wird. Wirft
+        ValueError mit dem Grund, wenn es nicht geht - das Panel macht daraus
+        eine 400 statt eines nichtssagenden Serverfehlers."""
+        guild = self.get_guild(int(gid)) if gid else None
+        if guild is None:
+            raise ValueError("Server nicht gefunden.")
+        if not features.is_on_in(guild.id, "arbeit"):
+            raise ValueError("Das Feature 'arbeit' ist auf diesem Server aus.")
+        channel = None
+        if cid:
+            channel = guild.get_channel(int(cid))
+            if channel is None:
+                raise ValueError("Kanal nicht gefunden.")
+        else:
+            channel = arbeit.kanal_fuer(guild)
+        if channel is None:
+            raise ValueError("Kein Kanal fuer das Wort des Tages eingestellt.")
+        if not hasattr(channel, "send"):
+            raise ValueError("In diesen Kanal kann Flo nicht schreiben.")
+        embed, view, datei, frisch = await arbeit.jetzt_starten(guild)
+        await self.wordle_aushaengen(guild, channel, embed, view, datei)
+        name = getattr(channel, "name", channel.id)
+        return (f"Wort des Tages in #{name} gestartet." if frisch
+                else f"Der Aushang haengt wieder in #{name} - die Runde von "
+                     "heute laeuft weiter (niemandem seine Versuche genommen).")
 
     @tasks.loop(seconds=LOTTO_TICK_SECONDS)
     async def lotto_loop(self):

@@ -12,3 +12,8 @@ backups/
 *.log
 # Bericht von 'bash k a' - gehoert dem Server, nicht dem Repo:
 diagnose.txt
+# YouTube-Cookies eines angemeldeten Kontos - das ist eine Anmeldung,
+# die gehoert NIE ins Repo:
+cookies.txt
+youtube.txt
+youtube_cookies.txt
