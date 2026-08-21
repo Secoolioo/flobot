@@ -1142,8 +1142,21 @@ class FloAktie(FeatureBasis):
         CEIL_FACTOR x Zielkurs, waehrend akt_deckel_base() zusaetzlich den
         Grundwert beruecksichtigte - zwei Zahlen, die im Dauerbetrieb um den
         Faktor 2 auseinanderliefen."""
-        return max(self.ziel_base(activity) * max(1.0, CEIL_FACTOR),
-                   self.boden_base())
+        # CEIL_FACTOR gehoert auf BEIDE Grundwerte, nicht nur auf einen.
+        #
+        # Vorher stand hier max(ziel*2, boden) - eine skalierte Zahl gegen eine
+        # unskalierte. Der Boden waechst aber mit GRUND_FAKTOR (4) und der
+        # Deckel nur mit CEIL_FACTOR (2): ab 4*grund >= 2*akt, also einem
+        # 3-Tage-Schnitt von etwa der halben aktuellen Aktivitaet, UEBERHOLT der
+        # Boden den Deckel. Dann ist deckel == boden, der Kurs steht genau
+        # darauf - und drift_fuer gibt 0 zurueck.
+        #
+        # Nachgemessen mit 10 Leuten im Call:
+        #   3-Tage-Schnitt 5  -> Deckel 20.020, Boden 20.010, Drift 2,15 %/min
+        #   3-Tage-Schnitt 6  -> Deckel 24.010, Boden 24.010, Drift 0,00 %/min
+        # Je lebendiger der Server WAR, desto weniger konnte die Aktie steigen -
+        # genau verkehrt herum.
+        return max(self.ziel_base(activity), self.boden_base()) * max(1.0, CEIL_FACTOR)
 
     # --- Flo als Analyst: die KI bewertet den Markt --------------------------
     def _ki_faktor(self):

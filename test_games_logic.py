@@ -1898,6 +1898,54 @@ def test_webpanel_api():
     restore_eco()
 
 
+def test_aktie_steigt_auch_auf_einem_lebendigen_server():
+    """Gemeldet: "10 Leute im Call und sie steigt nur 0,05 %".
+
+    Ursache war ein Vergleich zwischen einer skalierten und einer unskalierten
+    Zahl: deckel_fuer() rechnete max(ziel * CEIL_FACTOR, boden). Der Boden
+    waechst aber mit GRUND_FAKTOR (4), der Deckel nur mit CEIL_FACTOR (2) - ab
+    einem 3-Tage-Schnitt von etwa der halben aktuellen Aktivitaet UEBERHOLT der
+    Boden den Deckel. Dann ist deckel == boden, der Kurs steht genau darauf, und
+    drift_fuer gibt 0 zurueck.
+
+    Je lebendiger der Server WAR, desto weniger konnte die Aktie steigen."""
+    import floaktie
+    a = floaktie.instance
+    alt_store, alt_on = a._store, a._enabled
+    a._store = _FakeStore({"base": 10.0, "act_ema": 0.0, "grund_akt": 0.0,
+                           "shares": {}, "ticks": [], "hist": []})
+    a._enabled = True
+    st = a._state()
+    try:
+        # Der Kurs steht auf dem Boden (so sieht es nach einer ruhigen Nacht
+        # aus), dann kommen zehn Leute in den Call.
+        for grund in (0.0, 2.0, 5.0, 6.0, 8.0, 10.0, 20.0):
+            st["grund_akt"], st["act_ema"] = grund, 10.0
+            st["base"] = a.boden_base()
+            deckel, boden = a.deckel_fuer(10.0), a.boden_base()
+            assert deckel > boden, (
+                f"3-Tage-Schnitt {grund}: Boden {boden:.0f} hat den Deckel "
+                f"{deckel:.0f} eingeholt - der Kurs kann nicht mehr steigen")
+            drift = a.drift_fuer(10.0)
+            assert drift > 0.005, (
+                f"3-Tage-Schnitt {grund}: nur {drift * 100:.3f} %/min bei zehn "
+                f"Leuten im Call")
+
+        # Gegenprobe: ohne Aktivitaet darf sie NICHT steigen.
+        st["grund_akt"], st["act_ema"] = 10.0, 0.0
+        st["base"] = a.boden_base()
+        assert a.drift_fuer(0.0) <= 0.0, "steigt, obwohl niemand da ist"
+
+        # Und ein einzelner Zuhoerer bewegt sie deutlich weniger als zehn.
+        st["act_ema"] = 1.0
+        einer = a.drift_fuer(1.0)
+        st["act_ema"] = 10.0
+        zehn = a.drift_fuer(10.0)
+        assert 0 < einer < zehn / 5, (einer, zehn)
+    finally:
+        a._store, a._enabled = alt_store, alt_on
+
+
 def test_floaktie_aktivitaet_treibt_den_kurs():
     """DIE Regel, in Zahlen: jeder im Call, jeder Livestream und jede Chat-Nachricht
     heben den Kurs - je mehr, desto schneller. Ist gar nichts los, sinkt er langsam.
@@ -2033,7 +2081,21 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         # der letzte Schritt darf also einmal um bis zu TICK_CAP ueberschiessen.
         assert fa.price() <= deckel * (1 + floaktie.TICK_CAP) * 1.01, (fa.price(), deckel)
         # ... und der Deckel selbst bleibt gedeckelt: keine Explosion.
-        assert deckel <= fa.ziel_base(fa.activity_of(10, 10, 0, 40)) * 5, deckel
+        #
+        # Die Grenze ist 10x die Zielbasis, nicht 5x. Grund: deckel_fuer() legt
+        # CEIL_FACTOR (2) jetzt auf BEIDE Grundwerte statt nur auf einen - vorher
+        # wurde ziel*2 gegen boden*1 verglichen, und dadurch holte der Boden
+        # (waechst mit GRUND_FAKTOR 4) den Deckel ein. Stand er drauf, war der
+        # Drift exakt 0: "10 Leute im Call und sie steigt nur 0,05 %".
+        #
+        # In DIESEM Dauervollbetrieb rund um die Uhr wird grund_akt zur vollen
+        # Aktivitaet, also boden = ziel_base(4 x 47) und Deckel = 2 x boden = 8x.
+        # Im echten Betrieb (Call nur abends) ist grund_akt etwa ein Viertel der
+        # Spitze - genau dafuer ist GRUND_FAKTOR 4 gedacht -, dort liegt der
+        # Deckel wieder bei 2x. Nachgemessen laeuft der Kurs auch hier NICHT weg,
+        # sondern in eine Ebene: Tag 30 -> Tag 40 sind +0,33 %. Genau das prueft
+        # die Zeile darunter, und sie ist die eigentliche Absicherung.
+        assert deckel <= fa.ziel_base(fa.activity_of(10, 10, 0, 40)) * 10, deckel
         assert fa.price() < vier_tage * 1.05, (vier_tage, fa.price())
 
         # 7) Sofort-Impuls: Livestream geht an -> Kurs zieht augenblicklich an,
