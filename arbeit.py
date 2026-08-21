@@ -1333,9 +1333,22 @@ class Arbeit(FeatureBasis):
             e.add_field(name="Serie",
                         value=f"**{info['serie']}** in Folge "
                               f"(+{round(info['serie_bonus'] * 100)} %)")
-        e.add_field(name="Stufe",
-                    value=f"{stufe.symbol} **{stufe.titel}** "
-                          f"(+{round(stufe.bonus * 100)} %)")
+        # Die Stufe MIT Fortschritt. Vorher stand hier nur der Titel, und wie weit
+        # es noch ist, stand klein in der Fusszeile - dadurch sah es aus, als
+        # passiere ueber Stunden gar nichts. Der Balken beantwortet die Frage
+        # "ab wann steigt das?" da, wo man ohnehin hinschaut.
+        stufen_wert = f"{stufe.symbol} **{stufe.titel}** (+{round(stufe.bonus * 100)} %)"
+        weiter = naechste_stufe(info.get("geschafft", 0))
+        if weiter is not None:
+            hab = int(info.get("geschafft", 0))
+            von, bis = stufe.ab, weiter.ab
+            anteil = 0.0 if bis <= von else (hab - von) / (bis - von)
+            # Abschneiden statt runden: ein VOLLER Balken bei 29/30 waere eine
+            # kleine Luege - voll wird er erst, wenn die Stufe wirklich da ist.
+            voll = max(0, min(10, int(anteil * 10)))
+            stufen_wert += (f"\n{'▰' * voll}{'▱' * (10 - voll)} "
+                            f"{hab}/{bis} bis {weiter.symbol} {weiter.titel}")
+        e.add_field(name="Stufe", value=stufen_wert, inline=False)
         if info.get("aufgestiegen"):
             e.add_field(
                 name="🎉 Aufstieg",
@@ -1344,12 +1357,10 @@ class Arbeit(FeatureBasis):
                 inline=False)
         if info.get("hinweis"):
             e.add_field(name="Hinweis", value=info["hinweis"], inline=False)
-        weiter = naechste_stufe(info.get("geschafft", 0))
-        fuss = f"{autor.display_name} · nächste Schicht in {COOLDOWN // 60} Min."
-        if weiter is not None:
-            fehlt = weiter.ab - int(info.get("geschafft", 0))
-            fuss += f" · {fehlt} bis {weiter.titel}"
-        e.set_footer(text=fuss)
+        # Der Fortschritt steht jetzt oben am Stufen-Feld - hier nur noch, wann
+        # es weitergeht.
+        e.set_footer(text=f"{autor.display_name} · nächste Schicht in "
+                          f"{COOLDOWN // 60} Min.")
         return e
 
     # --- Wort des Tages: wann und wohin -----------------------------------

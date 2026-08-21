@@ -11123,6 +11123,90 @@ def test_arbeit_lohnzettel_und_rangliste_als_karte():
         restore()
 
 
+def test_arbeit_karriere_steigt_wirklich_und_faellt_nie_zurueck():
+    """Nachgespielt statt nachgelesen: 12 Schichten am Stueck, dann verlieren,
+    dann ein Spass-Wordle. Die Frage "ab wann steigt die Stufe ueberhaupt?"
+    muss der Test beantworten koennen, nicht der Quelltext."""
+    arbeit, restore = _arbeit_frisch()
+    A = arbeit.instance
+    uid = 5150501
+    salat = arbeit.SCHICHTEN["salat"]
+    try:
+        _karriere_durchspielen(arbeit, A, uid, salat)
+    finally:
+        restore()
+
+
+def _karriere_durchspielen(arbeit, A, uid, salat):
+    stufen_bei = {}
+    for i in range(1, 13):
+        _betrag, info = A.abrechnen(uid, salat, 1.0)
+        prof = A._nutzer(uid)
+        assert prof["geschafft"] == i, (i, prof["geschafft"])
+        assert prof["serie"] == i
+        if info.get("aufgestiegen"):
+            stufen_bei[i] = info["stufe"].titel
+    # Genau EIN Aufstieg in den ersten zwoelf, und zwar bei zehn.
+    assert stufen_bei == {10: "Aushilfe"}, stufen_bei
+    # Die Serie ist bei 50 % gedeckelt (nach zehn Siegen) und laeuft nicht weiter.
+    assert A._serie_bonus(A._nutzer(uid)) == arbeit.SERIE_MAX
+
+    # Verlieren: die Serie ist weg, die Karriere NICHT.
+    vorher = dict(A._nutzer(uid))
+    A.abrechnen(uid, salat, 0.0)
+    prof = A._nutzer(uid)
+    assert prof["serie"] == 0, "Serie muss beim Verlieren zurueckgesetzt werden"
+    assert prof["geschafft"] == vorher["geschafft"], (
+        "die Karriere darf niemals rueckwaerts gehen")
+    assert arbeit.stufe_fuer(prof["geschafft"]).titel == "Aushilfe"
+
+    # Spass-Wordle zaehlt bewusst NICHT fuer die Karriere.
+    vorher = dict(A._nutzer(uid))
+    A.abrechnen(uid, arbeit.SPASS, 1.0)
+    prof = A._nutzer(uid)
+    assert prof["geschafft"] == vorher["geschafft"]
+    assert prof["serie"] == vorher["serie"]
+    assert prof.get("spass_siege") == 1 and prof.get("spass_gespielt") == 1
+
+    # Die Schwellen selbst - damit sie nicht unbemerkt verrutschen.
+    assert [(st.ab, st.titel) for st in arbeit.STUFEN] == [
+        (0, "Praktikant"), (10, "Aushilfe"), (30, "Facharbeiter"),
+        (75, "Vorarbeiter"), (150, "Schichtleiter"), (300, "Meister"),
+        (600, "Werksleiter")]
+    for n, erwartet in ((0, "Praktikant"), (9, "Praktikant"), (10, "Aushilfe"),
+                        (29, "Aushilfe"), (30, "Facharbeiter"), (599, "Meister"),
+                        (600, "Werksleiter"), (9999, "Werksleiter")):
+        assert arbeit.stufe_fuer(n).titel == erwartet, n
+    assert arbeit.naechste_stufe(600) is None
+
+
+def test_arbeit_zeigt_den_fortschritt_zur_naechsten_stufe():
+    """Die Karriere FUNKTIONIERTE, aber wie weit es noch ist, stand nur klein in
+    der Fusszeile - ueber Stunden sah es deshalb aus, als passiere nichts. Der
+    Balken gehoert an das Stufen-Feld selbst.
+
+    Und er darf nicht luegen: bei 29 von 30 ist er NICHT voll."""
+    import arbeit
+    import inspect
+    quelle = inspect.getsource(arbeit.Arbeit.ergebnis_embed)
+    assert "\u25b0" in quelle and "\u25b1" in quelle, "kein Fortschrittsbalken am Stufen-Feld"
+    assert "int(anteil * 10)" in quelle, (
+        "der Balken rundet wieder - dann steht er bei 29/30 auf voll")
+
+    def balken(hab):
+        st = arbeit.stufe_fuer(hab)
+        w = arbeit.naechste_stufe(hab)
+        if w is None:
+            return None
+        anteil = 0.0 if w.ab <= st.ab else (hab - st.ab) / (w.ab - st.ab)
+        return max(0, min(10, int(anteil * 10)))
+
+    assert balken(10) == 0, "frisch aufgestiegen -> leerer Balken"
+    assert balken(29) == 9, "29 von 30 darf NICHT voll aussehen"
+    assert balken(7) == 7
+    assert balken(600) is None, "hoechste Stufe hat keinen naechsten Schritt"
+
+
 def test_arbeit_spasswordle_deckel_haelt_wirklich():
     """'Flo wordle' zum Spass - aber NIE mehr als der Deckel hergibt.
 
