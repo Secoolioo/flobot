@@ -52,6 +52,7 @@ import steal
 import terraria
 import voicegags
 import webpanel
+import gehirn
 import words
 
 # WICHTIG: Der Bot laeuft als 'python bot.py' - dieses Modul heisst dann
@@ -168,6 +169,7 @@ MOD_ENABLED = moderation.setup()
 # Wort-Zaehler ('Flo woerter <wort>'): zaehlt passiv jedes Wort auf dem Server,
 # beim ersten Start liest ein Backfill die komplette History ein.
 WORDS_ENABLED = words.setup()
+GEHIRN_ENABLED = gehirn.setup()
 # Admin-Befehle (nur OWNER_ID): Coins geben/nehmen/setzen, XP, Ansagen, Shop -
 # im Server UND privat per DM. Andere bekommen in DMs keine Antwort.
 ADMIN_ENABLED = admin.setup()
@@ -229,7 +231,7 @@ FEATURE_LOADED = {
     "giveaway": GIVEAWAY_ENABLED, "schulden": SCHULDEN_ENABLED,
     "handel": HANDEL_ENABLED, "luxus": LUXUS_ENABLED,
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
-    "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
+    "gehirn": GEHIRN_ENABLED, "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
     "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
     "arbeit": ARBEIT_ENABLED,
 }
@@ -260,6 +262,10 @@ LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
 # Bewusst kurz getaktet - der Moment, in dem der Call voll wird, soll nicht
 # eine halbe Stunde ungenutzt verstreichen.
 ARBEIT_TICK_SECONDS = float(os.getenv("ARBEIT_TICK_SECONDS", "300"))
+# Wie oft Flo aus dem Mitgehoerten Fakten zieht. Bewusst selten: jeder Lauf
+# kostet einen KI-Aufruf, und der Puffer muss erst voll genug sein, damit
+# ueberhaupt Zusammenhang drinsteht.
+GEHIRN_TICK_SECONDS = float(os.getenv("GEHIRN_TICK_SECONDS", "600"))
 # Takt, in dem die FloCorp-Aktie die Server-Aktivitaet (Call + Streamer + Kameras
 # + Nachrichten) misst und den Kurs bewegt. 60 s -> der Kurs steigt/faellt fast in
 # Echtzeit sichtbar.
@@ -527,6 +533,8 @@ _HELP_DATA = {
     "ki": ("KI", 0x5865F2, [
         ("flo <frage>", "einfach fragen - mit Kontext & Bildern"),
         ("flo bayrisch an / aus", "Dialekt-Modus"),
+        ("flo gedaechtnis", "was Flo ueber dich weiss"),
+        ("flo vergiss mich", "loescht alles davon"),
     ]),
 }
 # Kurz-Hinweise fuer die Uebersichts-Karte.
@@ -537,7 +545,7 @@ _HELP_HINTS = {
     "terraria": "alles aus dem Wiki",
     "chaos": "roast · rate · horoskop",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
-    "mod": "lösch · warn · ban", "ki": "einfach fragen",
+    "mod": "lösch · warn · ban", "ki": "einfach fragen · gedächtnis",
 }
 
 
@@ -741,6 +749,11 @@ class FloBot(discord.Client):
                 await words.flush_now()
             except Exception:
                 log.exception("Wort-Zaehler-Flush vor Neustart fehlgeschlagen")
+        if GEHIRN_ENABLED:
+            try:
+                await gehirn.flush_now()
+            except Exception:
+                log.exception("Gedaechtnis-Flush vor Neustart fehlgeschlagen")
         try:
             await self.close()
         except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
@@ -1059,6 +1072,19 @@ class FloBot(discord.Client):
                 # angesagt, auch nach einem Neustart nicht mehr.
                 log.exception("Haendler-Ansage konnte in #%s nicht gesendet werden",
                               getattr(channel, "name", "?"))
+
+    @tasks.loop(seconds=GEHIRN_TICK_SECONDS)
+    async def gehirn_loop(self):
+        """Macht aus dem Mitgehoerten dauerhaftes Wissen ueber Leute und Server.
+
+        Laeuft NUR ueber die Server, auf denen das Feature an ist - ein Server,
+        der nicht will, dass Flo sich Dinge merkt, soll auch nicht heimlich in
+        einen Puffer wandern."""
+        try:
+            await gehirn.tick(
+                [g for g in self.guilds if features.is_on_in(g.id, "gehirn")])
+        except Exception:
+            log.exception("Gedaechtnis-Loop Fehler - laeuft weiter")
 
     @tasks.loop(seconds=ARBEIT_TICK_SECONDS)
     async def arbeit_loop(self):
@@ -1564,7 +1590,8 @@ class FloBot(discord.Client):
                 else:
                     antwort = await ai.ask_flo(
                         content, author=message.author.display_name, title=title,
-                        tone=tone, channel_id=message.channel.id)
+                        tone=tone, channel_id=message.channel.id,
+                        uid=message.author.id)
             except Exception:
                 log.exception("KI-Antwort (DM) fehlgeschlagen")
                 antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
@@ -1647,6 +1674,13 @@ class FloBot(discord.Client):
                 words.note_message(message)
             except Exception:
                 log.exception("Wort-Zaehler-Hook fehlgeschlagen")
+        # Langzeitgedaechtnis: Nachricht in den Puffer. Synchron und billig -
+        # die teure KI-Auswertung passiert gebuendelt im gehirn_loop.
+        if GEHIRN_ENABLED and _on("gehirn"):
+            try:
+                gehirn.note_message(message)
+            except Exception:
+                log.exception("Gedaechtnis-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and _on("food"):
             self._spawn(food.on_message_passive(message))
@@ -1775,6 +1809,7 @@ class FloBot(discord.Client):
             (FLOAKTIE_ENABLED and not _on("floaktie"), floaktie.handle_aus),
             (PROFIL_ENABLED and _on("profil"), profil.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
+            (GEHIRN_ENABLED and _on("gehirn"), gehirn.handle),
             (WORDS_ENABLED and _on("words"), words.handle),
             (ECONOMY_ENABLED and _on("economy"), economy.handle),
             (FOOD_ENABLED and _on("food"), food.handle),
@@ -1848,11 +1883,13 @@ class FloBot(discord.Client):
                         content, image_url, author=message.author.display_name,
                         title=title, tone=tone, channel_id=message.channel.id,
                         bavarian=bavarian,
+                        gid=getattr(message.guild, "id", None), uid=message.author.id,
                     )
                 else:
                     antwort = await ai.ask_flo(
                         content, author=message.author.display_name, title=title, tone=tone,
                         channel_id=message.channel.id, bavarian=bavarian,
+                        gid=getattr(message.guild, "id", None), uid=message.author.id,
                     )
             except Exception:
                 log.exception("KI-Antwort fehlgeschlagen")
@@ -2061,6 +2098,8 @@ class FloBot(discord.Client):
                     log.exception("Wordle-Knoepfe konnten nicht angemeldet werden")
             if not self.arbeit_loop.is_running():
                 self.arbeit_loop.start()
+        if GEHIRN_ENABLED and not self.gehirn_loop.is_running():
+            self.gehirn_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():
             self.floaktie_market_loop.start()
         # Web-Panel starten (idempotent: laeuft nur einmal, egal wie oft on_ready feuert).

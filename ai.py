@@ -718,7 +718,7 @@ class FloAI:
         return re.sub(r"^\W+", "", title or "").strip()
 
     def _system_prompt(self, author = "", title = "", tone = "",
-                       bavarian = False):
+                       bavarian = False, gid = None, uid = None):
         persona = os.getenv("BOT_PERSONA", "").strip() or self._DEFAULT_PERSONA.format(name=self._bot_name)
         # Reihenfolge ist Absicht: Die Grenze kommt DIREKT hinter die Persona und
         # nicht ans Ende. Ganz hinten wirkt sie wie das letzte Wort und faerbt
@@ -744,6 +744,15 @@ class FloAI:
         # Tonfall nach Seltenheit des Titels: je seltener, desto entspannter spricht Flo.
         if tone:
             base += f" {tone.strip()}"
+        # Langzeitgedaechtnis: was Flo ueber diese Person und diesen Server
+        # gelernt hat. gehirn wird BEWUSST erst hier importiert - gehirn
+        # importiert ai, andersherum gaebe es einen Ring.
+        if gid:
+            try:
+                import gehirn
+                base += gehirn.kontext_fuer(gid, uid)
+            except Exception:  # noqa: BLE001 - ohne Gedaechtnis redet er trotzdem
+                pass
         if bavarian:
             try:
                 import bayern
@@ -990,7 +999,7 @@ class FloAI:
 
     async def ask_flo(self, user_message, *, author = "", title = "",
                       tone = "", channel_id = None,
-                      bavarian = False):
+                      bavarian = False, gid = None, uid = None):
         """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
         Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
@@ -1007,7 +1016,8 @@ class FloAI:
 
         history = self._recent(channel_id, skip_content=user_message.strip())
         messages = [
-            {"role": "system", "content": self._system_prompt(author, title, tone, bavarian)},
+            {"role": "system",
+             "content": self._system_prompt(author, title, tone, bavarian, gid, uid)},
             *history,
             {"role": "user", "content": text},
         ]
@@ -1094,7 +1104,8 @@ class FloAI:
 
     async def see_image(self, user_message, image_url, *, author = "",
                         title = "", tone = "",
-                        channel_id = None, bavarian = False):
+                        channel_id = None, bavarian = False,
+                        gid = None, uid = None):
         """Schaut sich ein Bild an (Vision-Modell) und antwortet in Flos Persoenlichkeit.
         image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL."""
         if self._client is None:
@@ -1105,7 +1116,8 @@ class FloAI:
             text = f"{author} schreibt: {text}"
         history = self._recent(channel_id, skip_content=(user_message or "").strip())
         messages = [
-            {"role": "system", "content": self._system_prompt(author, title, tone, bavarian)},
+            {"role": "system",
+             "content": self._system_prompt(author, title, tone, bavarian, gid, uid)},
             *history,
             {"role": "user", "content": [
                 {"type": "text", "text": text},

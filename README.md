@@ -220,6 +220,42 @@ Passiert das, ist es fast nie „das Modell ist halt so". Der Reihe nach:
 > Drohungen, keine privaten Daten — und wer wirklich am Boden ist, wird nicht
 > weitergeroastet. Ein Test prüft, dass diese Liste vollständig bleibt.
 
+### Flos Gedächtnis
+
+Flos Erinnerung reichte früher **12 Nachrichten und 20 Minuten** weit — danach
+war alles weg. Jeden Tag dieselben Fragen, kein einziger Rückbezug auf gestern.
+Jetzt baut er sich ein Gedächtnis auf, das Neustarts übersteht.
+
+```
+flo gedaechtnis        was Flo über dich weiß (und über den Server)
+flo vergiss mich       löscht alles davon – sofort
+flo vergiss @wer       nur mit „Server verwalten"-Recht
+```
+
+Wie es läuft: jede öffentliche Nachricht landet in einem kleinen Puffer je
+Server (billig, synchron). Alle 10 Minuten geht der Puffer **gesammelt** an die
+KI, die daraus kurze, dauerhafte Fakten zieht — „spielt Terraria", „hasst
+Montage", „verliert jede Wette gegen Ben". Die fließen dann beiläufig in Flos
+Antworten ein.
+
+Was **nicht** passiert, und zwar mit Absicht:
+
+| | |
+|---|---|
+| **Keine DMs** | nur was öffentlich im Server steht |
+| **Nichts wandert zwischen Servern** | was hier gesagt wurde, weiß Flo dort nicht |
+| **Keine privaten Daten** | die KI ist darauf verpflichtet — und weil eine Anweisung keine Zusicherung ist, filtert Flo danach *noch einmal* hart nach: Mail, Telefon, IBAN, Adresse, Links, Passwörter |
+| **Nichts Unsichtbares** | jeder sieht und löscht sein eigenes Zeug |
+| **Kein unbegrenztes Wachstum** | 25 Fakten je Person, 20 je Server. Oft Bestätigtes überlebt, Einmaliges fliegt zuerst raus; nach 120 Tagen ohne Bestätigung ist es weg |
+
+Abschaltbar wie jedes Feature (`flo features` / Web-Panel, Schlüssel `gehirn`).
+Taktrate über `GEHIRN_TICK_SECONDS` (Standard 600).
+
+> Der Puffer wird **vor** dem KI-Aufruf geleert. Scheitert der Aufruf, sind die
+> Nachrichten weg — das ist gewollt: sonst schickt ein dauerhaft kaputter Aufruf
+> alle 10 Minuten dieselben 120 Zeilen und der Puffer nimmt nie wieder etwas
+> Neues auf.
+
 ---
 
 ## Musik

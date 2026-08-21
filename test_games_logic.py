@@ -39,6 +39,7 @@ import casino
 import cmdnorm
 import economy
 import floaktie
+import gehirn
 import luxus
 import render
 import words
@@ -13337,7 +13338,7 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
         chat=SimpleNamespace(completions=SimpleNamespace(create=None)))
     for modul in (economy, words, schulden, profil, luxus, handel, steal, lotto,
                   floaktie, arbeit, fun, games, casino, moderation, guildcfg,
-                  terraria, merchant):
+                  terraria, merchant, gehirn):
         try:
             modul.setup()
         except Exception as exc:  # noqa: BLE001
@@ -13347,6 +13348,8 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
         (economy, ("level", "coins", "top", "daily", "shop", "inventar", "titel",
                    "rang", "kontostand", "bestenliste")),
         (words, ("woerter", "wort pizza", "wordcount")),
+        (gehirn, ("gedaechtnis", "gedächtnis", "vergiss mich", "vergiss",
+                  "was weisst du")),
         (schulden, ("schulden", "kreide", "leih 100", "insolvenz", "schuldenbuch")),
         (profil, ("profil", "avatar", "banner", "steckbrief")),
         (luxus, ("luxus", "thron", "prestige")),
@@ -14022,6 +14025,182 @@ def test_verweigerte_roasts_bleiben_nicht_still():
     muster = open(os.path.join(hier, "k"), encoding="utf-8").read()
     assert "KI-Fehler" in muster and "KI-Fehler" in text, (
         "'bash k' zeigt verweigerte Roasts nicht an")
+
+
+def _gehirn_frisch():
+    """gehirn mit Fake-Store. Gibt (modul, restore)."""
+    import gehirn
+    g = gehirn.instance
+    alt = (g._store, g._enabled)
+    g._store = _FakeStore({"guilds": {}})
+    g._enabled = True
+
+    def restore():
+        g._store, g._enabled = alt
+    return gehirn, restore
+
+
+def _gehirn_msg(uid, text, gid=77, name="Anna", bot=False):
+    return SimpleNamespace(
+        guild=SimpleNamespace(id=gid),
+        author=SimpleNamespace(id=uid, bot=bot, display_name=name),
+        content=text, mentions=[])
+
+
+def test_gehirn_merkt_sich_nur_was_es_darf():
+    """Flo hoert mit - aber nicht alles, und niemals heimlich in DMs.
+
+    Ein Bot, der jede Zeile mitschneidet, waere ein Ueberwachungswerkzeug statt
+    eines Spass-Features. Deshalb: keine DMs, keine Bots, keine Einzeiler (die
+    sagen ueber einen Menschen nichts aus) und keine Befehle an Flo - Bedienung
+    ist kein Gespraech."""
+    gehirn, restore = _gehirn_frisch()
+    try:
+        g = gehirn.instance
+        gehirn.note_message(_gehirn_msg(1, "ich zocke jeden Abend Terraria"))
+        assert len(g._guild(77)["puffer"]) == 1
+
+        # DM (kein guild) - darf NIE in den Puffer.
+        dm = _gehirn_msg(1, "das ist eine lange private Nachricht")
+        dm.guild = None
+        gehirn.note_message(dm)
+        # Bot-Nachrichten interessieren niemanden.
+        gehirn.note_message(_gehirn_msg(9, "ich bin ein langer Bot-Text", bot=True))
+        # Zu kurz, um etwas ueber jemanden zu sagen.
+        gehirn.note_message(_gehirn_msg(1, "lol"))
+        assert len(g._guild(77)["puffer"]) == 1, g._guild(77)["puffer"]
+
+        # Der Puffer hat einen Deckel - sonst waechst die Datei unbegrenzt.
+        for i in range(gehirn.PUFFER_MAX + 50):
+            gehirn.note_message(_gehirn_msg(1, f"nachricht nummer {i} mit text"))
+        assert len(g._guild(77)["puffer"]) == gehirn.PUFFER_MAX
+    finally:
+        restore()
+
+
+def test_gehirn_speichert_keine_privaten_daten():
+    """Der KI ist das verboten - aber eine Anweisung ist keine Zusicherung.
+
+    Einmal in der Datei steht es da. Deshalb filtert Flo hinterher noch einmal
+    hart nach, egal was das Modell vorschlaegt."""
+    import gehirn
+    heikel = [
+        "erreichbar unter anna@example.com",
+        "Handynummer ist +49 170 1234567",
+        "IBAN DE89370400440532013000",
+        "wohnt in der Hauptstrasse 5",
+        "wohnt in 93047 Regensburg",
+        "postet staendig https://example.com/x",
+        "hat das Passwort geaendert",
+    ]
+    for text in heikel:
+        assert gehirn.Gehirn._heikel(text), f"wird gespeichert: {text!r}"
+    harmlos = ["spielt Terraria", "hasst Montage", "kann nicht zielen",
+               "trinkt nur Club Mate", "verliert jede Wette gegen Ben"]
+    for text in harmlos:
+        assert not gehirn.Gehirn._heikel(text), f"faelschlich verworfen: {text!r}"
+
+
+def test_gehirn_waechst_nicht_unbegrenzt_und_vergisst_das_richtige():
+    """Ein Gedaechtnis ohne Deckel macht die Datei unlesbar und den Prompt teuer.
+
+    Was oft bestaetigt wurde, ueberlebt; was einmal nebenbei fiel, fliegt zuerst
+    raus. Sonst verdraengt zufaelliges Geplapper die echten Eigenheiten."""
+    import gehirn
+    liste = []
+    # Derselbe Fakt zweimal ist kein zweiter Eintrag, sondern eine Bestaetigung.
+    assert gehirn.Gehirn._merge(liste, "spielt Terraria", 5) is True
+    assert gehirn.Gehirn._merge(liste, "Spielt  Terraria!", 5) is False, (
+        "derselbe Fakt landet doppelt im Kopf")
+    assert len(liste) == 1 and liste[0]["oft"] == 2
+
+    # Ueber dem Deckel fliegt das Selten-Bestaetigte zuerst.
+    liste = [{"t": "oft gehoert", "wann": time.time() - 10, "oft": 9}]
+    for i in range(10):
+        gehirn.Gehirn._merge(liste, f"nebensache {i}", 5)
+    assert len(liste) == 5, len(liste)
+    assert any(e["t"] == "oft gehoert" for e in liste), (
+        "der oft bestaetigte Fakt wurde verdraengt")
+
+
+def test_gehirn_bleibt_auf_seinem_server_und_ist_loeschbar():
+    """Zwei Zusagen, die beide zaehlen:
+
+    (1) Was im einen Server gesagt wurde, weiss Flo im anderen NICHT. Sonst
+        traegt er Interna von Server zu Server.
+    (2) Jeder kann loeschen, was Flo ueber ihn weiss - samt dem, was noch
+        unausgewertet im Puffer liegt. Sonst waere es beim naechsten Lauf
+        einfach wieder da."""
+    gehirn, restore = _gehirn_frisch()
+    try:
+        g = gehirn.instance
+        gehirn.Gehirn._merge(g._person(77, 1)["fakten"], "spielt Terraria", 25)
+        gehirn.Gehirn._merge(g._person(88, 1)["fakten"], "ist auf 88 unterwegs", 25)
+
+        k77 = gehirn.kontext_fuer(77, 1)
+        assert "Terraria" in k77
+        assert "88" not in k77, "Wissen leckt zwischen Servern"
+        assert "Terraria" not in gehirn.kontext_fuer(88, 1)
+        # Ohne Wissen kein Block - sonst haengt an jeder Antwort leerer Text.
+        assert gehirn.kontext_fuer(77, 999) == ""
+        # Und der Block bleibt kurz: er kostet bei JEDER Antwort Token.
+        for i in range(40):
+            gehirn.Gehirn._merge(g._person(77, 1)["fakten"], f"fakt {i} " + "x" * 60, 25)
+        assert len(gehirn.kontext_fuer(77, 1)) <= 700
+
+        # Loeschen raeumt Fakten UND Puffer.
+        gehirn.note_message(_gehirn_msg(1, "noch eine lange Nachricht von mir"))
+        assert g._guild(77)["puffer"]
+        weg = gehirn.vergiss(77, 1)
+        assert weg > 0
+        assert gehirn.kontext_fuer(77, 1) == ""
+        assert not [m for m in g._guild(77)["puffer"] if m["wer"] == 1], (
+            "im Puffer steht die Person noch - beim naechsten Lauf waere sie zurueck")
+        # Server 88 bleibt unberuehrt.
+        assert "88" in gehirn.kontext_fuer(88, 1)
+    finally:
+        restore()
+
+
+def test_gehirn_haengt_nicht_an_einem_kaputten_ki_aufruf_fest():
+    """Scheitert die Auswertung, darf der Puffer nicht ewig neu geschickt werden.
+
+    Sonst laeuft ein dauerhaft kaputter KI-Aufruf alle 10 Minuten in dieselben
+    120 Nachrichten - und der Puffer nimmt nie wieder etwas Neues auf."""
+    gehirn, restore = _gehirn_frisch()
+    import ai
+    alt_gen = ai.generate
+    try:
+        g = gehirn.instance
+        for i in range(gehirn.PUFFER_ZIEL + 5):
+            gehirn.note_message(_gehirn_msg(1, f"eine nachricht nummer {i}"))
+        voll = len(g._guild(77)["puffer"])
+        assert voll >= gehirn.PUFFER_ZIEL
+
+        ai.generate = lambda *a, **k: _als_coro(None)     # KI liefert nichts
+        neu = asyncio.run(gehirn.tick([SimpleNamespace(id=77)]))
+        assert neu == 0
+        assert g._guild(77)["puffer"] == [], (
+            "der Puffer wird beim naechsten Lauf noch einmal verschickt")
+
+        # Und der gute Fall: aus dem Chat werden Fakten.
+        for i in range(gehirn.PUFFER_ZIEL + 1):
+            gehirn.note_message(_gehirn_msg(1, f"ich zocke gerne runde {i}"))
+        ai.generate = lambda *a, **k: _als_coro(
+            "Anna: spielt jeden Abend Terraria\n"
+            "SERVER: hier wird viel gezockt\n"
+            "Anna: erreichbar unter anna@example.com\n"
+            "Unbekannt: irgendwas")
+        neu = asyncio.run(gehirn.tick([SimpleNamespace(id=77)]))
+        assert neu == 2, neu
+        kontext = gehirn.kontext_fuer(77, 1)
+        assert "Terraria" in kontext and "gezockt" in kontext
+        assert "example.com" not in kontext, "private Daten im Gedaechtnis"
+        # Ein Name, den niemand im Chat hatte, wird nicht erfunden.
+        assert "irgendwas" not in kontext
+    finally:
+        ai.generate = alt_gen
+        restore()
 
 
 def _als_coro(wert):
