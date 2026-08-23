@@ -674,6 +674,9 @@ class FloBot(discord.Client):
         self._giveaway_views_ready = False
         # Dasselbe fuer die Rate-Knoepfe einer laufenden Wordle-Runde.
         self._arbeit_views_ready = False
+        # Das Soundboard lag frueher global in voicegags.json - einmal
+        # uebernehmen, sobald die Server bekannt sind.
+        self._soundboard_uebernommen = False
         # Damit die "Guild nicht auffindbar"-Warnung der Aktie nicht jede Minute
         # ins Log rauscht.
         self._floaktie_guild_warned = False
@@ -2098,6 +2101,12 @@ class FloBot(discord.Client):
                     log.exception("Wordle-Knoepfe konnten nicht angemeldet werden")
             if not self.arbeit_loop.is_running():
                 self.arbeit_loop.start()
+        if VOICE_GAGS_ENABLED and not self._soundboard_uebernommen:
+            self._soundboard_uebernommen = True
+            try:
+                await voicegags.altlast_migrieren([g.id for g in self.guilds])
+            except Exception:
+                log.exception("Soundboard-Uebernahme fehlgeschlagen")
         if GEHIRN_ENABLED and not self.gehirn_loop.is_running():
             self.gehirn_loop.start()
         if FLOAKTIE_ENABLED and not self.floaktie_market_loop.is_running():

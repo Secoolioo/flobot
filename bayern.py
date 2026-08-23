@@ -99,6 +99,12 @@ class Bayern(FeatureBasis):
         # Dialekt an/aus?
         tm = self._TOGGLE_RE.match(cleaned) or self._TOGGLE_LOSE_RE.match(cleaned)
         if tm:
+            # Das ist eine SERVER-Einstellung - und sie wurde bisher ohne jede
+            # Pruefung umgelegt. Ein beilaeufiges "flo red mal bayerisch" hat
+            # damit fuer alle umgeschaltet.
+            if not guildcfg.darf(message):
+                return ("Den Dialekt stellt um, wer den Server verwaltet. "
+                        "Sag's ihm halt. 🥨")
             off = (tm.group(1) or "").lower() in ("aus", "off", "weg")
             await guildcfg.setzen(message.guild.id, "bayern", "aus" if off else "an")
             if off:

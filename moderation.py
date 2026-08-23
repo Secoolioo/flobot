@@ -44,7 +44,25 @@ log = logging.getLogger("dcbot.mod")
 # geantwortet hat -> bot.py soll dann nichts mehr senden.
 HANDLED = object()
 
-# --- Einstellungen (per .env) -------------------------------------------
+# --- Einstellungen ------------------------------------------------------
+# Diese vier Werte stehen jetzt in guildcfg und gelten JE SERVER - sie sind
+# damit auch im Web-Panel einstellbar, ohne Neustart. Die .env bleibt der
+# Standard (guildcfg.Einstellung liest dieselben Variablen), damit sich ohne
+# eigene Einstellung nichts aendert. Die Konstanten hier sind nur noch der
+# Rueckfall, wenn guildcfg gar nicht da ist.
+def _cfg_zahl(gid, key, standard):
+    """Der Wert dieses Servers - bei JEDEM Gebrauch frisch gelesen.
+
+    Frueher waren das Modul-Konstanten aus der .env: eine Aenderung brauchte
+    einen Neustart und galt fuer alle Server gleich."""
+    try:
+        import guildcfg
+        wert = guildcfg.get(gid, key)
+        return standard if wert is None else int(wert)
+    except Exception:  # noqa: BLE001 - ohne guildcfg gilt der alte Standard
+        return standard
+
+
 # Sicherheitslimit fuer eine einzelne Zahl-Angabe ("loesch 5000" wird gedeckelt).
 MAX_PURGE = int(os.getenv("PURGE_MAX", "1000") or "1000")
 # Wie lange die Bestaetigung stehen bleibt, bevor sie sich selbst loescht.
@@ -398,18 +416,20 @@ class Moderation(FeatureBasis):
         # mit hoeherer Rolle, den er direkt nicht anfassen duerfte - die Verwarnung
         # selbst prueft bewusst nur full=False und bleibt weiterhin moeglich.
         darf_strafen = not self._hierarchy_problem(message, member, full=True)
-        if (count >= WARN_LIMIT and WARN_TIMEOUT_SECONDS > 0 and darf_strafen
+        grenze = _cfg_zahl(guild.id, "warn_limit", WARN_LIMIT)
+        dauer = _cfg_zahl(guild.id, "warn_timeout", WARN_TIMEOUT_SECONDS)
+        if (count >= grenze and dauer > 0 and darf_strafen
                 and self._bot_can(guild, "moderate_members")
                 and isinstance(member, discord.Member) and self._bot_hierarchy_ok(guild, member)):
-            if await self._apply_timeout(guild, member, WARN_TIMEOUT_SECONDS,
+            if await self._apply_timeout(guild, member, dauer,
                                          f"Auto-Timeout nach {count} Verwarnungen"):
                 gw[str(member.id)] = []  # Zaehler nach der Strafe zuruecksetzen
-                auto_note = (f"⏳ Limit erreicht → **{self._fmt_duration(WARN_TIMEOUT_SECONDS)}** "
+                auto_note = (f"⏳ Limit erreicht → **{self._fmt_duration(dauer)}** "
                              f"Timeout. Zähler zurückgesetzt.")
         await self._store.save()
 
         emb = self._action_embed("⚠️", "Verwarnung", discord.Color.gold(), member,
-                                 message.author, reason, [("Stand", f"**{count}/{WARN_LIMIT}**")])
+                                 message.author, reason, [("Stand", f"**{count}/{grenze}**")])
         if auto_note:
             emb.add_field(name="Folge", value=auto_note, inline=False)
         await self._modlog(message, emb)
@@ -479,7 +499,8 @@ class Moderation(FeatureBasis):
         prob = self._hierarchy_problem(message, member)
         if prob:
             return prob
-        secs = max(1, min(DISCORD_TIMEOUT_MAX, secs if secs is not None else DEFAULT_TIMEOUT_SECONDS))
+        standard = _cfg_zahl(guild.id, "timeout_standard", DEFAULT_TIMEOUT_SECONDS)
+        secs = max(1, min(DISCORD_TIMEOUT_MAX, secs if secs is not None else standard))
         reason = self._clean_reason(rest) or "kein Grund angegeben"
         if not await self._apply_timeout(guild, member, secs, f"{reason} · von {message.author}"):
             return "Der Timeout hat nicht geklappt (Rechte oder Rollen-Hierarchie?)."
@@ -664,7 +685,10 @@ class Moderation(FeatureBasis):
                 deleted = await channel.purge(limit=None, check=lambda m: not self._keep(m))
                 count = len(deleted)
             elif num_match:
-                n = max(1, min(MAX_PURGE, int(num_match.group())))
+                deckel = _cfg_zahl(
+                    getattr(getattr(message, "guild", None), "id", 0),
+                    "purge_max", MAX_PURGE)
+                n = max(1, min(deckel, int(num_match.group())))
                 # +1, damit die Befehls-Nachricht selbst nicht als eine der n zaehlt.
                 deleted = await channel.purge(limit=n + 1, check=lambda m: not self._keep(m))
                 count = max(0, len(deleted) - (0 if self._keep(message) else 1))

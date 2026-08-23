@@ -38,6 +38,21 @@ log = logging.getLogger("dcbot.guildcfg")
 
 HANDLED = object()
 
+# Wer will erfahren, dass sich eine Einstellung geaendert hat?
+# {key: [funktion(gid), ...]}. Gefuellt ueber horcht_auf().
+_HOERER = {}
+
+
+def horcht_auf(key, fn):
+    """Meldet eine Funktion an, die bei Aenderung von 'key' gerufen wird.
+
+    Aufzurufen im setup() des Moduls, das den Wert zwischenspeichert. Die
+    Funktion bekommt die Server-ID und muss selbst wissen, was zu tun ist.
+    Doppelte Anmeldungen werden ignoriert - setup() laeuft in Tests mehrfach."""
+    liste = _HOERER.setdefault(key, [])
+    if fn not in liste:
+        liste.append(fn)
+
 # Der Server, auf dem Flo "zu Hause" ist. Nur dort sind Sachen wie das
 # automatische Server-Icon von Haus aus an - ein frisch eingeladener Server
 # soll nicht ungefragt sein Icon getauscht bekommen.
@@ -181,6 +196,37 @@ KATALOG = [
                 "Ab 14 Tagen Verzug eine neutrale Notiz im Ansagen-Kanal – "
                 "ohne Beträge, nur „X hat einen überfälligen Posten bei Y“. "
                 "Standard: aus.", "Verhalten"),
+
+    # --- Voice -----------------------------------------------------------
+    # Lagen bis eben in voicegags.py in einem EIGENEN Speicher und galten fuer
+    # ALLE Server gleich - und im Web-Panel tauchten sie gar nicht auf. Wer sie
+    # umstellen wollte, brauchte den Bot-Besitzer.
+    Einstellung("soundboard", "Soundboard", "an_aus", True, "",
+                "Ob es das Sound-Brett (`Flo sounds`) auf diesem Server gibt.",
+                "Voice"),
+    Einstellung("join_sounds", "Join-Sounds", "an_aus", False, "JOIN_SOUNDS",
+                "Flo spielt einen kurzen Sound, wenn jemand einen Sprachkanal "
+                "betritt. Standard: aus.", "Voice"),
+
+    # --- Moderation ------------------------------------------------------
+    # Standen nur in der .env, galten fuer alle Server gleich und brauchten
+    # einen Neustart. Der env-Wert bleibt der Standard, damit sich ohne eigene
+    # Einstellung nichts aendert.
+    Einstellung("warn_limit", "Verwarnungen bis Timeout", "zahl", 3, "WARN_LIMIT",
+                "Nach so vielen Verwarnungen setzt Flo automatisch einen "
+                "Timeout.", "Moderation", minimum=1, maximum=20),
+    Einstellung("warn_timeout", "Auto-Timeout (Sekunden)", "zahl", 3600,
+                "WARN_TIMEOUT_SECONDS",
+                "Wie lange der automatische Timeout dauert. 0 = keiner.",
+                "Moderation", minimum=0, maximum=2419200),
+    Einstellung("timeout_standard", "Timeout-Standarddauer (Sekunden)", "zahl", 600,
+                "MOD_DEFAULT_TIMEOUT",
+                "Gilt, wenn `Flo timeout @wer` keine Dauer nennt.",
+                "Moderation", minimum=1, maximum=2419200),
+    Einstellung("purge_max", "Löschen höchstens", "zahl", 1000, "PURGE_MAX",
+                "Obergrenze für `Flo lösch N` – schützt vor einem Vertipper, "
+                "der den halben Kanal leert.", "Moderation", minimum=1,
+                maximum=5000),
 ]
 
 _NACH_KEY = {e.key: e for e in KATALOG}
@@ -297,6 +343,10 @@ class GuildConfig(FeatureBasis):
 
     _CMDS = ("einstellungen", "einstellung", "config", "konfig", "konfiguration",
              "servereinstellungen", "settings")
+    # Die Funktions-Schalter (Casino, Musik, ...) liegen in features.json und
+    # waren bisher NUR im Web-Panel erreichbar. Damit beides denselben Weg hat,
+    # gibt es sie jetzt auch als Befehl - dieselben Rechte, dieselbe Wahrheit.
+    _CMDS_FEATURES = ("funktionen", "funktion", "features", "feature", "module")
 
     def __init__(self):
         self._enabled = False
@@ -308,6 +358,11 @@ class GuildConfig(FeatureBasis):
         self._owner_id = int(os.getenv("OWNER_ID", "0") or "0")
         self._store = JsonStore("guildcfg.json", default={"guilds": {}})
         self._enabled = True
+        # Die Ansprache steckt in fertig gebauten Regexen (ai._RE_CACHE) - ohne
+        # diesen Anstoss haette 'Flo einstellung praefix Bob' erst nach einem
+        # Neustart gewirkt. Steht hier und nicht in ai.setup(), weil ai die
+        # guildcfg nur lazy importieren darf (sonst gaebe es einen Ring).
+        horcht_auf("praefix", ai.praefix_geaendert)
         log.info("Server-Einstellungen aktiv (%d Server mit eigenen Werten, "
                  "%d Schalter im Katalog).", len(self._guilds()), len(KATALOG))
         return True
@@ -406,16 +461,23 @@ class GuildConfig(FeatureBasis):
 
     @staticmethod
     def _nachziehen(gid, key):
-        """Wer haengt an dieser Einstellung und muss davon erfahren?
+        """Sagt allen Bescheid, die an dieser Einstellung haengen.
 
-        Die Ansprache steckt in fertig gebauten Regexen (ai._RE_CACHE). Ohne
-        diesen Anstoss haette ein 'Flo einstellung praefix Bob' erst nach einem
-        Neustart gewirkt - und genau das soll die Einstellung ja ersparen."""
-        if key == "praefix":
+        Wer einen Wert nicht bei jedem Gebrauch neu liest, sondern sich ihn
+        merkt, erfaehrt sonst NIE von einer Aenderung - im Panel klickt jemand,
+        und bis zum Neustart passiert nichts. Genau das ist mit der Lautstaerke
+        passiert.
+
+        Frueher stand hier eine if-Kette, die mit jedem neuen Verbraucher haette
+        wachsen muessen - und die niemand anfasst, der ein Modul aendert.
+        Jetzt meldet sich jeder Verbraucher in seinem eigenen setup() selbst an
+        (guildcfg.horcht_auf), und die Abhaengigkeit steht da, wo sie hingehoert."""
+        for fn in list(_HOERER.get(key, ())):
             try:
-                ai.praefix_geaendert(gid)
+                fn(gid)
             except Exception:  # noqa: BLE001 - eine Einstellung ist nie fatal
-                log.debug("Praefix-Cache nicht geleert", exc_info=True)
+                log.warning("Einstellung '%s': ein Hoerer ist gescheitert.", key,
+                            exc_info=True)
 
     async def _speichern(self):
         if self._store is None:
@@ -488,6 +550,13 @@ class GuildConfig(FeatureBasis):
         emb.set_footer(text=f"▸ = hier eigens gesetzt ({eigene}) · · = Standard")
         return emb
 
+    def darf(self, message):
+        """Darf diese Person Server-Einstellungen aendern? ('Server verwalten')
+
+        Oeffentlich, damit JEDER Weg denselben Check benutzt - vorher hat
+        bayern.py die Einstellung ganz ohne Pruefung umgelegt."""
+        return self._darf(message)
+
     def _darf(self, message):
         """Nur Server-Admins (Server verwalten) und der Besitzer duerfen schalten."""
         autor = getattr(message, "author", None)
@@ -497,6 +566,46 @@ class GuildConfig(FeatureBasis):
         return bool(getattr(rechte, "manage_guild", False))
 
     # --- Befehl -----------------------------------------------------------
+    async def _funktionen(self, message, rest):
+        """'Flo funktionen' / 'Flo funktion casino aus' - je Server.
+
+        Bisher gab es diese Schalter NUR im Web-Panel. Wer kein Panel offen
+        hatte, konnte auf seinem eigenen Server das Casino nicht abschalten."""
+        import features
+        gid = message.guild.id
+        if not rest:
+            zeilen = []
+            for eintrag in features.CATALOG:
+                an = features.is_on_in(gid, eintrag["key"])
+                global_aus = not features.is_on(eintrag["key"])
+                zeichen = "🟢" if an else "🔴"
+                notiz = " _(global aus)_" if global_aus else ""
+                zeilen.append(f"{zeichen} `{eintrag['key']}` – {eintrag['label']}{notiz}")
+            emb = discord.Embed(
+                title="🧩 Funktionen auf diesem Server",
+                description="\n".join(zeilen) or "Keine Module geladen.",
+                color=0x5865F2)
+            emb.set_footer(text=f"{self._bot_name} funktion casino aus")
+            await message.channel.send(embed=emb)
+            return HANDLED
+        if not self._darf(message):
+            return ("Funktionen darf nur umschalten, wer hier **Server "
+                    "verwalten** darf.")
+        key = rest[0].lower().strip(".,!?:")
+        schalter = (rest[1].lower().strip(".,!?") if len(rest) > 1 else "")
+        if schalter not in _JA and schalter not in _NEIN:
+            return (f"An oder aus? `{self._bot_name} funktion {key} aus`")
+        an = schalter in _JA
+        neu_wert = await features.set_guild(gid, key, an)
+        if neu_wert is None:
+            moeglich = ", ".join(f"`{e['key']}`" for e in features.CATALOG)
+            return f"„{key}“ kenne ich nicht. Es gibt: {moeglich}"
+        if an and not features.is_on(key):
+            return (f"`{key}` ist **global** abgeschaltet – das hebt ein "
+                    f"Server-Schalter nicht auf.")
+        return (f"`{key}` ist auf diesem Server jetzt "
+                f"**{'an' if neu_wert else 'aus'}**.")
+
     async def handle(self, message):
         if not self._enabled or getattr(message, "guild", None) is None:
             return None
@@ -504,7 +613,10 @@ class GuildConfig(FeatureBasis):
         if not cleaned:
             return None
         teile = cleaned.split()
-        if not teile or teile[0].lower().strip(".,!?") not in self._CMDS:
+        erstes = teile[0].lower().strip(".,!?") if teile else ""
+        if erstes in self._CMDS_FEATURES:
+            return await self._funktionen(message, teile[1:])
+        if erstes not in self._CMDS:
             return None
         rest = teile[1:]
 
@@ -548,6 +660,7 @@ get = instance.get
 an = instance.an
 eigen = instance.eigen
 setzen = instance.setzen
+darf = instance.darf
 loeschen = instance.loeschen
 vergessen = instance.vergessen
 alle = instance.alle

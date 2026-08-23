@@ -842,36 +842,69 @@ def test_admin_dm_parsing():
     assert uid == 123456789012345678 and text == ""
 
 
-def test_admin_soundboard_toggle():
+def test_soundboard_ist_eine_server_einstellung():
+    """Das Soundboard lag frueher in einem EIGENEN Speicher, galt fuer ALLE
+    Server gleich und liess sich nur vom Bot-Besitzer umschalten - im Web-Panel
+    tauchte es gar nicht auf.
+
+    Jetzt steht es in guildcfg. Damit gilt es je Server, erscheint automatisch
+    im Panel (das rendert den Katalog) und Discord-Befehl und Panel schreiben
+    dieselbe Stelle. Genau das ist mit "synchronisiert" gemeint."""
+    import guildcfg
     import voicegags
-    admin.setup()
 
-    class FakeStore:
-        def __init__(self):
-            self.data = {"soundboard": True}
-            self.saved = 0
+    # Es MUSS im Katalog stehen - sonst ist es nicht im Panel.
+    assert "soundboard" in {e.key for e in guildcfg.KATALOG}
+    assert "join_sounds" in {e.key for e in guildcfg.KATALOG}
 
-        async def save(self):
-            self.saved += 1
+    stand = {}
+    alt_an, alt_setzen = guildcfg.an, guildcfg.setzen
 
-    fake = FakeStore()
-    alt_store, alt_enabled = voicegags.instance._store, voicegags.instance._enabled
-    voicegags.instance._store, voicegags.instance._enabled = fake, True
+    async def fake_setzen(gid, key, roh, guild=None):
+        stand[(int(gid), key)] = str(roh).lower() in ("an", "ein", "on", "1", "true")
+        return True, stand[(int(gid), key)], ""
+
+    guildcfg.an = lambda gid, key: stand.get((int(gid), key), True)
+    guildcfg.setzen = fake_setzen
+    alt_enabled = voicegags.instance._enabled
+    voicegags.instance._enabled = True
     try:
-        assert voicegags.soundboard_enabled()
-        # Owner schaltet aus -> Embed + persistiert + Schalter greift.
-        antwort = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard aus")))
-        assert antwort is not None and not isinstance(antwort, str)
-        assert not voicegags.soundboard_enabled() and fake.saved == 1
-        # Wieder an.
-        asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard an")))
-        assert voicegags.soundboard_enabled() and fake.saved == 2
-        # 'soundboard' OHNE an/aus faellt durch (None) - voicegags zeigt das Board.
-        assert asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "soundboard"))) is None
-        # Fremde koennen nicht schalten.
-        assert asyncio.run(admin.handle(_fake_msg(999, "soundboard aus"))) is None
+        # Gelesen wird je Server - nicht global.
+        stand[(77, "soundboard")] = False
+        assert voicegags.soundboard_enabled(77) is False
+        assert voicegags.soundboard_enabled(88) is True, "der Wert gilt serveruebergreifend"
+
+        def msg(text, darf=True, gid=77):
+            m = _fake_msg(5, f"flo {text}")
+            m.guild = SimpleNamespace(id=gid)
+            m.author.guild_permissions = SimpleNamespace(manage_guild=darf)
+            return m
+
+        # Wer den Server verwaltet, darf schalten - und es landet in guildcfg.
+        antwort = asyncio.run(voicegags.handle(msg("soundboard an")))
+        assert stand[(77, "soundboard")] is True, stand
+        assert "AN" in str(antwort)
+        asyncio.run(voicegags.handle(msg("soundboard aus")))
+        assert stand[(77, "soundboard")] is False
+
+        # Wer nicht darf, aendert NICHTS - vorher brauchte man dafuer den
+        # Bot-Besitzer, jetzt reicht 'Server verwalten'.
+        stand[(77, "soundboard")] = True
+        antwort = asyncio.run(voicegags.handle(msg("soundboard aus", darf=False)))
+        assert stand[(77, "soundboard")] is True, "ohne Recht wurde geschaltet"
+        assert "verwaltet" in str(antwort)
+
+        # 'soundboard' OHNE an/aus ist weiterhin der Aufruf des Bretts und
+        # aendert die Einstellung NICHT (sonst schaltet ein Blick sie um).
+        stand[(77, "soundboard")] = True
+        try:
+            asyncio.run(voicegags.handle(msg("soundboard")))
+        except AttributeError:
+            pass        # das Brett braucht ein echtes Discord-Objekt
+        assert stand[(77, "soundboard")] is True, "ein Blick hat umgeschaltet"
     finally:
-        voicegags.instance._store, voicegags.instance._enabled = alt_store, alt_enabled
+        guildcfg.an, guildcfg.setzen = alt_an, alt_setzen
+        voicegags.instance._enabled = alt_enabled
 
 
 def test_cmdnorm_admin_sicherheit():
@@ -2848,7 +2881,12 @@ def test_audit_geld_und_rechte():
     # 4) Moderation: der Auto-Timeout nach Verwarnungen muss dieselbe Rangordnung
     #    achten wie ein direkter Timeout (sonst knebelt ein Junior-Mod einen Senior).
     mod_quelle = open("moderation.py", encoding="utf-8").read()
-    i = mod_quelle.index("if (count >= WARN_LIMIT")
+    # Am Verhalten festmachen, nicht am genauen Namen der Grenze: die stand
+    # frueher als Konstante WARN_LIMIT da und kommt jetzt je Server aus
+    # guildcfg. Der Test soll die RANGORDNUNG schuetzen, nicht die Schreibweise.
+    treffer = re.search(r"if \(count >= \w+", mod_quelle)
+    assert treffer, "die Auto-Timeout-Bedingung ist nicht mehr auffindbar"
+    i = treffer.start()
     assert "darf_strafen" in mod_quelle[i - 400:i + 200]
     assert "full=True" in mod_quelle[i - 400:i]
 
@@ -7538,12 +7576,21 @@ def test_bayrisch_ueberlebt_den_neustart():
     try:
         A, B = 111, 222
 
-        def msg(gid, text):
-            return SimpleNamespace(content=f"Flo {text}", mentions=[],
-                                   author=SimpleNamespace(id=5, bot=False, display_name="T"),
-                                   guild=SimpleNamespace(id=gid, name="S"))
+        def msg(gid, text, darf=True):
+            return SimpleNamespace(
+                content=f"Flo {text}", mentions=[],
+                author=SimpleNamespace(
+                    id=5, bot=False, display_name="T",
+                    guild_permissions=SimpleNamespace(manage_guild=darf)),
+                guild=SimpleNamespace(id=gid, name="S"))
 
         assert bayern.is_on(A) is False
+        # Ohne das Recht wird NICHTS umgestellt. Vorher hat bayern.py die
+        # Server-Einstellung voellig ungeprueft umgelegt - ein beilaeufiges
+        # "flo red mal bayerisch" hat sie fuer alle geaendert.
+        asyncio.run(bayern.handle(msg(A, "bayrisch an", darf=False)))
+        assert bayern.is_on(A) is False, "ohne Recht wurde der Dialekt umgestellt"
+
         antwort = asyncio.run(bayern.handle(msg(A, "bayrisch an")))
         assert "boarisch" in str(antwort)
         assert bayern.is_on(A) is True
@@ -14201,6 +14248,226 @@ def test_gehirn_haengt_nicht_an_einem_kaputten_ki_aufruf_fest():
     finally:
         ai.generate = alt_gen
         restore()
+
+
+def test_panel_aenderung_erreicht_den_laufenden_player():
+    """DAS war der eigentliche "nicht synchronisiert"-Fehler.
+
+    Die Lautstaerke wurde NUR beim Anlegen eines Players aus guildcfg gelesen -
+    und Player werden nie weggeraeumt. Wer einmal Musik gehoert hatte, behielt
+    seine Lautstaerke bis zum Neustart: 'flo ls 80' griff sofort, ein Klick im
+    Web-Panel nie. Jetzt meldet sich music bei guildcfg an und zieht nach."""
+    import guildcfg
+    import music
+
+    import discord
+
+    # Eine ECHTE PCMVolumeTransformer - music prueft per isinstance, und mit
+    # einer Attrappe wuerde der Test gruen, obwohl im Betrieb nichts passiert.
+    class StummeQuelle(discord.AudioSource):
+        def read(self):
+            return b""
+
+        def is_opus(self):
+            return False
+
+    quelle = discord.PCMVolumeTransformer(StummeQuelle(), volume=0.5)
+    player = SimpleNamespace(volume=0.5, voice=SimpleNamespace(source=quelle))
+    m = music.instance
+    alt_players = dict(m._players)
+    m._players[4242] = player
+    alt_get = guildcfg.get
+    try:
+        guildcfg.get = lambda gid, key: 90 if key == "lautstaerke" else alt_get(gid, key)
+        m.lautstaerke_nachziehen(4242)
+        assert abs(player.volume - 0.9) < 1e-6, player.volume
+        assert abs(player.voice.source.volume - 0.9) < 1e-6, (
+            "die LAUFENDE Tonspur bleibt leise - es wirkt erst beim naechsten Lied")
+        # Ein Server ohne Player darf nicht umfallen.
+        m.lautstaerke_nachziehen(999999)
+    finally:
+        guildcfg.get = alt_get
+        m._players.clear()
+        m._players.update(alt_players)
+
+
+def test_guildcfg_sagt_allen_bescheid_die_daran_haengen():
+    """Der Verteiler hinter dem Nachziehen.
+
+    Frueher stand in _nachziehen eine if-Kette mit genau einem Eintrag
+    (praefix). Jeder weitere Verbraucher haette sie erweitern muessen - und
+    niemand, der ein Modul aendert, schaut in guildcfg nach."""
+    import guildcfg
+    gerufen = []
+    guildcfg.horcht_auf("testschalter", gerufen.append)
+    # Doppelte Anmeldung derselben Funktion darf nicht doppelt feuern
+    # (setup() laeuft in Tests mehrfach).
+    guildcfg.horcht_auf("testschalter", gerufen.append)
+    try:
+        guildcfg.instance._nachziehen(77, "testschalter")
+        assert gerufen == [77], gerufen
+
+        # Ein kaputter Hoerer darf die Einstellung NICHT umwerfen - sonst
+        # scheitert das Speichern an einem Nebeneffekt.
+        def kaputt(_gid):
+            raise RuntimeError("absichtlich")
+
+        guildcfg.horcht_auf("testschalter", kaputt)
+        guildcfg.instance._nachziehen(88, "testschalter")
+        assert gerufen == [77, 88], gerufen
+    finally:
+        guildcfg._HOERER.pop("testschalter", None)
+
+
+def test_moderation_grenzen_gelten_je_server():
+    """Verwarn-Limit, Timeout-Dauern und das Loesch-Limit standen nur in der
+    .env: eine Aenderung galt fuer alle Server und brauchte einen Neustart.
+    Jetzt kommen sie aus guildcfg - also auch aus dem Web-Panel."""
+    import guildcfg
+    import moderation
+    for key in ("warn_limit", "warn_timeout", "timeout_standard", "purge_max"):
+        assert key in {e.key for e in guildcfg.KATALOG}, f"{key} fehlt im Katalog"
+
+    # WICHTIG: die Module rufen guildcfg.get (den Modul-Alias), nicht
+    # instance.get - der Alias wird beim Import gebunden. Wer instance.get
+    # ersetzt, ersetzt nichts.
+    alt = guildcfg.get
+    try:
+        guildcfg.get = lambda gid, key: (7 if (gid == 77 and key == "warn_limit")
+                                         else alt(gid, key))
+        assert moderation._cfg_zahl(77, "warn_limit", 3) == 7
+        assert moderation._cfg_zahl(88, "warn_limit", 3) == 3, "gilt serveruebergreifend"
+        # Kaputter Wert -> der alte Standard, kein Absturz mitten in der Moderation.
+        guildcfg.get = lambda gid, key: "keine zahl"
+        assert moderation._cfg_zahl(77, "warn_limit", 3) == 3
+    finally:
+        guildcfg.get = alt
+
+
+def test_aktie_laesst_sich_je_server_abschalten():
+    """Das Panel schreibt den Funktions-Schalter JE SERVER (features.set_guild),
+    die Aktie fragte aber nur den globalen ab. Ein Server, der die Aktie im
+    Panel abgeschaltet hatte, handelte munter weiter."""
+    import features
+    import floaktie
+    alt_on, alt_in = features.is_on, features.is_on_in
+    try:
+        features.is_on = lambda key: True
+        features.is_on_in = lambda gid, key: gid != 77
+        assert floaktie.instance.is_off(77) is True, (
+            "der Server-Schalter aus dem Panel wird ignoriert")
+        assert floaktie.instance.is_off(88) is False
+        # Ohne Server (DM) zaehlt nur der globale Schalter.
+        assert floaktie.instance.is_off(None) is False
+        features.is_on = lambda key: False
+        assert floaktie.instance.is_off(88) is True, "der globale Not-Aus greift nicht"
+    finally:
+        features.is_on, features.is_on_in = alt_on, alt_in
+
+
+def test_keine_server_einstellung_ohne_rechtepruefung():
+    """Wer eine Server-Einstellung schreibt, muss vorher fragen, ob er darf.
+
+    bayern.py hat guildcfg.setzen ohne jede Pruefung gerufen - ein beilaeufiges
+    "flo red mal bayerisch" hat damit fuer den ganzen Server umgestellt. Der
+    Test haelt das fuer ALLE Module fest, nicht nur fuer das eine."""
+    import glob
+    import re as _re
+    schuldige = []
+    for datei in sorted(glob.glob("*.py")):
+        if datei.startswith("test_") or datei in ("guildcfg.py", "webpanel.py"):
+            continue        # guildcfg prueft selbst, das Panel hat _guard
+        quelle = open(datei, encoding="utf-8").read()
+        # Ausnahmen an der FUNKTION festmachen, nicht an einem Textfenster:
+        # eine lange Erklaerung davor hat den Namen sonst aus dem Fenster
+        # geschoben und der Test schlug grundlos an.
+        ohne_nutzer = ("altlast_migrieren",)   # laeuft beim Start, ohne Person
+        for treffer in _re.finditer(r"guildcfg\.setzen\(", quelle):
+            davor = quelle[:treffer.start()]
+            umgebung = _re.findall(r"^\s*(?:async\s+)?def\s+(\w+)", davor,
+                                   _re.MULTILINE)
+            if umgebung and umgebung[-1] in ohne_nutzer:
+                continue
+            if "darf(" in davor[-900:] or "_darf(" in davor[-900:]:
+                continue
+            zeile = davor.count("\n") + 1
+            schuldige.append(f"{datei}:{zeile} (in {umgebung[-1] if umgebung else '?'})")
+    assert not schuldige, (
+        "Diese Stellen aendern eine Server-Einstellung, ohne die Rechte zu "
+        "pruefen:\n  " + "\n  ".join(schuldige))
+
+
+def test_soundboard_hat_keinen_eigenen_speicher_mehr():
+    """Zwei Wahrheiten fuer denselben Schalter sind genau der Grund, warum das
+    Panel und Discord auseinanderlaufen konnten. voicegags darf keinen eigenen
+    Konfigurations-Speicher mehr anlegen."""
+    quelle = open("voicegags.py", encoding="utf-8").read()
+    assert "JsonStore(" not in quelle, (
+        "voicegags legt wieder einen eigenen Speicher an - der Schalter gehoert "
+        "in guildcfg, sonst ist er im Panel nicht zu sehen")
+    assert "set_soundboard" not in quelle
+    # Und die Werte muessen bei JEDEM Gebrauch gelesen werden, nicht in setup().
+    assert "self._join_sounds" not in quelle, (
+        "die Join-Sounds werden wieder beim Start gemerkt - eine Aenderung im "
+        "Panel wirkt dann erst nach einem Neustart")
+
+
+def test_funktionen_lassen_sich_auch_in_discord_schalten():
+    """Die Funktions-Schalter gab es NUR im Web-Panel.
+
+    Wer kein Panel offen hatte, konnte auf seinem eigenen Server das Casino
+    nicht abschalten. Jetzt geht beides - und beides schreibt dieselbe Stelle."""
+    import features
+    import guildcfg
+    gesetzt = {}
+    alt_set, alt_on, alt_in = features.set_guild, features.is_on, features.is_on_in
+
+    async def fake_set(gid, key, on):
+        if key not in {e["key"] for e in features.CATALOG}:
+            return None
+        gesetzt[(int(gid), key)] = bool(on)
+        return bool(on)
+
+    def msg(text, darf=True):
+        m = SimpleNamespace(
+            content=f"Flo {text}", mentions=[],
+            author=SimpleNamespace(
+                id=5, bot=False, display_name="T",
+                guild_permissions=SimpleNamespace(manage_guild=darf)),
+            guild=SimpleNamespace(id=77, name="S"))
+        m.channel = SimpleNamespace(send=lambda **kw: _als_coro(None))
+        return m
+
+    alt_enabled = guildcfg.instance._enabled
+    guildcfg.instance._enabled = True
+    features.set_guild = fake_set
+    features.is_on = lambda key: True
+    features.is_on_in = lambda gid, key: gesetzt.get((int(gid), key), True)
+    try:
+        antwort = asyncio.run(guildcfg.handle(msg("funktion casino aus")))
+        assert gesetzt.get((77, "casino")) is False, gesetzt
+        assert "aus" in str(antwort)
+
+        # Ohne Recht wird NICHTS umgeschaltet.
+        gesetzt.clear()
+        antwort = asyncio.run(guildcfg.handle(msg("funktion casino aus", darf=False)))
+        assert not gesetzt, "ohne Recht wurde geschaltet"
+        assert "verwalten" in str(antwort)
+
+        # Unbekannter Schluessel wird benannt, nicht still verschluckt.
+        antwort = asyncio.run(guildcfg.handle(msg("funktion gibtsnicht aus")))
+        assert "kenne ich nicht" in str(antwort)
+
+        # Der globale Not-Aus gewinnt weiter.
+        features.is_on = lambda key: False
+        antwort = asyncio.run(guildcfg.handle(msg("funktion casino an")))
+        assert "global" in str(antwort)
+
+        # Uebersicht ohne Argument geht auch ohne Rechte (nur ansehen).
+        assert asyncio.run(guildcfg.handle(msg("funktionen", darf=False))) is guildcfg.HANDLED
+    finally:
+        features.set_guild, features.is_on, features.is_on_in = alt_set, alt_on, alt_in
+        guildcfg.instance._enabled = alt_enabled
 
 
 def _als_coro(wert):

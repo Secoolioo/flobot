@@ -344,11 +344,17 @@ class FloAktie(FeatureBasis):
     # KOMPLETT still: kein Kauf, kein Verkauf, kein Kurs-Tick, keine Dividende,
     # keine Aktivitaets-Zaehlung. Jede oeffentliche Tuer fragt hier nach - sonst
     # laufen alte Panel-Buttons und die Loops munter weiter.
-    def is_off(self):
-        """True, wenn die Aktie per Panel-Schalter abgeschaltet ist."""
+    def is_off(self, gid=None):
+        """True, wenn die Aktie abgeschaltet ist - global ODER auf DIESEM Server.
+
+        Vorher wurde nur der globale Schalter gefragt. Das Panel schreibt aber
+        je Server (features.set_guild) - ein Server, der die Aktie dort
+        abgeschaltet hatte, handelte munter weiter."""
         try:
             import features
-            return not features.is_on("floaktie")
+            if not features.is_on("floaktie"):
+                return True
+            return bool(gid) and not features.is_on_in(gid, "floaktie")
         except Exception:  # noqa: BLE001 - ohne features gilt: an
             return False
 
@@ -697,7 +703,7 @@ class FloAktie(FeatureBasis):
             return await self._sell(member, count)
 
     async def _buy(self, member, count):
-        if self.is_off():
+        if self.is_off(getattr(getattr(member, "guild", None), "id", None)):
             return self.aus_text()
         count = int(count)
         if count < 1:
@@ -749,7 +755,7 @@ class FloAktie(FeatureBasis):
         return self._trade_embed("kauf", member, count, cost, alt_kurs, neu, stand)
 
     async def _sell(self, member, count):
-        if self.is_off():
+        if self.is_off(getattr(getattr(member, "guild", None), "id", None)):
             return self.aus_text()
         count = int(count)
         habe = self.shares_of(member.id)
@@ -1713,7 +1719,7 @@ class FloAktie(FeatureBasis):
         """Sendet den Kurs-Chart (Bild) mit Zeitraum-Buttons. Gibt HANDLED zurueck.
         Dieser Chart wird gemerkt -> sein Bild wird ab jetzt live nachgezogen,
         sobald sich der Kurs aendert."""
-        if self.is_off():
+        if self.is_off(getattr(getattr(message, "guild", None), "id", None)):
             return self.aus_embed()
         view = KursView(days)
         try:
@@ -2027,7 +2033,7 @@ class FloAktie(FeatureBasis):
         first = parts[0].lower().strip(".,;:!?") if parts else ""
         if first not in _CMDS and first not in _CHART_CMDS:
             return None
-        if self.is_off():
+        if self.is_off(getattr(getattr(message, "guild", None), "id", None)):
             return self.aus_embed()
         if not economy.is_enabled():
             return "💤 Gerade gibt's keine Coins - das Economy-System schläft."

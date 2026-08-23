@@ -14,6 +14,7 @@ statt die Musik abzuwuergen. Die Sound-Dateien legt der Nutzer selbst in sounds/
 """
 
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -24,7 +25,6 @@ import discord
 
 import ai
 from basis import FeatureBasis
-from store import JsonStore
 
 log = logging.getLogger("dcbot.voice")
 
@@ -60,7 +60,8 @@ class _SoundBtn(discord.ui.Button):
         self.sound_name = name
 
     async def callback(self, interaction):
-        if not instance.soundboard_enabled():
+        if not instance.soundboard_enabled(
+                getattr(getattr(interaction, "guild", None), "id", 0)):
             await interaction.response.send_message(
                 "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
             return
@@ -112,8 +113,6 @@ class VoiceGags(FeatureBasis):
     def __init__(self):
         self._enabled = False
         self._tts_engine = ""          # "gtts", "espeak-ng", "espeak" oder "" (aus)
-        self._join_sounds = False
-        self._store = None   # persistente Schalter (Soundboard an/aus)
 
         # Hintergrund-Tasks (Sound spielt bis zu 60 s - Button antwortet sofort).
         self._bg = set()
@@ -167,14 +166,48 @@ class VoiceGags(FeatureBasis):
             except Exception:  # noqa: BLE001 - Pack ist Bonus, Feature laeuft auch ohne
                 log.exception("Soundpack-Generierung fehlgeschlagen")
         self._tts_engine = self._detect_tts()
-        self._join_sounds = os.getenv("JOIN_SOUNDS", "0").strip().lower() in ("1", "true", "yes", "on")
-        self._store = JsonStore("voicegags.json", default={"soundboard": True})
+        # Soundboard und Join-Sounds liegen jetzt in guildcfg - je Server und
+        # damit auch im Web-Panel. Vorher steckten sie in einem eigenen
+        # Speicher, galten fuer ALLE Server gleich und liessen sich nur vom
+        # Bot-Besitzer per Discord-Befehl umstellen.
         self._enabled = True
-        log.info(
-            "Voice-Gags aktiv (Sounds: %s, TTS: %s, Join-Sounds: %s).",
-            self._count_sounds(), self._tts_engine or "aus", "an" if self._join_sounds else "aus",
-        )
+        log.info("Voice-Gags aktiv (Sounds: %s, TTS: %s). Soundboard und "
+                 "Join-Sounds stellt jeder Server selbst ein.",
+                 self._count_sounds(), self._tts_engine or "aus")
         return True
+
+    async def altlast_migrieren(self, guild_ids):
+        """Uebernimmt ein frueher global abgeschaltetes Soundboard EINMALIG.
+
+        Ohne das waere ein bewusst ausgeschaltetes Board nach dem Update
+        ueberall wieder an - eine stille Aenderung am laufenden Server. Die
+        alte Datei wird danach umbenannt, damit das genau einmal passiert.
+        Wird aus on_ready gerufen: erst dort sind die Server bekannt."""
+        from store import DATA_DIR
+        alt = DATA_DIR / "voicegags.json"
+        if not alt.exists():
+            return 0
+        war_aus = False
+        try:
+            with open(alt, encoding="utf-8") as f:
+                war_aus = json.load(f).get("soundboard") is False
+        except Exception:  # noqa: BLE001 - unlesbar = nichts zu uebernehmen
+            log.warning("Alte voicegags.json unlesbar - nehme den Standard (an).")
+        gesetzt = 0
+        if war_aus:
+            import guildcfg
+            for gid in guild_ids or []:
+                ok, _w, _f = await guildcfg.setzen(gid, "soundboard", "aus")
+                gesetzt += 1 if ok else 0
+            log.warning("Soundboard war global AUS - auf %d Server(n) "
+                        "uebernommen. Ab jetzt stellt das jeder Server selbst "
+                        "ein, auch im Web-Panel.", gesetzt)
+        try:
+            alt.rename(alt.with_name("voicegags.json.uebernommen"))
+        except OSError:
+            log.warning("Alte voicegags.json liess sich nicht umbenennen - "
+                        "die Uebernahme laeuft beim naechsten Start erneut.")
+        return gesetzt
 
     def is_enabled(self):
         return self._enabled
@@ -190,18 +223,52 @@ class VoiceGags(FeatureBasis):
                 return binary
         return ""
 
-    def soundboard_enabled(self):
-        """Owner-Schalter: darf das Soundboard gerade benutzt werden?"""
-        if self._store is None:
-            return True
-        return bool(self._store.data.get("soundboard", True))
+    async def _schalten(self, message, schalter):
+        """'Flo soundboard an/aus' -> schreibt guildcfg (wie das Panel).
 
-    async def set_soundboard(self, an):
-        """Schaltet das Soundboard an/aus (persistiert; nur admin.py ruft das)."""
-        if self._store is None:
-            return
-        self._store.data["soundboard"] = bool(an)
-        await self._store.save()
+        Bewusst NICHT mehr nur fuer den Bot-Besitzer: es ist eine
+        Server-Einstellung, also gilt dasselbe Recht wie fuer alle anderen -
+        'Server verwalten'. Sonst braeuchte man fuer diesen einen Schalter den
+        Bot-Betreiber, waehrend man alles andere selbst einstellen darf."""
+        import guildcfg
+        if not guildcfg.darf(message):
+            return ("Das darf nur, wer den Server verwaltet. "
+                    f"Ansehen geht immer: `{self._bot_name} sounds`.")
+        an = schalter in ("an", "ein", "on")
+        ok, _wert, fehler = await guildcfg.setzen(
+            message.guild.id, "soundboard", "an" if an else "aus")
+        if not ok:
+            return fehler or "Das liess sich gerade nicht speichern."
+        if an:
+            return "🔊 Soundboard ist auf diesem Server wieder **AN**."
+        return ("🔇 Soundboard ist auf diesem Server **AUS** "
+                f"(wieder an: `{self._bot_name} soundboard an`).")
+
+    @staticmethod
+    def soundboard_enabled(gid=None):
+        """Darf das Soundboard auf DIESEM Server benutzt werden?
+
+        Wird bei jedem Gebrauch frisch gelesen, nicht beim Start gemerkt -
+        sonst wirkte ein Klick im Panel erst nach einem Neustart. Genau das ist
+        gemeint, wenn der Betreiber sagt, es soll synchron sein."""
+        if not gid:
+            return True
+        try:
+            import guildcfg
+            return guildcfg.an(gid, "soundboard")
+        except Exception:  # noqa: BLE001 - im Zweifel an
+            return True
+
+    @staticmethod
+    def join_sounds_an(gid=None):
+        """Join-Sounds auf diesem Server? Ebenfalls bei jedem Gebrauch gelesen."""
+        if not gid:
+            return False
+        try:
+            import guildcfg
+            return guildcfg.an(gid, "join_sounds")
+        except Exception:  # noqa: BLE001
+            return False
 
     def _count_sounds(self):
         if not SOUNDS_DIR.exists():
@@ -240,11 +307,19 @@ class VoiceGags(FeatureBasis):
         first = parts[0].lower()
         rest = parts[1] if len(parts) > 1 else ""
 
+        # 'Flo soundboard an/aus' - schaltet das Brett fuer DIESEN Server.
+        # Lag frueher in admin.py, war global und nur fuer den Bot-Besitzer.
+        # Jetzt dieselbe Wahrheit wie das Web-Panel: guildcfg.
+        if first in ("soundboard", "sounds", "soundliste"):
+            schalter = rest.strip().lower().strip(".,!?")
+            if schalter in ("an", "ein", "on", "aus", "off", "aus.", "off."):
+                return await self._schalten(message, schalter)
+
         # Die Soundliste nimmt gar kein Argument - steht etwas dahinter, ist es
         # kein Befehl: "Flo sounds gut, lass uns das so machen" hat sonst das
         # komplette Soundboard-Menue aufgeklappt (denglisch 'sounds good').
         if first in ("sounds", "soundboard", "soundliste") and not rest.strip(" .,!?"):
-            if not self.soundboard_enabled():
+            if not self.soundboard_enabled(message.guild.id):
                 return "Das Soundboard ist gerade **deaktiviert**. 🔇"
             sounds = self._list_sounds()
             if not sounds:
@@ -253,7 +328,7 @@ class VoiceGags(FeatureBasis):
             return await self._open_soundboard(message, sounds)
 
         if first in ("sound", "sb", "soundeffekt"):
-            if not self.soundboard_enabled():
+            if not self.soundboard_enabled(message.guild.id):
                 return "Das Soundboard ist gerade **deaktiviert**. 🔇"
             return await self._cmd_sound(message, rest)
 
@@ -481,7 +556,9 @@ class VoiceGags(FeatureBasis):
 
     async def on_voice_state_update(self, member, before, after):
         """Spielt einen Join-Sound, wenn jemand NEU einen Sprachkanal betritt."""
-        if not self._enabled or not self._join_sounds or member.bot:
+        if not self._enabled or member.bot:
+            return
+        if not self.join_sounds_an(getattr(getattr(member, "guild", None), "id", 0)):
             return
         if after.channel is None:
             return
@@ -505,6 +582,7 @@ instance = VoiceGags()
 setup = instance.setup
 is_enabled = instance.is_enabled
 soundboard_enabled = instance.soundboard_enabled
-set_soundboard = instance.set_soundboard
+join_sounds_an = instance.join_sounds_an
+altlast_migrieren = instance.altlast_migrieren
 handle = instance.handle
 on_voice_state_update = instance.on_voice_state_update

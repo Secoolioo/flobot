@@ -165,13 +165,6 @@ class Admin(FeatureBasis):
             return await self._announce(message, rest)
         if first in ("dm", "flüster", "fluester"):
             return await self._dm(message, rest)
-        if first in ("soundboard", "sounds", "soundliste"):
-            # NUR die an/aus-Form abfangen - 'flo soundboard' ohne Argument faellt
-            # durch an voicegags (der Owner will das Board ja auch benutzen).
-            schalter = rest.strip().lower()
-            if schalter in ("an", "ein", "on", "aus", "off"):
-                return await self._toggle_soundboard(schalter in ("an", "ein", "on"))
-            return None
         if first in ("shopneu", "shoprefresh"):
             return await self._shop_refresh()
         if first in ("sendepause", "sendpause", "funkstille", "lockdown"):
@@ -354,23 +347,6 @@ class Admin(FeatureBasis):
         emb.set_footer(text="Antworten leite ich automatisch an dich weiter.")
         return emb
 
-    async def _toggle_soundboard(self, an):
-        """Soundboard serverweit an-/abschalten (persistiert ueber Neustarts)."""
-        try:
-            import voicegags
-            if not voicegags.is_enabled():
-                return "Voice-Gags sind gerade komplett aus (ffmpeg/PyNaCl fehlt?)."
-            await voicegags.set_soundboard(an)
-        except Exception:  # noqa: BLE001
-            log.exception("Soundboard-Toggle fehlgeschlagen")
-            return "Da ist beim Umschalten etwas schiefgelaufen."
-        if an:
-            return self._emb("🔊 Soundboard ist wieder **AN** - lasst es krachen!",
-                             color=discord.Color.green())
-        return self._emb("🔇 Soundboard ist jetzt **AUS** - niemand kann Sounds abspielen "
-                         f"(wieder an: `{self._bot_name} soundboard an`).",
-                         color=discord.Color.orange())
-
     async def _shop_refresh(self):
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
@@ -423,6 +399,5 @@ _parse_announce = instance._parse_announce
 _announce = instance._announce
 _parse_dm = instance._parse_dm
 _dm = instance._dm
-_toggle_soundboard = instance._toggle_soundboard
 _shop_refresh = instance._shop_refresh
 _admin_help = instance._admin_help

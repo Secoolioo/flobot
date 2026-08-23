@@ -38,9 +38,49 @@ Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unte
 | `levelup_ansagen`, `daily_erinnerung` | Level-Karten, Tagesbonus-Erinnerung |
 | `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
 | `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
+| `soundboard`, `join_sounds` | Sound-Brett und Begrüßungs-Sounds |
+| `warn_limit`, `warn_timeout`, `timeout_standard`, `purge_max` | Moderations-Grenzen |
 
 Gesetzt wird nur, was abweicht; der Rest folgt dem Standard aus der `.env`. Ein
 bestehender Server verhält sich nach dem Update also **unverändert**.
+
+### Eine Wahrheit für Discord und Panel
+
+Alles aus diesem Katalog steht **automatisch** im Web-Panel — das Panel rendert
+den Katalog, es gibt keine zweite Liste, die man vergessen könnte. Und
+`Flo einstellung <name> <wert>` schreibt genau die Stelle, die auch der
+Panel-Klick schreibt.
+
+Drei Dinge liefen dem früher davon:
+
+- **Soundboard** lag in einer eigenen `voicegags.json`, galt für **alle** Server
+  gleich und war nur vom Bot-Besitzer umschaltbar — im Panel tauchte es gar
+  nicht auf. Jetzt: je Server, `Server verwalten` genügt. Ein früher global
+  abgeschaltetes Board wird beim ersten Start **einmalig übernommen**, damit es
+  nicht stillschweigend wieder angeht.
+- **Moderations-Grenzen** standen nur in der `.env`: global und erst nach einem
+  Neustart wirksam. Jetzt je Server und sofort; die `.env` bleibt der Standard.
+- **Join-Sounds** waren überhaupt nicht einstellbar.
+
+Der Rückweg gilt auch: die **Funktions-Schalter** (Casino, Musik, KI …) gab es
+nur im Panel. Jetzt auch im Chat:
+
+```
+flo funktionen              was auf diesem Server an ist
+flo funktion casino aus     abschalten (global aus bleibt global aus)
+```
+
+> **Sofort statt nach dem Neustart.** Wer einen Wert nicht bei jedem Gebrauch
+> liest, sondern sich ihn merkt, erfährt sonst nie von einer Änderung. Genau das
+> war bei der **Lautstärke** so: sie wurde nur beim *Anlegen* eines Players
+> gelesen, und Player werden nie weggeräumt — `flo ls 80` griff sofort, ein
+> Panel-Klick nie. Module melden sich jetzt mit `guildcfg.horcht_auf(key, fn)`
+> an und ziehen nach.
+
+> **Rechte.** Eine Server-Einstellung zu ändern verlangt `Server verwalten` — auf
+> jedem Weg. `bayern.py` hat sie vorher völlig ungeprüft umgelegt: ein
+> beiläufiges „flo red mal bayerisch" hat für alle umgeschaltet. Ein Test hält
+> für *alle* Module fest, dass vor `guildcfg.setzen` geprüft wird.
 
 ### Ansprache je Server
 

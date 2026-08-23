@@ -1663,6 +1663,9 @@ class Music(FeatureBasis):
 
         Rueckgabe: True, wenn das Musik-Feature aktiv ist.
         """
+        # Bei einer Aenderung der Lautstaerke im Panel oder per Befehl sofort
+        # nachziehen, statt sie nur beim Anlegen eines Players zu lesen.
+        guildcfg.horcht_auf("lautstaerke", self.lautstaerke_nachziehen)
         self._spotify_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
         self._spotify_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
 
@@ -1772,6 +1775,32 @@ class Music(FeatureBasis):
                                  volume=self._start_lautstaerke(guild_id))
             self._players[guild_id] = player
         return player
+
+    @staticmethod
+    def _lautstaerke_anwenden(player, wert):
+        """Setzt die Lautstaerke am Player UND an der laufenden Tonquelle.
+
+        Beides zusammen, weil der Player die Zahl fuer den naechsten Song haelt
+        und die Tonquelle das, was gerade zu hoeren ist. Nur eins davon zu
+        setzen heisst: es wirkt erst beim naechsten Lied."""
+        if player is None:
+            return
+        player.volume = max(0.0, min(2.0, float(wert)))
+        if player.voice is not None and isinstance(
+                player.voice.source, discord.PCMVolumeTransformer):
+            player.voice.source.volume = player.volume
+
+    def lautstaerke_nachziehen(self, gid):
+        """guildcfg meldet: die Lautstaerke dieses Servers hat sich geaendert.
+
+        Ohne das wirkte ein Klick im Web-Panel NIE: die Einstellung wurde nur
+        beim ANLEGEN eines Players gelesen, und Player werden nie weggeraeumt.
+        Wer also einmal Musik gehoert hatte, behielt seine Lautstaerke bis zum
+        Neustart - waehrend 'flo ls 80' sofort griff. Genau dieser Unterschied
+        ist gemeint, wenn es heisst, es soll synchron sein."""
+        player = self._players.get(int(gid or 0)) or self._players.get(gid)
+        if player is not None:
+            self._lautstaerke_anwenden(player, self._start_lautstaerke(gid))
 
     @staticmethod
     def _start_lautstaerke(guild_id):
@@ -3226,20 +3255,24 @@ class Music(FeatureBasis):
                 new = max(0, cur - 20)
             else:
                 new = max(0, min(200, int(arg)))
-            player.volume = new / 100
-            if player.voice is not None and isinstance(
-                player.voice.source, discord.PCMVolumeTransformer
-            ):
-                player.voice.source.volume = player.volume  # live anwenden
-            # Und MERKEN - je Server. Vorher stand die Lautstaerke nur im
-            # Player: nach 'flo stop' oder einem Neustart war sie wieder auf 50,
-            # obwohl man sie gerade eingestellt hatte.
-            try:
-                await guildcfg.setzen(message.guild.id, "lautstaerke", str(new))
-            except Exception:  # noqa: BLE001 - Musik laeuft auch ohne Speichern
-                log.exception("Lautstaerke konnte nicht gespeichert werden")
+            # Lauter/leiser darf JEDER - das gilt fuer diese Sitzung.
+            self._lautstaerke_anwenden(player, new / 100)
+            # MERKEN ist etwas anderes: das ist eine Server-Einstellung und
+            # ueberlebt Neustart und 'flo stop'. Sie zu aendern darf nicht
+            # jeder - sonst stellt einer die Vorgabe fuer alle um, weil ihm ein
+            # Lied zu laut war. Dasselbe Recht wie im Web-Panel.
+            gemerkt = False
+            if guildcfg.darf(message):
+                try:
+                    await guildcfg.setzen(message.guild.id, "lautstaerke", str(new))
+                    gemerkt = True
+                except Exception:  # noqa: BLE001 - Musik laeuft auch ohne Speichern
+                    log.exception("Lautstaerke konnte nicht gespeichert werden")
             bar = "🔉" if new < 50 else ("🔊" if new <= 100 else "📢")
-            return self._embed(f"Lautstärke steht jetzt auf **{new}%**.",
+            zusatz = ("" if gemerkt else
+                      "\n_Nur für jetzt – dauerhaft merken darf, wer den Server "
+                      "verwaltet._")
+            return self._embed(f"Lautstärke steht jetzt auf **{new}%**.{zusatz}",
                                title=f"{bar}  Lautstärke", color=_COL_CTRL)
 
         if action in ("stop", "leave"):
