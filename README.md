@@ -1068,6 +1068,9 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
+| `GAMES_EVENT_REWARD_MIN` / `_MAX` | `5000` / `25000` | Preis fürs Schnell-Event (je Runde gewürfelt) |
+| `GAMES_EVENT_INTERVAL` / `GAMES_EVENT_CHANCE` | `300` / `0.15` | Takt und Chance je Tick |
+| `GAMES_DAILY_MAX` | `50000` | Netto-Gewinn aus allen Spielen pro Tag und Person |
 | `ARBEIT_GOLD_CHANCE` | `0.08` | Chance auf eine goldene (doppelt zahlende) Schicht |
 | `WORDLE_SPASS_MAX` | `15000` | Höchstlohn je Spaß-Wordle |
 | `WORDLE_VERZUG_MIN` / `_MAX` | `300` / `2700` | Zufallsfenster, bis das Wort des Tages fällt |

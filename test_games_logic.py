@@ -14470,6 +14470,55 @@ def test_funktionen_lassen_sich_auch_in_discord_schalten():
         guildcfg.instance._enabled = alt_enabled
 
 
+def test_schnell_event_lohnt_sich_wirklich():
+    """Der Preis fuers Schnell-Event war 100 Coins.
+
+    Danebengehalten: der Tagesbonus bringt 2.500, das Wort des Tages ab 50.000.
+    Fuer 100 Coins hat sich niemand mehr vom Stuhl bewegt. Jetzt wird der Preis
+    je Runde gewuerfelt - eine Spanne ist spannender als eine feste Zahl."""
+    import games
+    assert games.EVENT_REWARD_MIN >= 1000, (
+        "der Preis ist wieder auf Trinkgeld-Niveau")
+    assert games.EVENT_REWARD_MAX > games.EVENT_REWARD_MIN, "keine Spanne"
+
+    werte = {games.instance._event_preis() for _ in range(500)}
+    assert min(werte) >= games.EVENT_REWARD_MIN
+    assert max(werte) <= games.EVENT_REWARD_MAX
+    assert len(werte) > 50, "der Preis wird gar nicht gewuerfelt"
+
+    # Ein Vertipper in der .env (MIN groesser als MAX) darf das Event nicht
+    # sprengen - random.randint wirft bei verdrehten Grenzen sonst.
+    alt = (games.EVENT_REWARD_MIN, games.EVENT_REWARD_MAX)
+    try:
+        games.EVENT_REWARD_MIN, games.EVENT_REWARD_MAX = 9_000, 1_000
+        assert games.instance._event_preis() == 1_000
+        games.EVENT_REWARD_MIN, games.EVENT_REWARD_MAX = 0, 0
+        assert games.instance._event_preis() >= 1
+    finally:
+        games.EVENT_REWARD_MIN, games.EVENT_REWARD_MAX = alt
+
+    # Die Tageskappe bleibt der Deckel - der Preis darf sie nicht aushebeln.
+    assert games.GAMES_DAILY_MAX > 0
+    assert games.EVENT_REWARD_MAX <= games.GAMES_DAILY_MAX, (
+        "ein einzelnes Event fuellt die komplette Tageskappe")
+
+
+def test_schnell_event_verspricht_nichts_was_es_nicht_zahlt():
+    """Bei 100 Coins fiel es nie auf - bei fuenfstelligen Preisen schon:
+    _auszahlen kuerzt auf die Tageskappe, die Siegermeldung nannte aber den
+    AUSGELOBTEN Betrag. Wer seine Kappe voll hatte, las "+25.000 Flo Coins"
+    und bekam nichts."""
+    quelle = open("games.py", encoding="utf-8").read()
+    i = quelle.index('self._auszahlen(message.author.id, runde["reward"]')
+    rumpf = quelle[i:i + 1200]
+    assert "gezahlt =" in quelle[max(0, i - 200):i + 100], (
+        "der Rueckgabewert von _auszahlen wird weggeworfen")
+    assert "gezahlt" in rumpf and "Tageskappe" in rumpf, (
+        "die Siegermeldung nennt weiter den ausgelobten statt den gezahlten Betrag")
+    # Und der Betrag muss mit Tausenderpunkten dastehen, nicht als '25000'.
+    assert "numfmt.fmt(gezahlt)" in rumpf, rumpf[:200]
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():

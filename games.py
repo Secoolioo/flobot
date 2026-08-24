@@ -51,7 +51,18 @@ EVENT_CHANNEL_ID = int(os.getenv("GAMES_EVENT_CHANNEL_ID", "1512045750362837013"
 QUIZ_REWARD = 50
 QUIZ_TIMEOUT = 30           # Sekunden bis zur Aufloesung
 GUESS_TIMEOUT = 90
-EVENT_REWARD = 100
+# Der Preis fuers Schnell-Event wird je Runde GEWUERFELT statt fest vergeben.
+# Vorher waren es 100 Coins - neben einem Tagesbonus von 2.500 und einem Wort
+# des Tages ab 50.000 hat sich dafuer niemand mehr vom Stuhl bewegt. Eine
+# Spanne ist ausserdem spannender als eine feste Zahl: es kann sich immer
+# lohnen, hinzuschauen.
+#
+# Nach oben ist das ohnehin gedeckelt: GAMES_DAILY_MAX begrenzt den
+# NETTO-Gewinn aus allen Spielen zusammen pro Tag und Person. Die Spanne
+# verschiebt also vor allem, WO man seine Tageskappe verdient - nicht, wie
+# viele Coins insgesamt entstehen.
+EVENT_REWARD_MIN = int(os.getenv("GAMES_EVENT_REWARD_MIN", "5000") or "5000")
+EVENT_REWARD_MAX = int(os.getenv("GAMES_EVENT_REWARD_MAX", "25000") or "25000")
 EVENT_TIMEOUT = 30
 
 MATHE_TIMEOUT = 20
@@ -1424,19 +1435,33 @@ class Games(FeatureBasis):
             return
         wort = random.choice(self._event_words or _EVENT_FALLBACK_WORDS)
         tok = self._new_token(channel.id)
+        preis = self._event_preis()
         self._event[channel.id] = {"word": self._fold(wort), "display": wort,
-                                   "reward": EVENT_REWARD,
+                                   "reward": preis,
                                    "expires": time.monotonic() + EVENT_TIMEOUT,
                                    "token": tok}
         try:
             await channel.send(
                 f"⚡ **SCHNELL!** Wer als Erster `{wort}` in den Chat schreibt, "
-                f"schnappt sich **{EVENT_REWARD} Flo Coins**! (du hast {EVENT_TIMEOUT}s)")
+                f"schnappt sich **{numfmt.fmt(preis)} Flo Coins**! "
+                f"(du hast {EVENT_TIMEOUT}s)")
         except discord.HTTPException:
             self._event.pop(channel.id, None)
             return
         # Watchdog: meldet 'Zeit vorbei', falls bis zum Ablauf niemand getroffen hat.
         self._spawn(self._event_timeout(channel, tok))
+
+    @staticmethod
+    def _event_preis():
+        """Was in DIESER Runde zu holen ist. Wird je Event neu gewuerfelt.
+
+        Steht bewusst als eigene Methode da und nicht inline im Versand: so
+        laesst sich die Spanne pruefen, ohne einen Discord-Kanal zu bauen.
+        Verdrehte Grenzen (MIN groesser als MAX) werden still geradegerueckt -
+        ein Vertipper in der .env soll das Event nicht sprengen."""
+        lo = max(1, min(EVENT_REWARD_MIN, EVENT_REWARD_MAX))
+        hi = max(lo, EVENT_REWARD_MAX)
+        return random.randint(lo, hi)
 
     async def _event_timeout(self, channel, token):
         """Wartet die Event-Dauer ab. Ist die Runde dann noch offen (niemand hat das
@@ -1501,10 +1526,21 @@ class Games(FeatureBasis):
         self._event.pop(cid, None)  # erster Treffer gewinnt -> Runde sofort schliessen
         belohnung = ""
         if economy.is_enabled():
-            self._auszahlen(message.author.id, runde["reward"], 0, "event")
+            # Was WIRKLICH ankommt, nicht was ausgelobt war: _auszahlen kuerzt
+            # auf die Tageskappe. Bei 100 Coins fiel das nie auf - bei einem
+            # fuenfstelligen Preis waere "schnappt sich +25.000" schlicht
+            # gelogen, wenn die Kappe schon voll ist.
+            gezahlt = self._auszahlen(message.author.id, runde["reward"], 0, "event")
             await economy.add_xp(message.author, 20)
             await economy.flush()
-            belohnung = f" und schnappt sich **+{runde['reward']} Flo Coins** 💰"
+            if gezahlt <= 0:
+                belohnung = (" – aber deine **Tageskappe** für Spiele ist schon "
+                             "voll, heute gibt's dafür nichts mehr 😬")
+            elif gezahlt < runde["reward"]:
+                belohnung = (f" und schnappt sich **+{numfmt.fmt(gezahlt)} Flo "
+                             f"Coins** 💰 _(mehr ging heute nicht – Tageskappe)_")
+            else:
+                belohnung = f" und schnappt sich **+{numfmt.fmt(gezahlt)} Flo Coins** 💰"
         wort = runde.get("display", runde["word"])
         text = (f"🏁 {message.author.mention} war am schnellsten mit **{wort}**"
                 f"{belohnung}!")
