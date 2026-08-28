@@ -14519,6 +14519,213 @@ def test_schnell_event_verspricht_nichts_was_es_nicht_zahlt():
     assert "numfmt.fmt(gezahlt)" in rumpf, rumpf[:200]
 
 
+def _verlauf_track(titel, url="", wer="", dauer=None, query=""):
+    return SimpleNamespace(title=titel, webpage_url=url, requested_by=wer,
+                           duration=dauer, query=query)
+
+
+def _verlauf_frisch():
+    """music mit leerem Verlaufs-Store. Gibt (modul, restore)."""
+    import music
+    m = music.instance
+    alt = (m._store, m._enabled)
+    m._store = _FakeStore({"guilds": {}})
+    m._enabled = True
+
+    def restore():
+        m._store, m._enabled = alt
+    return music, restore
+
+
+def test_verlauf_erkennt_die_richtigen_befehle():
+    """'flo history' und 'flo nochmal verlauf' - auch vertippt.
+
+    Die Grenze ist genauso wichtig wie die Treffer: waere die Erkennung zu
+    locker, landeten andere Befehle im Verlauf statt dort, wo sie hingehoeren."""
+    import music
+    treffer = ("history", "histori", "historie", "nochmal verlauf",
+               "nochmal history", "nochmall verlauf", "nohmal history",
+               "nochmal histori", "nochmal verlauv", "again history",
+               "replay history", "musik verlauf", "music history",
+               "song verlauf", "wiederhole verlauf")
+    for text in treffer:
+        assert music.verlauf_befehl(text), f"nicht erkannt: {text!r}"
+
+    daneben = ("nochmal", "nochmal 3", "skip", "stop", "pause", "queue",
+               "spiel wonderwall", "lyrics", "shuffle", "leave", "volume 50",
+               "handel", "transaktionen", "trades", "luxus", "join",
+               "spiel history von abba", "")
+    for text in daneben:
+        assert not music.verlauf_befehl(text), f"faelschlich Verlauf: {text!r}"
+
+
+def test_verlauf_nimmt_dem_handelsbuch_nicht_den_befehl_weg():
+    """'flo verlauf' gehoert seit jeher dem Handelsbuch - und music.handle
+    laeuft in bot.py VOR handel.handle.
+
+    Haette der Musik-Verlauf das nackte Wort beansprucht, wuerde Flo ab sofort
+    Songs zeigen, wenn jemand seine Coin-Umsaetze sehen will. Ein bestehender
+    Befehl darf davon nicht kaputtgehen."""
+    import handel
+    import music
+    assert "verlauf" in handel.Handel._CMDS, "Annahme veraltet"
+    assert not music.verlauf_befehl("verlauf"), (
+        "der Musik-Verlauf hat dem Handelsbuch 'verlauf' weggenommen")
+    assert not music.verlauf_befehl("verlaufs")
+    # In bot.py steht music wirklich vor handel - deshalb ist das kein Detail.
+    quelle = open("bot.py", encoding="utf-8").read()
+    assert quelle.index("music.handle") < quelle.index("handel.handle")
+
+
+def test_verlauf_ueberlebt_den_neustart():
+    """Der Player haelt nur die letzten 30 im Arbeitsspeicher - nach einem
+    Neustart ist alles weg. Genau danach fragt man aber 'was lief gestern?'."""
+    music, restore = _verlauf_frisch()
+    try:
+        m = music.instance
+        for i in range(1, 6):
+            m.verlauf_notieren(77, _verlauf_track(f"Song {i}", f"https://x/{i}", "Anna"))
+        # Neuester zuerst - Nummer 1 ist der zuletzt gespielte.
+        assert [e["t"] for e in m.verlauf(77)][:2] == ["Song 5", "Song 4"]
+
+        # "Neustart": derselbe Inhalt, frisch aus dem Speicher gelesen.
+        roh = m._store.data
+        m._store = _FakeStore(roh)
+        assert len(m.verlauf(77)) == 5, "der Verlauf ist beim Neustart weg"
+        assert m.verlauf(77)[0]["t"] == "Song 5"
+
+        # Server bleiben getrennt.
+        assert m.verlauf(88) == []
+    finally:
+        restore()
+
+
+def test_verlauf_waechst_nicht_unbegrenzt():
+    """Mindestens 100 Eintraege, aeltere fliegen automatisch raus - sonst
+    waechst die Datei bei jedem Song weiter."""
+    music, restore = _verlauf_frisch()
+    try:
+        m = music.instance
+        assert music.VERLAUF_MAX >= 100, "weniger als gefordert"
+        for i in range(music.VERLAUF_MAX + 60):
+            m.verlauf_notieren(77, _verlauf_track(f"Song {i}"))
+        eintraege = m.verlauf(77)
+        assert len(eintraege) == music.VERLAUF_MAX, len(eintraege)
+        # Der NEUESTE ueberlebt, der aelteste ist weg.
+        assert eintraege[0]["t"] == f"Song {music.VERLAUF_MAX + 59}"
+        assert not any(e["t"] == "Song 0" for e in eintraege)
+
+        # Derselbe Song zweimal hintereinander (Stall-Neustart, Seek) ist EIN
+        # Eintrag - sonst steht der Verlauf nach einer Stoerung voll damit.
+        m.verlauf_notieren(99, _verlauf_track("Derselbe"))
+        m.verlauf_notieren(99, _verlauf_track("Derselbe"))
+        assert len(m.verlauf(99)) == 1
+    finally:
+        restore()
+
+
+def test_verlauf_embed_nummeriert_und_blaettert():
+    """10 je Seite, neuester ist Nummer 1, Seitenanzeige im Fusstext."""
+    music, restore = _verlauf_frisch()
+    try:
+        m = music.instance
+        for i in range(1, 26):
+            m.verlauf_notieren(77, _verlauf_track(f"Song {i}", f"https://x/{i}", "Anna",
+                                                  dauer=200))
+        view = music.VerlaufView(77, owner_id=5)
+        emb = view.embed()
+        assert "**1.** [Song 25]" in emb.description, emb.description[:120]
+        assert "**10.** " in emb.description
+        assert "**11.** " not in emb.description, "mehr als 10 auf einer Seite"
+        assert "Seite 1/3" in emb.footer.text, emb.footer.text
+        assert "Anna" in emb.description and "25 Songs" in emb.footer.text
+
+        # Dropdown + zwei Blaetter-Knoepfe.
+        namen = [type(c).__name__ for c in view.children]
+        assert namen.count("Button") == 2 and "_VerlaufSelect" in namen, namen
+
+        view.seite = 1
+        view._aufbauen()
+        assert "**11.** [Song 15]" in view.embed().description
+        assert "Seite 2/3" in view.embed().footer.text
+
+        # Ueber die letzte Seite hinaus wird geklemmt statt zu fliegen.
+        view.seite = 99
+        view._aufbauen()
+        assert "Seite 3/3" in view.embed().footer.text
+    finally:
+        restore()
+
+
+def test_verlauf_faengt_die_raender_ab():
+    """Leerer Verlauf, unsinnige Nummer, Eintrag ohne Quelle - jeweils ein
+    klarer Satz statt eines Absturzes."""
+    music, restore = _verlauf_frisch()
+    try:
+        m = music.instance
+        # Leer.
+        eintrag, fehler = m.verlauf_eintrag(77, 1)
+        assert eintrag is None and "Noch keine Songs" in fehler
+        assert "Noch keine Songs" in music.VerlaufView(77, 5).embed().description
+
+        m.verlauf_notieren(77, _verlauf_track("Song A", "https://x/a"))
+        # Zu gross, zu klein, keine Zahl.
+        assert m.verlauf_eintrag(77, 9)[0] is None
+        assert "gibt es nicht" in m.verlauf_eintrag(77, 9)[1]
+        assert m.verlauf_eintrag(77, 0)[0] is None
+        assert "keine Nummer" in m.verlauf_eintrag(77, "abc")[1]
+        # Gueltig.
+        assert m.verlauf_eintrag(77, 1)[0]["t"] == "Song A"
+
+        # Ohne Quelle laesst sich nichts nachspielen - das muss auffallen,
+        # bevor yt-dlp mit einem leeren String losrennt.
+        assert m._verlauf_quelle({"t": "", "u": "", "q": ""}) == ""
+        assert m._verlauf_quelle({"t": "Nur Titel"}) == "Nur Titel"
+        assert m._verlauf_quelle({"u": "https://x/1", "q": "such"}) == "https://x/1"
+    finally:
+        restore()
+
+
+def test_nochmal_n_meint_dieselbe_nummer_wie_der_verlauf():
+    """'flo nochmal 3' und die 3 in 'flo history' MUESSEN derselbe Song sein.
+
+    Vorher las 'nochmal' aus player.history (Arbeitsspeicher, letzte 30,
+    aelteste zuerst gezaehlt) - zwei Listen mit verschiedener Zaehlrichtung.
+    Nach einem Neustart war sie ausserdem leer, obwohl der Verlauf noch stand."""
+    import music
+    quelle = open(music.__file__, encoding="utf-8").read()
+    i = quelle.index('if action == "replay":')
+    rumpf = quelle[i:i + 1200]
+    assert "verlauf_eintrag" in rumpf, (
+        "'nochmal N' liest wieder aus dem fluechtigen player.history")
+    assert "player.history[-idx]" not in rumpf
+
+    music_mod, restore = _verlauf_frisch()
+    try:
+        m = music_mod.instance
+        for i in range(1, 6):
+            m.verlauf_notieren(77, _verlauf_track(f"Song {i}", f"https://x/{i}"))
+        # Nummer 3 im Embed ...
+        emb = music_mod.VerlaufView(77, 5).embed()
+        assert "**3.** [Song 3]" in emb.description, emb.description[:200]
+        # ... ist auch die 3 fuer 'nochmal 3'.
+        assert m.verlauf_eintrag(77, 3)[0]["t"] == "Song 3"
+    finally:
+        restore()
+
+
+def test_verlauf_ist_im_hilfetext():
+    """Ein Befehl, den niemand findet, hilft niemandem."""
+    quelle = open("bot.py", encoding="utf-8").read()
+    assert "flo history" in quelle, "der Verlauf fehlt in der Hilfe"
+    # Gezielt in _HELP_HINTS schauen: 'musik' kommt in bot.py mehrfach vor
+    # (u. a. in der Kategorie-Zuordnung), ein blindes split() traefe die
+    # falsche Stelle - und der Test waere gruen, ohne etwas zu pruefen.
+    hints = quelle.split("_HELP_HINTS = {")[1].split("}")[0]
+    assert "history" in hints.split('"musik": "')[1].split('"')[0], (
+        "die Musik-Kurzuebersicht nennt den Verlauf nicht")
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():

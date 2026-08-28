@@ -40,6 +40,7 @@ import numfmt
 import ai
 from basis import FeatureBasis
 import guildcfg
+from store import JsonStore
 
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
     import yt_dlp
@@ -492,11 +493,103 @@ _RANDOM_GENRES = {
     ]),
 }
 
+# --- Musik-Verlauf ----------------------------------------------------------
+# So viele gespielte Songs bleiben je Server erhalten - ueber Neustarts hinweg.
+# Der Player selbst haelt nur die letzten 30 im Arbeitsspeicher; die sind nach
+# einem Neustart weg, und genau danach will man "was lief gestern?" fragen.
+VERLAUF_MAX = int(os.getenv("MUSIC_VERLAUF_MAX", "100") or "100")
+VERLAUF_SEITE = 10          # Eintraege je Seite im Embed
+VERLAUF_TIMEOUT = 180.0     # ~3 Minuten, dann sind die Knoepfe aus
+
+# Woerter, die "Verlauf" meinen. Tippfehler faengt _ist_verlauf_wort ab.
+_VERLAUF_WOERTER = ("verlauf", "history", "historie", "histori", "verlaufs",
+                    "playlistverlauf", "songverlauf")
+# Was davor stehen darf: 'nochmal verlauf', 'musik history', 'again history'.
+_VERLAUF_VORWORT = ("nochmal", "nochmals", "nochmoi", "repeat", "replay",
+                    "again", "wiederhole", "wiederholen", "wiederhol",
+                    "musik", "music", "song", "songs", "lied", "lieder",
+                    "spiel", "spiele", "played", "gespielt")
+
+def _wort_abstand(a, b):
+    """Levenshtein-Abstand, abgebrochen sobald er 3 ueberschreitet.
+
+    Kein difflib: dessen ratio() haengt an der Wortlaenge und laesst bei kurzen
+    Woertern viel zu viel durch. Hier zaehlen echte Tippfehler - eingefuegt,
+    vergessen, vertauscht, vertippt."""
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > 2:
+        return 3
+    vorige = list(range(len(b) + 1))
+    for i, za in enumerate(a, 1):
+        aktuell = [i]
+        for j, zb in enumerate(b, 1):
+            aktuell.append(min(vorige[j] + 1, aktuell[j - 1] + 1,
+                               vorige[j - 1] + (za != zb)))
+        if min(aktuell) > 2:
+            return 3
+        vorige = aktuell
+    return vorige[-1]
+
+
+def _ist_verlauf_wort(wort):
+    """Meint dieses Wort den Verlauf - auch vertippt?
+
+    Die Laengengrenze ist wichtig: mit Abstand 2 auf kurze Woerter waere fast
+    jeder andere Befehl ploetzlich 'Verlauf'. Ab 6 Zeichen ist ein Abstand von
+    2 ein Tippfehler und keine Verwechslung."""
+    w = (wort or "").lower().strip(".,!?:;")
+    if not w:
+        return False
+    if w in _VERLAUF_WOERTER:
+        return True
+    if len(w) < 6:
+        return False
+    return any(_wort_abstand(w, ziel) <= 2 for ziel in _VERLAUF_WOERTER)
+
+
+def _ist_verlauf_vorwort(wort):
+    """'nochmal', 'musik', 'again' ... - ebenfalls tippfehlertolerant."""
+    w = (wort or "").lower().strip(".,!?:;")
+    if w in _VERLAUF_VORWORT:
+        return True
+    if len(w) < 5:
+        return False
+    return any(_wort_abstand(w, ziel) <= 2 for ziel in _VERLAUF_VORWORT)
+
+
+def verlauf_befehl(text):
+    """Ist das ein Verlauf-Befehl? Erwartet den Text OHNE Botnamen.
+
+    Erlaubt sind hoechstens zwei Woerter:
+        history | histori | ...            (ein Wort)
+        nochmal verlauf | musik history    (Vorwort + Verlaufwort)
+
+    BEWUSST NICHT das nackte 'verlauf': das gehoert seit jeher dem
+    Handelsbuch (handel.py '_CMDS'), und music.handle laeuft in der Kette VOR
+    handel - Flo wuerde also ab sofort den Musik-Verlauf zeigen, wenn jemand
+    seine Coin-Umsaetze sehen will. Ein bestehender Befehl darf davon nicht
+    kaputtgehen."""
+    teile = (text or "").split()
+    if not teile or len(teile) > 2:
+        return False
+    if len(teile) == 1:
+        # Ein Wort: nur die eindeutigen. 'verlauf' allein bleibt beim Handel.
+        w = teile[0].lower().strip(".,!?:;")
+        if w in ("verlauf", "verlaufs"):
+            return False
+        return _ist_verlauf_wort(w)
+    return _ist_verlauf_vorwort(teile[0]) and _ist_verlauf_wort(teile[1])
+
+
 # "flo nochmal", "flo spiel nochmal 2", "flo repeat 3", "flo wiederhole" ->
 # den zuletzt (bzw. N-t-letzten) gespielten Song noch einmal spielen.
 _REPLAY_RE = re.compile(
     r"^(?:spiel(?:e|st)?\s+)?"
     r"(?:nochmal(?:s)?|noch\s*mal|repeat|replay|wiederhol(?:e|en|st)?)"
+    # 'nochmal nummer 3' / 'nochmal nr 3' / 'nochmal #3' - das Fuellwort davor
+    # ist ueblich und wurde vorher als Suchtext gedeutet.
+    r"\s*(?:nummer|nr\.?|no\.?|numer|nummber|#)?"
     r"\s*(\d+)?\b", re.I)
 
 # Lautstaerke - tolerant: "flo lautstärke 30", "flo ls 80", "flo LS", "flo vol 50",
@@ -717,6 +810,11 @@ class GuildPlayer:
             # Effekt-/Tempo-Neustarts (keep_speed) zaehlen nicht als neuer Song.
             self.history.append(track)
             del self.history[:-30]   # nur die letzten 30 behalten
+            # UND dauerhaft: der Verlauf oben ist nach einem Neustart weg.
+            try:
+                instance.verlauf_notieren(self.guild_id, track)
+            except Exception:  # noqa: BLE001 - Mitschreiben darf nie die Musik kippen
+                log.debug("Verlauf konnte nicht notiert werden", exc_info=True)
 
     def position(self):
         """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
@@ -1330,6 +1428,130 @@ class RandomGenreView(discord.ui.View):
                 pass
 
 
+class _VerlaufSelect(discord.ui.Select):
+    """Die Songs der aktuellen Seite als Dropdown - ein Klick spielt."""
+
+    def __init__(self, eintraege, start_nr):
+        optionen = []
+        for i, e in enumerate(eintraege):
+            nr = start_nr + i
+            titel = (e.get("t") or "Unbekannt")[:90]
+            wer = e.get("w") or ""
+            beschreibung = " · ".join(x for x in (
+                wer, Music._vor_wie_lange(e.get("ts"))) if x)[:95]
+            optionen.append(discord.SelectOption(
+                label=f"{nr}. {titel}"[:100], value=str(nr),
+                description=beschreibung or None))
+        super().__init__(placeholder="Song anklicken zum Nochmal-Spielen …",
+                         min_values=1, max_values=1,
+                         options=optionen or [discord.SelectOption(label="—", value="0")],
+                         disabled=not optionen)
+
+    async def callback(self, interaction):
+        await instance.verlauf_abspielen(interaction, int(self.values[0]))
+
+
+class VerlaufView(discord.ui.View):
+    """Blaettern durch den Musik-Verlauf + Direktauswahl.
+
+    Wer darf bedienen: der Aufrufer ODER wer Nachrichten verwalten darf -
+    genau wie bei QueuePositionView. Ein Verlauf ist nichts Privates, aber
+    wenn zwei Leute gleichzeitig blaettern, springt die Seite unter den
+    Fingern weg; deshalb dieselbe Regel wie bei den anderen Musik-Knoepfen."""
+
+    def __init__(self, gid, owner_id, seite=0, *, timeout=VERLAUF_TIMEOUT):
+        super().__init__(timeout=timeout)
+        self.gid = gid
+        self.owner_id = owner_id
+        self.seite = seite
+        self.message = None
+        self._aufbauen()
+
+    # --- Aufbau ---
+    def _daten(self):
+        eintraege = instance.verlauf(self.gid)
+        seiten = max(1, (len(eintraege) + VERLAUF_SEITE - 1) // VERLAUF_SEITE)
+        self.seite = max(0, min(self.seite, seiten - 1))
+        start = self.seite * VERLAUF_SEITE
+        return eintraege, seiten, start, eintraege[start:start + VERLAUF_SEITE]
+
+    def _aufbauen(self):
+        self.clear_items()
+        eintraege, seiten, start, seite_eintraege = self._daten()
+        if seite_eintraege:
+            self.add_item(_VerlaufSelect(seite_eintraege, start + 1))
+        if seiten > 1:
+            zurueck = discord.ui.Button(emoji="◀", style=discord.ButtonStyle.secondary,
+                                        disabled=self.seite <= 0)
+            zurueck.callback = self._zurueck
+            vor = discord.ui.Button(emoji="▶", style=discord.ButtonStyle.secondary,
+                                    disabled=self.seite >= seiten - 1)
+            vor.callback = self._vor
+            self.add_item(zurueck)
+            self.add_item(vor)
+
+    def embed(self):
+        eintraege, seiten, start, seite_eintraege = self._daten()
+        if not eintraege:
+            return instance._embed(
+                "Noch keine Songs gespielt. Leg was auf: "
+                f"`{instance._bot_name} spiel <titel>` 🎵",
+                title="🕘  Musik-Verlauf", color=_COL_INFO)
+        zeilen = []
+        for i, e in enumerate(seite_eintraege):
+            nr = start + i + 1
+            titel = e.get("t") or "Unbekannt"
+            url = e.get("u") or ""
+            name = f"[{titel}]({url})" if url.startswith("http") else titel
+            teile = [instance._vor_wie_lange(e.get("ts"))]
+            if e.get("w"):
+                teile.append(f"von {e['w']}")
+            dauer = instance._fmt_dur(e.get("d"))
+            if dauer:
+                teile.append(dauer)
+            zeilen.append(f"**{nr}.** {name}\n_{' · '.join(teile)}_")
+        emb = instance._embed("\n".join(zeilen), title="🕘  Musik-Verlauf",
+                              color=_COL_QUEUE)
+        emb.set_footer(text=(f"Seite {self.seite + 1}/{seiten} · "
+                             f"{len(eintraege)} Songs · "
+                             f"{instance._bot_name} nochmal <nr>"))
+        return emb
+
+    # --- Bedienung ---
+    async def interaction_check(self, interaction):
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if interaction.user.id == self.owner_id or (perms and perms.manage_messages):
+            return True
+        await interaction.response.send_message(
+            f"Das ist nicht dein Verlauf – tipp dir mit "
+            f"`{instance._bot_name} history` einen eigenen. 🕘",
+            ephemeral=True)
+        return False
+
+    async def _blaettern(self, interaction, delta):
+        self.seite += delta
+        self._aufbauen()
+        try:
+            await interaction.response.edit_message(embed=self.embed(), view=self)
+        except discord.HTTPException:
+            pass
+
+    async def _zurueck(self, interaction):
+        await self._blaettern(interaction, -1)
+
+    async def _vor(self, interaction):
+        await self._blaettern(interaction, +1)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
 class QueuePositionView(discord.ui.View):
     """Buttons unter einem frisch hinzugefuegten Song: an Position vorziehen."""
 
@@ -1609,6 +1831,91 @@ class Music(FeatureBasis):
         self._sp_token = {"value": "", "exp": 0.0}
         # Player-/Queue-Zustand pro Server (guild_id -> GuildPlayer).
         self._players = {}
+        # Dauerhafter Musik-Verlauf je Server (ueberlebt Neustarts).
+        self._store = None
+        self._verlauf_dirty = False
+        self._verlauf_task = None
+
+    # --- Musik-Verlauf: dauerhaft, je Server --------------------------------
+    def _verlauf_liste(self, gid):
+        """Die Liste dieses Servers - NEUESTER zuerst (Index 0 = Nummer 1)."""
+        if self._store is None:
+            return []
+        alle = self._store.data.setdefault("guilds", {})
+        if not isinstance(alle, dict):
+            alle = self._store.data["guilds"] = {}
+        liste = alle.setdefault(str(int(gid or 0)), [])
+        if not isinstance(liste, list):
+            liste = alle[str(int(gid or 0))] = []
+        return liste
+
+    def verlauf(self, gid):
+        """Der gespielte Verlauf, neuester zuerst. Nur brauchbare Eintraege."""
+        return [e for e in self._verlauf_liste(gid)
+                if isinstance(e, dict) and e.get("t")]
+
+    def verlauf_notieren(self, gid, track):
+        """Einen gestarteten Song dauerhaft festhalten. Synchron und billig.
+
+        Wird aus GuildPlayer.start() gerufen - das ist kein async-Kontext, also
+        wird hier nur die Liste angefasst und das Speichern verzoegert."""
+        if self._store is None or not gid or track is None:
+            return
+        eintrag = {
+            "t": (getattr(track, "title", "") or "Unbekannter Titel")[:150],
+            "u": (getattr(track, "webpage_url", "") or "")[:400],
+            "q": (getattr(track, "query", "") or "")[:200],
+            "w": (getattr(track, "requested_by", "") or "")[:64],
+            "d": getattr(track, "duration", None),
+            "ts": time.time(),
+        }
+        liste = self._verlauf_liste(gid)
+        # Direkt hintereinander derselbe Song (Neustart nach Stall, Seek,
+        # 'weiter') soll den Verlauf nicht zumuellen - dann nur die Zeit
+        # auffrischen, damit "vor wie lange" stimmt.
+        if liste and isinstance(liste[0], dict) and liste[0].get("t") == eintrag["t"]:
+            liste[0]["ts"] = eintrag["ts"]
+        else:
+            liste.insert(0, eintrag)
+        del liste[VERLAUF_MAX:]
+        self._verlauf_merken()
+
+    def _verlauf_merken(self):
+        """Speichern verzoegern - bei jedem Songwechsel sofort auf die Platte
+        zu schreiben waere teuer und braechte nichts."""
+        self._verlauf_dirty = True
+        if self._verlauf_task is None or self._verlauf_task.done():
+            try:
+                self._verlauf_task = asyncio.get_running_loop().create_task(
+                    self._verlauf_spaeter())
+            except RuntimeError:
+                pass        # kein Loop (Tests) - der Stand steht trotzdem im RAM
+
+    async def _verlauf_spaeter(self):
+        await asyncio.sleep(15)
+        await self.verlauf_speichern()
+
+    async def verlauf_speichern(self):
+        if self._store is not None and self._verlauf_dirty:
+            self._verlauf_dirty = False
+            await self._store.save()
+
+    @staticmethod
+    def _vor_wie_lange(ts):
+        """'vor 12 Min' - grob und lesbar, nicht auf die Sekunde genau."""
+        try:
+            sek = max(0, int(time.time() - float(ts or 0)))
+        except (TypeError, ValueError):
+            return "gerade eben"
+        if sek < 60:
+            return "gerade eben"
+        if sek < 3600:
+            return f"vor {sek // 60} Min"
+        if sek < 86400:
+            std = sek // 3600
+            return f"vor {std} Std" if std > 1 else "vor 1 Std"
+        tage = sek // 86400
+        return f"vor {tage} Tagen" if tage > 1 else "vor 1 Tag"
 
     def _fmt_dur(self, secs):
         """Sekunden -> 'm:ss' bzw. 'h:mm:ss' (leer, wenn unbekannt)."""
@@ -1666,6 +1973,10 @@ class Music(FeatureBasis):
         # Bei einer Aenderung der Lautstaerke im Panel oder per Befehl sofort
         # nachziehen, statt sie nur beim Anlegen eines Players zu lesen.
         guildcfg.horcht_auf("lautstaerke", self.lautstaerke_nachziehen)
+        # Der Verlauf muss Neustarts ueberleben - der Player haelt nur die
+        # letzten 30 im Arbeitsspeicher, und ausgerechnet nach einem Neustart
+        # fragt man "was lief denn gestern?".
+        self._store = JsonStore("musikverlauf.json", default={"guilds": {}})
         self._spotify_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
         self._spotify_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
 
@@ -2724,6 +3035,12 @@ class Music(FeatureBasis):
         if not cleaned:
             return None
 
+        # 2a0) Verlauf? MUSS vor dem Replay stehen: "nochmal verlauf" wuerde
+        #      sonst als "nochmal" ohne Nummer gelesen und spielte den letzten
+        #      Song, statt die Liste zu zeigen.
+        if verlauf_befehl(cleaned):
+            return ("history", "")
+
         # 2a) Wiederholen? (vor der Freitext-Suche, sonst wuerde "spiel nochmal"
         #     als Suche nach "nochmal" gedeutet.)
         rm = _REPLAY_RE.match(cleaned)
@@ -2782,6 +3099,88 @@ class Music(FeatureBasis):
             return ("search", m.group(1).strip())
 
         return None
+
+    def verlauf_eintrag(self, gid, nummer):
+        """Eintrag Nummer N aus dem Verlauf (1 = neuester). (eintrag, fehler)."""
+        eintraege = self.verlauf(gid)
+        if not eintraege:
+            return None, ("Noch keine Songs gespielt. Leg was auf: "
+                          f"`{self._bot_name} spiel <titel>` 🎵")
+        try:
+            nr = int(nummer)
+        except (TypeError, ValueError):
+            return None, f"Das ist keine Nummer. `{self._bot_name} nochmal 3`"
+        if nr < 1 or nr > len(eintraege):
+            return None, (f"Nummer **{nr}** gibt es nicht – mein Verlauf hat "
+                          f"**{len(eintraege)}** Songs. "
+                          f"`{self._bot_name} history` zeigt sie dir.")
+        return eintraege[nr - 1], ""
+
+    @staticmethod
+    def _verlauf_quelle(eintrag):
+        """Womit sich der Eintrag wieder abspielen laesst - oder ""."""
+        return ((eintrag.get("u") or "").strip()
+                or (eintrag.get("q") or "").strip()
+                or (eintrag.get("t") or "").strip())
+
+    async def verlauf_abspielen(self, interaction, nummer):
+        """Klick im Verlauf-Dropdown: diesen Song noch einmal spielen."""
+        if not self._enabled or interaction.guild is None:
+            await interaction.response.send_message("Musik ist gerade aus.", ephemeral=True)
+            return
+        eintrag, fehler = self.verlauf_eintrag(interaction.guild.id, nummer)
+        if eintrag is None:
+            await interaction.response.send_message(fehler, ephemeral=True)
+            return
+        quelle = self._verlauf_quelle(eintrag)
+        if not quelle:
+            await interaction.response.send_message(
+                "Zu diesem Eintrag habe ich keine Quelle mehr – den kann ich "
+                "leider nicht nochmal laden. 😕", ephemeral=True)
+            return
+
+        voice_state = getattr(interaction.user, "voice", None)
+        if voice_state is None or voice_state.channel is None:
+            await interaction.response.send_message(
+                "Geh erst in einen Sprachkanal, dann leg ich los. 🎧", ephemeral=True)
+            return
+
+        # Aufloesen + Connect dauert laenger als Discords 3s-Frist.
+        await interaction.response.defer()
+        player = self._player_for(interaction.guild.id)
+        player.text_channel = interaction.channel
+        try:
+            track = await self._extract(quelle, ausweich_text=eintrag.get("t") or "")
+        except Exception as exc:  # noqa: BLE001 - yt-dlp wirft viele Fehlerarten
+            art, satz = self.yt_fehler_deuten(exc)
+            log.warning("Verlauf: %r nicht mehr abspielbar (%s)",
+                        eintrag.get("t"), art)
+            await interaction.followup.send(embed=self._embed(
+                f"**{self._short(eintrag.get('t') or 'Der Song', 80)}** geht "
+                f"nicht mehr: {satz}", color=_COL_ERR))
+            return
+        track.requested_by = interaction.user.display_name
+        try:
+            await player.connect(voice_state.channel)
+        except (discord.ClientException, RuntimeError) as exc:
+            log.error("Verlauf-Connect fehlgeschlagen: %s", exc)
+            await interaction.followup.send(embed=self._embed(
+                "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
+                color=_COL_ERR))
+            return
+        if player.is_active():
+            self._einreihen(player, track)
+            await interaction.followup.send(
+                embed=self._added_embed(track, len(player.queue), len(player.queue)))
+            return
+        try:
+            player.start(track)
+        except Exception:  # noqa: BLE001
+            log.exception("Verlauf-Track nicht abspielbar: %s", track.title)
+            await interaction.followup.send(embed=self._embed(
+                "Den Song konnte ich gerade nicht abspielen.", color=_COL_ERR))
+            return
+        await self._send_panel(player, track)
 
     async def start_random(self, interaction, genre_key):
         """Spielt aus einer Genre-Auswahl (Dropdown) heraus einen zufaelligen Song.
@@ -3223,20 +3622,20 @@ class Music(FeatureBasis):
 
         # --- Wiederholen: den (N-t-)letzten Song aus dem Verlauf erneut spielen ---
         if action == "replay":
+            # Aus dem DAUERHAFTEN Verlauf, nicht aus player.history: nur so
+            # meint 'nochmal 3' denselben Song wie die 3 in 'flo history' -
+            # und nur so ueberlebt es einen Neustart.
             try:
                 idx = max(1, int(arg))
             except (TypeError, ValueError):
                 idx = 1
-            if idx > len(player.history):
-                if not player.history:
-                    return self._embed("Ich hab noch keinen Song im Verlauf. Spiel erst was! 🎵",
-                                       color=_COL_ERR)
-                return self._embed(f"So weit reicht mein Verlauf nicht – ich kenne die letzten "
-                                   f"**{len(player.history)}** Songs.", color=_COL_ERR)
-            want = player.history[-idx]
-            again = want.webpage_url or want.query or want.title
+            eintrag, fehler = self.verlauf_eintrag(message.guild.id, idx)
+            if eintrag is None:
+                return self._embed(fehler, color=_COL_ERR)
+            again = self._verlauf_quelle(eintrag)
             if not again:
-                return self._embed("Diesen Song kann ich leider nicht nochmal laden.", color=_COL_ERR)
+                return self._embed("Diesen Song kann ich leider nicht nochmal laden.",
+                                   color=_COL_ERR)
             # Wie ein normaler Play-Befehl weiterbehandeln.
             action, arg = "play", again
 
@@ -3353,6 +3752,21 @@ class Music(FeatureBasis):
                 return self._embed("Die Warteschlange ist leer – wirf was rein!",
                                    title="🎶  Warteschlange", color=_COL_INFO)
             return self._queue_embed(player)
+
+        # "history"/"nochmal verlauf" -> die zuletzt gespielten Songs, blaetterbar.
+        if action == "history":
+            view = VerlaufView(message.guild.id, message.author.id)
+            emb = view.embed()
+            if not self.verlauf(message.guild.id):
+                return emb              # leer -> kein Menue, nur der Hinweis
+            try:
+                view.message = await message.reply(embed=emb, view=view,
+                                                   mention_author=False)
+            except discord.HTTPException as exc:
+                log.error("Verlauf konnte nicht gesendet werden: %s", exc)
+                return self._embed("Den Verlauf konnte ich gerade nicht posten.",
+                                   color=_COL_ERR)
+            return HANDLED
 
         # "random"/"zufall"/"überrasch mich" -> Genre-Dropdown, danach Zufalls-Song.
         if action == "random":
@@ -3643,3 +4057,7 @@ _queue_embed = instance._queue_embed
 _retire_panel = instance._retire_panel
 _send_panel = instance._send_panel
 handle = instance.handle
+verlauf = instance.verlauf
+verlauf_notieren = instance.verlauf_notieren
+verlauf_eintrag = instance.verlauf_eintrag
+verlauf_speichern = instance.verlauf_speichern

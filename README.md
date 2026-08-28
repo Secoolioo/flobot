@@ -305,10 +305,48 @@ Flo spiel <suchbegriff>        YouTube-Suche
 Flo spiel <link>              YouTube, Spotify, SoundCloud, direkte Audiodatei
 Flo pause / weiter / skip / stop / leave / queue
 Flo ls 80                     Lautstärke (wird je Server gespeichert)
+Flo history                   Verlauf der gespielten Songs
+Flo nochmal 3                 Nummer 3 aus dem Verlauf nochmal
 ```
 
 Dazu die normalen Sätze: „mach mal *X* an", „leg *X* auf", „hau *X* raus",
 „mach die Musik aus". Fragen (*„spielst du …"*) sind bewusst **kein** Befehl.
+
+### Verlauf: was lief zuletzt?
+
+```
+Flo history            Flo nochmal verlauf      Flo musik verlauf
+Flo again history      Flo replay history       Flo nochmal history
+```
+
+Tippfehler sind eingerechnet (`nohmal history`, `nochmall verlauf`,
+`nochmal histori`, `nochmal verlauv` …): ab sechs Zeichen zählt ein
+Levenshtein-Abstand von 2 noch als Vertipper. Kürzere Wörter bleiben außen vor —
+mit Abstand 2 auf kurze Wörter wäre plötzlich jeder zweite Befehl „Verlauf".
+
+Die Liste zeigt **10 Songs pro Seite**, neuester ist **Nr. 1**, mit Interpret/
+Titel, wer ihn angefordert hat und wie lange es her ist. Darunter ein
+**Dropdown** (Klick spielt sofort) und **◀ ▶** zum Blättern; nach ~3 Minuten
+werden die Knöpfe deaktiviert. Bedienen darf, wer den Befehl abgesetzt hat —
+oder wer Nachrichten verwalten darf, genau wie bei den anderen Musik-Knöpfen.
+
+Gespeichert wird in `data/musikverlauf.json`, **je Server**, die letzten
+**100** Songs (`MUSIC_VERLAUF_MAX`); ältere fallen automatisch raus. Der
+Verlauf überlebt Neustarts — der Player selbst hält nur die letzten 30 im
+Arbeitsspeicher, und ausgerechnet nach einem Neustart fragt man „was lief
+gestern?". Derselbe Song zweimal hintereinander (Neustart nach einem Stall,
+Seek) ist **ein** Eintrag, sonst steht der Verlauf nach einer Störung voll
+damit.
+
+`Flo nochmal 3` meint dieselbe **3** wie die Liste — auch `nochmal nummer 3`
+oder `nochmal nr. 3`. Vorher las `nochmal` aus dem flüchtigen Speicher des
+Players, der andersherum zählte und nach einem Neustart leer war.
+
+> ⚠️ **`Flo verlauf` allein bleibt beim Handelsbuch.** Das Wort gehört seit
+> jeher `handel.py`, und `music.handle` läuft in der Kette **vor** `handel` —
+> Flo würde also Songs zeigen, wenn jemand seine Coin-Umsätze sehen will. Ein
+> Test hält das fest. Für die Musik gibt es `history` und alle
+> Zwei-Wort-Formen.
 
 **SoundCloud** läuft ohne Key und ohne Login — yt-dlp bringt den Extractor mit,
 es fehlte nur die Erkennung. Erkannt werden einzelne Tracks
@@ -426,6 +464,7 @@ statt yt-dlp mit einem leeren Zugang loslaufen zu lassen.
 | `YTDLP_PO_TOKEN` | PO Tokens von Hand, mehrere per Komma |
 | `YTDLP_PROXY` | eigener Ausgang **nur** für yt-dlp (Discord/KI bleiben direkt) |
 | `MUSIC_SOUNDCLOUD_FALLBACK` | `0` = lieber eine ehrliche Fehlermeldung |
+| `MUSIC_VERLAUF_MAX` | wie viele gespielte Songs je Server erhalten bleiben (Standard 100) |
 
 Prüfen lässt sich das alles mit `k y` und `k m`.
 

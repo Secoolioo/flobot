@@ -448,7 +448,8 @@ _HELP_DATA = {
         ("flo spiel random", "Genre wählen 🎲 → zufälliger Song"),
         ("flo lyrics [song]", "Songtext (auch per 🎤-Button am Panel)"),
         ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
-        ("flo nochmal [n]", "letzten Song nochmal"),
+        ("flo nochmal [n]", "letzten Song nochmal (auch `nochmal nummer 3`)"),
+        ("flo history", "Verlauf der gespielten Songs – anklickbar"),
         ("flo queue", "Warteschlange zeigen"),
         ("flo lautstärke 50", "Lautstärke setzen"),
         ("flo join · leave", "Voice rein / raus"),
@@ -539,7 +540,7 @@ _HELP_DATA = {
 }
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
-    "musik": "spiel · skip · queue", "spiele": "quiz · mathe · duelle",
+    "musik": "spiel · skip · queue · history", "spiele": "quiz · mathe · duelle",
     "economy": "level · daily · shop · händler · lotto", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
     "terraria": "alles aus dem Wiki",
@@ -757,6 +758,11 @@ class FloBot(discord.Client):
                 await gehirn.flush_now()
             except Exception:
                 log.exception("Gedaechtnis-Flush vor Neustart fehlgeschlagen")
+        if MUSIC_ENABLED:
+            try:
+                await music.verlauf_speichern()
+            except Exception:
+                log.exception("Musik-Verlauf-Flush vor Neustart fehlgeschlagen")
         try:
             await self.close()
         except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
