@@ -37,7 +37,13 @@ os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="flobot-lauf-"))
 
 # Die Testdateien, die es gibt. Neue kommen hier dazu - ein Test haelt die
 # Liste gegen den Ordner, damit keine vergessen wird.
-TESTDATEIEN = ("test_games_logic", "test_logic")
+TESTDATEIEN = (
+    "test_logic",
+    "test_aktie", "test_arbeit", "test_casino", "test_ki", "test_konfig",
+    "test_moderation", "test_module", "test_musik", "test_panel",
+    "test_profil", "test_schulden", "test_spiele",
+    "test_werkzeug", "test_wirtschaft",
+)
 
 
 # Module, deren An/Aus-Schalter ein Test versehentlich stehen lassen kann.
