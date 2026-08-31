@@ -51,6 +51,8 @@ _FEHLT = object()
 
 WACHE = ("economy", "features", "guildcfg", "admin", "music", "words")
 
+#: Auch der Panel-Login: ein Test, der ihn abschaltet und stehen laesst, macht
+#: den naechsten Panel-Test gruen, ohne dass der seine Anmeldung geprueft haette.
 #: Was ein Test ausser den An/Aus-Schaltern noch stehen lassen kann. Nachgemessen
 #: mit einer breiteren Wache: es sind nicht 9 schlampige Tests, sondern 25 - die
 #: Hauptursache sind uebriggebliebene _store-Objekte und ein gefuellter
@@ -72,6 +74,8 @@ WACHE_TIEF = (
     ("music", "_resolve_track"),
     ("music", "_send_panel"),
     ("music", "_retire_panel"),
+    ("webpanel", "instance._auth"),
+    ("webpanel", "instance._log_store"),
 )
 
 

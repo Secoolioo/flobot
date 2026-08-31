@@ -14868,6 +14868,39 @@ def test_einstellungen_aendern_das_discord_nicht():
     assert "import guildcfg" in neu and "import features" in neu
 
 
+def test_panel_laesst_sich_wirklich_bedienen():
+    """Das Panel im echten Browser aufmachen und anklicken.
+
+    Von allen Tests hier prueft sonst keiner die Oberflaeche des Panels - das
+    sind rund 1.800 Zeilen Javascript, die alles Sichtbare per innerHTML
+    zusammenbauen, und die einzige Absicherung war bisher: hinsehen. Ein
+    Tippfehler in einem Selektor faellt in keinem Python-Test auf, und das
+    Inventar sieht nur, ob es den ENDPUNKT noch gibt - nicht, ob der KNOPF ihn
+    noch trifft.
+
+    werkzeug/panelprobe.py faehrt den echten aiohttp-Server hoch, laedt die
+    echte webpanel.html in Chromium und klickt sich durch. Laeuft als
+    Unterprozess, weil ein Browser und ein Server im Testprozess nichts zu
+    suchen haben.
+
+    Fehlt Playwright oder Chromium, meldet die Probe das und gibt 0 zurueck -
+    dann laeuft die Suite weiter, nur ohne dieses Netz.
+    """
+    import subprocess
+
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    probe = os.path.join(wurzel, "werkzeug", "panelprobe.py")
+    if not os.path.exists(probe):
+        return
+    lauf = subprocess.run([sys.executable, probe, "--leise"], cwd=wurzel,
+                          capture_output=True, text=True, timeout=900,
+                          env=dict(os.environ, DATA_DIR=tempfile.mkdtemp(
+                              prefix="flobot-panelprobe-test-")))
+    assert lauf.returncode == 0, (
+        "Das Panel laesst sich nicht mehr bedienen:\n"
+        + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
+
+
 def test_lauf_kennt_jede_testdatei():
     """Der Waechter, den lauf.py in seinem Kopf versprochen hat.
 

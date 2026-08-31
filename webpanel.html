@@ -1483,38 +1483,66 @@ function cfgFeld(s,kanaele){ var id="cfg_"+s.key;
   return '<input class="inp sm" type="number" id="'+id+'" data-key="'+esc(s.key)+'" value="'+esc(String(s.wert))+'"'+extra+'>'; }
 
 function renderGuildCfg(d,name){ var c=$("#content"); var v=ce("div","view");
-  var g=d.guild||{}; var kanaele=d.channels||[]; var sets=d.settings||[]; var feats=d.features||[];
-  var gruppen=[],nach={};
-  sets.forEach(function(s){ if(!nach[s.gruppe]){ nach[s.gruppe]=[]; gruppen.push(s.gruppe); } nach[s.gruppe].push(s); });
+  var g=d.guild||{}; var kanaele=d.channels||[]; var baum=d.baum||[];
 
-  var bloecke=gruppen.map(function(gr){
-    var zeilen=nach[gr].map(function(s){
-      return '<div class="control-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'+
-        '<div class="cl">'+esc(s.label)+(s.eigen?' <span class="tag" style="margin-left:6px">eigener Wert</span>':"")+'</div>'+
-        '<div class="cd">'+esc(s.hinweis||"")+'</div>'+
-        '<div class="cd" style="margin-top:4px;opacity:.7">Schlüssel <code>'+esc(s.key)+'</code>'+
-        (s.eigen?' · <a href="#" class="cfg-std" data-key="'+esc(s.key)+'">auf Standard zurück</a>':" · Standard")+'</div></div>'+
-        '<div style="display:flex;gap:8px;align-items:center">'+cfgFeld(s,kanaele)+
-        (s.typ==="an_aus"?"":'<button class="btn-sm-gold cfg-save" data-key="'+esc(s.key)+'">OK</button>')+'</div></div>'; }).join("");
-    return '<div class="sec-h"><h2>'+esc(gr)+'</h2><div class="ln"></div></div><div class="card reveal">'+zeilen+'</div>'; }).join("");
+  /* Eine Zeile: Beschriftung, Erklärung, Eingabefeld. */
+  function wertZeile(s){
+    return '<div class="control-row" style="align-items:flex-start"><div style="flex:1;min-width:0">'+
+      '<div class="cl">'+esc(s.label)+(s.eigen?' <span class="tag" style="margin-left:6px">eigener Wert</span>':"")+'</div>'+
+      '<div class="cd">'+esc(s.hinweis||"")+'</div>'+
+      '<div class="cd" style="margin-top:4px;opacity:.7">Schlüssel <code>'+esc(s.key)+'</code>'+
+      (s.eigen?' · <a href="#" class="cfg-std" data-key="'+esc(s.key)+'">auf Standard zurück</a>':" · Standard")+'</div></div>'+
+      '<div style="display:flex;gap:8px;align-items:center">'+cfgFeld(s,kanaele)+
+      (s.typ==="an_aus"?"":'<button class="btn-sm-gold cfg-save" data-key="'+esc(s.key)+'">OK</button>')+'</div></div>'; }
 
-  var fzeilen=feats.map(function(f){
-    var sperre=(!f.loaded||!f.global_on);
-    var warum=!f.loaded?"Modul nicht geladen – Neustart nötig"
-             :(!f.global_on?"Global abgeschaltet – gilt für alle Server":esc(f.desc||""));
-    return '<div class="control-row"><div style="flex:1;min-width:0"><div class="cl">'+(f.emoji||"")+' '+esc(f.label)+
+  /* Der Schalter einer Funktion. Gesperrt, wenn das Modul nicht geladen ist
+     oder der Besitzer es global aus hat – dann sagt die Zeile auch warum. */
+  /* mitTitel=false, wenn schon eine Überschrift darüber steht: sonst hieße die
+     Zeile genauso wie ihr Block, und "Bayrisch-Modus" stünde wieder zweimal
+     untereinander – genau das, was hier abgeschafft werden sollte. */
+  function schalterZeile(a,mitTitel){ var sc=a.schalter; if(!sc) return "";
+    var sperre=(!sc.geladen||!sc.global_an);
+    var warum=!sc.geladen?"Modul nicht geladen – Neustart nötig"
+             :(!sc.global_an?"Global abgeschaltet – gilt für alle Server":esc(a.erklaerung||""));
+    var titel=mitTitel?((a.emoji||"")+" "+esc(a.titel)):"Funktion auf diesem Server";
+    return '<div class="control-row"><div style="flex:1;min-width:0">'+
+      '<div class="cl">'+titel+
       (sperre?' <span class="tag" style="margin-left:6px">gesperrt</span>':"")+'</div>'+
       '<div class="cd">'+warum+'</div></div>'+
-      '<div class="toggle'+(f.on?" on":"")+(sperre?" off-lock":"")+'" data-fkey="'+esc(f.key)+'" data-lock="'+(sperre?"1":"")+'"></div></div>'; }).join("");
+      '<div class="toggle'+(sc.an?" on":"")+(sperre?" off-lock":"")+'" data-fkey="'+esc(sc.key)+
+      '" data-lock="'+(sperre?"1":"")+'"></div></div>'; }
+
+  /* Funktionen MIT Einstellungen bekommen einen eigenen Block: Schalter oben,
+     darunter, was man daran drehen kann. Genau danach sucht man – der
+     Lautstärkeregler gehört zur Musik und nicht in eine zweite Liste weiter
+     unten. Funktionen ohne Einstellungen wären als Einzelblöcke nur Leerlauf;
+     die stehen gesammelt am Ende. */
+  var grund=null, mitWerten=[], nurSchalter=[];
+  baum.forEach(function(a){
+    if(a.key==="_grund"){ grund=a; return; }
+    (a.werte&&a.werte.length?mitWerten:nurSchalter).push(a); });
+
+  var bloecke="";
+  if(grund&&grund.werte.length){
+    bloecke+='<div class="sec-h"><h2>'+esc(grund.titel)+'</h2><div class="ln"></div></div>'+
+      '<div class="card reveal"><div class="cd" style="margin-bottom:10px">'+esc(grund.erklaerung)+'</div>'+
+      grund.werte.map(wertZeile).join("")+'</div>'; }
+
+  bloecke+=mitWerten.map(function(a){
+    return '<div class="sec-h"><h2>'+(a.emoji||"")+' '+esc(a.titel)+'</h2><div class="ln"></div></div>'+
+      '<div class="card reveal">'+schalterZeile(a,false)+a.werte.map(wertZeile).join("")+'</div>'; }).join("");
+
+  if(nurSchalter.length){
+    bloecke+='<div class="sec-h"><h2>Weitere Funktionen</h2><div class="ln"></div>'+
+      '<div class="tag">nur an/aus</div></div><div class="card reveal">'+
+      nurSchalter.map(function(a){return schalterZeile(a,true);}).join("")+'</div>'; }
 
   v.innerHTML='<div class="sec-h"><h2>'+esc(g.name||name||"Server")+'</h2><div class="ln"></div>'+
       '<button class="btn-sm-gold" id="cfgBack">← Alle Server</button></div>'+
-    '<div class="card reveal"><div class="cd">Diese Einstellungen gelten <b>nur auf diesem Server</b>. '+
+    '<div class="card reveal"><div class="cd">Alles auf dieser Seite gilt <b>nur auf diesem Server</b>. '+
       'Was hier nicht gesetzt ist, folgt dem Standard aus der <code>.env</code>. '+
-      'Im Chat geht dasselbe mit <code>Flo einstellungen</code>.</div></div>'+
+      'Im Chat geht dasselbe mit <code>Flo einstellungen</code> und <code>Flo funktionen</code>.</div></div>'+
     bloecke+
-    '<div class="sec-h"><h2>Funktionen auf diesem Server</h2><div class="ln"></div></div>'+
-    '<div class="card reveal">'+(fzeilen||'<div class="cd">Keine Module geladen.</div>')+'</div>'+
     '<div class="sec-h"><h2>Sofort ausl\u00f6sen</h2><div class="ln"></div></div>'+
     '<div class="card reveal"><div class="control-row"><div style="flex:1;min-width:0">'+
       '<div class="cl">\ud83d\udd24 Wort des Tages jetzt starten</div>'+

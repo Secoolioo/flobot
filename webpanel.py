@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import time
 import unicodedata
 from collections import deque
@@ -1387,12 +1388,24 @@ class WebPanel(FeatureBasis):
 
     # --- API: Funktionen (Laufzeit-Schalter) -----------------------------
     def _loaded_flags(self):
-        """Start-Flags {key: geladen?} aus bot.py (welche Module aktiv sind)."""
-        try:
-            import bot
-            return dict(getattr(bot, "FEATURE_LOADED", {}) or {})
-        except Exception:  # noqa: BLE001
+        """Start-Flags {key: geladen?} aus bot.py (welche Module aktiv sind).
+
+        Bewusst ueber sys.modules und NICHT per 'import bot': das Panel laeuft
+        IM Bot-Prozess, dort ist bot laengst geladen, und ein Import waere nur
+        ein Nachschlagen. Ausserhalb - in Tests und Werkzeugen - waere es
+        dagegen ein echter Import mit allen Nebenwirkungen. Eine davon ist
+        webpanel.setup(): die liest WEBPANEL_AUTH neu aus der Umgebung und
+        schaltet den Login wieder an. Gemessen: ein GET auf /api/features
+        machte aus einem Panel ohne Login mitten im Betrieb eines mit Login,
+        und die naechste Anfrage kam mit 401 zurueck.
+
+        Ist bot nicht geladen, gilt 'nichts geladen' - das ist die ehrliche
+        Antwort und nicht etwa ein Fehler.
+        """
+        modul = sys.modules.get("bot")
+        if modul is None:
             return {}
+        return dict(getattr(modul, "FEATURE_LOADED", {}) or {})
 
     async def _api_features(self, request):
         self._guard(request)
@@ -2408,6 +2421,10 @@ class WebPanel(FeatureBasis):
             for wert in abschnitt["werte"]:
                 wert["wert"] = self._cfg_wert(wert["typ"], wert["wert"])
                 wert["standard"] = self._cfg_wert(wert["typ"], wert["standard"])
+                # Dieselben Kurznamen wie in 'settings', damit die Oberflaeche
+                # dasselbe Feld-Bauteil fuer beide benutzen kann.
+                wert["min"] = wert.get("minimum")
+                wert["max"] = wert.get("maximum")
         return baum
 
     async def _api_guildcfg_set(self, request):

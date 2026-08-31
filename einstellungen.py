@@ -44,6 +44,7 @@ Unordnung bemaengelt hat.
 """
 
 import logging
+import sys
 
 import features
 import guildcfg
@@ -151,11 +152,14 @@ class Baum:
 
         Lazy und mit Rueckfall auf ein leeres dict: dieses Modul soll sich auch
         importieren lassen, wenn gar kein Bot laeuft (Werkzeuge, Tests)."""
-        try:
-            import bot
-            return dict(getattr(bot, "FEATURE_LOADED", {}) or {})
-        except Exception:  # noqa: BLE001
+        # Ueber sys.modules und nicht per Import: das Panel laeuft im
+        # Bot-Prozess, dort ist bot laengst da. Ausserhalb waere es ein echter
+        # Import mit Nebenwirkungen - eine davon hat schon einmal mitten im
+        # Betrieb den Panel-Login wieder angeschaltet (siehe webpanel.py).
+        modul = sys.modules.get("bot")
+        if modul is None:
             return {}
+        return dict(getattr(modul, "FEATURE_LOADED", {}) or {})
 
     # -- Die Liste -----------------------------------------------------------
     def bauen(self, gid, geladen=None):
