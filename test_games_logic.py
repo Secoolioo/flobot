@@ -14814,6 +14814,60 @@ def test_inventar_hat_nichts_verloren():
         + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
 
 
+def test_einstellungen_ordnen_jeden_wert_ein():
+    """Die eine Liste darf keinen Wert unterschlagen.
+
+    einstellungen.py fuehrt guildcfg (26 Werte) und features (24 Schalter) zu
+    EINER nach Funktionen geordneten Liste zusammen - das ist die Antwort auf
+    'manche einstellungen sind da und andere da'. Die Zuordnung ist von Hand
+    gepflegt, weil sie nirgends im Code steht: sie ergibt sich daraus, was ein
+    Wert tatsaechlich beeinflusst.
+
+    Von Hand gepflegt heisst: sie verrottet, sobald jemand einen Schluessel
+    dazulegt und hier nichts eintraegt. Der Wert waere dann im Panel
+    unsichtbar - genau die Sorte stiller Verlust, gegen die dieser Umbau
+    laeuft. Deshalb prueft dieser Test beide Richtungen und beide Kataloge.
+    """
+    import einstellungen
+
+    vergessen = einstellungen.vergessene_werte()
+    assert not vergessen, (
+        f"Diese guildcfg-Werte sind in keinem Abschnitt und damit im Panel "
+        f"unsichtbar: {vergessen}. In einstellungen.ZUORDNUNG einordnen (oder "
+        f"in GRUNDLEGEND, wenn sie zu keiner Funktion gehoeren).")
+    erfunden = einstellungen.erfundene_werte()
+    assert not erfunden, (
+        f"Diese Namen stehen in einstellungen.ZUORDNUNG, aber nicht in "
+        f"guildcfg.KATALOG: {erfunden}")
+    erfundene_f = einstellungen.erfundene_funktionen()
+    assert not erfundene_f, (
+        f"Diese Funktionsnamen stehen in einstellungen.ZUORDNUNG, aber nicht "
+        f"in features.CATALOG: {erfundene_f}")
+
+    # Und die Liste muss wirklich jeden Schalter zeigen, nicht nur die mit Werten.
+    baum = einstellungen.als_dicts(0, {})
+    gezeigt = {a["key"] for a in baum}
+    import features
+    fehlt = sorted({f["key"] for f in features.CATALOG} - gezeigt)
+    assert not fehlt, f"Diese Funktionen fehlen in der Liste: {fehlt}"
+
+
+def test_einstellungen_aendern_das_discord_nicht():
+    """Die neue Liste ist NUR fuer das Panel.
+
+    'Flo einstellungen' und 'Flo funktionen' im Discord sollen sich nicht
+    bewegen - der Betreiber hat ausdruecklich gesagt, im Discord soll alles so
+    bleiben. Deshalb darf guildcfg.handle nichts aus einstellungen.py holen.
+    """
+    quelle = open("guildcfg.py", encoding="utf-8").read()
+    assert "import einstellungen" not in quelle, (
+        "guildcfg benutzt einstellungen.py - dann wandert die neue Gruppierung "
+        "ins Discord. Sie ist aber nur fuer das Panel gedacht.")
+    # Der umgekehrte Weg ist richtig und muss bleiben.
+    neu = open("einstellungen.py", encoding="utf-8").read()
+    assert "import guildcfg" in neu and "import features" in neu
+
+
 def test_lauf_kennt_jede_testdatei():
     """Der Waechter, den lauf.py in seinem Kopf versprochen hat.
 

@@ -2378,7 +2378,37 @@ class WebPanel(FeatureBasis):
             "settings": settings,
             "channels": kanaele,
             "features": feats,
+            "baum": self._einstellungsbaum(gid),
         })
+
+    def _einstellungsbaum(self, gid):
+        """Alles, was man einstellen kann - in EINER nach Funktionen geordneten
+        Liste (einstellungen.py).
+
+        'settings' und 'features' oben bleiben unveraendert daneben stehen:
+        etwas aus einer Antwort zu entfernen ist genau die Art stiller Verlust,
+        gegen die der ganze Umbau laeuft. Die Oberflaeche nimmt den Baum, alles
+        Andere kann weiter das Alte lesen.
+
+        Der Baum bringt zusammen, was zusammengehoert: der Lautstaerkeregler
+        steht bei der Musik und nicht unter 'Musik' in einer anderen Liste als
+        der Musik-Schalter. Und 'Bayrisch-Modus' steht nicht mehr zweimal mit
+        demselben Wortlaut untereinander.
+        """
+        try:
+            import einstellungen
+            baum = einstellungen.als_dicts(gid, self._loaded_flags())
+        except Exception:  # noqa: BLE001
+            log.exception("Einstellungsbaum konnte nicht gebaut werden")
+            return []
+        # Zahlenwerte, die Discord-IDs sind, muessen als TEXT rausgehen: die
+        # Zahlen von Javascript sind zu klein fuer Snowflakes und wuerden am
+        # Ende gerundet - aus einer Kanal-ID wuerde eine andere.
+        for abschnitt in baum:
+            for wert in abschnitt["werte"]:
+                wert["wert"] = self._cfg_wert(wert["typ"], wert["wert"])
+                wert["standard"] = self._cfg_wert(wert["typ"], wert["standard"])
+        return baum
 
     async def _api_guildcfg_set(self, request):
         """Eine Einstellung eines Servers setzen (oder mit 'standard' zuruecksetzen)."""
