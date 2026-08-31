@@ -19,12 +19,20 @@ keines zustaendig ist. Das passiert bei jedem "hahaha" auf dem Server.
 
 WAS GEMESSEN WIRD
 =================
-  durchfall     eine normale Chatnachricht durch die ganze Kette (der haeufigste
-                Fall ueberhaupt) - hier zaehlt jede Mikrosekunde
+  nachricht     eine normale Chatnachricht komplett, so wie on_message sie
+                behandelt: Tippfehler-Korrektur PLUS die ganze Handler-Kette.
+                Der haeufigste Fall ueberhaupt - hier zaehlt jede Mikrosekunde
+  kette         nur die Handler-Kette daraus
+  cmdnorm_warm  die Tippfehler-Korrektur bei Woertern, die schon einmal da waren
+  cmdnorm_kalt  dieselbe bei jedes Mal NEUEN Woertern
   befehl        ein erkannter Befehl bis zur fertigen Antwort
-  cmdnorm       die Tippfehler-Korrektur allein
   ansprache     ai.strip_lead allein - laeuft in JEDEM Modul noch einmal
-  je_modul      welches Modul im Durchfall am meisten kostet
+  je_modul      welches Modul in der Kette am meisten kostet
+
+Warm und kalt stehen getrennt da, weil sie sich seit dem Wortspeicher in
+cmdnorm um zwei Groessenordnungen unterscheiden. Nur den warmen Wert zu zeigen
+waere geschoenigt: das erste 'hahaha' des Tages kostet den vollen Preis. Nur den
+kalten zu zeigen waere genauso falsch, denn im Chat wiederholt sich fast alles.
 
 EHRLICH BLEIBEN
 ===============
@@ -144,16 +152,38 @@ class Messung:
         from werkzeug.attrappe import rauch_nachricht
 
         raus = {}
-        self._sagen("  durchfall (normale Chatnachricht durch die ganze Kette) ...")
-        raus["durchfall"] = self.uhr.messen(
+
+        def eine_nachricht(text):
+            """So wie bot.on_message es macht: erst korrigieren, dann die Kette."""
+            verbessert = cmdnorm.normalize(ai.strip_lead(text) or text)
+            self._durch_die_kette(verbessert or text)
+
+        self._sagen("  nachricht (komplett, wie on_message) ...")
+        raus["nachricht"] = self.uhr.messen(
+            lambda: [eine_nachricht(t) for t in GEPLAUDER])
+
+        self._sagen("  kette ...")
+        raus["kette"] = self.uhr.messen(
             lambda: [self._durch_die_kette(t) for t in GEPLAUDER])
 
         self._sagen("  befehl ...")
         raus["befehl"] = self.uhr.messen(lambda: self._durch_die_kette("coins"))
 
-        self._sagen("  cmdnorm ...")
-        raus["cmdnorm"] = self.uhr.messen(
+        self._sagen("  cmdnorm warm ...")
+        raus["cmdnorm_warm"] = self.uhr.messen(
             lambda: [cmdnorm.normalize(t) for t in GEPLAUDER])
+
+        # Kalt: jedes Wort genau einmal, damit kein Speicher greift. Die Woerter
+        # werden durchgezaehlt statt gewuerfelt - so misst jeder Lauf dasselbe.
+        self._sagen("  cmdnorm kalt ...")
+        self._zaehler = 0
+
+        def kalt():
+            self._zaehler += 1
+            n = self._zaehler
+            for i, wort in enumerate(GEPLAUDER):
+                cmdnorm.normalize(f"{wort[:6]}{n}x{i}")
+        raus["cmdnorm_kalt"] = self.uhr.messen(kalt)
 
         self._sagen("  ansprache (ai.strip_lead) ...")
         raus["ansprache"] = self.uhr.messen(
@@ -213,7 +243,7 @@ def zeigen(daten, alt=None):
                 zeile += f"   {abs(d):>6.0%} {pfeil} (war {frueher:.1f})"
         print(zeile)
     teuer = sorted(daten["_je_modul"].items(), key=lambda x: -x[1]["us"])[:8]
-    print("\n  Teuerste Module im Durchfall (7 Chatnachrichten je Modul):")
+    print("\n  Teuerste Module in der Kette (7 Chatnachrichten je Modul):")
     for name, wert in teuer:
         print(f"    {name:14} {wert['us']:>8.1f} us")
     print()

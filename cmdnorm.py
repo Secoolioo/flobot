@@ -22,6 +22,12 @@ und stellt sie nach dem Befehls-Durchlauf wieder her (die KI bekommt immer den
 Originaltext, falls kein Befehl passte)."""
 
 
+#: Eigener "nichts gemerkt"-Wert. None geht nicht: None IST ein gueltiges
+#: Ergebnis von _fuzzy (kein eindeutiger Treffer), und genau das ist der Fall,
+#: der sich am meisten zu merken lohnt.
+_NICHTS = object()
+
+
 class CmdNorm:
     """Zentrale Befehls-Normalisierung als Klasse (rein struktureller Umbau)."""
 
@@ -395,17 +401,71 @@ class CmdNorm:
                 i += 1
         return True
 
+    #: Befehle >= 4 Buchstaben, nach Laenge sortiert. Wird beim ersten Bedarf
+    #: gebaut und danach nicht mehr angefasst.
+    #:
+    #: Warum: _one_typo kann NIE True liefern, wenn sich die Laengen um mehr als
+    #: eins unterscheiden - eine Einfuegung, eine Loeschung oder eine Vertauschung
+    #: aendert die Laenge um hoechstens eins. Bis hierher hat _fuzzy trotzdem alle
+    #: 491 langen Befehle durchprobiert. Fuer ein sechsbuchstabiges Wort bleiben
+    #: mit dem Verzeichnis 238 statt 491 uebrig, fuer ein zehnbuchstabiges 86.
+    #: Dasselbe Ergebnis, weniger Arbeit.
+    _NACH_LAENGE = None
+
+    #: Schon einmal nachgeschlagene Woerter. Im Chat wiederholt sich der
+    #: Wortschatz staendig ('ja', 'ok', 'hahaha', 'ne'), und _fuzzy ist der
+    #: teuerste Teil des heissen Pfades: gemessen kostete cmdnorm rund ein
+    #: Drittel der Zeit, die eine normale Chatnachricht ueberhaupt im Bot
+    #: verbringt. Ein zweites 'hahaha' soll nichts mehr kosten.
+    #:
+    #: Der Deckel ist noetig, weil der Chat-Wortschatz nach oben offen ist. Wird
+    #: er erreicht, faengt der Speicher von vorn an - simpel und ausreichend,
+    #: denn was oft vorkommt, ist gleich wieder drin.
+    _CACHE_MAX = 4096
+
+    def __init__(self):
+        # Pro Instanz eigener Speicher. Das Laengen-Verzeichnis haengt dagegen
+        # an der Klasse: es leitet sich allein aus KNOWN ab, und KNOWN ist fuer
+        # alle Instanzen dasselbe.
+        self._fuzzy_cache = {}
+
+    def _laengen_verzeichnis(self):
+        if self._NACH_LAENGE is None:
+            verzeichnis = {}
+            for wort in self.KNOWN:
+                if len(wort) >= 4:
+                    verzeichnis.setdefault(len(wort), []).append(wort)
+            # Auf die Klasse, nicht auf die Instanz: KNOWN ist eine
+            # Klassen-Konstante, das Verzeichnis gehoert dorthin, wo sie steht.
+            CmdNorm._NACH_LAENGE = {k: tuple(v) for k, v in verzeichnis.items()}
+        return self._NACH_LAENGE
+
     def _fuzzy(self, word):
         """Naechstgelegenes bekanntes Befehlswort bei genau einem Vertipper
         (Einfuegen/Loeschen/Nachbar-Vertauschung) - nur wenn EINDEUTIG und das Wort
         lang genug ist (kurze Woerter sind zu mehrdeutig)."""
         if len(word) < 4:
             return None
+        gemerkt = self._fuzzy_cache.get(word, _NICHTS)
+        if gemerkt is not _NICHTS:
+            return gemerkt
         # Ziel muss selbst >= 4 Buchstaben haben: kurze Befehle (ban, top, pay, vol ...)
         # nur EXAKT erkennen, sonst faellt jedes 4-Buchstaben-Wort per Loeschung drauf
         # (band->ban, tops->top ...).
-        hits = {w for w in self.KNOWN if len(w) >= 4 and self._one_typo(word, w)}
-        return next(iter(hits)) if len(hits) == 1 else None
+        verzeichnis = self._laengen_verzeichnis()
+        laenge = len(word)
+        treffer = set()
+        for kandidat in (verzeichnis.get(laenge - 1, ()) + verzeichnis.get(laenge, ())
+                         + verzeichnis.get(laenge + 1, ())):
+            if self._one_typo(word, kandidat):
+                treffer.add(kandidat)
+                if len(treffer) > 1:
+                    break            # nicht mehr eindeutig - weitersuchen bringt nichts
+        ergebnis = next(iter(treffer)) if len(treffer) == 1 else None
+        if len(self._fuzzy_cache) >= self._CACHE_MAX:
+            self._fuzzy_cache.clear()
+        self._fuzzy_cache[word] = ergebnis
+        return ergebnis
 
     def normalize(self, cleaned):
         """Nimmt den (schon vom Botnamen befreiten) Text. Gibt die korrigierte Form
