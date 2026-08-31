@@ -96,7 +96,8 @@ class WebPanel(FeatureBasis):
         self._html_kennung = None
         self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
         self._fails = {}       # ip -> (Fehlversuche, gesperrt_bis) gegen Raten
-        self._auth = False     # Login verlangen? (WEBPANEL_AUTH, Standard aus)
+        self._auth = False     # Login verlangen? setup() setzt den echten
+        #                        Wert aus WEBPANEL_AUTH - der Standard ist AN.
         # Protokoll der schreibenden Panel-Aktionen (Nachvollziehbarkeit, kein
         # Login-Thema - den gibt es hier bewusst nicht).
         self._log = []
@@ -238,9 +239,10 @@ class WebPanel(FeatureBasis):
 
         Bewusst als Middleware und nicht in den elf Handlern einzeln: so ist
         auch der zwoelfte Knopf protokolliert, den irgendwann jemand nachruest.
-        Das hat NICHTS mit Login zu tun (den gibt es hier absichtlich nicht) -
-        es geht um Nachvollziehbarkeit: wer im Nachhinein wissen will, warum
-        ein Konto 5 Mio mehr hat, findet es hier."""
+        Das hat NICHTS mit dem Login zu tun - es geht um Nachvollziehbarkeit:
+        wer im Nachhinein wissen will, warum ein Konto 5 Mio mehr hat, findet
+        es hier. Gerade OHNE Login (WEBPANEL_AUTH=0) ist das die einzige
+        Spur, die bleibt."""
         antwort = await handler(request)
         try:
             if request.method == "POST" and request.path not in self._NICHT_NOTIEREN:

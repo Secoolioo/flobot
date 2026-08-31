@@ -893,8 +893,23 @@ ein Posten „Übernahme alte Kreide-Tafel"; die alten Volumen-Zahlen wandern na
 
 ## Web-Panel
 
-Standardmäßig auf `0.0.0.0:9123`, **ohne Login** (`WEBPANEL_AUTH=1` schaltet ihn
-wieder an). Übersicht mit Kennzahlen und Kurs-Chart, Nutzer verwalten (Coins,
+Standardmäßig auf `0.0.0.0:9123`, **mit Login**. Ist kein `WEBPANEL_PASS`
+gesetzt, würfelt Flo beim Start eins und schreibt es einmal ins Log — ein festes
+Standardpasswort wäre das Schlimmste von beidem: es sieht nach Schutz aus und ist
+keiner, weil es im Quelltext steht.
+
+Ohne Login läuft es mit `WEBPANEL_AUTH=0`. Das ist ausdrücklich vorgesehen, aber
+es heißt wörtlich: **jeder, der `9123` erreicht, kann Coins vergeben, Titel
+verteilen und den Bot neu starten.** Wer das will, sollte zusätzlich
+`WEBPANEL_HOST=127.0.0.1` setzen, damit das Panel nur vom selben Rechner aus
+erreichbar ist.
+
+(Bis hierher stand an dieser Stelle „ohne Login" und in der Tabelle unten
+`WEBPANEL_AUTH` mit Standard `0`. Der Code sagt seit Längerem `1`. Wer sich auf
+die README verlassen hat, hielt sein Panel für offen oder für geschlossen — je
+nachdem, was er gerade brauchte.)
+
+Übersicht mit Kennzahlen und Kurs-Chart, Nutzer verwalten (Coins,
 XP, Titel, Anteile), Server steuern (Sendepause, Ansage, Features), Update-Knopf.
 
 Ein Klick auf eine Server-Karte öffnet die Einstellungen **dieses** Servers:
@@ -1103,7 +1118,7 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `GUILD_ID` | — | Flos Hauptserver (optional, keine Sperre) |
 | `OWNER_ID` | — | der Chef |
 | `BOT_NAME` | `Flo` | Ansprache |
-| `WEBPANEL_AUTH` | `0` | Login fürs Panel |
+| `WEBPANEL_AUTH` | `1` | Login fürs Panel (`0` = ohne, siehe oben) |
 | `WEBPANEL_HOST` / `_PORT` | `0.0.0.0` / `9123` | Panel-Adresse |
 | `BOTSICHT_PUFFER` | `400` | wie viele gesehene Nachrichten der Live-Strom vorhält |
 | `BOTSICHT_DM_MAX` | `500` | wie viele DM-Bekanntschaften Flo sich merkt |
@@ -1140,6 +1155,37 @@ python lauf.py                    alle Tests, alle Fehler auf einmal
 python lauf.py --misch            zufällige Reihenfolge (deckt Abhängigkeiten auf)
 python lauf.py --nur musik        nur passende Testnamen
 ```
+
+Die Testsuite liegt in 15 Themendateien (`test_musik.py`, `test_casino.py`, …);
+die gemeinsamen Attrappen und der umgebogene Datenordner stehen **einmal** in
+`testhilfe.py`. Keine Testdatei fasst `DATA_DIR` selbst an — sonst zeigten die
+Speicher hinterher auf verschiedene Ordner.
+
+Dazu drei Werkzeuge, die zusammen das Netz bilden. Sie beantworten drei
+verschiedene Fragen, und keins ersetzt ein anderes:
+
+| Werkzeug | Frage |
+|---|---|
+| `lauf.py` | Läuft der Code noch? |
+| `werkzeug/inventar.py` | Ist noch **alles da**? |
+| `werkzeug/abdruck.py` | Sieht es im Discord noch **genauso aus**? |
+| `werkzeug/panelprobe.py` | Lässt sich das **Panel** noch bedienen? |
+| `werkzeug/tempo.py` | Ist es **schneller** geworden — oder heimlich langsamer? |
+
+```
+python werkzeug/abdruck.py --vergleiche      Antwortform jedes Befehls
+python werkzeug/panelprobe.py                Panel im echten Chromium anklicken
+python werkzeug/tempo.py --vergleiche        heiße Pfade messen
+```
+
+`werkzeug/abdruck.py` nimmt die **Form** jeder Antwort auf — Typ, Überschrift,
+Feldnamen, Knopfbeschriftungen, Textgerüst. Was sich nicht reproduzieren lässt
+(Würfel, Uhrzeit), misst es selbst und sortiert es aus: 472 von 480 Befehlen
+sind stabil, die 8 wackeligen stehen offen dabei.
+
+`werkzeug/panelprobe.py` fährt den echten Panel-Server hoch, lädt die echte
+Oberfläche in Chromium und klickt sich durch. Das Inventar sieht, ob es den
+*Endpunkt* noch gibt — nicht, ob der *Knopf* ihn noch trifft.
 
 `werkzeug/inventar.py` nimmt den Funktionsumfang **aus dem Code** auf — es
 schreibt nichts ab, sondern liest den Quelltext (AST) und fragt zusätzlich die
