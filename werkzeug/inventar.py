@@ -4,6 +4,7 @@
     python werkzeug/inventar.py --schreibe      Grundstand neu aufnehmen
     python werkzeug/inventar.py --vergleiche    gegen den Grundstand pruefen
     python werkzeug/inventar.py --zeige         Stand lesbar ausgeben
+    python werkzeug/inventar.py --panel         vergessene/tote Panel-Knoepfe
     python werkzeug/inventar.py --cmdnorm       cmdnorm-Fehlgriffe messen
 
 WOZU
@@ -1041,6 +1042,50 @@ class CmdnormPruefung:
         return sorted(set(woerter) & set(cmdnorm.KNOWN))
 
 
+class PanelAbgleich:
+    """Beide Seiten des Panels gegeneinander halten.
+
+    Beim Neubau der Oberflaeche ist der wahrscheinlichste Verlust nicht ein
+    kaputter Endpunkt, sondern ein Knopf, den niemand nachbaut: 'Wordle jetzt
+    starten' oder 'Aktienkurs setzen' haben je genau einen Aufrufer. Faellt der
+    weg, bleibt der Endpunkt bestehen, alle Tests sind gruen - und die Funktion
+    ist trotzdem weg, weil man sie nicht mehr erreicht.
+
+    Deshalb hier beide Richtungen:
+      verwaist  Endpunkt ohne Bedienelement -> vergessener Knopf
+      tot       Aufruf ohne Endpunkt        -> Knopf, der ins Leere zeigt
+    """
+
+    def __init__(self, stand):
+        self.routen = stand.get("routen", {})
+        self.frontend = set(stand.get("frontend", {}))
+
+    @staticmethod
+    def _als_muster(pfad):
+        return re.compile(re.sub(r"\{[^}]*\}", "[^/]+", pfad) + "/?$")
+
+    def _wird_gerufen(self, pfad):
+        muster = self._als_muster(pfad)
+        # Ohne den Platzhalter: die Oberflaeche baut '/api/user/' + id im
+        # Javascript zusammen, im Text steht dann nur der Anfang.
+        stumpf = re.sub(r"/\{[^}]*\}$", "", pfad).rstrip("/")
+        return any(muster.fullmatch(ruf) or ruf.rstrip("/") == stumpf
+                   for ruf in self.frontend)
+
+    def verwaist(self):
+        return sorted(r for r in self.routen
+                      if r.split(" ", 1)[1].startswith("/api/")
+                      and not self._wird_gerufen(r.split(" ", 1)[1]))
+
+    def tot(self):
+        muster = [self._als_muster(r.split(" ", 1)[1]) for r in self.routen]
+        stumpf = {re.sub(r"/\{[^}]*\}$", "", r.split(" ", 1)[1]).rstrip("/")
+                  for r in self.routen}
+        return sorted(f for f in self.frontend
+                      if not any(m.fullmatch(f) for m in muster)
+                      and f.rstrip("/") not in stumpf)
+
+
 # --- Kommandozeile ----------------------------------------------------------
 
 def main(argv=None):
@@ -1050,6 +1095,8 @@ def main(argv=None):
     p.add_argument("--vergleiche", action="store_true",
                    help="aktuellen Code gegen den Grundstand pruefen")
     p.add_argument("--zeige", action="store_true", help="Stand lesbar ausgeben")
+    p.add_argument("--panel", action="store_true",
+                   help="Panel-Endpunkte und Bedienelemente gegeneinander halten")
     p.add_argument("--cmdnorm", action="store_true",
                    help="messen, welche Woerter cmdnorm heute verbiegt")
     p.add_argument("--ohne-probe", action="store_true",
@@ -1057,7 +1104,7 @@ def main(argv=None):
     p.add_argument("--leise", action="store_true")
     a = p.parse_args(argv)
 
-    if not any((a.schreibe, a.vergleiche, a.zeige, a.cmdnorm)):
+    if not any((a.schreibe, a.vergleiche, a.zeige, a.cmdnorm, a.panel)):
         p.print_help()
         return 3
 
@@ -1075,6 +1122,17 @@ def main(argv=None):
     inv = Inventar(laut=not a.leise)
     neu = inv.aufnehmen(mit_probe=not a.ohne_probe)
     zaehlung_zeigen(neu)
+
+    if a.panel:
+        ab = PanelAbgleich(neu)
+        verwaist, tot = ab.verwaist(), ab.tot()
+        print(f"Endpunkte ohne Bedienelement (vergessene Knoepfe): {len(verwaist)}")
+        for r in verwaist:
+            print(f"  {r:40} -> {neu['routen'][r]['handler']}")
+        print(f"\nAufrufe ohne Endpunkt (Knoepfe ins Leere): {len(tot)}")
+        for f in tot:
+            print(f"  {f}")
+        return 0
 
     if a.cmdnorm:
         fund = CmdnormPruefung(neu).messen()

@@ -1129,6 +1129,47 @@ jeweils mit Kommentar, warum der Wert so gewählt ist.
 
 ---
 
+## Testen und Nachzählen
+
+Zwei Werkzeuge, die zusammen das Sicherheitsnetz bilden. Das eine fragt *läuft
+der Code noch?*, das andere *ist noch alles da?* — beides braucht man, denn ein
+grüner Testlauf beweist nur die getesteten Wege.
+
+```
+python lauf.py                    alle Tests, alle Fehler auf einmal
+python lauf.py --misch            zufällige Reihenfolge (deckt Abhängigkeiten auf)
+python lauf.py --nur musik        nur passende Testnamen
+```
+
+`werkzeug/inventar.py` nimmt den Funktionsumfang **aus dem Code** auf — es
+schreibt nichts ab, sondern liest den Quelltext (AST) und fragt zusätzlich die
+laufenden Module: *reagierst du auf dieses Wort?* Gefragt werden alle Module,
+nicht nur das erwartete; so kommen Kollisionen ans Licht.
+
+```
+python werkzeug/inventar.py --schreibe      Grundstand aufnehmen
+python werkzeug/inventar.py --vergleiche    prüfen, ob noch alles da ist
+python werkzeug/inventar.py --zeige         Stand und Kollisionen ansehen
+python werkzeug/inventar.py --panel         vergessene und tote Panel-Knöpfe
+python werkzeug/inventar.py --cmdnorm       messen, was die Tippfehler-Toleranz verbiegt
+```
+
+Rückgabecodes: `0` alles da · `1` nur angekündigte Verluste · `2` **echter
+Verlust** · `3` das Werkzeug selbst ist kaputt.
+
+Verglichen wird nach dem Grundsatz **was verlorengehen kann, ist ein Schlüssel;
+was sich ändern darf, ist ein Wert**. Die Schlüssel sind bewusst besitzerlos:
+`wordle` ist ein Befehl, egal welches Modul ihn beantwortet. Ein Umzug ist eine
+Notiz, nur das Verschwinden ist ein Fehler.
+
+Ein absichtlicher Wegfall gehört mit Grund und Datum in
+`inventar/erwartet.json`. Der Eintrag gilt für **einen** `--schreibe`-Lauf und
+ist danach verbraucht; ein Eintrag, der im Vergleich gar nicht auftaucht, ist
+selbst ein Fehler; und ganze Kategorien lassen sich nicht abnicken.
+
+Heutiger Stand: 536 Befehle, 39 Panel-Routen, 249 Katalogeinträge, 16 Loops,
+426 Modul-Funktionen, 35 Frontend-Aufrufe.
+
 ## Weitere Dokumente
 | `AUDIT.md` | Vollständige Durchsicht der Codebase: was gefunden, was behoben, was widerlegt |
 
