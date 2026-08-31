@@ -61,13 +61,24 @@ import tempfile
 import time
 import traceback
 
-# ---------------------------------------------------------------------------
-# ZUERST den Datenordner umbiegen - VOR jedem Bot-Import. store.DATA_DIR wird
-# beim Import festgelegt, und jeder JsonStore haengt daran. Ohne das schreibt
-# die Probe in die ECHTEN Daten des laufenden Servers.
-# ---------------------------------------------------------------------------
 WURZEL = pathlib.Path(__file__).resolve().parent.parent
-os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="flobot-inventar-"))
+# ---------------------------------------------------------------------------
+# IMMER ein eigener, frischer Datenordner - und zwar bevor irgendein Bot-Modul
+# importiert wird. store.DATA_DIR wird beim Import festgelegt, jeder JsonStore
+# haengt daran.
+#
+# Bewusst ein hartes Setzen und kein setdefault: dieses Werkzeug FAEHRT DEN BOT
+# HOCH und laesst ihn Befehle ausfuehren. Wuerde es einen von aussen geerbten
+# DATA_DIR uebernehmen, haette ein Aufruf in einer Shell, in der DATA_DIR auf
+# die echten Daten zeigt, Konten angelegt und Kurse verstellt.
+#
+# Der zweite Grund ist Messbarkeit: als Unterprozess aus dem Testlauf heraus
+# erbte das Werkzeug den Ordner der Tests - mit allem, was vorherige Tests dort
+# hinterlassen hatten. Je nach Testreihenfolge sah der Bot damit einen anderen
+# Zustand und antwortete anders. Der Waechter fuer "im Discord bleibt alles
+# gleich" wackelte also selbst; unter 'lauf.py --misch 4242' fiel er um.
+# ---------------------------------------------------------------------------
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="flobot-inventar-")
 if str(WURZEL) not in sys.path:
     sys.path.insert(0, str(WURZEL))
 

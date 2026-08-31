@@ -14778,6 +14778,31 @@ def test_inventar_hat_nichts_verloren():
         + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
 
 
+def test_lauf_kennt_jede_testdatei():
+    """Der Waechter, den lauf.py in seinem Kopf versprochen hat.
+
+    lauf.py fuehrt die Testdateien in einer Liste (TESTDATEIEN). Wenn beim
+    Aufteilen der Suite eine neue Datei entsteht und niemand traegt sie ein,
+    laufen ihre Tests einfach nicht - und der Lauf meldet trotzdem 'alles
+    gruen'. Der Kommentar in lauf.py behauptete, ein Test halte die Liste gegen
+    den Ordner. Den gab es nicht. Jetzt schon, und er prueft beide Richtungen.
+    """
+    import lauf
+
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    im_ordner = {p[:-3] for p in os.listdir(wurzel)
+                 if p.startswith("test_") and p.endswith(".py")}
+    in_liste = set(lauf.TESTDATEIEN)
+    fehlt = sorted(im_ordner - in_liste)
+    zuviel = sorted(in_liste - im_ordner)
+    assert not fehlt, (
+        f"Diese Testdateien stehen NICHT in lauf.TESTDATEIEN und laufen "
+        f"deshalb nie mit: {fehlt}")
+    assert not zuviel, (
+        f"Diese Namen stehen in lauf.TESTDATEIEN, aber es gibt keine Datei "
+        f"dazu: {zuviel}")
+
+
 def test_abdruck_flo_antwortet_noch_genauso():
     """Die Bedingung des Betreibers, nachpruefbar gemacht.
 

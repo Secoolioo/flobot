@@ -46,7 +46,33 @@ TESTDATEIEN = ("test_games_logic", "test_logic")
 # prueft die Meldung "Economy ist aus" und war nur deshalb gruen, weil er
 # alphabetisch VOR allen Tests lief, die economy anschalten. Nachgemessen:
 # sieben Tests lassen economy angeschaltet zurueck.
+#: "Attribut gibt es nicht" - None geht nicht, denn None ist ein gueltiger Wert.
+_FEHLT = object()
+
 WACHE = ("economy", "features", "guildcfg", "admin", "music", "words")
+
+#: Was ein Test ausser den An/Aus-Schaltern noch stehen lassen kann. Nachgemessen
+#: mit einer breiteren Wache: es sind nicht 9 schlampige Tests, sondern 25 - die
+#: Hauptursache sind uebriggebliebene _store-Objekte und ein gefuellter
+#: ai._RE_CACHE. Beim Aufteilen der Suite aendert sich die Reihenfolge, und dann
+#: entscheidet so ein Rest darueber, ob ein Test gruen ist.
+#: Form: (Modulname, Attributpfad ab dem Modul).
+WACHE_TIEF = (
+    ("economy", "instance._store"),
+    ("games", "instance._store"),
+    ("schulden", "instance._store"),
+    ("arbeit", "instance._store"),
+    ("handel", "instance._store"),
+    ("words", "instance._store"),
+    ("guildcfg", "instance._store"),
+    ("features", "_store"),
+    ("ai", "instance._RE_CACHE"),
+    ("ai", "instance._LEAD_CACHE"),
+    ("ai", "instance._client"),
+    ("music", "_resolve_track"),
+    ("music", "_send_panel"),
+    ("music", "_retire_panel"),
+)
 
 
 class Ergebnis:
@@ -82,7 +108,18 @@ class Lauf:
         doppelt = []
         for modulname in TESTDATEIEN:
             if not os.path.exists(f"{modulname}.py") and not os.path.isdir(modulname):
-                continue          # Datei gibt es (noch) nicht - in Ordnung
+                # Frueher stand hier ein stilles 'continue'. Das ist derselbe
+                # Fehler wie der verschluckte ImportError zwei Zeilen weiter
+                # unten, nur leiser: ein Tippfehler beim Aufteilen der Suite
+                # haette eine ganze Datei verschwinden lassen, und der Lauf
+                # haette trotzdem 'alles gruen' gemeldet. Ein Werkzeug, das
+                # Vollstaendigkeit behauptet, darf nie still weniger finden.
+                print(f"FEHLER: {modulname}.py steht in TESTDATEIEN, "
+                      f"existiert aber nicht.")
+                print("  Entweder ist die Datei weg oder der Name ist vertippt. "
+                      "Beides heisst:\n  hier fehlen Tests, und der Lauf waere "
+                      "gruen, ohne sie gefahren zu haben.")
+                raise SystemExit(2)
             try:
                 modul = importlib.import_module(modulname)
             except Exception as exc:  # noqa: BLE001
@@ -117,24 +154,55 @@ class Lauf:
 
     @staticmethod
     def _zustand():
-        """Die globalen An/Aus-Schalter, so wie sie GERADE stehen."""
+        """Was GERADE global gesetzt ist - Schalter und die tiefen Stellen."""
         stand = {}
         for modulname in WACHE:
             modul = sys.modules.get(modulname)
             inst = getattr(modul, "instance", None) if modul else None
             if inst is not None and hasattr(inst, "_enabled"):
-                stand[modulname] = inst._enabled
+                stand[f"{modulname}._enabled"] = (modulname, "instance._enabled",
+                                                  inst._enabled)
+        for modulname, pfad in WACHE_TIEF:
+            wert, da = Lauf._hole(modulname, pfad)
+            if da:
+                stand[f"{modulname}.{pfad}"] = (modulname, pfad, wert)
         return stand
 
     @staticmethod
+    def _hole(modulname, pfad):
+        """Wert hinter einem Attributpfad -> (wert, gefunden)."""
+        ding = sys.modules.get(modulname)
+        if ding is None:
+            return None, False
+        for stueck in pfad.split("."):
+            ding = getattr(ding, stueck, _FEHLT)
+            if ding is _FEHLT:
+                return None, False
+        return ding, True
+
+    @staticmethod
     def _zustand_zurueck(vorher):
-        """Stellt die Schalter wieder her. Gibt zurueck, was verstellt war."""
+        """Stellt alles wieder her. Gibt zurueck, WAS verstellt war.
+
+        Verglichen wird mit 'is' und nicht mit '==': ein _store ist ein Objekt,
+        und zwei verschiedene Stores koennen gleich aussehen und trotzdem auf
+        verschiedene Dateien zeigen. Bei den Schaltern (True/False) ist 'is'
+        genauso richtig.
+        """
         verstellt = []
-        for modulname, wert in vorher.items():
-            inst = getattr(sys.modules.get(modulname), "instance", None)
-            if inst is not None and inst._enabled != wert:
-                verstellt.append(modulname)
-                inst._enabled = wert
+        for schluessel, (modulname, pfad, wert) in vorher.items():
+            jetzt, da = Lauf._hole(modulname, pfad)
+            if not da or jetzt is wert:
+                continue
+            verstellt.append(schluessel)
+            ziel = sys.modules.get(modulname)
+            stuecke = pfad.split(".")
+            for stueck in stuecke[:-1]:
+                ziel = getattr(ziel, stueck, None)
+                if ziel is None:
+                    break
+            if ziel is not None:
+                setattr(ziel, stuecke[-1], wert)
         return verstellt
 
     def einer(self, name, fn, erg):
