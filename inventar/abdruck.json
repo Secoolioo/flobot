@@ -1,0 +1,5113 @@
+{
+ "_fehler": [],
+ "_runden": 3,
+ "_wackelig": [
+  "Handelsbuch",
+  "Schicht",
+  "avatar",
+  "daily",
+  "errate",
+  "lookup",
+  "quiz",
+  "woertle"
+ ],
+ "befehle": {
+  "Aura": [
+   {
+    "art": "text",
+    "text": "✨ **Rauchtester** — Aura: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "Bayrisch-Modus": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "Casino": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "Chad": [
+   {
+    "art": "text",
+    "text": "💪 **Rauchtester** — Chad: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "Kalorien": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "Keks": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "Kreide": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "Rakete": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Eigenes Ziel",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort. Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥",
+    "titel": "🚀 Crash"
+   }
+  ],
+  "Rizz": [
+   {
+    "art": "text",
+    "text": "😏 **Rauchtester** — Rizz: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "Sigma": [
+   {
+    "art": "text",
+    "text": "🗿 **Rauchtester** — Sigma: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "Turm": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "N Ebenen, je N Türen, N Bombe. Ganz oben warten ×ZEIT.",
+    "titel": "🗼 Tower"
+   }
+  ],
+  "absturz": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Eigenes Ziel",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort. Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥",
+    "titel": "🚀 Crash"
+   }
+  ],
+  "abzahl": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "abzahlen": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "aktie": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "aktien": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "aktienkurs": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": [
+     "_KursButton:Gesamt",
+     "_KursButton:N Tag",
+     "_KursButton:N Tage",
+     "_KursButton:N Tage"
+    ]
+   }
+  ],
+  "anagramm": [
+   {
+    "art": "text",
+    "text": "Wort entwirren: richtig in Ns = **×N**, N Versuche. Mit Einsatz: `Flo anagramm N` (auch `Nk`)."
+   }
+  ],
+  "anlegen": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "anschreiben": [
+   {
+    "art": "text",
+    "text": "Wer schuldet dir was? `Flo schuldschein @jemand Nk [Grund]`"
+   }
+  ],
+  "anziehen": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "arbeit": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "arbeiten": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "arbeitszeugnis": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": true,
+    "text": "🧻 **Praktikant** · +N % auf jeden Lohn",
+    "titel": "🧾 Lohnzettel · Rauchtester"
+   }
+  ],
+  "aufhoer": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "aufhör": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "aufraeum": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "aufräum": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "aura": [
+   {
+    "art": "text",
+    "text": "✨ **Rauchtester** — Aura: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "auszeit": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "automat": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz und drück **Drehen**! Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🎰 Slot-Machine"
+   }
+  ],
+  "baccarat": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Bank",
+     "Button:Spieler",
+     "Button:Tie",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Spieler** ×N · **Bank** ×ZEIT · **Tie** ×N (fremder Tie: Einsatz zurück).",
+    "titel": "🃏 Baccarat"
+   }
+  ],
+  "baierisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bairisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bakkarat": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Bank",
+     "Button:Spieler",
+     "Button:Tie",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Spieler** ×N · **Bank** ×ZEIT · **Tie** ×N (fremder Tie: Einsatz zurück).",
+    "titel": "🃏 Baccarat"
+   }
+  ],
+  "bal": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "balance": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "ban": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "bankrott": [
+   {
+    "art": "text",
+    "text": "Du hast gar keine Schulden. Genieß es. ✨"
+   }
+  ],
+  "bann": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "banne": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "banner": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "bayerisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bayrisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bestenliste": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
+    "titel": ""
+   }
+  ],
+  "bewerte": [
+   {
+    "art": "text",
+    "text": "📊 **Rauchtester** — Vibe: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "bilanz": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "**Rauchtester** hat noch keine Casino-Runde gespielt. `Flo casino` wartet. 🎰",
+    "titel": ""
+   }
+  ],
+  "bj": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Deal",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Deal**. Danach steuerst du mit **Karte / Stand / Double** – so nah wie möglich an N",
+    "titel": "🂡 Blackjack"
+   }
+  ],
+  "blackjack": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Deal",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Deal**. Danach steuerst du mit **Karte / Stand / Double** – so nah wie möglich an N",
+    "titel": "🂡 Blackjack"
+   }
+  ],
+  "boarisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "boirisch": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bomben": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Bomben",
+     "N Feld"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_MinesCountSelect:💣 Bomben wählen …"
+    ],
+    "text": "**Einsatz** und **Bombenzahl** wählen, dann **Start**. Jedes sichere Feld erhöht den Multiplikator – Cashout, bevor es knallt!",
+    "titel": "💣 Mines"
+   }
+  ],
+  "borg": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "borge": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "borgen": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "buy": [
+   {
+    "art": "text",
+    "text": "Welche Nummer? z. B. `Flo kaufen N` – oder öffne den `Flo shop` und nimm das Dropdown."
+   }
+  ],
+  "casino": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "chad": [
+   {
+    "art": "text",
+    "text": "💪 **Rauchtester** — Chad: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "chart": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": [
+     "_KursButton:Gesamt",
+     "_KursButton:N Tag",
+     "_KursButton:N Tage",
+     "_KursButton:N Tage"
+    ]
+   }
+  ],
+  "cleanup": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "clear": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "coinflip": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "coinlb": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "coins": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "config": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "connect": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
+    "titel": ""
+   }
+  ],
+  "crash": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Eigenes Ziel",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort. Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥",
+    "titel": "🚀 Crash"
+   }
+  ],
+  "dailyword": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "debt": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "debts": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "del": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "delete": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "dialekt": [
+   {
+    "art": "text",
+    "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "dice": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "disconnect": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "diss": [
+   {
+    "art": "text",
+    "text": "Rauchtester hat schon mal Tetris verloren – horizontal."
+   }
+  ],
+  "disst": [
+   {
+    "art": "text",
+    "text": "Rauchtester hat schon mal Tetris verloren – horizontal."
+   }
+  ],
+  "don": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "Jeder Wurf: **KOPF** verdoppelt den Pott, **ZAHL** nimmt alles. Maximal N Verdopplungen.",
+    "titel": "🪙 Doppelt oder nichts"
+   }
+  ],
+  "doppelt": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "Jeder Wurf: **KOPF** verdoppelt den Pott, **ZAHL** nimmt alles. Maximal N Verdopplungen.",
+    "titel": "🪙 Doppelt oder nichts"
+   }
+  ],
+  "duel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Wen forderst du heraus? `Flo duell @wer <einsatz>`",
+    "titel": ""
+   }
+  ],
+  "duell": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Wen forderst du heraus? `Flo duell @wer <einsatz>`",
+    "titel": ""
+   }
+  ],
+  "einstellung": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "einstellungen": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "entbann": [
+   {
+    "art": "text",
+    "text": "Welche ID entbannen? z. B. `Flo unban N`."
+   }
+  ],
+  "entknebel": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "entmute": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "entsperr": [
+   {
+    "art": "text",
+    "text": "Welche ID entbannen? z. B. `Flo unban N`."
+   }
+  ],
+  "entstumm": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "enttimeout": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "entwarn": [
+   {
+    "art": "text",
+    "text": "Wem eine Verwarnung erlassen? z. B. `Flo unwarn @name` (oder `... alle`)."
+   }
+  ],
+  "equip": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "feature": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "🟢 `ki` – KI-Chat 🟢 `music` – Musik 🟢 `games` – Spiele 🟢 `casino` – Casino 🟢 `economy` – Level & Coins 🟢 `floaktie` – FloCorp-Aktie 🟢 `lotto` – Monats-Lotto 🟢 `giveaway` – Giveaways 🟢 `merchant` – Fahrender Händler 🟢 `steal` – Coin-Raub 🟢 `arbeit` – Arbeit & Wordle 🟢 `handel` – Handelsbuch 🟢 `schulden` – Kreide-Tafel 🟢 `luxus` – Luxus & Thron 🟢 `terraria` – Terraria-Wiki 🟢 `media` – Bilder 🟢 `food`",
+    "titel": "🧩 Funktionen auf diesem Server"
+   }
+  ],
+  "features": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "🟢 `ki` – KI-Chat 🟢 `music` – Musik 🟢 `games` – Spiele 🟢 `casino` – Casino 🟢 `economy` – Level & Coins 🟢 `floaktie` – FloCorp-Aktie 🟢 `lotto` – Monats-Lotto 🟢 `giveaway` – Giveaways 🟢 `merchant` – Fahrender Händler 🟢 `steal` – Coin-Raub 🟢 `arbeit` – Arbeit & Wordle 🟢 `handel` – Handelsbuch 🟢 `schulden` – Kreide-Tafel 🟢 `luxus` – Luxus & Thron 🟢 `terraria` – Terraria-Wiki 🟢 `media` – Bilder 🟢 `food`",
+    "titel": "🧩 Funktionen auf diesem Server"
+   }
+  ],
+  "flip": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "floaktie": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "floaktien": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "floboerse": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "flokurs": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": [
+     "_KursButton:Gesamt",
+     "_KursButton:N Tag",
+     "_KursButton:N Tage",
+     "_KursButton:N Tage"
+    ]
+   }
+  ],
+  "flonyse": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "floshare": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "flostock": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Börsenwert",
+     "Aktionäre",
+     "Server-Aktivität",
+     "Dein Depot",
+     "Regeln, kurz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_InfoButton:Depot",
+     "_InfoButton:Top",
+     "_TradeButton:Kauf MAX",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Kauf N",
+     "_TradeButton:Verkauf N",
+     "_TradeButton:Verkauf alles"
+    ],
+    "text": "**Kurs:** N Flo Coins / Anteil 🟢▲ `▁▁` **N h:** +N% · **N Tage:** +N%",
+    "titel": "📈 FloCorp ($FLO)"
+   }
+  ],
+  "fortsetz": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Da ist nichts pausiert.",
+    "titel": ""
+   }
+  ],
+  "fortune": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "funktion": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "🟢 `ki` – KI-Chat 🟢 `music` – Musik 🟢 `games` – Spiele 🟢 `casino` – Casino 🟢 `economy` – Level & Coins 🟢 `floaktie` – FloCorp-Aktie 🟢 `lotto` – Monats-Lotto 🟢 `giveaway` – Giveaways 🟢 `merchant` – Fahrender Händler 🟢 `steal` – Coin-Raub 🟢 `arbeit` – Arbeit & Wordle 🟢 `handel` – Handelsbuch 🟢 `schulden` – Kreide-Tafel 🟢 `luxus` – Luxus & Thron 🟢 `terraria` – Terraria-Wiki 🟢 `media` – Bilder 🟢 `food`",
+    "titel": "🧩 Funktionen auf diesem Server"
+   }
+  ],
+  "funktionen": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "🟢 `ki` – KI-Chat 🟢 `music` – Musik 🟢 `games` – Spiele 🟢 `casino` – Casino 🟢 `economy` – Level & Coins 🟢 `floaktie` – FloCorp-Aktie 🟢 `lotto` – Monats-Lotto 🟢 `giveaway` – Giveaways 🟢 `merchant` – Fahrender Händler 🟢 `steal` – Coin-Raub 🟢 `arbeit` – Arbeit & Wordle 🟢 `handel` – Handelsbuch 🟢 `schulden` – Kreide-Tafel 🟢 `luxus` – Luxus & Thron 🟢 `terraria` – Terraria-Wiki 🟢 `media` – Bilder 🟢 `food`",
+    "titel": "🧩 Funktionen auf diesem Server"
+   }
+  ],
+  "gambling": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "gas": [
+   {
+    "art": "text",
+    "text": "Rauchtester betritt den Raum und die FPS steigen. Absolute Legende."
+   }
+  ],
+  "gehalt": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": true,
+    "text": "🧻 **Praktikant** · +N % auf jeden Lohn",
+    "titel": "🧾 Lohnzettel · Rauchtester"
+   }
+  ],
+  "geld": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "geldtop": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "gluecksrad": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Drehen** – das Rad entscheidet. Felder: N · ×N · ×N · ×N · ×N · ×N · ×N · ×N",
+    "titel": "🍀 Glücksrad"
+   }
+  ],
+  "gluecksspiel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "glücksrad": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Drehen** – das Rad entscheidet. Felder: N · ×N · ×N · ×N · ×N · ×N · ×N · ×N",
+    "titel": "🍀 Glücksrad"
+   }
+  ],
+  "glücksspiel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "griasdi": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "griaseich": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "griasgod": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "griaßdi": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "habidere": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "haendler": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "halt": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "handel": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "handelsbuch": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "heist": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "hilo": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "Nächste Karte **höher oder tiefer**? Jede richtige Antwort erhöht den Multiplikator – Cashout jederzeit.",
+    "titel": "🃏 HiLo"
+   }
+  ],
+  "histori": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "historie": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "history": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "hoehertiefer": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "Nächste Karte **höher oder tiefer**? Jede richtige Antwort erhöht den Multiplikator – Cashout jederzeit.",
+    "titel": "🃏 HiLo"
+   }
+  ],
+  "horoskop": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "hype": [
+   {
+    "art": "text",
+    "text": "Rauchtester betritt den Raum und die FPS steigen. Absolute Legende."
+   }
+  ],
+  "hyped": [
+   {
+    "art": "text",
+    "text": "Rauchtester betritt den Raum und die FPS steigen. Absolute Legende."
+   }
+  ],
+  "händler": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "höhertiefer": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "Nächste Karte **höher oder tiefer**? Jede richtige Antwort erhöht den Multiplikator – Cashout jederzeit.",
+    "titel": "🃏 HiLo"
+   }
+  ],
+  "insolvenz": [
+   {
+    "art": "text",
+    "text": "Du hast gar keine Schulden. Genieß es. ✨"
+   }
+  ],
+  "inv": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "inventar": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "inventory": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "iou": [
+   {
+    "art": "text",
+    "text": "Wer schuldet dir was? `Flo schuldschein @jemand Nk [Grund]`"
+   }
+  ],
+  "jackpot": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "job": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "join": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
+    "titel": ""
+   }
+  ],
+  "kalorien": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "kasino": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "kauf": [
+   {
+    "art": "text",
+    "text": "Welche Nummer? z. B. `Flo kaufen N` – oder öffne den `Flo shop` und nimm das Dropdown."
+   }
+  ],
+  "kaufen": [
+   {
+    "art": "text",
+    "text": "Welche Nummer? z. B. `Flo kaufen N` – oder öffne den `Flo shop` und nimm das Dropdown."
+   }
+  ],
+  "kcal": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "keks": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "keno": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Deine Zahlen (N/N)"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Spielen",
+     "Button:Zufall",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_NumberSelect:🔢 Zahlen N–N",
+     "_NumberSelect:🔢 Zahlen N–N"
+    ],
+    "text": "Wähle **Einsatz** und **N–N Zahlen** (N–N), dann **Spielen**. Es werden N Zahlen gezogen – je mehr Treffer, desto mehr Gewinn.",
+    "titel": "🎱 Keno"
+   }
+  ],
+  "kessel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Gerade",
+     "Button:N–N",
+     "Button:N–N",
+     "Button:Rot",
+     "Button:Schwarz",
+     "Button:Ungerade",
+     "Button:Zahl",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **worauf** du tippst – die Kugel rollt sofort. Außenwetten (Rot/Schwarz/…): ×N · eine exakte Zahl: ×N",
+    "titel": "🎡 Roulette"
+   }
+  ],
+  "kick": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "kicker": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "kicks": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "kickst": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "kickt": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "klau": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "klauen": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "knebel": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "komm": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
+    "titel": ""
+   }
+  ],
+  "konfig": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "konfiguration": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "konto": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "kontostand": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "kopfrechnen": [
+   {
+    "art": "text",
+    "text": "Kopfrechnen: richtig in Ns = **×N**. Mit Einsatz: `Flo mathe N` (auch `Nk`)."
+   }
+  ],
+  "kraemer": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "kramer": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "kredit": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "kreide": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "kreidetafel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "krämer": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "kurs": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": [
+     "_KursButton:Gesamt",
+     "_KursButton:N Tag",
+     "_KursButton:N Tage",
+     "_KursButton:N Tage"
+    ]
+   }
+  ],
+  "kursverlauf": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": [
+     "_KursButton:Gesamt",
+     "_KursButton:N Tag",
+     "_KursButton:N Tage",
+     "_KursButton:N Tage"
+    ]
+   }
+  ],
+  "laden": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [
+     "🟣 Highlight heute · Mythisch",
+     "Die Leiter"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Luxus",
+     "_ShopBuySelect:Titel kaufen…"
+    ],
+    "text": "Jeden Tag um **N Uhr** acht frische Titel. Je seltener, desto teurer – und desto **entspannter quatscht Flo** mit dir. Jeder Kauf bringt die **farbige Rolle** der Stufe. **Kaufen:** unten im Dropdown auswählen. 👇",
+    "titel": "🛒 Flo Shop — Titel des Tages"
+   }
+  ],
+  "lauter": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautr": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautst": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstaeke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstaerk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstaerke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstarke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautsterke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstrke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstärje": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstärk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautstärke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautsärcke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lautsärke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lb": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "leaderboard": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
+    "titel": ""
+   }
+  ],
+  "leave": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "leih": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "leihe": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "leihen": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "leise": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "leiser": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "level": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "liedtext": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Gerade läuft nichts. Sag `Flo lyrics <Künstler - Titel>` oder starte erst einen Song.",
+    "titel": "🎤 Lyrics"
+   }
+  ],
+  "liste": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Die Warteschlange ist leer – wirf was rein!",
+    "titel": "🎶 Warteschlange"
+   }
+  ],
+  "loesch": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "loeschen": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "lohn": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": true,
+    "text": "🧻 **Praktikant** · +N % auf jeden Lohn",
+    "titel": "🧾 Lohnzettel · Rauchtester"
+   }
+  ],
+  "lohnzettel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": true,
+    "text": "🧻 **Praktikant** · +N % auf jeden Lohn",
+    "titel": "🧾 Lohnzettel · Rauchtester"
+   }
+  ],
+  "los": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "lose": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "lottery": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "lotto": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "louder": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "ls": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lst": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lstk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lstrk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "lstrke": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "luxury": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🪙 Einstieg",
+     "💠 Oberklasse",
+     "🌌 Endgame",
+     "☄️ Jenseits der Milliarde",
+     "🎯 Nächstes Ziel",
+     "⚔️ DER THRON (Unikat)"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_LuxusSelect:🛍️ Was gönnst du dir?"
+    ],
+    "text": "Coins in **Status** verwandeln. Rahmen zieren deine Level-Karte, die Krone glänzt im Leaderboard – und ganz oben endet die Leiter im **MULTIVERSUM**. ▱▱▱▱▱▱▱▱▱▱▱▱ **N/N** Stufen",
+    "titel": "🏆 Flo Luxus"
+   }
+  ],
+  "luxus": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🪙 Einstieg",
+     "💠 Oberklasse",
+     "🌌 Endgame",
+     "☄️ Jenseits der Milliarde",
+     "🎯 Nächstes Ziel",
+     "⚔️ DER THRON (Unikat)"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_LuxusSelect:🛍️ Was gönnst du dir?"
+    ],
+    "text": "Coins in **Status** verwandeln. Rahmen zieren deine Level-Karte, die Krone glänzt im Leaderboard – und ganz oben endet die Leiter im **MULTIVERSUM**. ▱▱▱▱▱▱▱▱▱▱▱▱ **N/N** Stufen",
+    "titel": "🏆 Flo Luxus"
+   }
+  ],
+  "lvl": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "lyric": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Gerade läuft nichts. Sag `Flo lyrics <Künstler - Titel>` oder starte erst einen Song.",
+    "titel": "🎤 Lyrics"
+   }
+  ],
+  "lyrics": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Gerade läuft nichts. Sag `Flo lyrics <Künstler - Titel>` oder starte erst einen Song.",
+    "titel": "🎤 Lyrics"
+   }
+  ],
+  "lösch": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "löschen": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "makro": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "makros": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "malochen": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "mathe": [
+   {
+    "art": "text",
+    "text": "Kopfrechnen: richtig in Ns = **×N**. Mit Einsatz: `Flo mathe N` (auch `Nk`)."
+   }
+  ],
+  "meme": [
+   {
+    "art": "text",
+    "text": "Was soll das Zitat sein? z. B. `Flo quote Pizza ist Leben`, `Flo quote @wer Ich liebe Montage` - oder antworte mit `Flo quote` auf eine Nachricht."
+   }
+  ],
+  "merchant": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "mine": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Bomben",
+     "N Feld"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_MinesCountSelect:💣 Bomben wählen …"
+    ],
+    "text": "**Einsatz** und **Bombenzahl** wählen, dann **Start**. Jedes sichere Feld erhöht den Multiplikator – Cashout, bevor es knallt!",
+    "titel": "💣 Mines"
+   }
+  ],
+  "minen": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Bomben",
+     "N Feld"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_MinesCountSelect:💣 Bomben wählen …"
+    ],
+    "text": "**Einsatz** und **Bombenzahl** wählen, dann **Start**. Jedes sichere Feld erhöht den Multiplikator – Cashout, bevor es knallt!",
+    "titel": "💣 Mines"
+   }
+  ],
+  "mines": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Bomben",
+     "N Feld"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_MinesCountSelect:💣 Bomben wählen …"
+    ],
+    "text": "**Einsatz** und **Bombenzahl** wählen, dann **Start**. Jedes sichere Feld erhöht den Multiplikator – Cashout, bevor es knallt!",
+    "titel": "💣 Mines"
+   }
+  ],
+  "minesweeper": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz",
+     "Bomben",
+     "N Feld"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …",
+     "_MinesCountSelect:💣 Bomben wählen …"
+    ],
+    "text": "**Einsatz** und **Bombenzahl** wählen, dann **Start**. Jedes sichere Feld erhöht den Multiplikator – Cashout, bevor es knallt!",
+    "titel": "💣 Mines"
+   }
+  ],
+  "module": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "🟢 `ki` – KI-Chat 🟢 `music` – Musik 🟢 `games` – Spiele 🟢 `casino` – Casino 🟢 `economy` – Level & Coins 🟢 `floaktie` – FloCorp-Aktie 🟢 `lotto` – Monats-Lotto 🟢 `giveaway` – Giveaways 🟢 `merchant` – Fahrender Händler 🟢 `steal` – Coin-Raub 🟢 `arbeit` – Arbeit & Wordle 🟢 `handel` – Handelsbuch 🟢 `schulden` – Kreide-Tafel 🟢 `luxus` – Luxus & Thron 🟢 `terraria` – Terraria-Wiki 🟢 `media` – Bilder 🟢 `food`",
+    "titel": "🧩 Funktionen auf diesem Server"
+   }
+  ],
+  "moneytop": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "muenze": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "muenzen": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "muenzwurf": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "mute": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "muten": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "münze": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "münzen": [
+   {
+    "art": "text",
+    "text": "💰 Du hast **N Flo Coins**."
+   }
+  ],
+  "münzwurf": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Kopf",
+     "Button:Zahl",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz, dann tippe **Kopf** oder **Zahl**. Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🪙 Münzwurf"
+   }
+  ],
+  "nachschlagen": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "naechst": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "naehrwert": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "naehrwerte": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "next": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "nochmal": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "nochmals": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "nuke": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "nächst": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "nährwert": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "nährwerte": [
+   {
+    "art": "text",
+    "text": "Haeng ein Foto von deinem Essen an (oder antworte auf eins) - dann sag ich dir Kalorien & Naehrwerte. z. B. `Flo kalorien` + Bild."
+   }
+  ],
+  "pause": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "pausier": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "pay": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ],
+  "pfiadi": [
+   {
+    "art": "text",
+    "text": "Pfiat di Gott, mach's guad!"
+   }
+  ],
+  "pfiati": [
+   {
+    "art": "text",
+    "text": "Pfiat di Gott, mach's guad!"
+   }
+  ],
+  "pfp": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "playlistverlauf": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "pleite": [
+   {
+    "art": "text",
+    "text": "Du hast gar keine Schulden. Genieß es. ✨"
+   }
+  ],
+  "prestige": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🪙 Einstieg",
+     "💠 Oberklasse",
+     "🌌 Endgame",
+     "☄️ Jenseits der Milliarde",
+     "🎯 Nächstes Ziel",
+     "⚔️ DER THRON (Unikat)"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_LuxusSelect:🛍️ Was gönnst du dir?"
+    ],
+    "text": "Coins in **Status** verwandeln. Rahmen zieren deine Level-Karte, die Krone glänzt im Leaderboard – und ganz oben endet die Leiter im **MULTIVERSUM**. ▱▱▱▱▱▱▱▱▱▱▱▱ **N/N** Stufen",
+    "titel": "🏆 Flo Luxus"
+   }
+  ],
+  "privatinsolvenz": [
+   {
+    "art": "text",
+    "text": "Du hast gar keine Schulden. Genieß es. ✨"
+   }
+  ],
+  "profil": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "profilbanner": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "profilbild": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "profile": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "props": [
+   {
+    "art": "text",
+    "text": "Rauchtester betritt den Raum und die FPS steigen. Absolute Legende."
+   }
+  ],
+  "punto": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Bank",
+     "Button:Spieler",
+     "Button:Tie",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Spieler** ×N · **Bank** ×ZEIT · **Tie** ×N (fremder Tie: Einsatz zurück).",
+    "titel": "🃏 Baccarat"
+   }
+  ],
+  "purge": [
+   {
+    "art": "text",
+    "text": "Hier kann ich nichts löschen."
+   }
+  ],
+  "queue": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Die Warteschlange ist leer – wirf was rein!",
+    "titel": "🎶 Warteschlange"
+   }
+  ],
+  "quieter": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht jetzt auf **N%**.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "quizduel": [
+   {
+    "art": "text",
+    "text": "So: `Flo quizduell @wer N` – schnellste richtige Antwort gewinnt."
+   }
+  ],
+  "quizduell": [
+   {
+    "art": "text",
+    "text": "So: `Flo quizduell @wer N` – schnellste richtige Antwort gewinnt."
+   }
+  ],
+  "quizzz": [
+   {
+    "art": "text",
+    "text": "Hier läuft schon ein Quiz - erst antworten! 🤓"
+   }
+  ],
+  "quote": [
+   {
+    "art": "text",
+    "text": "Was soll das Zitat sein? z. B. `Flo quote Pizza ist Leben`, `Flo quote @wer Ich liebe Montage` - oder antworte mit `Flo quote` auf eine Nachricht."
+   }
+  ],
+  "rad": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Drehen** – das Rad entscheidet. Felder: N · ×N · ×N · ×N · ×N · ×N · ×N · ×N",
+    "titel": "🍀 Glücksrad"
+   }
+  ],
+  "rakete": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Eigenes Ziel",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort. Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥",
+    "titel": "🚀 Crash"
+   }
+  ],
+  "random": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "knoepfe": [
+     "_RandomGenreSelect:Welches Genre? 🎧"
+    ],
+    "text": "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen Song raus und leg ihn im Voice auf. _(Du musst dafür in einem Sprachkanal sein.)_",
+    "titel": "🎲 Zufalls-Song"
+   }
+  ],
+  "rang": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "rangliste": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
+    "titel": ""
+   }
+  ],
+  "rank": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "rate": [
+   {
+    "art": "text",
+    "text": "📊 **Rauchtester** — Vibe: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "raten": [
+   {
+    "art": "text",
+    "text": "Hier läuft schon eine Raterunde - rate weiter! 🔢"
+   }
+  ],
+  "raub": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "rauben": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "raus": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "rausschmeis": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "rausschmeiss": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "rausschmeiß": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "rauswerf": [
+   {
+    "art": "text",
+    "text": "Wen rauswerfen? z. B. `Flo kick @name Grund`."
+   }
+  ],
+  "reaktion": [
+   {
+    "art": "text",
+    "text": "Sobald der Button rot wird: klicken! <N ms = ×N <N ms = ×N <N ms = ×N Mit Einsatz: `Flo reaktion N` (auch `Nk`)."
+   }
+  ],
+  "reaktionstest": [
+   {
+    "art": "text",
+    "text": "Sobald der Button rot wird: klicken! <N ms = ×N <N ms = ×N <N ms = ×N Mit Einsatz: `Flo reaktion N` (auch `Nk`)."
+   }
+  ],
+  "rechnen": [
+   {
+    "art": "text",
+    "text": "Kopfrechnen: richtig in Ns = **×N**. Mit Einsatz: `Flo mathe N` (auch `Nk`)."
+   }
+  ],
+  "reflex": [
+   {
+    "art": "text",
+    "text": "Sobald der Button rot wird: klicken! <N ms = ×N <N ms = ×N <N ms = ×N Mit Einsatz: `Flo reaktion N` (auch `Nk`)."
+   }
+  ],
+  "reich": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "reichste": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "reichtum": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "repeat": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "replay": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "resume": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Da ist nichts pausiert.",
+    "titel": ""
+   }
+  ],
+  "rizz": [
+   {
+    "art": "text",
+    "text": "😏 **Rauchtester** — Rizz: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "rizzler": [
+   {
+    "art": "text",
+    "text": "😏 **Rauchtester** — Rizz: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "roast": [
+   {
+    "art": "text",
+    "text": "Rauchtester hat schon mal Tetris verloren – horizontal."
+   }
+  ],
+  "rocket": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Eigenes Ziel",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "Button:N×",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Ziel-Faktor** – die Rakete startet sofort. Erreicht sie dein Ziel, kassierst du Einsatz × Faktor. Sonst weg. 💥",
+    "titel": "🚀 Crash"
+   }
+  ],
+  "roesten": [
+   {
+    "art": "text",
+    "text": "Rauchtester hat schon mal Tetris verloren – horizontal."
+   }
+  ],
+  "roll": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "roul": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Gerade",
+     "Button:N–N",
+     "Button:N–N",
+     "Button:Rot",
+     "Button:Schwarz",
+     "Button:Ungerade",
+     "Button:Zahl",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **worauf** du tippst – die Kugel rollt sofort. Außenwetten (Rot/Schwarz/…): ×N · eine exakte Zahl: ×N",
+    "titel": "🎡 Roulette"
+   }
+  ],
+  "roulette": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Gerade",
+     "Button:N–N",
+     "Button:N–N",
+     "Button:Rot",
+     "Button:Schwarz",
+     "Button:Ungerade",
+     "Button:Zahl",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **worauf** du tippst – die Kugel rollt sofort. Außenwetten (Rot/Schwarz/…): ×N · eine exakte Zahl: ×N",
+    "titel": "🎡 Roulette"
+   }
+  ],
+  "rps": [
+   {
+    "art": "text",
+    "text": "Womit? `Flo ssp schere` (oder stein/papier)."
+   }
+  ],
+  "rubbel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Rubbeln",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Rubbeln**. Drei gleiche Symbole in einer **Reihe** gewinnen – je edler das Symbol, desto fetter der Faktor (bis ×N).",
+    "titel": "🎫 Rubbellos"
+   }
+  ],
+  "rubbellos": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Rubbeln",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Rubbeln**. Drei gleiche Symbole in einer **Reihe** gewinnen – je edler das Symbol, desto fetter der Faktor (bis ×N).",
+    "titel": "🎫 Rubbellos"
+   }
+  ],
+  "rösten": [
+   {
+    "art": "text",
+    "text": "Rauchtester hat schon mal Tetris verloren – horizontal."
+   }
+  ],
+  "schein": [
+   {
+    "art": "text",
+    "text": "Wer schuldet dir was? `Flo schuldschein @jemand Nk [Grund]`"
+   }
+  ],
+  "schicht": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "schnickschnack": [
+   {
+    "art": "text",
+    "text": "Womit? `Flo ssp schere` (oder stein/papier)."
+   }
+  ],
+  "schuld": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "schulden": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "schuldenbuch": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "schuldschein": [
+   {
+    "art": "text",
+    "text": "Wer schuldet dir was? `Flo schuldschein @jemand Nk [Grund]`"
+   }
+  ],
+  "scratch": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Rubbeln",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Rubbeln**. Drei gleiche Symbole in einer **Reihe** gewinnen – je edler das Symbol, desto fetter der Faktor (bis ×N).",
+    "titel": "🎫 Rubbellos"
+   }
+  ],
+  "seas": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "sers": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "servas": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "servereinstellungen": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "servus": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "settings": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Ansprache",
+     "Kanäle",
+     "Musik",
+     "Arbeit",
+     "Spiel",
+     "Verhalten",
+     "Voice",
+     "Moderation"
+    ],
+    "fuss": true,
+    "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
+    "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "setze": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "shop": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [
+     "🟣 Highlight heute · Mythisch",
+     "Die Leiter"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Luxus",
+     "_ShopBuySelect:Titel kaufen…"
+    ],
+    "text": "Jeden Tag um **N Uhr** acht frische Titel. Je seltener, desto teurer – und desto **entspannter quatscht Flo** mit dir. Jeder Kauf bringt die **farbige Rolle** der Stufe. **Kaufen:** unten im Dropdown auswählen. 👇",
+    "titel": "🛒 Flo Shop — Titel des Tages"
+   }
+  ],
+  "sieben": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Genau N",
+     "Button:Unter N",
+     "Button:Über N",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "N Würfel. **Unter/Über N** zahlt ×N · **genau N** zahlt ×N",
+    "titel": "🎲 Sieben"
+   }
+  ],
+  "siebzehnundvier": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Deal",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Deal**. Danach steuerst du mit **Karte / Stand / Double** – so nah wie möglich an N",
+    "titel": "🂡 Blackjack"
+   }
+  ],
+  "sigma": [
+   {
+    "art": "text",
+    "text": "🗿 **Rauchtester** — Sigma: **N/N** `██░░░░░░░░`"
+   }
+  ],
+  "skip": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "slot": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz und drück **Drehen**! Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🎰 Slot-Machine"
+   }
+  ],
+  "slots": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz und drück **Drehen**! Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🎰 Slot-Machine"
+   }
+  ],
+  "songtext": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Gerade läuft nichts. Sag `Flo lyrics <Künstler - Titel>` oder starte erst einen Song.",
+    "titel": "🎤 Lyrics"
+   }
+  ],
+  "songverlauf": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "sperr": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "sperre": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "sperrt": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "spielautomat": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_GameBetSelect:Einsatz wählen…"
+    ],
+    "text": "Wähle deinen Einsatz und drück **Drehen**! Aktueller Einsatz: ohne Einsatz (nur Spaß)",
+    "titel": "🎰 Slot-Machine"
+   }
+  ],
+  "spielbank": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "🂡 Blackjack",
+     "🚀 Crash",
+     "🎱 Keno",
+     "🎡 Roulette",
+     "💣 Mines",
+     "🍀 Glücksrad",
+     "🎫 Rubbellos",
+     "🃏 HiLo",
+     "🗼 Tower",
+     "🎲 Sieben",
+     "🃏 Baccarat",
+     "🪙 D.O.N.",
+     "⚔️ Duell",
+     "📊 Bilanz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Baccarat",
+     "Button:Bilanz",
+     "Button:Blackjack",
+     "Button:Crash",
+     "Button:D.O.N.",
+     "Button:Glücksrad",
+     "Button:HiLo",
+     "Button:Keno",
+     "Button:Mines",
+     "Button:Roulette",
+     "Button:Rubbellos",
+     "Button:Sieben",
+     "Button:Tower"
+    ],
+    "text": "Setze deine **Flo Coins** und versuch dein Glück. Tippe unten einfach auf ein **Spiel** – der Rest geht per Button & Formular. 👇",
+    "titel": "🎰 Flo Casino"
+   }
+  ],
+  "spruch": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "ssp": [
+   {
+    "art": "text",
+    "text": "Womit? `Flo ssp schere` (oder stein/papier)."
+   }
+  ],
+  "sss": [
+   {
+    "art": "text",
+    "text": "Womit? `Flo ssp schere` (oder stein/papier)."
+   }
+  ],
+  "statistik": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "**Rauchtester** hat noch keine Casino-Runde gespielt. `Flo casino` wartet. 🎰",
+    "titel": ""
+   }
+  ],
+  "statistiken": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "**Rauchtester** hat noch keine Casino-Runde gespielt. `Flo casino` wartet. 🎰",
+    "titel": ""
+   }
+  ],
+  "stats": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "**Rauchtester** hat noch keine Casino-Runde gespielt. `Flo casino` wartet. 🎰",
+    "titel": ""
+   }
+  ],
+  "steal": [
+   {
+    "art": "text",
+    "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
+   }
+  ],
+  "steckbrief": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "stop": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "stopp": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "store": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [
+     "🟣 Highlight heute · Mythisch",
+     "Die Leiter"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Luxus",
+     "_ShopBuySelect:Titel kaufen…"
+    ],
+    "text": "Jeden Tag um **N Uhr** acht frische Titel. Je seltener, desto teurer – und desto **entspannter quatscht Flo** mit dir. Jeder Kauf bringt die **farbige Rolle** der Stufe. **Kaufen:** unten im Dropdown auswählen. 👇",
+    "titel": "🛒 Flo Shop — Titel des Tages"
+   }
+  ],
+  "stumm": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "taeglich": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Serie",
+     "Morgen gibt's"
+    ],
+    "fuss": true,
+    "text": "Deinen Tagesbonus hast du für heute schon kassiert. **Morgen** wieder – und lass die Serie nicht reißen!",
+    "titel": "🕒 Heute schon abgeholt"
+   }
+  ],
+  "tagesbonus": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Serie",
+     "Morgen gibt's"
+    ],
+    "fuss": true,
+    "text": "Deinen Tagesbonus hast du für heute schon kassiert. **Morgen** wieder – und lass die Serie nicht reißen!",
+    "titel": "🕒 Heute schon abgeholt"
+   }
+  ],
+  "tagesraetsel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "tagesrätsel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "tageswordle": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "tageswort": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "terra": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "Frag mich alles zu Terraria - ich zieh's live aus dem Wiki. Zum Beispiel: `Flo terraria Plantera` `Flo terraria wie besiege ich den Wall of Flesh?` `Flo terraria Zenith` 💡 **Wusstest du?** Der Wall of Flesh laesst die Welt in den Hardmode kippen - danach ist nichts mehr wie vorher.",
+    "titel": "🌳 Terraria-Wiki"
+   }
+  ],
+  "terraria": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "Frag mich alles zu Terraria - ich zieh's live aus dem Wiki. Zum Beispiel: `Flo terraria Plantera` `Flo terraria wie besiege ich den Wall of Flesh?` `Flo terraria Zenith` 💡 **Wusstest du?** Der Wall of Flesh laesst die Welt in den Hardmode kippen - danach ist nichts mehr wie vorher.",
+    "titel": "🌳 Terraria-Wiki"
+   }
+  ],
+  "terrariawiki": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "Frag mich alles zu Terraria - ich zieh's live aus dem Wiki. Zum Beispiel: `Flo terraria Plantera` `Flo terraria wie besiege ich den Wall of Flesh?` `Flo terraria Zenith` 💡 **Wusstest du?** Der Wall of Flesh laesst die Welt in den Hardmode kippen - danach ist nichts mehr wie vorher.",
+    "titel": "🌳 Terraria-Wiki"
+   }
+  ],
+  "thron": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Erobern"
+    ],
+    "text": "Der Thron ist **UNBESETZT**! Erster Preis: **N** Flo Coins. Es gibt nur **einen**. Jede Eroberung macht ihn **N% teurer** - und der alte Besitzer geht leer aus. 😈 Der Herrscher glänzt im Leaderboard und wird von Flo wie Adel behandelt.",
+    "titel": "⚔️ DER THRON"
+   }
+  ],
+  "throne": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Erobern"
+    ],
+    "text": "Der Thron ist **UNBESETZT**! Erster Preis: **N** Flo Coins. Es gibt nur **einen**. Jede Eroberung macht ihn **N% teurer** - und der alte Besitzer geht leer aus. 😈 Der Herrscher glänzt im Leaderboard und wird von Flo wie Adel behandelt.",
+    "titel": "⚔️ DER THRON"
+   }
+  ],
+  "tilg": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "tilge": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "tilgen": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "time-out": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "timeout": [
+   {
+    "art": "text",
+    "text": "Wen für wie lange? z. B. `Flo timeout @name Nm Spam`."
+   }
+  ],
+  "titel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "title": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "titles": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Noch leer"
+    ],
+    "fuss": false,
+    "text": "Getragener Titel: **—**",
+    "titel": "🎒 Inventar von Rauchtester"
+   }
+  ],
+  "top": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
+    "titel": ""
+   }
+  ],
+  "tower": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "N Ebenen, je N Türen, N Bombe. Ganz oben warten ×ZEIT.",
+    "titel": "🗼 Tower"
+   }
+  ],
+  "trader": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "trades": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "trage": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "tragen": [
+   {
+    "art": "text",
+    "text": "Welchen Titel? Öffne `Flo inventar` und wähl ihn im Dropdown (oder `Flo titel ab` zum Ablegen)."
+   }
+  ],
+  "transaktion": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "transaktionen": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "trivia": [
+   {
+    "art": "text",
+    "text": "Hier läuft schon ein Quiz - erst antworten! 🤓"
+   }
+  ],
+  "turm": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Start",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "N Ebenen, je N Türen, N Bombe. Ganz oben warten ×ZEIT.",
+    "titel": "🗼 Tower"
+   }
+  ],
+  "twiki": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": true,
+    "text": "Frag mich alles zu Terraria - ich zieh's live aus dem Wiki. Zum Beispiel: `Flo terraria Plantera` `Flo terraria wie besiege ich den Wall of Flesh?` `Flo terraria Zenith` 💡 **Wusstest du?** Der Wall of Flesh laesst die Welt in den Hardmode kippen - danach ist nichts mehr wie vorher.",
+    "titel": "🌳 Terraria-Wiki"
+   }
+  ],
+  "täglich": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Serie",
+     "Morgen gibt's"
+    ],
+    "fuss": true,
+    "text": "Deinen Tagesbonus hast du für heute schon kassiert. **Morgen** wieder – und lass die Serie nicht reißen!",
+    "titel": "🕒 Heute schon abgeholt"
+   }
+  ],
+  "ueberrasch": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "knoepfe": [
+     "_RandomGenreSelect:Welches Genre? 🎧"
+    ],
+    "text": "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen Song raus und leg ihn im Voice auf. _(Du musst dafür in einem Sprachkanal sein.)_",
+    "titel": "🎲 Zufalls-Song"
+   }
+  ],
+  "ueberspring": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "ueberspringen": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "ueberweis": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ],
+  "unban": [
+   {
+    "art": "text",
+    "text": "Welche ID entbannen? z. B. `Flo unban N`."
+   }
+  ],
+  "unbann": [
+   {
+    "art": "text",
+    "text": "Welche ID entbannen? z. B. `Flo unban N`."
+   }
+  ],
+  "unmute": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "unmuten": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "untimeout": [
+   {
+    "art": "text",
+    "text": "Wem den Timeout abnehmen? z. B. `Flo untimeout @name`."
+   }
+  ],
+  "unwarn": [
+   {
+    "art": "text",
+    "text": "Wem eine Verwarnung erlassen? z. B. `Flo unwarn @name` (oder `... alle`)."
+   }
+  ],
+  "userinfo": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "verbann": [
+   {
+    "art": "text",
+    "text": "Wen bannen? z. B. `Flo ban @name Grund` (oder per ID)."
+   }
+  ],
+  "verbinde": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
+    "titel": ""
+   }
+  ],
+  "verkauf": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "verkaufe": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "verlass": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": "🕘 Musik-Verlauf"
+   }
+  ],
+  "verlasse": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich bin gerade in keinem Sprachkanal.",
+    "titel": ""
+   }
+  ],
+  "verlauf": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "verleih": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "verleihe": [
+   {
+    "art": "text",
+    "text": "Wem willst du etwas leihen? `Flo leih @jemand Nk [Grund] [bis freitag]`"
+   }
+  ],
+  "vermoegen": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "vermögen": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "verwarn": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "verwarnungen": [
+   {
+    "art": "text",
+    "text": "Von wem die Verwarnungen? z. B. `Flo warns @name`."
+   }
+  ],
+  "verzeih": [
+   {
+    "art": "text",
+    "text": "Wem eine Verwarnung erlassen? z. B. `Flo unwarn @name` (oder `... alle`)."
+   }
+  ],
+  "vol": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "volume": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
+    "titel": "🔊 Lautstärke"
+   }
+  ],
+  "w6": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "wanderhaendler": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "wanderhändler": [
+   {
+    "art": "text",
+    "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
+   }
+  ],
+  "warn": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "warnings": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "warnliste": [
+   {
+    "art": "text",
+    "text": "Von wem die Verwarnungen? z. B. `Flo warns @name`."
+   }
+  ],
+  "warns": [
+   {
+    "art": "text",
+    "text": "Von wem die Verwarnungen? z. B. `Flo warns @name`."
+   }
+  ],
+  "warnst": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "warnt": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "warnungen": [
+   {
+    "art": "text",
+    "text": "Von wem die Verwarnungen? z. B. `Flo warns @name`."
+   }
+  ],
+  "warteschlange": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Die Warteschlange ist leer – wirf was rein!",
+    "titel": "🎶 Warteschlange"
+   }
+  ],
+  "weisheit": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "weiter": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Da ist nichts pausiert.",
+    "titel": ""
+   }
+  ],
+  "weiterspiel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Da ist nichts pausiert.",
+    "titel": ""
+   }
+  ],
+  "werk": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
+    "titel": ""
+   }
+  ],
+  "wheel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Einsatz"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "Button:Drehen",
+     "_BetSelect:💰 Einsatz wählen …"
+    ],
+    "text": "**Einsatz** wählen, dann **Drehen** – das Rad entscheidet. Felder: N · ×N · ×N · ×N · ×N · ×N · ×N · ×N",
+    "titel": "🍀 Glücksrad"
+   }
+  ],
+  "whois": [
+   {
+    "art": "text",
+    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+   }
+  ],
+  "wiederhol": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "wiederhole": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "wiederholen": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "wiederholst": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
+    "titel": ""
+   }
+  ],
+  "wisdom": [
+   {
+    "art": "text",
+    "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
+   }
+  ],
+  "woerter": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "word": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wordcount": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "worddaily": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "wordel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "wordl": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "wordle": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "words": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "work": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "worlde": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "wort": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wortdestages": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Heute ist noch kein Wort gefallen. Ich lege es raus, sobald mindestens **N Leute** im Voice sind.",
+    "titel": ""
+   }
+  ],
+  "worte": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wortle": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "wortsalat": [
+   {
+    "art": "text",
+    "text": "Wort entwirren: richtig in Ns = **×N**, N Versuche. Mit Einsatz: `Flo anagramm N` (auch `Nk`)."
+   }
+  ],
+  "wortzaehler": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wortzähler": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wuerfel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "wuerfeln": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "wörtel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "wörter": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Noch nichts gezählt. ⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen wachsen eventuell noch.*",
+    "titel": "📊 Flo Wörter"
+   }
+  ],
+  "wörtle": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "⏳ Kurz warten – noch **N Minuten**.",
+    "titel": ""
+   }
+  ],
+  "würfel": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "würfeln": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": true,
+    "felder": [],
+    "fuss": false,
+    "text": "Du würfelst eine **N** (WN).",
+    "titel": "🎲 Würfel"
+   }
+  ],
+  "zahl": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ],
+  "zahle": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ],
+  "zahlenraten": [
+   {
+    "art": "text",
+    "text": "Hier läuft schon eine Raterunde - rate weiter! 🔢"
+   }
+  ],
+  "zefix": [
+   {
+    "art": "text",
+    "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "zettel": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Kreditwürdigkeit"
+    ],
+    "fuss": true,
+    "text": "🟢 Blitzsauber: du hast mit niemandem etwas offen. ✨",
+    "titel": "🧾 Dein Schuldbuch"
+   }
+  ],
+  "ziehung": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [
+     "Deine Lose",
+     "Lose gesamt",
+     "Ziehung in",
+     "So läuft's"
+    ],
+    "fuss": true,
+    "knoepfe": [
+     "_BuyButton:N Los",
+     "_BuyButton:N Lose",
+     "_BuyButton:N Lose",
+     "_MaxButton:Max"
+    ],
+    "text": "**💰 Jackpot:** N Flo Coins **🎟️ Lospreis:** N Flo Coins **🍀 Chance pro Los:** ZEIT% (extrem selten!) *Ein Los ist ein Traum auf Papier. 🎟️*",
+    "titel": "🎰 Monats-Lotto"
+   }
+  ],
+  "zitat": [
+   {
+    "art": "text",
+    "text": "Was soll das Zitat sein? z. B. `Flo quote Pizza ist Leben`, `Flo quote @wer Ich liebe Montage` - oder antworte mit `Flo quote` auf eine Nachricht."
+   }
+  ],
+  "zufall": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "knoepfe": [
+     "_RandomGenreSelect:Welches Genre? 🎧"
+    ],
+    "text": "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen Song raus und leg ihn im Voice auf. _(Du musst dafür in einem Sprachkanal sein.)_",
+    "titel": "🎲 Zufalls-Song"
+   }
+  ],
+  "zufallssong": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "knoepfe": [
+     "_RandomGenreSelect:Welches Genre? 🎧"
+    ],
+    "text": "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen Song raus und leg ihn im Voice auf. _(Du musst dafür in einem Sprachkanal sein.)_",
+    "titel": "🎲 Zufalls-Song"
+   }
+  ],
+  "zurueckzahlen": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "zurückzahlen": [
+   {
+    "art": "text",
+    "text": "Bei wem willst du tilgen? `Flo tilg @jemand [betrag]`"
+   }
+  ],
+  "überrasch": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "knoepfe": [
+     "_RandomGenreSelect:Welches Genre? 🎧"
+    ],
+    "text": "Bock auf Zufall? 🎲 Wähl unten dein **Genre** – ich kram dir einen Song raus und leg ihn im Voice auf. _(Du musst dafür in einem Sprachkanal sein.)_",
+    "titel": "🎲 Zufalls-Song"
+   }
+  ],
+  "überspring": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "überspringen": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts.",
+    "titel": ""
+   }
+  ],
+  "überweis": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ],
+  "überweise": [
+   {
+    "art": "text",
+    "text": "So geht's: `Flo pay @jemand N`"
+   }
+  ]
+ },
+ "zaehlung": {
+  "befragt": 480,
+  "stabil": 472,
+  "wackelig": 8
+ }
+}

@@ -14778,6 +14778,33 @@ def test_inventar_hat_nichts_verloren():
         + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
 
 
+def test_abdruck_flo_antwortet_noch_genauso():
+    """Die Bedingung des Betreibers, nachpruefbar gemacht.
+
+    Das Inventar sagt, WELCHE Befehle es gibt. Das reicht nicht: ein Modul kann
+    nach dem Verschieben weiterhin auf 'flo level' reagieren und trotzdem eine
+    andere Ueberschrift, andere Felder oder keine Knoepfe mehr schicken. Inventar
+    gruen, Testlauf gruen - und im Discord sieht es anders aus.
+
+    werkzeug/abdruck.py nimmt darum die FORM jeder Antwort auf (Typ, Titel,
+    Feldnamen, Knopfbeschriftungen, Textgeruest) und vergleicht sie. Was nicht
+    reproduzierbar ist (Wuerfel, Uhrzeit), hat das Werkzeug selbst gemessen und
+    aussortiert - 472 von 480 Befehlen sind stabil.
+    """
+    import subprocess
+
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.exists(os.path.join(wurzel, "inventar", "abdruck.json")):
+        return          # noch kein Abdruck aufgenommen
+    lauf = subprocess.run(
+        [sys.executable, os.path.join("werkzeug", "abdruck.py"), "--vergleiche",
+         "--leise"],
+        cwd=wurzel, capture_output=True, text=True, timeout=900)
+    assert lauf.returncode == 0, (
+        "Flo antwortet woanders anders als vorher:\n"
+        + (lauf.stdout or "")[-4000:] + (lauf.stderr or "")[-1500:])
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():
