@@ -315,13 +315,35 @@ class Economy(FeatureBasis):
             pass
 
     async def _flush(self):
+        """Speichern anmelden - nicht sofort schreiben.
+
+        economy ist der heisseste Store im Bot: 14 Stellen hier drin und
+        mehrere andere Module rufen das nach jeder Coin- und XP-Bewegung. Jedes
+        save() serialisiert die ganze Datei synchron im Event-Loop, bei 3.000
+        Nutzern rund 20 ms. Eine Casino-Runde mit 30 Buchungen hielt den Bot
+        damit immer wieder an - fuer alle auf dem Server, nicht nur fuer den
+        Spieler.
+
+        store.save_soon() sammelt das auf ein Schreiben pro Sekunde zusammen.
+        Die Signatur bleibt async, damit keine der Aufrufstellen angefasst
+        werden muss.
+        """
         if self._store is not None:
-            await self._store.save()
+            self._store.save_soon()
 
     async def flush(self):
         """Oeffentliches Speichern - andere Module (z. B. games) rufen das nach
         einer Coin-Aenderung auf, damit der Gewinn die Platte erreicht."""
         await self._flush()
+
+    async def flush_now(self):
+        """Sofort auf die Platte - fuer den Neustart.
+
+        Gleiche Rolle wie words.flush_now und gehirn.flush_now. store.alle_sichern()
+        ruft das ohnehin fuer jeden Store; dieser Name existiert, damit die
+        Absicht an der Aufrufstelle lesbar bleibt."""
+        if self._store is not None:
+            await self._store.flush_now()
 
     # --- Level-Mathematik ----------------------------------------------------
     @staticmethod
@@ -2028,6 +2050,7 @@ LEGACY_RARITY = Economy.LEGACY_RARITY
 setup = instance.setup
 is_enabled = instance.is_enabled
 flush = instance.flush
+flush_now = instance.flush_now
 add_xp = instance.add_xp
 add_coins = instance.add_coins
 get_coins = instance.get_coins

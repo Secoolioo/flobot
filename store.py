@@ -18,12 +18,39 @@ import logging
 import os
 import shutil
 import time
+import weakref
 from pathlib import Path
 
 log = logging.getLogger("dcbot.store")
 
 # Datenordner (per .env ueberschreibbar). Wird beim ersten Schreiben angelegt.
 DATA_DIR = Path(os.getenv("DATA_DIR", str(Path(__file__).resolve().parent / "data")))
+
+#: Wie lange gesammelt wird, bevor wirklich geschrieben wird (Sekunden).
+#: Klein halten: in diesem Fenster liegt eine Buchung nur im Speicher, ein
+#: kill -9 wuerde sie kosten. Eine Sekunde reicht, um aus 30 Serialisierungen
+#: einer Casino-Runde eine einzige zu machen.
+SAMMELZEIT = float(os.getenv("STORE_SAVE_DEBOUNCE", "1.0") or 1.0)
+
+#: Alle lebenden Stores - fuer alle_sichern() vor einem Neustart.
+#: Schwache Verweise, damit ein Store, den niemand mehr haelt, verschwinden darf.
+_ALLE = weakref.WeakSet()
+
+
+async def alle_sichern():
+    """Alles, was noch aussteht, sofort auf die Platte - vor einem Neustart.
+
+    Ohne das wuerde das gesammelte Speichern (save_soon) beim Neustart die
+    letzte Sekunde Coins und XP verlieren. bot._restart_bot hat solche
+    Einzelaufrufe schon fuer den Wort-Zaehler und das Gedaechtnis; diese Stelle
+    hier gilt fuer ALLE Stores, auch fuer die, die es noch gar nicht gibt.
+    """
+    for laden in list(_ALLE):
+        try:
+            await laden.flush_now()
+        except Exception:  # noqa: BLE001 - ein kaputter Store darf die anderen
+            log.exception("Sichern von %s vor dem Neustart fehlgeschlagen",
+                          getattr(laden, "path", "?"))
 
 
 class JsonStore:
@@ -39,7 +66,12 @@ class JsonStore:
         self._default = copy.deepcopy(default or {})
         self.data = copy.deepcopy(self._default)
         self._verdaechtig = False   # schon eine Sicherheitskopie angelegt?
+        # Gesammeltes Speichern (siehe save_soon).
+        self._schmutzig = False
+        self._sammler = None
+        self._laufende = set()
         self._load()
+        _ALLE.add(self)
 
     def _schablone_pruefen(self):
         """Jeder Schluessel aus dem Standard muss auch dessen TYP haben.
@@ -179,6 +211,60 @@ class JsonStore:
         async with self._lock:
             payload = json.dumps(self.data, ensure_ascii=False, separators=(",", ":"))
             return await asyncio.to_thread(self._write_text, payload)
+
+    def save_soon(self):
+        """Speichern SAMMELN statt bei jeder Aenderung neu zu schreiben.
+
+        save() serialisiert den ganzen Store SYNCHRON im Event-Loop - das muss
+        so sein, damit der Schnappschuss in sich stimmt, aber es ist echte
+        Blockierzeit fuer alle. Bei economy sind das mit 3.000 Nutzern rund
+        20 ms pro Aufruf, und economy wird nach JEDER Coin-Bewegung geschrieben.
+        Eine Casino-Runde mit 30 Buchungen hielt den Bot damit eine halbe
+        Sekunde lang immer wieder an.
+
+        Jetzt laeuft hoechstens EIN Sammel-Task je Store. Kommt waehrend des
+        Wartens etwas Neues dazu, wird danach genau einmal nachgespeichert.
+
+        Der Preis, offen benannt: in diesem Fenster liegt die Aenderung nur im
+        Speicher. Ein kill -9 kostet sie. Deshalb ist das Fenster klein und
+        alle_sichern() haengt im Neustart-Weg.
+
+        (handel.py hat dieses Muster als Erstes gebaut und dabei begruendet -
+        hier steht es jetzt einmal fuer alle Stores.)
+        """
+        self._schmutzig = True
+        if self._sammler is not None and not self._sammler.done():
+            return
+        try:
+            self._sammler = asyncio.get_running_loop().create_task(self._sammeln())
+        except RuntimeError:
+            # Kein laufender Loop (Tests, Werkzeuge). Dann bleibt es schmutzig
+            # und der naechste Aufruf mit Loop schreibt mit.
+            self._sammler = None
+            return
+        self._laufende.add(self._sammler)
+        self._sammler.add_done_callback(self._laufende.discard)
+
+    async def _sammeln(self):
+        """Schreibt, solange zwischendurch neue Aenderungen aufgelaufen sind."""
+        try:
+            while self._schmutzig:
+                self._schmutzig = False
+                await asyncio.sleep(SAMMELZEIT)
+                await self.save()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - Speichern darf nie etwas sprengen
+            log.exception("Gesammeltes Speichern von %s fehlgeschlagen", self.path)
+
+    async def flush_now(self):
+        """Sofort schreiben, wenn etwas aussteht. Sonst nichts tun."""
+        if not self._schmutzig and (self._sammler is None or self._sammler.done()):
+            return False
+        self._schmutzig = False
+        if self._sammler is not None and not self._sammler.done():
+            self._sammler.cancel()
+        return await self.save()
 
     def _write_text(self, payload):
         tmp = None

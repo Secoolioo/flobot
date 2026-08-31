@@ -1093,13 +1093,49 @@ def test_casino_bilanz_gewonnen_verloren():
 
 
 class _FakeStore:
-    """Minimaler JsonStore-Ersatz fuer die Tests (kein Datei-IO)."""
+    """Minimaler JsonStore-Ersatz fuer die Tests (kein Datei-IO).
+
+    Muss ALLES koennen, was store.JsonStore oeffentlich anbietet - sonst faellt
+    eine Attrappe erst auf, wenn der echte Store eine Methode dazubekommt und
+    elf Tests gleichzeitig mit AttributeError umkippen. Genau das ist beim
+    Einbau von save_soon passiert. test_attrappe_kann_alles_was_der_store_kann
+    haelt die beiden ab jetzt zusammen.
+    """
 
     def __init__(self, data):
         self.data = data
+        self.gespeichert = 0
+        self.angemeldet = 0
 
     async def save(self):
-        pass
+        self.gespeichert += 1
+        return True
+
+    def save_soon(self):
+        self.angemeldet += 1
+
+    async def flush_now(self):
+        self.angemeldet = 0
+        return await self.save()
+
+
+def test_attrappe_kann_alles_was_der_store_kann():
+    """Die Test-Attrappe darf nicht hinter dem echten Store zurueckbleiben.
+
+    Als store.JsonStore save_soon bekam, kippten auf einen Schlag elf Tests mit
+    AttributeError um - die Attrappe kannte die Methode nicht. Der Fehler lag
+    nicht im Bot, sondern in der Attrappe, und er kostet jedes Mal Zeit, bis man
+    das gemerkt hat. Dieser Test sagt es sofort und beim Namen.
+    """
+    import store
+
+    echt = {name for name in dir(store.JsonStore)
+            if not name.startswith("_") and callable(getattr(store.JsonStore, name))}
+    attrappe = {name for name in dir(_FakeStore) if not name.startswith("_")}
+    fehlt = sorted(echt - attrappe)
+    assert not fehlt, (
+        f"_FakeStore fehlen Methoden, die store.JsonStore hat: {fehlt}. "
+        f"Attrappe nachziehen, nicht den Store beschneiden.")
 
 
 def _embed_text(antwort):

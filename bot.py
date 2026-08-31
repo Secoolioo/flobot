@@ -49,6 +49,7 @@ import titles
 import render
 import schedule_logic
 import steal
+import store
 import terraria
 import voicegags
 import webpanel
@@ -763,6 +764,12 @@ class FloBot(discord.Client):
                 await music.verlauf_speichern()
             except Exception:
                 log.exception("Musik-Verlauf-Flush vor Neustart fehlgeschlagen")
+        # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
+        # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
+        try:
+            await store.alle_sichern()
+        except Exception:
+            log.exception("Sichern der Speicher vor Neustart fehlgeschlagen")
         try:
             await self.close()
         except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
