@@ -161,6 +161,12 @@ def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
 
     alt_anim = casino.instance._anim
     casino.instance._anim = kein_bild
+    # economy AUSDRUECKLICH anschalten: add_coins/get_coins sind sonst ein
+    # No-Op und der Test war nur gruen, weil ein frueherer Test economy
+    # angelassen hatte. In gemischter Reihenfolge fiel er um.
+    alt_eco = (economy.instance._store, economy.instance._enabled)
+    economy.instance._store = _FakeStore({"users": {}})
+    economy.instance._enabled = True
     try:
         e.add_coins(uid, 10_000 - e.get_coins(uid))    # Startguthaben setzen
         einsatz = 500
@@ -176,7 +182,7 @@ def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
             f"Coins verbrannt: {vorher} -> {e.get_coins(uid)}")
     finally:
         casino.instance._anim = alt_anim
-        e.add_coins(uid, -e.get_coins(uid))            # Testkonto wieder leeren
+        economy.instance._store, economy.instance._enabled = alt_eco
 
     # Ein gueltiger Tipp verhaelt sich unveraendert.
     assert casino._roulette_payout("rot", 10, 1) == (20, "Rot")
@@ -239,27 +245,34 @@ def test_words_zaehlen():
     """Gezaehlt wird JE SERVER - frueher lief alles in einen gemeinsamen Topf,
     und auf dem zweiten Server stand die Statistik des ersten mit drin."""
     # Fake-Store: reine dict-Logik testen, ohne Datei (Zustand lebt in der Instanz).
+    # Das Modul wird hier AUSDRUECKLICH angeschaltet: vorher hing der Test daran,
+    # dass irgendein alphabetisch frueherer Test words.setup() gerufen hatte. In
+    # gemischter Reihenfolge war er deshalb rot.
+    alt = (words.instance._store, words.instance._enabled)
     words.instance._store = type("S", (), {"data": {"guilds": {}}})()
-    n = words._count_text("pizza pizza salat", "111", 1)
-    assert n == 3
-    n = words._count_text("PIZZA!", "222", 1)
-    assert n == 1
-    buch = words.instance._buch(1)
-    assert buch["words"]["pizza"]["n"] == 3
-    assert buch["words"]["pizza"]["u"] == {"111": 2, "222": 1}
-    assert buch["words"]["salat"]["n"] == 1
-    assert buch["total"] == 4 and buch["msgs"] == 2
+    words.instance._enabled = True
+    try:
+        n = words._count_text("pizza pizza salat", "111", 1)
+        assert n == 3
+        n = words._count_text("PIZZA!", "222", 1)
+        assert n == 1
+        buch = words.instance._buch(1)
+        assert buch["words"]["pizza"]["n"] == 3
+        assert buch["words"]["pizza"]["u"] == {"111": 2, "222": 1}
+        assert buch["words"]["salat"]["n"] == 1
+        assert buch["total"] == 4 and buch["msgs"] == 2
 
-    # Ein zweiter Server faengt bei null an und faerbt den ersten nicht ein.
-    words._count_text("pizza", "111", 2)
-    assert words.instance._buch(2)["words"]["pizza"]["n"] == 1
-    assert words.instance._buch(1)["words"]["pizza"]["n"] == 3
-    # Der Profil-Lookup fragt ausdruecklich nach EINEM Server; ohne Angabe
-    # (z. B. aus einer DM) kommt die Summe ueber alle.
-    assert words.instance.statistik_von("111", gid=1)[0] == 3
-    assert words.instance.statistik_von("111", gid=2)[0] == 1
-    assert words.instance.statistik_von("111")[0] == 4
-    words.instance._store = None
+        # Ein zweiter Server faengt bei null an und faerbt den ersten nicht ein.
+        words._count_text("pizza", "111", 2)
+        assert words.instance._buch(2)["words"]["pizza"]["n"] == 1
+        assert words.instance._buch(1)["words"]["pizza"]["n"] == 3
+        # Der Profil-Lookup fragt ausdruecklich nach EINEM Server; ohne Angabe
+        # (z. B. aus einer DM) kommt die Summe ueber alle.
+        assert words.instance.statistik_von("111", gid=1)[0] == 3
+        assert words.instance.statistik_von("111", gid=2)[0] == 1
+        assert words.instance.statistik_von("111")[0] == 4
+    finally:
+        words.instance._store, words.instance._enabled = alt
 
 
 def test_words_migriert_den_alten_topf():
@@ -7316,16 +7329,29 @@ def test_webpanel_token_deckel():
 # --- Mehrere Server ---------------------------------------------------------
 def _cfg_frisch():
     """guildcfg mit leerem Speicher - gibt eine Aufraeum-Funktion zurueck."""
+    import ai
     import guildcfg
     alt = (guildcfg.instance._enabled, guildcfg.instance._store,
            guildcfg.instance._owner_id)
     guildcfg.instance._enabled = True
     guildcfg.instance._store = _FakeStore({"guilds": {}})
     guildcfg.instance._owner_id = 0
+    # Den Praefix-Cache in ai mitleeren. Im Betrieb macht das der Hoerer
+    # (guildcfg.horcht_auf("praefix", ai.praefix_geaendert)); hier wird der
+    # Speicher aber direkt getauscht, ohne jemandem Bescheid zu sagen. Ohne das
+    # gewinnt ein Regex, den ein frueherer Test fuer denselben Server gebaut
+    # hat - in gemischter Reihenfolge reproduzierbar, alphabetisch nie.
+    ai.instance._RE_CACHE.clear()
+    # Den Hoerer anmelden, den sonst guildcfg.setup() anmeldet. Der Helfer
+    # setzt _store/_enabled direkt und ruft setup() bewusst NICHT - ohne diese
+    # Zeile wirkt eine Praefix-Aenderung im Test nicht sofort, weil niemand den
+    # Regex-Cache leert. Doppelte Anmeldungen ignoriert horcht_auf.
+    guildcfg.horcht_auf("praefix", ai.praefix_geaendert)
 
     def zurueck():
         (guildcfg.instance._enabled, guildcfg.instance._store,
          guildcfg.instance._owner_id) = alt
+        ai.instance._RE_CACHE.clear()
     return guildcfg, zurueck
 
 
@@ -7615,6 +7641,16 @@ def test_webpanel_einstellungen_je_server():
         print("   (aiohttp test utils fehlen - uebersprungen)")
         return
     import features
+    # bot ZUERST importieren - dieselbe Falle wie in _arbeit_frisch():
+    # webpanel._api_guildcfg holt sich per lazy 'import bot' die Liste der
+    # geladenen Module. Ist bot in diesem Prozess noch nie importiert worden,
+    # laeuft dabei bot.py komplett durch - samt 'WEBPANEL_ENABLED =
+    # webpanel.setup()', und setup() ueberschreibt _auth aus der .env (Standard
+    # AN). Der Test setzt _auth vorher auf False; mitten im Testlauf kippte es
+    # dadurch auf True zurueck und der POST kam als 401 nicht mehr durch.
+    # Alphabetisch fiel das nie auf, weil ein frueherer Test bot laengst
+    # importiert hatte.
+    import bot                                                    # noqa: F401
     guildcfg, zurueck = _cfg_frisch()
     alt_feat = (features.instance._store, set(features.instance._disabled),
                 dict(features.instance._per_guild))
@@ -8357,6 +8393,18 @@ def _musik_umgebung():
 
     music._send_panel = nix
     music._retire_panel = nix
+
+    # Aufloesen wird AUSDRUECKLICH stillgelegt: der Track kommt unveraendert
+    # zurueck. Vorher hat der Helfer _resolve_track zwar gesichert, aber nie
+    # gesetzt - er erbte also, was ein frueherer Test hinterlassen hatte. Lief
+    # zufaellig ein echtes (oder gefaketes) Aufloesen, wurde player.current
+    # durch ein ANDERES Track-Objekt ersetzt und die Identitaetspruefung
+    # 'player.current is lang' fiel um. In gemischter Reihenfolge war das
+    # reproduzierbar, alphabetisch nie.
+    async def unveraendert(track):
+        return track
+
+    music._resolve_track = unveraendert
 
     player = music.GuildPlayer(loop=asyncio.get_event_loop_policy().new_event_loop())
     voice = _StallVoice()
