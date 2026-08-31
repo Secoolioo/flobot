@@ -32,7 +32,7 @@ import traceback
 # Der Datenordner MUSS umgebogen sein, bevor irgendein Modul importiert wird -
 # store.DATA_DIR wird beim Import festgelegt und jeder JsonStore haengt daran.
 # Ohne das schreibt ein Testlauf in die ECHTEN Daten (siehe den ausfuehrlichen
-# Kommentar im Kopf von test_games_logic.py).
+# Kommentar im Kopf von testhilfe.py).
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="flobot-lauf-"))
 
 # Die Testdateien, die es gibt. Neue kommen hier dazu - ein Test haelt die

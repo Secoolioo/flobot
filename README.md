@@ -144,14 +144,17 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 test_games_logic.py    # 280 Tests
-python3 test_logic.py          #   6 Tests
+python3 lauf.py                # alle 339 Tests, alle Fehler auf einmal
+python3 lauf.py --misch        # zufällige Reihenfolge (deckt Abhängigkeiten auf)
+python3 lauf.py --nur musik    # nur ein Thema
+python3 test_musik.py          # eine einzelne Themendatei
 python3 bot.py --check         # lädt alle Module ohne zu verbinden
 ```
 
-Kein pytest nötig — beide Dateien bringen ihren eigenen Runner mit. Sie laufen
-in einem Wegwerf-Datenordner (`DATA_DIR` wird ganz oben umgebogen) und fassen
-`data/` **nicht** an — ein Testlauf auf dem Server ist also ungefährlich.
+Kein pytest nötig — `lauf.py` ist der Runner, und jede Themendatei läuft auch
+allein. Alle laufen in einem Wegwerf-Datenordner (`DATA_DIR` wird in
+`testhilfe.py` umgebogen, genau einmal für alle) und fassen `data/` **nicht**
+an — ein Testlauf auf dem Server ist also ungefährlich.
 
 ### Aktie durchrechnen
 
