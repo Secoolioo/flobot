@@ -307,6 +307,11 @@ class FloAI:
         # bauen waere Verschwendung; ein globaler waere falsch, sobald ein
         # Server einen eigenen Praefix hat.
         self._RE_CACHE = {}
+        # Ergebnisse von strip_lead, je (Text, Server). Deckel, weil der
+        # Chat-Wortschatz nach oben offen ist; ist er voll, faengt der Speicher
+        # von vorn an - was oft vorkommt, ist gleich wieder drin.
+        self._LEAD_CACHE = {}
+        self._LEAD_CACHE_MAX = 512
 
     def setup(self):
         """Liest die Konfiguration aus der Umgebung und baut den LLM-Client auf.
@@ -646,6 +651,10 @@ class FloAI:
         """Hook fuer guildcfg: der Praefix dieses Servers hat sich geaendert.
 
         Ohne gid wird alles verworfen (z. B. nach einem .env-Neustart)."""
+        # Der Lead-Speicher haengt am selben Regex und muss IMMER mit weg -
+        # auch der eines fremden Servers waere danach nicht mehr sicher falsch,
+        # sondern nur wahrscheinlich richtig, und das reicht hier nicht.
+        self._LEAD_CACHE.clear()
         if gid is None:
             self._RE_CACHE.clear()
             return
@@ -667,10 +676,25 @@ class FloAI:
         Befehlserkennung, damit Befehle auch mit 'Florian' davor funktionieren.
 
         Ohne gid gilt der Server, der gerade bedient wird - deshalb mussten die
-        37 Aufrufstellen in den Modulen nicht angefasst werden."""
+        37 Aufrufstellen in den Modulen nicht angefasst werden.
+
+        Gemerkt wird das Ergebnis, weil dieselbe Nachricht auf ihrem Weg durch
+        die Handler-Kette hier 27 Mal ankommt: jedes Modul ruft strip_lead als
+        Erstes auf, alle mit demselben Text. Gerechnet wird also einmal, die
+        26 folgenden Aufrufe holen nur noch ab. Der Wert haengt allein an Text
+        und Server - deshalb ist das Merken gefahrlos, solange der Speicher bei
+        einer Praefix-Aenderung mitgeleert wird (siehe praefix_geaendert)."""
+        merk_gid = int((self.aktuelle_guild() if gid is None else gid) or 0)
+        schluessel = (text, merk_gid)
+        fertig = self._LEAD_CACHE.get(schluessel)
+        if fertig is not None:
+            return fertig
         t = re.sub(r"<@!?\d+>", " ", text or "")
-        t = self.lead_re(gid).sub("", t)
-        return t.strip()
+        t = self.lead_re(merk_gid).sub("", t).strip()
+        if len(self._LEAD_CACHE) >= self._LEAD_CACHE_MAX:
+            self._LEAD_CACHE.clear()
+        self._LEAD_CACHE[schluessel] = t
+        return t
 
     # --- Welcher Server wird gerade bedient? -------------------------------
     @staticmethod
