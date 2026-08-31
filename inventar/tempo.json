@@ -1,0 +1,152 @@
+{
+ "_je_modul": {
+  "admin": {
+   "streuung": 0.23,
+   "us": 38.4
+  },
+  "arbeit": {
+   "streuung": 0.34,
+   "us": 59.2
+  },
+  "bayern": {
+   "streuung": 0.27,
+   "us": 68.5
+  },
+  "casino": {
+   "streuung": 0.25,
+   "us": 61.4
+  },
+  "economy": {
+   "streuung": 0.24,
+   "us": 67.2
+  },
+  "floaktie": {
+   "streuung": 0.26,
+   "us": 62.5
+  },
+  "food": {
+   "streuung": 0.24,
+   "us": 54.3
+  },
+  "fun": {
+   "streuung": 0.32,
+   "us": 59.3
+  },
+  "games": {
+   "streuung": 0.21,
+   "us": 56.9
+  },
+  "gehirn": {
+   "streuung": 0.32,
+   "us": 35.4
+  },
+  "giveaway": {
+   "streuung": 0.16,
+   "us": 60.7
+  },
+  "guildcfg": {
+   "streuung": 0.29,
+   "us": 59.5
+  },
+  "handel": {
+   "streuung": 0.32,
+   "us": 92.6
+  },
+  "lotto": {
+   "streuung": 0.28,
+   "us": 58.3
+  },
+  "luxus": {
+   "streuung": 0.4,
+   "us": 90.1
+  },
+  "media": {
+   "streuung": 0.23,
+   "us": 60.0
+  },
+  "merchant": {
+   "streuung": 0.43,
+   "us": 62.9
+  },
+  "moderation": {
+   "streuung": 0.2,
+   "us": 74.5
+  },
+  "music": {
+   "streuung": 0.24,
+   "us": 136.9
+  },
+  "profil": {
+   "streuung": 0.54,
+   "us": 85.8
+  },
+  "schulden": {
+   "streuung": 0.37,
+   "us": 66.1
+  },
+  "steal": {
+   "streuung": 0.23,
+   "us": 60.2
+  },
+  "terraria": {
+   "streuung": 0.25,
+   "us": 54.5
+  },
+  "voicegags": {
+   "streuung": 0.19,
+   "us": 61.3
+  },
+  "words": {
+   "streuung": 0.33,
+   "us": 73.8
+  }
+ },
+ "_kette": [
+  "bayern",
+  "moderation",
+  "admin",
+  "guildcfg",
+  "music",
+  "voicegags",
+  "games",
+  "casino",
+  "arbeit",
+  "luxus",
+  "handel",
+  "schulden",
+  "steal",
+  "merchant",
+  "giveaway",
+  "lotto",
+  "floaktie",
+  "profil",
+  "terraria",
+  "gehirn",
+  "words",
+  "economy",
+  "food",
+  "media",
+  "fun"
+ ],
+ "umgebung": {
+  "python": "3.11.15"
+ },
+ "werte": {
+  "ansprache": {
+   "streuung": 0.61,
+   "us": 8.7
+  },
+  "befehl": {
+   "streuung": 0.24,
+   "us": 188.0
+  },
+  "cmdnorm": {
+   "streuung": 0.11,
+   "us": 425.2
+  },
+  "durchfall": {
+   "streuung": 0.09,
+   "us": 1514.3
+  }
+ }
+}
