@@ -501,23 +501,12 @@ class Luxus(FeatureBasis):
         return HANDLED
 
     # --- Auto-Loesch-Schutz (wie in den anderen Modulen) -------------------------
+    # Loesch-Schutz: liegt in basis.FeatureBasis (schuetzen/freigeben).
     def _protect(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.protect_message(msg)
-        except Exception:
-            pass
+        self.schuetzen(msg)
 
     def _release(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:
-            pass
+        self.freigeben(msg)
 
 
 class _LuxusSelect(discord.ui.Select):

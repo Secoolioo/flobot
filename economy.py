@@ -27,6 +27,7 @@ import discord
 
 import ai
 import basis
+import laufzeit
 from basis import FeatureBasis, erstes_ziel
 import guildcfg
 import leaderboard_img
@@ -298,23 +299,12 @@ class Economy(FeatureBasis):
         return prof.setdefault("owned", [])
 
     # --- Auto-Loesch-Schutz (fuer die Shop-/Inventar-Views) ------------------
+    # Loesch-Schutz: liegt in basis.FeatureBasis (schuetzen/freigeben).
     def _protect(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.protect_message(msg)
-        except Exception:  # noqa: BLE001
-            pass
+        self.schuetzen(msg)
 
     def _release(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:  # noqa: BLE001
-            pass
+        self.freigeben(msg)
 
     async def _flush(self):
         """Speichern anmelden - nicht sofort schreiben.
@@ -1300,11 +1290,9 @@ class Economy(FeatureBasis):
             return n or None
 
         client = None
-        try:
-            import bot
-            client = bot.client
-        except Exception:  # noqa: BLE001 - ohne laufenden Bot geht nur der Cache
-            client = None
+        # Ohne laufenden Bot ist laufzeit.client schlicht None - dann geht
+        # nur der Cache, und genau das stand hier vorher im except.
+        client = laufzeit.client
 
         # 1) Member-Cache (hat den Server-Nickname)
         name = brauchbar(guild.get_member(uid)) if guild is not None else None
@@ -1416,10 +1404,10 @@ class Economy(FeatureBasis):
         if member is not None:
             return member
         try:
-            import bot
-            user = bot.client.get_user(uid)
+            client = laufzeit.client
+            user = client.get_user(uid)
             if user is None:
-                user = await bot.client.fetch_user(uid)
+                user = await client.fetch_user(uid)
             return user
         except Exception:  # noqa: BLE001 - unbekannte/geloeschte ID, API-Huster
             return None

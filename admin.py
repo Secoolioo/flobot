@@ -23,6 +23,7 @@ import re
 import discord
 
 import ai
+import laufzeit
 from basis import FeatureBasis, echte_erwaehnungen
 import economy
 import numfmt
@@ -127,8 +128,8 @@ class Admin(FeatureBasis):
             if member is not None:
                 return member
         try:
-            import bot
-            return bot.client.get_user(uid) or await bot.client.fetch_user(uid)
+            client = laufzeit.client
+            return client.get_user(uid) or await client.fetch_user(uid)
         except Exception:  # noqa: BLE001 - unbekannte ID o. Ae.
             return None
 
@@ -284,11 +285,10 @@ class Admin(FeatureBasis):
                     "ich schicke den Text als Flo in den Channel.")
         channel = None
         try:
-            import bot
-            channel = bot.client.get_channel(cid)
+            channel = laufzeit.client.get_channel(cid)
             if channel is None:
                 # Nicht im Cache (z. B. Thread oder frisch angelegt) -> per API holen.
-                channel = await bot.client.fetch_channel(cid)
+                channel = await laufzeit.client.fetch_channel(cid)
         except discord.NotFound:
             return f"Es gibt keinen Channel mit der ID `{cid}`."
         except discord.Forbidden:

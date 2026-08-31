@@ -840,28 +840,12 @@ class Games(FeatureBasis):
         task.add_done_callback(self._bg.discard)
 
     # --- Auto-Loesch-Schutz + Bild-/Text-Versand ----------------------------
+    # Loesch-Schutz: liegt in basis.FeatureBasis (schuetzen/freigeben).
     def _protect(self, msg):
-        """Meldet eine laufende Spiel-Nachricht (Quiz/Zahlenraten) beim Auto-Loesch-
-        Schutz an, damit sie im #commands-Channel nicht mitten in der Runde
-        verschwindet. Lazy-Import von bot wegen Zirkel-Import."""
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.protect_message(msg)
-        except Exception:
-            pass
+        self.schuetzen(msg)
 
     def _release(self, msg):
-        """Gibt eine geschuetzte Spiel-Nachricht wieder frei (Runde vorbei / keine
-        Reaktion mehr) -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:
-            pass
+        self.freigeben(msg)
 
     async def _say(self, message, text):
         """Schickt eine Text-Antwort als Reply und gibt die Nachricht zurueck."""

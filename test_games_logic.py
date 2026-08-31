@@ -11734,12 +11734,15 @@ def test_arbeit_laufende_schicht_wird_nicht_weggeraeumt():
     Cooldown laeuft weiter, der Lohn ist weg, und die Knoepfe zeigen ins Leere.
     Genau das war die Beschwerde. Freigegeben wird erst, wenn die Schicht
     wirklich vorbei ist - dann darf sie nach der Gnadenfrist weg."""
-    import bot
+    # Angesetzt wird an laufzeit.py und nicht mehr an bot.py: dort holen sich
+    # die Module den Loesch-Schutz seit dem Umbau. Geprueft wird dieselbe Sache
+    # wie vorher - nur an der Stelle, an der sie jetzt wirklich passiert.
+    import laufzeit
     arbeit, restore = _arbeit_frisch({5: 0})
     geschuetzt, freigegeben = [], []
-    alt = (bot.protect_message, bot.release_message)
-    bot.protect_message = lambda m: geschuetzt.append(getattr(m, "id", None))
-    bot.release_message = lambda m, **kw: freigegeben.append(getattr(m, "id", None))
+    alt = (laufzeit.protect_message, laufzeit.release_message)
+    laufzeit.protect_message = lambda m: geschuetzt.append(getattr(m, "id", None))
+    laufzeit.release_message = lambda m, **kw: freigegeben.append(getattr(m, "id", None))
     try:
         autor = _fake_person(5, name="tester", global_name="Tester")
         kanal = SimpleNamespace(id=9, send=lambda **kw: _als_coro(SimpleNamespace(id=777)))
@@ -11764,7 +11767,7 @@ def test_arbeit_laufende_schicht_wird_nicht_weggeraeumt():
         assert bearbeitet.get("view") is None and "embed" not in bearbeitet, bearbeitet
         assert "content" in bearbeitet and "Zeit" in bearbeitet["content"]
     finally:
-        bot.protect_message, bot.release_message = alt
+        laufzeit.protect_message, laufzeit.release_message = alt
         restore()
 
 

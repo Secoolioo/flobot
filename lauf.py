@@ -74,6 +74,9 @@ WACHE_TIEF = (
     ("music", "_resolve_track"),
     ("music", "_send_panel"),
     ("music", "_retire_panel"),
+    ("laufzeit", "protect_message"),
+    ("laufzeit", "release_message"),
+    ("laufzeit", "client"),
     ("webpanel", "instance._auth"),
     ("webpanel", "instance._log_store"),
 )

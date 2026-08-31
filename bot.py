@@ -37,6 +37,7 @@ import games
 import guildcfg
 import handel
 import giveaway
+import laufzeit
 import lotto
 import schulden
 import luxus
@@ -2198,6 +2199,13 @@ client = FloBot(
 # alten Modul-Namen erreichbar.
 protect_message = client.protect_message
 release_message = client.release_message
+
+# Und dieselbe Schnittstelle noch einmal ueber laufzeit.py anmelden. Die Module
+# holen sie von dort, statt bot zu importieren: ein 'import bot' ist NUR im
+# laufenden Bot ein Nachschlagen, ueberall sonst fuehrt es bot.py komplett aus.
+# Was das anrichten kann, steht ausfuehrlich im Kopf von laufzeit.py.
+laufzeit.anmelden(client=client, protect_message=client.protect_message,
+                  release_message=client.release_message)
 
 # Nach einem Verbindungsproblem wartet der Prozess so lange, bevor er sich frisch
 # neu startet (per .env RECONNECT_REEXEC_DELAY anpassbar).

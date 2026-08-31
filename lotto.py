@@ -37,6 +37,7 @@ import discord
 
 import economy
 import basis
+import laufzeit
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -511,12 +512,11 @@ class Lotto(FeatureBasis):
         if msg is None:
             return
         try:
-            import bot
             alt = self._geschuetzt.get(slot)
             if alt is not None and alt != msg:
-                bot.release_message(alt)
+                laufzeit.release_message(alt)
             self._geschuetzt[slot] = msg
-            bot.protect_message(msg)
+            laufzeit.protect_message(msg)
         except Exception:  # noqa: BLE001
             pass
 

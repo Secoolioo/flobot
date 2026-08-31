@@ -192,28 +192,12 @@ class Casino(FeatureBasis):
         # Aktive Mines-Runden je (channel_id, user_id) -> MinesView. Nur im Speicher.
         self._mines_views = {}
 
+    # Loesch-Schutz: liegt in basis.FeatureBasis (schuetzen/freigeben).
     def _protect(self, msg):
-        """Meldet eine laufende Spiel-Nachricht beim Auto-Loesch-Schutz an (damit sie
-        im #commands-Channel nicht mitten im Spiel verschwindet). Lazy-Import von bot,
-        um Zirkel-Importe zu vermeiden; faellt der Bot weg (Tests), passiert nichts."""
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.protect_message(msg)
-        except Exception:
-            pass
+        self.schuetzen(msg)
 
     def _release(self, msg):
-        """Gibt eine Spiel-Nachricht wieder frei (Runde vorbei / kein Reagieren mehr)
-        -> der Bot raeumt sie nach kurzer Gnadenfrist weg."""
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:
-            pass
+        self.freigeben(msg)
 
     def setup(self):
         """Aktiviert das Casino. Voraussetzung: economy (Flo Coins) ist aktiv."""

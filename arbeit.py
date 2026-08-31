@@ -55,6 +55,7 @@ import discord
 
 import ai
 import basis
+import laufzeit
 from basis import FeatureBasis, erstes_ziel
 import economy
 import numfmt
@@ -320,10 +321,10 @@ def _schuetzen(message):
     Lazy-Import von bot, um Zirkel zu vermeiden (wie casino/games es machen)."""
     if message is None:
         return
+    # Loesch-Schutz ueber laufzeit.py - kein Import von bot noetig.
     try:
-        import bot
-        bot.protect_message(message)
-    except Exception:  # noqa: BLE001 - ohne bot (Tests) passiert eben nichts
+        laufzeit.protect_message(message)
+    except Exception:  # noqa: BLE001 - ohne Bot (Tests) passiert eben nichts
         pass
 
 
@@ -332,8 +333,7 @@ def _freigeben(message):
     if message is None:
         return
     try:
-        import bot
-        bot.release_message(message)
+        laufzeit.release_message(message)
     except Exception:  # noqa: BLE001
         pass
 

@@ -17,9 +17,13 @@ BESTIMMTEN Server braucht (Hintergrund-Loops, DMs), nimmt `self.name_fuer(gid)`.
 Ein Test haelt fest, dass kein Modul sich wieder eine eigene Kopie anlegt.
 """
 
+import logging
 import re
 
 import ai
+import laufzeit
+
+log = logging.getLogger("dcbot.basis")
 
 # Eine getippte Erwaehnung sieht im Text so aus. Alles andere in
 # message.mentions steht dort, ohne dass jemand es geschrieben hat.
@@ -113,3 +117,38 @@ class FeatureBasis:
     def name_fuer(gid):
         """Der Name fuer einen AUSDRUECKLICH genannten Server."""
         return ai.bot_name(gid)
+
+    # --- Loesch-Schutz -------------------------------------------------------
+    # Zehn Module hatten dafuer dasselbe Fuenfzeiler-Paar: ein lazy 'import bot'
+    # in einem try/except, einmal zum Anmelden und einmal zum Freigeben. Zehn
+    # Kopien derselben Zeilen sind nicht nur Ballast - sie sind zehn Stellen,
+    # an denen jemand das try/except vergessen kann, und jede davon ist ein
+    # echter Import von bot.py mit allen Nebenwirkungen (siehe laufzeit.py).
+    #
+    # Jetzt einmal hier. Die Module behalten ihre Namen _protect/_release als
+    # duenne Weiterleitung, damit keine Aufrufstelle angefasst werden musste.
+
+    @staticmethod
+    def schuetzen(message):
+        """Nachricht vor dem Auto-Loeschen schuetzen (Spielrunde laeuft)."""
+        if message is None:
+            return
+        try:
+            laufzeit.protect_message(message)
+        except Exception:  # noqa: BLE001 - Komfort, kein Grund zum Abbrechen
+            log.debug("Loesch-Schutz anmelden fehlgeschlagen", exc_info=True)
+
+    @staticmethod
+    def freigeben(message, **wie):
+        """Schutz nach der Gnadenfrist wieder aufheben."""
+        if message is None:
+            return
+        try:
+            laufzeit.release_message(message, **wie)
+        except Exception:  # noqa: BLE001
+            log.debug("Loesch-Schutz freigeben fehlgeschlagen", exc_info=True)
+
+    @property
+    def client(self):
+        """Der laufende discord.Client - oder None, wenn keiner laeuft."""
+        return laufzeit.client

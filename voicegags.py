@@ -123,23 +123,12 @@ class VoiceGags(FeatureBasis):
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
+    # Loesch-Schutz: liegt in basis.FeatureBasis (schuetzen/freigeben).
     def _protect(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.protect_message(msg)
-        except Exception:
-            pass
+        self.schuetzen(msg)
 
     def _release(self, msg):
-        if msg is None:
-            return
-        try:
-            import bot
-            bot.release_message(msg)
-        except Exception:
-            pass
+        self.freigeben(msg)
 
     def setup(self):
         """Aktiv, wenn Voice moeglich ist (ffmpeg + PyNaCl). TTS-Engine wird erkannt."""
