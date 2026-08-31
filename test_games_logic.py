@@ -14728,6 +14728,56 @@ def test_verlauf_ist_im_hilfetext():
         "die Musik-Kurzuebersicht nennt den Verlauf nicht")
 
 
+# --- Das Inventar: ist noch alles da? ---------------------------------------
+def test_inventar_findet_ueberhaupt_etwas():
+    """Die Wache am Werkzeug selbst.
+
+    Das Inventar (werkzeug/inventar.py) soll beim Umbau sagen, was verloren
+    gegangen ist. Es kann dabei auf eine besonders unangenehme Art versagen:
+    es laeuft in einer kaputten Umgebung, findet fast nichts, und ab da ist
+    jeder Vergleich trivial gruen - das Sicherheitsnetz haette ein Loch in
+    genau der Groesse des Problems.
+
+    Dieser Test laeuft ohne Probe (nur Quelltext, also schnell) und prueft, ob
+    die gefundenen Mengen ueber den Untergrenzen liegen.
+    """
+    from werkzeug import inventar
+
+    stand = inventar.Inventar(laut=False).aufnehmen(mit_probe=False)
+    zu_wenig = inventar.untergrenze_pruefen(stand)
+    assert not zu_wenig, (
+        "Das Inventar findet zu wenig - das heisst fast immer, dass die "
+        "Umgebung kaputt ist, nicht der Bot:\n  " + "\n  ".join(zu_wenig))
+    # Und die Handler-Schleife in bot.py muss auffindbar bleiben: ohne sie
+    # weiss das Inventar nicht mehr, wer eine Wort-Kollision gewinnt.
+    quelle = inventar.Quelltext.hol(inventar.WURZEL / "bot.py")
+    module = inventar.Reihenfolge(quelle).module()
+    assert len(module) >= 20, f"nur {len(module)} Module in der Handler-Schleife"
+
+
+def test_inventar_hat_nichts_verloren():
+    """Der eigentliche Zweck: nach jedem Umbauschritt muss noch alles da sein.
+
+    Laeuft als Unterprozess, weil die Probe alle Module hochfaehrt und
+    einschaltet - das soll den uebrigen Tests nicht in die Quere kommen.
+
+    Rueckgabecodes des Werkzeugs: 0 alles da, 1 nur angekuendigte Verluste
+    (steht begruendet in inventar/erwartet.json), 2 echter Verlust,
+    3 das Werkzeug selbst ist kaputt.
+    """
+    import subprocess
+
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.exists(os.path.join(wurzel, "inventar", "stand.json")):
+        return          # noch kein Grundstand aufgenommen - nichts zu pruefen
+    lauf = subprocess.run(
+        [sys.executable, os.path.join("werkzeug", "inventar.py"), "--vergleiche"],
+        cwd=wurzel, capture_output=True, text=True, timeout=900)
+    assert lauf.returncode in (0, 1), (
+        f"Inventar meldet Code {lauf.returncode}:\n"
+        + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
+
+
 def _als_coro(wert):
     """Kleiner Helfer: macht aus einem Wert etwas Awaitbares."""
     async def lauf():

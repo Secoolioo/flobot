@@ -1,0 +1,11 @@
+{
+ "_hinweis": "Angekuendigte Verluste. Jeder Eintrag braucht 'grund' und 'datum' und gilt fuer GENAU EINEN --schreibe-Lauf; danach loescht --schreibe ihn hier heraus.",
+ "_beispiel": {
+  "befehle": {
+   "altwort": {
+    "grund": "durch 'neuwort' ersetzt",
+    "datum": "2026-08-31"
+   }
+  }
+ }
+}

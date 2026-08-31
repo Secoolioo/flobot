@@ -1,0 +1,5917 @@
+{
+ "_dauer": 6.7,
+ "_fehler": [],
+ "_kollisionen": {
+  "bestenliste": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "leaderboard": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "rangliste": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "top": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  }
+ },
+ "_nicht_geprobt": {
+  "admin": "Owner-Befehle: Neustart, Update, Sendepause - Nebenwirkungen",
+  "giveaway": "legt Verlosungen an und startet Timer",
+  "voicegags": "will in den Voice-Channel und ruft TTS"
+ },
+ "befehle": {
+  "Aura": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "Bayrisch-Modus": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "Casino": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "Chad": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "Handelsbuch": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "Kalorien": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "Keks": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "Kreide": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "Rakete": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "Rizz": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "Schicht": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "Sigma": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "Turm": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "abbrechen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "abbruch": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "absturz": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "abzahl": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "abzahlen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "admin": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "adminhelp": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "adminhilfe": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "aktie": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "aktien": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "aktienkurs": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "alle": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "anagramm": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "anlegen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "announce": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "ansage": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "anschreiben": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "anziehen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "arbeit": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "arbeiten": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "arbeitszeugnis": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "aufhoer": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "aufhör": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "aufraeum": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "aufräum": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "aura": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "auslosen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "auszeit": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "automat": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "avatar": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "baccarat": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "baierisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "bairisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "bakkarat": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "bal": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "balance": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "ban": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "bankrott": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "bann": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "banne": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "banner": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "bayerisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "bayrisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "beenden": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "bestenliste": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "bewerte": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "bilanz": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "bj": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "blackjack": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "boarisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "boirisch": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "bomben": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "borg": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "borge": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "borgen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "buy": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "cancel": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "casino": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "chad": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "chart": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "cleanup": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "clear": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "coinflip": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "coinlb": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "coins": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "coinsset": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "config": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "connect": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "crash": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "daily": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "dailyword": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "debt": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "debts": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "del": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "delete": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "dialekt": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "dice": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "disconnect": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "diss": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "disst": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "dm": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "don": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "doppelt": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "draw": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "duel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "duell": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "einstellung": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "einstellungen": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "ende": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "entbann": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entknebel": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entmute": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entsperr": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entstumm": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "enttimeout": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entwarn": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "entzieh": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "entziehe": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "equip": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "errate": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "feature": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "features": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "flip": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "floaktie": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "floaktien": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "floboerse": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "flokurs": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "flonyse": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "floshare": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "flostock": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "fluester": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "flüster": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "fortsetz": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "fortune": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "funkstille": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "funktion": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "funktionen": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "gambling": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "gas": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "gehalt": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "geld": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "geldtop": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "gib": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "gibxp": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "give": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "givexp": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "gluecksrad": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "gluecksspiel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "glücksrad": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "glücksspiel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "griasdi": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "griaseich": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "griasgod": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "griaßdi": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "habidere": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "haendler": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "halt": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "handel": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "handelsbuch": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "heist": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "hilo": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "histori": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "historie": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "history": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "hoehertiefer": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "horoskop": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "hype": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "hyped": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "händler": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "höhertiefer": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "insolvenz": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "inv": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "inventar": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "inventory": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "iou": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "jackpot": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "jetzt": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "job": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "join": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "kalorien": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "kasino": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "kauf": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "kaufen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "kcal": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "keks": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "keno": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "kessel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "kick": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "kicker": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "kicks": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "kickst": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "kickt": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "klau": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "klauen": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "knebel": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "komm": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "konfig": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "konfiguration": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "konto": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "kontostand": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "kopfrechnen": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "kraemer": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "kramer": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "kredit": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "kreide": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "kreidetafel": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "krämer": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "kurs": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "kursverlauf": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
+   ]
+  },
+  "laden": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "laufend": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "laufende": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "lauter": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautr": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautst": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstaeke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstaerk": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstaerke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstarke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautsterke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstk": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstrke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstärje": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstärk": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautstärke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautsärcke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lautsärke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lb": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "leaderboard": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "leave": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "leih": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "leihe": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "leihen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "leise": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "leiser": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "level": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "liedtext": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "liste": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lockdown": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "loesch": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "loeschen": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "lohn": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "lohnzettel": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "lookup": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "los": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "lose": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "losen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "lottery": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "lotto": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "louder": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "ls": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lst": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lstk": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lstrk": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lstrke": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "luxury": {
+   "gewinner": "luxus",
+   "module": [
+    "luxus"
+   ]
+  },
+  "luxus": {
+   "gewinner": "luxus",
+   "module": [
+    "luxus"
+   ]
+  },
+  "lvl": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "lyric": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lyrics": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "lösch": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "löschen": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "makro": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "makros": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "malochen": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "mathe": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "meme": {
+   "gewinner": "media",
+   "module": [
+    "media"
+   ]
+  },
+  "merchant": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "mine": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "minen": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "mines": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "minesweeper": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "module": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "moneytop": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "muenze": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "muenzen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "muenzwurf": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "mute": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "muten": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "münze": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "münzen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "münzwurf": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "nachschlagen": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "naechst": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "naehrwert": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "naehrwerte": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "next": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "nimm": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "nochmal": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "nochmals": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "nuke": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "nächst": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "nährwert": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "nährwerte": {
+   "gewinner": "food",
+   "module": [
+    "food"
+   ]
+  },
+  "pause": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "pausier": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "pay": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "pfiadi": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "pfiati": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "pfp": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "playlistverlauf": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "pleite": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "prestige": {
+   "gewinner": "luxus",
+   "module": [
+    "luxus"
+   ]
+  },
+  "privatinsolvenz": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "profil": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "profilbanner": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "profilbild": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "profile": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "props": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "punto": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "purge": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "queue": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "quieter": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "quiz": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "quizduel": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "quizduell": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "quizzz": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "quote": {
+   "gewinner": "media",
+   "module": [
+    "media"
+   ]
+  },
+  "rad": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "rakete": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "random": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "rang": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "rangliste": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "rank": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "rate": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "raten": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "raub": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "rauben": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "raus": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "rausschmeis": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "rausschmeiss": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "rausschmeiß": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "rauswerf": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "reaktion": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "reaktionstest": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "rechnen": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "reflex": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "reich": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "reichste": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "reichtum": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "repeat": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "replay": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "resume": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "rizz": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "rizzler": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "roast": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "rocket": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "roesten": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "roll": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "roul": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "roulette": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "rps": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "rubbel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "rubbellos": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "rösten": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "say": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "sb": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "schein": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "schenk": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "schenke": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "schicht": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "schnickschnack": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "schuld": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "schulden": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "schuldenbuch": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "schuldschein": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "scratch": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "seas": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "sendepause": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "sendpause": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "sers": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "servas": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "servereinstellungen": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "servus": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "setcoins": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "settings": {
+   "gewinner": "guildcfg",
+   "module": [
+    "guildcfg"
+   ]
+  },
+  "setze": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "shop": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "shopneu": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "shoprefresh": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "sieben": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "siebzehnundvier": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "sigma": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "skip": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "slot": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "slots": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "sofort": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "songtext": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "songverlauf": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "sound": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "soundboard": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "soundeffekt": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "soundliste": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "sounds": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "sperr": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "sperre": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "sperrt": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "spielautomat": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "spielbank": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "sprich": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "spruch": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "ssp": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "sss": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "statistik": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "statistiken": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "stats": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "steal": {
+   "gewinner": "steal",
+   "module": [
+    "steal"
+   ]
+  },
+  "steckbrief": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "stop": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "stopp": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "store": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "stumm": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "taeglich": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "tagesbonus": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "tagesraetsel": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "tagesrätsel": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "tageswordle": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "tageswort": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "take": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "terra": {
+   "gewinner": "terraria",
+   "module": [
+    "terraria"
+   ]
+  },
+  "terraria": {
+   "gewinner": "terraria",
+   "module": [
+    "terraria"
+   ]
+  },
+  "terrariawiki": {
+   "gewinner": "terraria",
+   "module": [
+    "terraria"
+   ]
+  },
+  "thron": {
+   "gewinner": "luxus",
+   "module": [
+    "luxus"
+   ]
+  },
+  "throne": {
+   "gewinner": "luxus",
+   "module": [
+    "luxus"
+   ]
+  },
+  "tilg": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "tilge": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "tilgen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "time-out": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "timeout": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "titel": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "title": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "titles": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "top": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit",
+    "economy"
+   ]
+  },
+  "tower": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "trader": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "trades": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "trage": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "tragen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "transaktion": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "transaktionen": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "trivia": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "tts": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "turm": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "twiki": {
+   "gewinner": "terraria",
+   "module": [
+    "terraria"
+   ]
+  },
+  "täglich": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "ueberrasch": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "uebersicht": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "ueberspring": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "ueberspringen": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "ueberweis": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "unban": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "unbann": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "unmute": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "unmuten": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "untimeout": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "unwarn": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "userinfo": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "verbann": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "verbinde": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "verkauf": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "verkaufe": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "verlass": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "verlasse": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "verlauf": {
+   "gewinner": "handel",
+   "module": [
+    "handel"
+   ]
+  },
+  "verleih": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "verleihe": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "vermoegen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "vermögen": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "verwarn": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "verwarnungen": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "verzeih": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "vol": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "volume": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "vorlesen": {
+   "_orakel": "statisch",
+   "gewinner": "voicegags",
+   "module": [
+    "voicegags"
+   ]
+  },
+  "w6": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "wanderhaendler": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "wanderhändler": {
+   "gewinner": "merchant",
+   "module": [
+    "merchant"
+   ]
+  },
+  "warn": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warnings": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warnliste": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warns": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warnst": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warnt": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warnungen": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warteschlange": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "weisheit": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "weiter": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "weiterspiel": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "werk": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wheel": {
+   "gewinner": "casino",
+   "module": [
+    "casino"
+   ]
+  },
+  "whois": {
+   "gewinner": "profil",
+   "module": [
+    "profil"
+   ]
+  },
+  "wiederhol": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "wiederhole": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "wiederholen": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "wiederholst": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "wisdom": {
+   "gewinner": "fun",
+   "module": [
+    "fun"
+   ]
+  },
+  "woerter": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "woertle": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "word": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wordcount": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "worddaily": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wordel": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wordl": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wordle": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "words": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "work": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "worlde": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wort": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wortdestages": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "worte": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wortle": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wortsalat": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "wortzaehler": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wortzähler": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wuerfel": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "wuerfeln": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "wörtel": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "wörter": {
+   "gewinner": "words",
+   "module": [
+    "words"
+   ]
+  },
+  "wörtle": {
+   "gewinner": "arbeit",
+   "module": [
+    "arbeit"
+   ]
+  },
+  "würfel": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "würfeln": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "xpgeben": {
+   "_orakel": "statisch",
+   "gewinner": "admin",
+   "module": [
+    "admin"
+   ]
+  },
+  "zahl": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "zahle": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "zahlenraten": {
+   "gewinner": "games",
+   "module": [
+    "games"
+   ]
+  },
+  "zefix": {
+   "gewinner": "bayern",
+   "module": [
+    "bayern"
+   ]
+  },
+  "zettel": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "ziehe": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "ziehen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "ziehung": {
+   "gewinner": "lotto",
+   "module": [
+    "lotto"
+   ]
+  },
+  "zitat": {
+   "gewinner": "media",
+   "module": [
+    "media"
+   ]
+  },
+  "zufall": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "zufallssong": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "zuruecknehmen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "zurueckzahlen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "zurücknehmen": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "zurückzahlen": {
+   "gewinner": "schulden",
+   "module": [
+    "schulden"
+   ]
+  },
+  "überrasch": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "übersicht": {
+   "_orakel": "statisch",
+   "gewinner": "giveaway",
+   "module": [
+    "giveaway"
+   ]
+  },
+  "überspring": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "überspringen": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "überweis": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  },
+  "überweise": {
+   "gewinner": "economy",
+   "module": [
+    "economy"
+   ]
+  }
+ },
+ "erzeugt": "2026-08-31 12:01",
+ "frontend": {
+  "/api/avatar": {
+   "quelle": "webpanel.html"
+  },
+  "/api/backup": {
+   "quelle": "webpanel.html"
+  },
+  "/api/config": {
+   "quelle": "webpanel.html"
+  },
+  "/api/feature": {
+   "quelle": "webpanel.html"
+  },
+  "/api/features": {
+   "quelle": "webpanel.html"
+  },
+  "/api/guildcfg": {
+   "quelle": "webpanel.html"
+  },
+  "/api/log": {
+   "quelle": "webpanel.html"
+  },
+  "/api/login": {
+   "quelle": "webpanel.html"
+  },
+  "/api/overview": {
+   "quelle": "webpanel.html"
+  },
+  "/api/server/announce": {
+   "quelle": "webpanel.html"
+  },
+  "/api/server/sendepause": {
+   "quelle": "webpanel.html"
+  },
+  "/api/servers": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/channels": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/delete": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/dm": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/dms": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/dmsuche": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/feed": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/guilds": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/members": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/messages": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/react": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/send": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/typing": {
+   "quelle": "webpanel.html"
+  },
+  "/api/sicht/ws": {
+   "quelle": "webpanel.html"
+  },
+  "/api/stock/price": {
+   "quelle": "webpanel.html"
+  },
+  "/api/stock/series": {
+   "quelle": "webpanel.html"
+  },
+  "/api/update": {
+   "quelle": "webpanel.html"
+  },
+  "/api/user": {
+   "quelle": "webpanel.html"
+  },
+  "/api/user/coins": {
+   "quelle": "webpanel.html"
+  },
+  "/api/user/shares": {
+   "quelle": "webpanel.html"
+  },
+  "/api/user/title": {
+   "quelle": "webpanel.html"
+  },
+  "/api/user/xp": {
+   "quelle": "webpanel.html"
+  },
+  "/api/users": {
+   "quelle": "webpanel.html"
+  },
+  "/api/wordle/start": {
+   "quelle": "webpanel.html"
+  }
+ },
+ "kataloge": {
+  "ALIAS:addcoins": {
+   "label": "gib",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:addmoney": {
+   "label": "gib",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:addxp": {
+   "label": "gibxp",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:broadcast": {
+   "label": "ansage",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:broke": {
+   "label": "pleite",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:cfg": {
+   "label": "config",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:grind": {
+   "label": "arbeit",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:options": {
+   "label": "einstellungen",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:removemoney": {
+   "label": "nimm",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:serversettings": {
+   "label": "einstellungen",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:shift": {
+   "label": "schicht",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:shopreset": {
+   "label": "shopneu",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:silence": {
+   "label": "mute",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:tempmute": {
+   "label": "timeout",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:warnings": {
+   "label": "warns",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:whisper": {
+   "label": "dm",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "ALIAS:wipe": {
+   "label": "purge",
+   "quelle": "cmdnorm.ALIAS"
+  },
+  "CATALOG:arbeit": {
+   "label": "Arbeit & Wordle",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:bayern": {
+   "label": "Bayrisch-Modus",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:casino": {
+   "label": "Casino",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:chaos": {
+   "label": "Chaos & Fun",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:economy": {
+   "label": "Level & Coins",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:floaktie": {
+   "label": "FloCorp-Aktie",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:food": {
+   "label": "Kalorien",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:games": {
+   "label": "Spiele",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:gehirn": {
+   "label": "Gedächtnis",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:giveaway": {
+   "label": "Giveaways",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:handel": {
+   "label": "Handelsbuch",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:ki": {
+   "label": "KI-Chat",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:lotto": {
+   "label": "Monats-Lotto",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:luxus": {
+   "label": "Luxus & Thron",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:media": {
+   "label": "Bilder",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:merchant": {
+   "label": "Fahrender Händler",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:mod": {
+   "label": "Moderation",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:music": {
+   "label": "Musik",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:profil": {
+   "label": "Profil-Lookup",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:schulden": {
+   "label": "Kreide-Tafel",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:steal": {
+   "label": "Coin-Raub",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:terraria": {
+   "label": "Terraria-Wiki",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:voice": {
+   "label": "Voice-Gags",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:words": {
+   "label": "Wörter-Zähler",
+   "quelle": "features.CATALOG"
+  },
+  "DIALECT:abgebrannt": {
+   "label": "pleite",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:aufdrahn": {
+   "label": "lauter",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:aufhean": {
+   "label": "stop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:aufraama": {
+   "label": "aufräum",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:auframa": {
+   "label": "aufräum",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:aus": {
+   "label": "stop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:auszoin": {
+   "label": "auszahlen",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:batzn": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:borgn": {
+   "label": "borg",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:eistellunga": {
+   "label": "einstellungen",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:fladern": {
+   "label": "klau",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:gemma": {
+   "label": "leave",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:gnua": {
+   "label": "genug",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:goid": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:greisler": {
+   "label": "haendler",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:greissler": {
+   "label": "haendler",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:gschaeft": {
+   "label": "shop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:gschäft": {
+   "label": "shop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:gwinnspui": {
+   "label": "gewinnspiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:göid": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:hackln": {
+   "label": "arbeit",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:hackn": {
+   "label": "arbeit",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:haudi": {
+   "label": "leave",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:hoid": {
+   "label": "stop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:hoit": {
+   "label": "stop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:hoits": {
+   "label": "stop",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:ibaweis": {
+   "label": "ueberweis",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:iberspring": {
+   "label": "skip",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:iwaspring": {
+   "label": "skip",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:iwaspringa": {
+   "label": "skip",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kaffa": {
+   "label": "kaufen",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kafn": {
+   "label": "kaufen",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kartn": {
+   "label": "karte",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kaufn": {
+   "label": "kauf",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kimm": {
+   "label": "komm",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kini": {
+   "label": "thron",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kohle": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:koin": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kontostond": {
+   "label": "kontostand",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kreidn": {
+   "label": "kreide",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:kumm": {
+   "label": "komm",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:lauda": {
+   "label": "lauter",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:leihn": {
+   "label": "leih",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:leisa": {
+   "label": "leiser",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:lodn": {
+   "label": "laden",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:moos": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:nausschmeissn": {
+   "label": "kick",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:nochmoi": {
+   "label": "nochmal",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:nomal": {
+   "label": "nochmal",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:nomoi": {
+   "label": "nochmal",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:obara": {
+   "label": "hype",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:pausn": {
+   "label": "pause",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:raubn": {
+   "label": "raub",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:reichstn": {
+   "label": "reichste",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schaugn": {
+   "label": "check",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schleich": {
+   "label": "leave",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schleichdi": {
+   "label": "leave",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schmaeh": {
+   "label": "spruch",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schmäh": {
+   "label": "spruch",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schotter": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schuftn": {
+   "label": "arbeit",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schuid": {
+   "label": "schuld",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:schuidn": {
+   "label": "schulden",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:siebm": {
+   "label": "sieben",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spui": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spuih": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spuis": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spuits": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spöi": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spöl": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spü": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:spün": {
+   "label": "spiel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:stibitzn": {
+   "label": "klau",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:vabann": {
+   "label": "verbann",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:vaschwind": {
+   "label": "leave",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:vasteck": {
+   "label": "roast",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:vawarn": {
+   "label": "verwarn",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:vazeih": {
+   "label": "verzeih",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:weda": {
+   "label": "weiter",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:weida": {
+   "label": "weiter",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:weisheid": {
+   "label": "weisheit",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:weita": {
+   "label": "weiter",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:wiafl": {
+   "label": "würfel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:wiafln": {
+   "label": "würfel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:wiaschd": {
+   "label": "würfel",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:wiavui": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:wörtl": {
+   "label": "wordle",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zammrama": {
+   "label": "aufräum",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zaster": {
+   "label": "coins",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zeichna": {
+   "label": "zeichne",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:ziag": {
+   "label": "zieh",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:ziagn": {
+   "label": "ziehen",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:ziagung": {
+   "label": "ziehung",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zoggn": {
+   "label": "casino",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zoihn": {
+   "label": "zahl",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:zoin": {
+   "label": "zahl",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:übaspring": {
+   "label": "skip",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "DIALECT:übaspringa": {
+   "label": "skip",
+   "quelle": "cmdnorm.DIALECT"
+  },
+  "FEATURE_LOADED:arbeit": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:bayern": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:casino": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:chaos": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:economy": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:floaktie": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:food": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:games": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:gehirn": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:giveaway": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:handel": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:ki": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:lotto": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:luxus": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:media": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:merchant": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:mod": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:music": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:profil": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:schulden": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:steal": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:terraria": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:voice": {
+   "label": "False",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:words": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "ITEMS:bronze": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:diamant": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:galaxie": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:gold": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:imperium": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:krone": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:multiversum": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:nova": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:silber": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "ITEMS:singularitaet": {
+   "label": "",
+   "quelle": "luxus.ITEMS"
+  },
+  "KATALOG:aktie_zaehlt": {
+   "label": "Zählt für die $FLO-Aktie",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:ansage_channel": {
+   "label": "Ansagen-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:autodelete_channels": {
+   "label": "Aufräum-Kanäle",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:autodelete_sekunden": {
+   "label": "Aufräumen nach",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:bayern": {
+   "label": "Bayrisch-Modus",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:casino_max_einsatz": {
+   "label": "Maximaleinsatz",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:daily_erinnerung": {
+   "label": "An den Daily erinnern",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:event_channel": {
+   "label": "Event-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:icon_auto": {
+   "label": "Server-Icon automatisch",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:join_sounds": {
+   "label": "Join-Sounds",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:kalorien_channel": {
+   "label": "Kalorien-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:lautstaerke": {
+   "label": "Lautstärke",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:levelup_ansagen": {
+   "label": "Level-Up-Karten",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:levelup_channel": {
+   "label": "Level-Up-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:modlog_channel": {
+   "label": "Mod-Log-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:musik_max_queue": {
+   "label": "Warteschlange höchstens",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:praefix": {
+   "label": "Ansprache",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:purge_max": {
+   "label": "Löschen höchstens",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:schulden_pranger": {
+   "label": "Überfällige Posten ansagen",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:soundboard": {
+   "label": "Soundboard",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:timeout_standard": {
+   "label": "Timeout-Standarddauer (Sekunden)",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:warn_limit": {
+   "label": "Verwarnungen bis Timeout",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:warn_timeout": {
+   "label": "Auto-Timeout (Sekunden)",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:wordle_channel": {
+   "label": "Wort-des-Tages-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:wordle_min_voice": {
+   "label": "Wordle ab … Leuten im Voice",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "KATALOG:zaehl_channel": {
+   "label": "Zählspiel-Kanal",
+   "quelle": "guildcfg.KATALOG"
+  },
+  "LEGACY_RARITY:gigachad": {
+   "label": "legendary",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_RARITY:goblin": {
+   "label": "normal",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_RARITY:king": {
+   "label": "legendary",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_RARITY:npc": {
+   "label": "normal",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_RARITY:rizzler": {
+   "label": "selten",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_RARITY:sigma": {
+   "label": "mythisch",
+   "quelle": "economy.LEGACY_RARITY"
+  },
+  "LEGACY_SHOP:gigachad": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "LEGACY_SHOP:goblin": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "LEGACY_SHOP:king": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "LEGACY_SHOP:npc": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "LEGACY_SHOP:rizzler": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "LEGACY_SHOP:sigma": {
+   "label": "",
+   "quelle": "economy.LEGACY_SHOP"
+  },
+  "PACK:airhorn": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:applaus": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:badumtss": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:boom": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:buzzer": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:ding": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:gong": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:pew": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:pups": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:tada": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "PACK:trompete": {
+   "label": "",
+   "quelle": "soundpack.PACK"
+  },
+  "RANK:episch": {
+   "label": "2",
+   "quelle": "titles.RANK"
+  },
+  "RANK:exklusiv": {
+   "label": "6",
+   "quelle": "titles.RANK"
+  },
+  "RANK:goettlich": {
+   "label": "7",
+   "quelle": "titles.RANK"
+  },
+  "RANK:legendary": {
+   "label": "4",
+   "quelle": "titles.RANK"
+  },
+  "RANK:mythisch": {
+   "label": "3",
+   "quelle": "titles.RANK"
+  },
+  "RANK:normal": {
+   "label": "0",
+   "quelle": "titles.RANK"
+  },
+  "RANK:relikt": {
+   "label": "5",
+   "quelle": "titles.RANK"
+  },
+  "RANK:selten": {
+   "label": "1",
+   "quelle": "titles.RANK"
+  },
+  "RARITY:episch": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:exklusiv": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:goettlich": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:legendary": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:mythisch": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:normal": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:relikt": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "RARITY:selten": {
+   "label": "",
+   "quelle": "titles.RARITY"
+  },
+  "SCHICHTEN:kontrolle": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:paare": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:rechnen": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:safe": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:salat": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:sortieren": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SCHICHTEN:wordle": {
+   "label": "",
+   "quelle": "arbeit.SCHICHTEN"
+  },
+  "SEASON_IMAGES:fruehling": {
+   "label": "Frühling.png",
+   "quelle": "schedule_logic.SEASON_IMAGES"
+  },
+  "SEASON_IMAGES:herbst": {
+   "label": "Herbst.png",
+   "quelle": "schedule_logic.SEASON_IMAGES"
+  },
+  "SEASON_IMAGES:sommer": {
+   "label": "Sommer.png",
+   "quelle": "schedule_logic.SEASON_IMAGES"
+  },
+  "SEASON_IMAGES:winter": {
+   "label": "Winter.png",
+   "quelle": "schedule_logic.SEASON_IMAGES"
+  }
+ },
+ "loops": {
+  "arbeit_loop": {
+   "takt": {
+    "seconds": "ARBEIT_TICK_SECONDS"
+   }
+  },
+  "autodelete_batch_loop": {
+   "takt": {
+    "seconds": "5.0"
+   }
+  },
+  "autodelete_sweep_loop": {
+   "takt": {
+    "seconds": "AUTODELETE_SWEEP_SECONDS"
+   }
+  },
+  "daily_remind_loop": {
+   "takt": {
+    "time": "DAILY_REMIND_TIME"
+   }
+  },
+  "event_loop": {
+   "takt": {
+    "seconds": "EVENT_INTERVAL_SECONDS"
+   }
+  },
+  "floaktie_market_loop": {
+   "takt": {
+    "seconds": "STOCK_SAMPLE_SECONDS"
+   }
+  },
+  "gehirn_loop": {
+   "takt": {
+    "seconds": "GEHIRN_TICK_SECONDS"
+   }
+  },
+  "giveaway_loop": {
+   "takt": {
+    "seconds": "GIVEAWAY_TICK_SECONDS"
+   }
+  },
+  "icon_loop": {
+   "takt": {
+    "seconds": "CHECK_INTERVAL_SECONDS"
+   }
+  },
+  "lotto_loop": {
+   "takt": {
+    "seconds": "LOTTO_TICK_SECONDS"
+   }
+  },
+  "merchant_loop": {
+   "takt": {
+    "seconds": "MERCHANT_TICK_SECONDS"
+   }
+  },
+  "schulden_mahn_loop": {
+   "takt": {
+    "seconds": "SCHULDEN_MAHN_SECONDS"
+   }
+  },
+  "shop_refresh_loop": {
+   "takt": {
+    "time": "SHOP_REFRESH_TIME"
+   }
+  },
+  "status_loop": {
+   "takt": {
+    "seconds": "STATUS_INTERVAL_SECONDS"
+   }
+  },
+  "voice_heal_loop": {
+   "takt": {
+    "seconds": "music.VOICE_HEAL_SECONDS"
+   }
+  },
+  "voice_xp_loop": {
+   "takt": {
+    "seconds": "economy.VOICE_TICK_SECONDS"
+   }
+  }
+ },
+ "modulapi": {
+  "admin.Admin": {
+   "art": "type"
+  },
+  "admin.handle": {
+   "art": "method"
+  },
+  "admin.is_enabled": {
+   "art": "method"
+  },
+  "admin.is_locked": {
+   "art": "method"
+  },
+  "admin.set_lock": {
+   "art": "method"
+  },
+  "admin.setup": {
+   "art": "method"
+  },
+  "ai.FloAI": {
+   "art": "type"
+  },
+  "ai.LlmFehler": {
+   "art": "type"
+  },
+  "ai.aktuelle_guild": {
+   "art": "function"
+  },
+  "ai.ask_flo": {
+   "art": "method"
+  },
+  "ai.bot_name": {
+   "art": "method"
+  },
+  "ai.fehlertext": {
+   "art": "method"
+  },
+  "ai.generate": {
+   "art": "method"
+  },
+  "ai.get_weather": {
+   "art": "method"
+  },
+  "ai.guild_kontext": {
+   "art": "method"
+  },
+  "ai.guild_zuruecksetzen": {
+   "art": "function"
+  },
+  "ai.http_session": {
+   "art": "method"
+  },
+  "ai.is_enabled": {
+   "art": "method"
+  },
+  "ai.lead_re": {
+   "art": "method"
+  },
+  "ai.names": {
+   "art": "method"
+  },
+  "ai.note_message": {
+   "art": "method"
+  },
+  "ai.praefix_geaendert": {
+   "art": "method"
+  },
+  "ai.praefix_von": {
+   "art": "method"
+  },
+  "ai.see_image": {
+   "art": "method"
+  },
+  "ai.see_image_raw": {
+   "art": "method"
+  },
+  "ai.selbsttest": {
+   "art": "method"
+  },
+  "ai.setup": {
+   "art": "method"
+  },
+  "ai.setze_guild": {
+   "art": "function"
+  },
+  "ai.strip_lead": {
+   "art": "method"
+  },
+  "ai.trigger_re": {
+   "art": "method"
+  },
+  "arbeit.Arbeit": {
+   "art": "type"
+  },
+  "arbeit.KontrolleKnopf": {
+   "art": "type"
+  },
+  "arbeit.KontrolleSchicht": {
+   "art": "type"
+  },
+  "arbeit.KontrolleView": {
+   "art": "type"
+  },
+  "arbeit.PaarKnopf": {
+   "art": "type"
+  },
+  "arbeit.PaareSchicht": {
+   "art": "type"
+  },
+  "arbeit.PaareView": {
+   "art": "type"
+  },
+  "arbeit.RateModal": {
+   "art": "type"
+  },
+  "arbeit.RechenKnopf": {
+   "art": "type"
+  },
+  "arbeit.RechenSchicht": {
+   "art": "type"
+  },
+  "arbeit.RechenView": {
+   "art": "type"
+  },
+  "arbeit.SafeModal": {
+   "art": "type"
+  },
+  "arbeit.SafeSchicht": {
+   "art": "type"
+  },
+  "arbeit.SafeView": {
+   "art": "type"
+  },
+  "arbeit.SalatSchicht": {
+   "art": "type"
+  },
+  "arbeit.SalatView": {
+   "art": "type"
+  },
+  "arbeit.Schicht": {
+   "art": "type"
+  },
+  "arbeit.SchichtView": {
+   "art": "type"
+  },
+  "arbeit.SortierKnopf": {
+   "art": "type"
+  },
+  "arbeit.SortierSchicht": {
+   "art": "type"
+  },
+  "arbeit.SortierView": {
+   "art": "type"
+  },
+  "arbeit.SpassWordle": {
+   "art": "type"
+  },
+  "arbeit.Stufe": {
+   "art": "type"
+  },
+  "arbeit.TagesKnopf": {
+   "art": "type"
+  },
+  "arbeit.TagesModal": {
+   "art": "type"
+  },
+  "arbeit.TagesView": {
+   "art": "type"
+  },
+  "arbeit.Tagesraetsel": {
+   "art": "type"
+  },
+  "arbeit.Wordle": {
+   "art": "type"
+  },
+  "arbeit.WordleSchicht": {
+   "art": "type"
+  },
+  "arbeit.WordleView": {
+   "art": "type"
+  },
+  "arbeit.handle": {
+   "art": "method"
+  },
+  "arbeit.is_enabled": {
+   "art": "method"
+  },
+  "arbeit.jetzt_starten": {
+   "art": "method"
+  },
+  "arbeit.kanal_fuer": {
+   "art": "method"
+  },
+  "arbeit.laenge_des_tages": {
+   "art": "function"
+  },
+  "arbeit.leute_im_voice": {
+   "art": "function"
+  },
+  "arbeit.naechste_stufe": {
+   "art": "function"
+  },
+  "arbeit.raetsel": {
+   "art": "method"
+  },
+  "arbeit.register_views": {
+   "art": "method"
+  },
+  "arbeit.schicht_ziehen": {
+   "art": "function"
+  },
+  "arbeit.seltene_chance": {
+   "art": "function"
+  },
+  "arbeit.setup": {
+   "art": "method"
+  },
+  "arbeit.stufe_fuer": {
+   "art": "function"
+  },
+  "arbeit.tick": {
+   "art": "method"
+  },
+  "arzt.Arzt": {
+   "art": "type"
+  },
+  "basis.FeatureBasis": {
+   "art": "type"
+  },
+  "basis.echte_erwaehnungen": {
+   "art": "function"
+  },
+  "basis.erstes_ziel": {
+   "art": "function"
+  },
+  "bayern.Bayern": {
+   "art": "type"
+  },
+  "bayern.handle": {
+   "art": "method"
+  },
+  "bayern.is_enabled": {
+   "art": "method"
+  },
+  "bayern.is_on": {
+   "art": "method"
+  },
+  "bayern.setup": {
+   "art": "method"
+  },
+  "bot.FloBot": {
+   "art": "type"
+  },
+  "bot.HelpView": {
+   "art": "type"
+  },
+  "bot.RestartConfirmView": {
+   "art": "type"
+  },
+  "bot.invite_url": {
+   "art": "function"
+  },
+  "bot.main": {
+   "art": "function"
+  },
+  "bot.protect_message": {
+   "art": "method"
+  },
+  "bot.release_message": {
+   "art": "method"
+  },
+  "casino.BlackjackView": {
+   "art": "type"
+  },
+  "casino.Casino": {
+   "art": "type"
+  },
+  "casino.CasinoHubView": {
+   "art": "type"
+  },
+  "casino.DonView": {
+   "art": "type"
+  },
+  "casino.DuelView": {
+   "art": "type"
+  },
+  "casino.HiloView": {
+   "art": "type"
+  },
+  "casino.MinesView": {
+   "art": "type"
+  },
+  "casino.TowerView": {
+   "art": "type"
+  },
+  "casino.handle": {
+   "art": "method"
+  },
+  "casino.is_enabled": {
+   "art": "method"
+  },
+  "casino.record": {
+   "art": "method"
+  },
+  "casino.setup": {
+   "art": "method"
+  },
+  "cmdnorm.CmdNorm": {
+   "art": "type"
+  },
+  "cmdnorm.normalize": {
+   "art": "method"
+  },
+  "economy.Economy": {
+   "art": "type"
+  },
+  "economy.add_coins": {
+   "art": "method"
+  },
+  "economy.add_xp": {
+   "art": "method"
+  },
+  "economy.depot_wert": {
+   "art": "method"
+  },
+  "economy.display_name_of": {
+   "art": "method"
+  },
+  "economy.ensure_roles": {
+   "art": "method"
+  },
+  "economy.flush": {
+   "art": "method"
+  },
+  "economy.get_coins": {
+   "art": "method"
+  },
+  "economy.get_shop_items": {
+   "art": "method"
+  },
+  "economy.get_title": {
+   "art": "method"
+  },
+  "economy.get_tone": {
+   "art": "method"
+  },
+  "economy.get_user_rarity": {
+   "art": "method"
+  },
+  "economy.grant_title": {
+   "art": "method"
+  },
+  "economy.handle": {
+   "art": "method"
+  },
+  "economy.is_enabled": {
+   "art": "method"
+  },
+  "economy.kurzprofil": {
+   "art": "method"
+  },
+  "economy.leaderboard_data": {
+   "art": "method"
+  },
+  "economy.list_titles": {
+   "art": "method"
+  },
+  "economy.money_leaderboard_data": {
+   "art": "method"
+  },
+  "economy.on_message": {
+   "art": "method"
+  },
+  "economy.owns_title": {
+   "art": "method"
+  },
+  "economy.parse_amount": {
+   "art": "method"
+  },
+  "economy.refresh_shop": {
+   "art": "method"
+  },
+  "economy.refresh_shop_async": {
+   "art": "method"
+  },
+  "economy.remove_title": {
+   "art": "method"
+  },
+  "economy.resolve_display_name": {
+   "art": "method"
+  },
+  "economy.setup": {
+   "art": "method"
+  },
+  "economy.steuer_fuer": {
+   "art": "method"
+  },
+  "economy.sync_role": {
+   "art": "method"
+  },
+  "economy.tick_voice": {
+   "art": "method"
+  },
+  "economy.vermoegenssteuer": {
+   "art": "method"
+  },
+  "features.Features": {
+   "art": "type"
+  },
+  "features.fuer": {
+   "art": "method"
+  },
+  "features.is_on": {
+   "art": "method"
+  },
+  "features.is_on_in": {
+   "art": "method"
+  },
+  "features.set_feature": {
+   "art": "method"
+  },
+  "features.set_guild": {
+   "art": "method"
+  },
+  "features.setup": {
+   "art": "method"
+  },
+  "features.state": {
+   "art": "method"
+  },
+  "features.vergessen": {
+   "art": "method"
+  },
+  "floaktie.FloAktie": {
+   "art": "type"
+  },
+  "floaktie.FloAktieView": {
+   "art": "type"
+  },
+  "floaktie.KursView": {
+   "art": "type"
+  },
+  "floaktie.activity_of": {
+   "art": "method"
+  },
+  "floaktie.admin_set_price": {
+   "art": "method"
+  },
+  "floaktie.admin_shares": {
+   "art": "method"
+  },
+  "floaktie.akt_deckel_base": {
+   "art": "method"
+  },
+  "floaktie.deckel_fuer": {
+   "art": "method"
+  },
+  "floaktie.drift_fuer": {
+   "art": "method"
+  },
+  "floaktie.handle": {
+   "art": "method"
+  },
+  "floaktie.handle_aus": {
+   "art": "method"
+  },
+  "floaktie.is_enabled": {
+   "art": "method"
+  },
+  "floaktie.is_off": {
+   "art": "method"
+  },
+  "floaktie.ki_text": {
+   "art": "method"
+  },
+  "floaktie.ki_tick": {
+   "art": "method"
+  },
+  "floaktie.note_message": {
+   "art": "method"
+  },
+  "floaktie.note_stream_start": {
+   "art": "method"
+  },
+  "floaktie.note_voice_join": {
+   "art": "method"
+  },
+  "floaktie.pay_voice_dividends": {
+   "art": "method"
+  },
+  "floaktie.price": {
+   "art": "method"
+  },
+  "floaktie.reset_kurs": {
+   "art": "method"
+  },
+  "floaktie.sample_and_tick": {
+   "art": "method"
+  },
+  "floaktie.series": {
+   "art": "method"
+  },
+  "floaktie.setup": {
+   "art": "method"
+  },
+  "floaktie.shares_of": {
+   "art": "method"
+  },
+  "floaktie.total_shares": {
+   "art": "method"
+  },
+  "floaktie.ziel_base": {
+   "art": "method"
+  },
+  "floaktie.ziel_kurs": {
+   "art": "method"
+  },
+  "food.Food": {
+   "art": "type"
+  },
+  "food.handle": {
+   "art": "method"
+  },
+  "food.is_enabled": {
+   "art": "method"
+  },
+  "food.on_message_passive": {
+   "art": "method"
+  },
+  "food.setup": {
+   "art": "method"
+  },
+  "fun.Fun": {
+   "art": "type"
+  },
+  "fun.handle": {
+   "art": "method"
+  },
+  "fun.is_enabled": {
+   "art": "method"
+  },
+  "fun.looks_offensive": {
+   "art": "method"
+  },
+  "fun.maybe_dm_roast": {
+   "art": "method"
+  },
+  "fun.maybe_roast_bot": {
+   "art": "method"
+  },
+  "fun.on_message_passive": {
+   "art": "method"
+  },
+  "fun.setup": {
+   "art": "method"
+  },
+  "games.Games": {
+   "art": "type"
+  },
+  "games.handle": {
+   "art": "method"
+  },
+  "games.is_enabled": {
+   "art": "method"
+  },
+  "games.maybe_event": {
+   "art": "method"
+  },
+  "games.on_message_passive": {
+   "art": "method"
+  },
+  "games.setup": {
+   "art": "method"
+  },
+  "gehirn.Gehirn": {
+   "art": "type"
+  },
+  "gehirn.flush_now": {
+   "art": "method"
+  },
+  "gehirn.handle": {
+   "art": "method"
+  },
+  "gehirn.is_enabled": {
+   "art": "method"
+  },
+  "gehirn.kontext_fuer": {
+   "art": "method"
+  },
+  "gehirn.note_message": {
+   "art": "method"
+  },
+  "gehirn.setup": {
+   "art": "method"
+  },
+  "gehirn.tick": {
+   "art": "method"
+  },
+  "gehirn.vergiss": {
+   "art": "method"
+  },
+  "gehirn.weiss_ueber": {
+   "art": "method"
+  },
+  "giveaway.Giveaway": {
+   "art": "type"
+  },
+  "giveaway.JoinView": {
+   "art": "type"
+  },
+  "giveaway.dauer_text": {
+   "art": "method"
+  },
+  "giveaway.escrow_von": {
+   "art": "method"
+  },
+  "giveaway.handle": {
+   "art": "method"
+  },
+  "giveaway.is_cancel": {
+   "art": "method"
+  },
+  "giveaway.is_enabled": {
+   "art": "method"
+  },
+  "giveaway.is_no": {
+   "art": "method"
+  },
+  "giveaway.is_yes": {
+   "art": "method"
+  },
+  "giveaway.on_message_passive": {
+   "art": "method"
+  },
+  "giveaway.parse_duration": {
+   "art": "method"
+  },
+  "giveaway.parse_stake": {
+   "art": "method"
+  },
+  "giveaway.register_views": {
+   "art": "method"
+  },
+  "giveaway.setup": {
+   "art": "method"
+  },
+  "giveaway.tick": {
+   "art": "method"
+  },
+  "guildcfg.Einstellung": {
+   "art": "type"
+  },
+  "guildcfg.GuildConfig": {
+   "art": "type"
+  },
+  "guildcfg.alle": {
+   "art": "method"
+  },
+  "guildcfg.an": {
+   "art": "method"
+  },
+  "guildcfg.darf": {
+   "art": "method"
+  },
+  "guildcfg.eigen": {
+   "art": "method"
+  },
+  "guildcfg.get": {
+   "art": "method"
+  },
+  "guildcfg.handle": {
+   "art": "method"
+  },
+  "guildcfg.horcht_auf": {
+   "art": "function"
+  },
+  "guildcfg.is_enabled": {
+   "art": "method"
+  },
+  "guildcfg.loeschen": {
+   "art": "method"
+  },
+  "guildcfg.setup": {
+   "art": "method"
+  },
+  "guildcfg.setzen": {
+   "art": "method"
+  },
+  "guildcfg.text": {
+   "art": "method"
+  },
+  "guildcfg.vergessen": {
+   "art": "method"
+  },
+  "handel.Handel": {
+   "art": "type"
+  },
+  "handel.handle": {
+   "art": "method"
+  },
+  "handel.is_enabled": {
+   "art": "method"
+  },
+  "handel.record": {
+   "art": "method"
+  },
+  "handel.setup": {
+   "art": "method"
+  },
+  "handel.summe_von": {
+   "art": "method"
+  },
+  "leaderboard_img.LeaderboardImg": {
+   "art": "type"
+  },
+  "leaderboard_img.is_available": {
+   "art": "method"
+  },
+  "leaderboard_img.render_png": {
+   "art": "method"
+  },
+  "lotto.Lotto": {
+   "art": "type"
+  },
+  "lotto.LottoResult": {
+   "art": "type"
+  },
+  "lotto.LottoView": {
+   "art": "type"
+  },
+  "lotto.buy": {
+   "art": "method"
+  },
+  "lotto.handle": {
+   "art": "method"
+  },
+  "lotto.is_enabled": {
+   "art": "method"
+  },
+  "lotto.setup": {
+   "art": "method"
+  },
+  "lotto.tick": {
+   "art": "method"
+  },
+  "lotto.withdraw": {
+   "art": "method"
+  },
+  "luxus.Luxus": {
+   "art": "type"
+  },
+  "luxus.decorate_rows": {
+   "art": "method"
+  },
+  "luxus.fmt_coins": {
+   "art": "method"
+  },
+  "luxus.get_frame": {
+   "art": "method"
+  },
+  "luxus.get_tone_extra": {
+   "art": "method"
+  },
+  "luxus.handle": {
+   "art": "method"
+  },
+  "luxus.has_crown": {
+   "art": "method"
+  },
+  "luxus.is_enabled": {
+   "art": "method"
+  },
+  "luxus.owns": {
+   "art": "method"
+  },
+  "luxus.setup": {
+   "art": "method"
+  },
+  "luxus.throne_state": {
+   "art": "method"
+  },
+  "media.Media": {
+   "art": "type"
+  },
+  "media.generate_image": {
+   "art": "method"
+  },
+  "media.handle": {
+   "art": "method"
+  },
+  "media.is_enabled": {
+   "art": "method"
+  },
+  "media.setup": {
+   "art": "method"
+  },
+  "merchant.HaendlerView": {
+   "art": "type"
+  },
+  "merchant.Merchant": {
+   "art": "type"
+  },
+  "merchant.TickResult": {
+   "art": "type"
+  },
+  "merchant.appear_time_str": {
+   "art": "method"
+  },
+  "merchant.build_view": {
+   "art": "method"
+  },
+  "merchant.buy": {
+   "art": "method"
+  },
+  "merchant.handle": {
+   "art": "method"
+  },
+  "merchant.is_enabled": {
+   "art": "method"
+  },
+  "merchant.is_present": {
+   "art": "method"
+  },
+  "merchant.protect_panel": {
+   "art": "method"
+  },
+  "merchant.setup": {
+   "art": "method"
+  },
+  "merchant.tick": {
+   "art": "method"
+  },
+  "merchant.trade": {
+   "art": "method"
+  },
+  "moderation.Moderation": {
+   "art": "type"
+  },
+  "moderation.classify": {
+   "art": "method"
+  },
+  "moderation.handle": {
+   "art": "method"
+  },
+  "moderation.is_enabled": {
+   "art": "method"
+  },
+  "moderation.setup": {
+   "art": "method"
+  },
+  "moderation.warns_of": {
+   "art": "method"
+  },
+  "music.GuildPlayer": {
+   "art": "type"
+  },
+  "music.LyricsView": {
+   "art": "type"
+  },
+  "music.Music": {
+   "art": "type"
+  },
+  "music.PlaybackControlView": {
+   "art": "type"
+  },
+  "music.QueuePositionView": {
+   "art": "type"
+  },
+  "music.RandomGenreView": {
+   "art": "type"
+  },
+  "music.Track": {
+   "art": "type"
+  },
+  "music.VerlaufView": {
+   "art": "type"
+  },
+  "music.handle": {
+   "art": "method"
+  },
+  "music.heal_voice": {
+   "art": "method"
+  },
+  "music.is_enabled": {
+   "art": "method"
+  },
+  "music.is_voice_busy": {
+   "art": "method"
+  },
+  "music.max_queue": {
+   "art": "function"
+  },
+  "music.parse_command": {
+   "art": "method"
+  },
+  "music.selbsttest": {
+   "art": "method"
+  },
+  "music.setup": {
+   "art": "method"
+  },
+  "music.spotify_selbsttest": {
+   "art": "method"
+  },
+  "music.verlauf": {
+   "art": "method"
+  },
+  "music.verlauf_befehl": {
+   "art": "function"
+  },
+  "music.verlauf_eintrag": {
+   "art": "method"
+  },
+  "music.verlauf_notieren": {
+   "art": "method"
+  },
+  "music.verlauf_speichern": {
+   "art": "method"
+  },
+  "numfmt.fmt": {
+   "art": "function"
+  },
+  "numfmt.ist_zahl": {
+   "art": "function"
+  },
+  "profil.Profil": {
+   "art": "type"
+  },
+  "profil.bekannt_seit": {
+   "art": "method"
+  },
+  "profil.flush": {
+   "art": "method"
+  },
+  "profil.handle": {
+   "art": "method"
+  },
+  "profil.is_enabled": {
+   "art": "method"
+  },
+  "profil.notiere": {
+   "art": "method"
+  },
+  "profil.seit": {
+   "art": "method"
+  },
+  "profil.setup": {
+   "art": "method"
+  },
+  "profil.verlauf": {
+   "art": "method"
+  },
+  "render.Render": {
+   "art": "type"
+  },
+  "render.arbeit_rangliste": {
+   "art": "method"
+  },
+  "render.blackjack_table": {
+   "art": "method"
+  },
+  "render.blackjack_table_anim": {
+   "art": "method"
+  },
+  "render.casino_stats_card": {
+   "art": "method"
+  },
+  "render.coin_flip": {
+   "art": "method"
+  },
+  "render.coin_flip_anim": {
+   "art": "method"
+  },
+  "render.crash_chart": {
+   "art": "method"
+  },
+  "render.crash_chart_anim": {
+   "art": "method"
+  },
+  "render.dice_roll": {
+   "art": "method"
+  },
+  "render.dice_roll_anim": {
+   "art": "method"
+  },
+  "render.floaktie_chart": {
+   "art": "method"
+  },
+  "render.handel_card": {
+   "art": "method"
+  },
+  "render.help_card": {
+   "art": "method"
+  },
+  "render.hilo_card": {
+   "art": "method"
+  },
+  "render.keno_grid": {
+   "art": "method"
+  },
+  "render.keno_grid_anim": {
+   "art": "method"
+  },
+  "render.level_card": {
+   "art": "method"
+  },
+  "render.lohnzettel": {
+   "art": "method"
+  },
+  "render.money_card": {
+   "art": "method"
+  },
+  "render.nutrition_card": {
+   "art": "method"
+  },
+  "render.quote_card": {
+   "art": "method"
+  },
+  "render.roulette_wheel": {
+   "art": "method"
+  },
+  "render.roulette_wheel_anim": {
+   "art": "method"
+  },
+  "render.scratch_card_anim": {
+   "art": "method"
+  },
+  "render.shop_banner": {
+   "art": "method"
+  },
+  "render.slot_machine": {
+   "art": "method"
+  },
+  "render.slot_machine_anim": {
+   "art": "method"
+  },
+  "render.wheel_fortune_anim": {
+   "art": "method"
+  },
+  "render.wordle_board": {
+   "art": "method"
+  },
+  "render.words_card": {
+   "art": "method"
+  },
+  "schedule_logic.ScheduleLogic": {
+   "art": "type"
+  },
+  "schedule_logic.all_image_filenames": {
+   "art": "method"
+  },
+  "schedule_logic.get_image_filename": {
+   "art": "method"
+  },
+  "schedule_logic.get_period": {
+   "art": "method"
+  },
+  "schedule_logic.get_season": {
+   "art": "method"
+  },
+  "schulden.Kreditwuerdigkeit": {
+   "art": "type"
+  },
+  "schulden.Posten": {
+   "art": "type"
+  },
+  "schulden.Schuldbuch": {
+   "art": "type"
+  },
+  "schulden.Schulden": {
+   "art": "type"
+  },
+  "schulden.Tilgungsplan": {
+   "art": "type"
+  },
+  "schulden.erlassen": {
+   "art": "method"
+  },
+  "schulden.getilgt_summe": {
+   "art": "method"
+  },
+  "schulden.handle": {
+   "art": "method"
+  },
+  "schulden.is_enabled": {
+   "art": "method"
+  },
+  "schulden.kredit_score": {
+   "art": "method"
+  },
+  "schulden.leih_anfrage": {
+   "art": "method"
+  },
+  "schulden.mahn_tick": {
+   "art": "method"
+  },
+  "schulden.note_pay": {
+   "art": "method"
+  },
+  "schulden.note_pay_block": {
+   "art": "method"
+  },
+  "schulden.pay_block": {
+   "art": "method"
+  },
+  "schulden.posten": {
+   "art": "method"
+  },
+  "schulden.saldo": {
+   "art": "method"
+  },
+  "schulden.setup": {
+   "art": "method"
+  },
+  "schulden.summen": {
+   "art": "method"
+  },
+  "schulden.tilgen_von_einnahme": {
+   "art": "method"
+  },
+  "schulden.top": {
+   "art": "method"
+  },
+  "soundpack.Soundpack": {
+   "art": "type"
+  },
+  "soundpack.ensure_pack": {
+   "art": "method"
+  },
+  "steal.Steal": {
+   "art": "type"
+  },
+  "steal.fmt_coins": {
+   "art": "method"
+  },
+  "steal.handle": {
+   "art": "method"
+  },
+  "steal.is_enabled": {
+   "art": "method"
+  },
+  "steal.setup": {
+   "art": "method"
+  },
+  "store.JsonStore": {
+   "art": "type"
+  },
+  "terraria.Terraria": {
+   "art": "type"
+  },
+  "terraria.TerrariaPagesView": {
+   "art": "type"
+  },
+  "terraria.TerrariaView": {
+   "art": "type"
+  },
+  "terraria.beantworte": {
+   "art": "method"
+  },
+  "terraria.erkennt_frage": {
+   "art": "method"
+  },
+  "terraria.handle": {
+   "art": "method"
+  },
+  "terraria.is_enabled": {
+   "art": "method"
+  },
+  "terraria.setup": {
+   "art": "method"
+  },
+  "titles.Titles": {
+   "art": "type"
+  },
+  "titles.color_of": {
+   "art": "method"
+  },
+  "titles.counts": {
+   "art": "method"
+  },
+  "titles.emoji_of": {
+   "art": "method"
+  },
+  "titles.entry": {
+   "art": "method"
+  },
+  "titles.label_of": {
+   "art": "method"
+  },
+  "titles.pool": {
+   "art": "method"
+  },
+  "titles.price_of": {
+   "art": "method"
+  },
+  "titles.random_titles": {
+   "art": "method"
+  },
+  "titles.rarity_of": {
+   "art": "method"
+  },
+  "titles.total": {
+   "art": "method"
+  },
+  "voicegags.SoundboardView": {
+   "art": "type"
+  },
+  "voicegags.VoiceGags": {
+   "art": "type"
+  },
+  "voicegags.altlast_migrieren": {
+   "art": "method"
+  },
+  "voicegags.handle": {
+   "art": "method"
+  },
+  "voicegags.is_enabled": {
+   "art": "method"
+  },
+  "voicegags.join_sounds_an": {
+   "art": "function"
+  },
+  "voicegags.on_voice_state_update": {
+   "art": "method"
+  },
+  "voicegags.setup": {
+   "art": "method"
+  },
+  "voicegags.soundboard_enabled": {
+   "art": "function"
+  },
+  "webpanel.WebPanel": {
+   "art": "type"
+  },
+  "webpanel.is_enabled": {
+   "art": "method"
+  },
+  "webpanel.setup": {
+   "art": "method"
+  },
+  "webpanel.sicht_dm_merken": {
+   "art": "method"
+  },
+  "webpanel.sicht_notiere": {
+   "art": "method"
+  },
+  "webpanel.start": {
+   "art": "method"
+  },
+  "webpanel.stop": {
+   "art": "method"
+  },
+  "words.Words": {
+   "art": "type"
+  },
+  "words.backfill": {
+   "art": "method"
+  },
+  "words.flush_now": {
+   "art": "method"
+  },
+  "words.handle": {
+   "art": "method"
+  },
+  "words.is_enabled": {
+   "art": "method"
+  },
+  "words.is_scanning": {
+   "art": "method"
+  },
+  "words.note_message": {
+   "art": "method"
+  },
+  "words.setup": {
+   "art": "method"
+  },
+  "words.statistik_von": {
+   "art": "method"
+  }
+ },
+ "routen": {
+  "GET /": {
+   "handler": "_index"
+  },
+  "GET /api/avatar/{uid}": {
+   "handler": "_api_avatar"
+  },
+  "GET /api/backup": {
+   "handler": "_api_backup"
+  },
+  "GET /api/config": {
+   "handler": "_api_config"
+  },
+  "GET /api/features": {
+   "handler": "_api_features"
+  },
+  "GET /api/guildcfg": {
+   "handler": "_api_guildcfg"
+  },
+  "GET /api/log": {
+   "handler": "_api_log"
+  },
+  "GET /api/overview": {
+   "handler": "_api_overview"
+  },
+  "GET /api/servers": {
+   "handler": "_api_servers"
+  },
+  "GET /api/sicht/channels": {
+   "handler": "_api_sicht_channels"
+  },
+  "GET /api/sicht/dms": {
+   "handler": "_api_sicht_dms"
+  },
+  "GET /api/sicht/dmsuche": {
+   "handler": "_api_sicht_dm_suche"
+  },
+  "GET /api/sicht/feed": {
+   "handler": "_api_sicht_feed"
+  },
+  "GET /api/sicht/guilds": {
+   "handler": "_api_sicht_guilds"
+  },
+  "GET /api/sicht/members": {
+   "handler": "_api_sicht_members"
+  },
+  "GET /api/sicht/messages": {
+   "handler": "_api_sicht_messages"
+  },
+  "GET /api/sicht/ws": {
+   "handler": "_api_sicht_ws"
+  },
+  "GET /api/stock/series": {
+   "handler": "_api_stock_series"
+  },
+  "GET /api/user/{uid}": {
+   "handler": "_api_user"
+  },
+  "GET /api/users": {
+   "handler": "_api_users"
+  },
+  "GET /panel": {
+   "handler": "_index"
+  },
+  "POST /api/feature": {
+   "handler": "_api_feature"
+  },
+  "POST /api/guildcfg": {
+   "handler": "_api_guildcfg_set"
+  },
+  "POST /api/login": {
+   "handler": "_api_login"
+  },
+  "POST /api/server/announce": {
+   "handler": "_api_announce"
+  },
+  "POST /api/server/sendepause": {
+   "handler": "_api_sendepause"
+  },
+  "POST /api/sicht/delete": {
+   "handler": "_api_sicht_delete"
+  },
+  "POST /api/sicht/dm": {
+   "handler": "_api_sicht_dm_merken"
+  },
+  "POST /api/sicht/dmsuche": {
+   "handler": "_api_sicht_dm_suche_start"
+  },
+  "POST /api/sicht/react": {
+   "handler": "_api_sicht_react"
+  },
+  "POST /api/sicht/send": {
+   "handler": "_api_sicht_send"
+  },
+  "POST /api/sicht/typing": {
+   "handler": "_api_sicht_typing"
+  },
+  "POST /api/stock/price": {
+   "handler": "_api_stock_price"
+  },
+  "POST /api/update": {
+   "handler": "_api_update"
+  },
+  "POST /api/user/coins": {
+   "handler": "_api_coins"
+  },
+  "POST /api/user/shares": {
+   "handler": "_api_shares"
+  },
+  "POST /api/user/title": {
+   "handler": "_api_title"
+  },
+  "POST /api/user/xp": {
+   "handler": "_api_xp"
+  },
+  "POST /api/wordle/start": {
+   "handler": "_api_wordle_start"
+  }
+ },
+ "umgebung": {
+  "module_geladen": 39,
+  "probe_gelaufen": true,
+  "python": "3.11.15"
+ },
+ "zaehlung": {
+  "befehle": 536,
+  "frontend": 35,
+  "kataloge": 249,
+  "loops": 16,
+  "modulapi": 426,
+  "routen": 39
+ }
+}
