@@ -335,6 +335,29 @@ class CmdNorm:
         "speaks", "spinn", "spion", "spuin", "steak", "stock", "surprised",
         "surprises", "sven", "swipe", "ticket", "unser", "wealthy", "whispern",
         "wiped", "wippe",
+        # --- Nachgemessen mit werkzeug/inventar.py --cmdnorm (31.08.2026) ---
+        # Das Inventar kennt seit heute die echte Befehlsliste (536 Woerter).
+        # Damit liess sich zum ersten Mal MESSEN statt raten, was die
+        # Tippfehler-Toleranz verbiegt: jedes Wort aus dem Repo-Wortschatz
+        # durch normalize(), und die Treffer nach Mechanismus getrennt.
+        #
+        # Uebrig blieben 63 Faelle, in denen ein ANDERES Wort auf einem Befehl
+        # landet (Beugungen wie 'bannen' -> 'banne' sind genau richtig und
+        # bleiben). Davon stehen hier die, die ein Mensch wirklich tippt.
+        # Die schlimmsten waren:
+        #   'status' -> stats      'Flo status?' ist die natuerlichste Frage
+        #                          der Welt und rief die Casino-Statistik auf
+        #   'tage'   -> trage      'Tage' ist Alltagsdeutsch
+        #   'reply'  -> replay     'lese'/'leser' -> leise/leiser
+        #   'erlass' -> verlass    im Bot mit Schuldenbuch besonders fies:
+        #                          statt Schulden zu erlassen ging Flo aus dem
+        #                          Voice-Channel
+        "abzaehlen", "abzählen", "aktive", "aktiven", "arten", "blieb",
+        "blieben", "eich", "erlass", "haelt", "hält", "handle", "handler",
+        "landen", "leib", "lese", "leser", "mate", "mins", "raet", "rät",
+        "rasten", "rauten", "reichte", "relay", "reply", "saetze", "sätze",
+        "setzte", "spielte", "starts", "states", "status", "strand", "tage",
+        "tagen", "traege", "träge", "verrate", "worst",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

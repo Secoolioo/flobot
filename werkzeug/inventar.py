@@ -934,26 +934,43 @@ def untergrenze_pruefen(stand):
 # --- cmdnorm messen statt raten ---------------------------------------------
 
 class CmdnormPruefung:
-    """Was verbiegt cmdnorm heute, das es nicht verbiegen sollte?
+    """Welche Woerter verbiegt cmdnorm, ohne dass es jemand so wollte?
 
-    cmdnorm korrigiert Vertipper auf Befehle. Der Preis: ein unbekanntes Wort
-    kann auf einen Befehl GEBOGEN werden, der gar nicht gemeint war - 'banner'
-    wird zu 'banne'. Bisher war das eine Vermutung. Sobald das Inventar die
-    echte Befehlsliste kennt, laesst es sich messen:
+    cmdnorm korrigiert Vertipper auf Befehle. Das geschieht in drei Toepfen,
+    und nur einer davon ist gefaehrlich:
 
-      - Jedes Wort aus dem Repo-Wortschatz durch normalize() schicken.
-      - Wo ein Wort, das KEIN Befehl ist, zu einem Befehl wird, ist ein
-        Fehlgriff.
-      - Getrennt ausgewiesen: 'verbogen_heute' (das Wort ist selbst ein Befehl
-        eines anderen Moduls - aktiv schaedlich) und 'nur_vorsorglich' (das
-        Wort tippt heute vermutlich niemand).
+        ALIAS     exakte Uebersetzung ('cash' -> 'coins')     - gewollt
+        DIALECT   exakte Mundart ('fladern' -> 'klau')        - gewollt
+        _fuzzy    Tippfehler-Toleranz nach Buchstabenabstand  - raet
+
+    Nur _fuzzy raet. Und weil es raet, kann es ein ganz normales Wort auf einen
+    Befehl biegen: 'arten' wird zu 'raten', 'eich' zu 'reich'. Wer das schreibt,
+    loest einen Befehl aus, den er nicht gemeint hat.
+
+    Der erste Messversuch warf alle drei Toepfe zusammen und meldete 299
+    'Fehlgriffe' - fast alle davon absichtliche Aliase. Eine Liste, in der das
+    Gewollte und das Verunglueckte nebeneinanderstehen, liest niemand zweimal.
+    Deshalb wird hier nach MECHANISMUS getrennt, und nur der ratende Topf
+    ausgewertet.
+
+    Drei Schweregrade:
+
+      hijack      Das Wort ist selbst ein funktionierender Befehl eines Moduls,
+                  steht aber nicht in cmdnorm.KNOWN. cmdnorm schreibt es um,
+                  BEVOR das Modul es je sieht - der Befehl ist unerreichbar.
+                  Das ist die schlimmste Sorte: eine verlorene Funktion.
+      fehlgriff   Ein ANDERES Wort landet auf einem Befehl ('arten' -> 'raten').
+      beugung     Dieselbe Wortfamilie ('bannen' -> 'banne') - genau dafuer ist
+                  die Toleranz da, das soll so bleiben.
+      kurz        Unter vier Zeichen - da ist jeder Abstand klein, und es tippt
+                  ohnehin kaum jemand.
 
     Diese Klasse AENDERT NICHTS. Sie liefert die Zahlen, auf deren Grundlage
-    man cmdnorm dann von Hand repariert.
+    man cmdnorm dann von Hand repariert (naemlich per STOPWORDS).
     """
 
     def __init__(self, stand):
-        self.befehle = set(stand.get("befehle", {}))
+        self.befehle = {w.lower() for w in stand.get("befehle", {})}
 
     def wortschatz(self):
         """Alle Woerter, die im Repo als Text vorkommen - die Sprache des Bots."""
@@ -965,26 +982,63 @@ class CmdnormPruefung:
         return woerter
 
     def messen(self):
+        """-> {"hijack": {...}, "alltagswort": {...}, "kurz": {...}}"""
         import cmdnorm
-        verbogen_heute, nur_vorsorglich = {}, {}
+        raus = {"hijack": {}, "fehlgriff": {}, "beugung": {}, "kurz": {}}
         for wort in sorted(self.wortschatz()):
-            if wort in self.befehle:
-                continue                     # ist selbst ein Befehl, alles gut
+            if wort in cmdnorm.KNOWN:
+                continue                 # cmdnorm laesst echte Befehle in Ruhe
+            if wort in cmdnorm.ALIAS or wort in cmdnorm.DIALECT:
+                continue                 # gewollte Uebersetzung, kein Fehlgriff
+            if "_" in wort:
+                continue                 # Bezeichner aus dem Code, kein Chatwort
             try:
                 nachher = cmdnorm.normalize(wort)
-            except Exception:                # noqa: BLE001
+            except Exception:            # noqa: BLE001
                 continue
             if not nachher:
                 continue
             ziel = nachher.split()[0].lower()
-            if ziel == wort or ziel not in self.befehle:
+            if ziel == wort:
                 continue
-            # Ein Wort, das im Repo oft vorkommt, tippen Leute vermutlich auch.
-            if len(wort) >= 4:
-                verbogen_heute[wort] = ziel
+            if wort in self.befehle:
+                raus["hijack"][wort] = ziel
+            elif len(wort) < 4:
+                raus["kurz"][wort] = ziel
+            elif self._ist_beugung(wort, ziel):
+                raus["beugung"][wort] = ziel
             else:
-                nur_vorsorglich[wort] = ziel
-        return verbogen_heute, nur_vorsorglich
+                raus["fehlgriff"][wort] = ziel
+        return raus
+
+    @staticmethod
+    def _ist_beugung(wort, ziel):
+        """Ist das eine Beugung des Befehls - oder ein anderes Wort?
+
+        Diese Unterscheidung ist der ganze Nutzen der Messung. 'bannen' ->
+        'banne' und 'charts' -> 'chart' sind genau das, wofuer die Toleranz
+        gebaut wurde: derselbe Wortstamm, nur anders gebeugt. 'arten' ->
+        'raten' und 'erlass' -> 'verlass' sind etwas voellig anderes - zwei
+        verschiedene Woerter, die zufaellig einen Buchstaben auseinanderliegen.
+
+        Ohne die Trennung stehen beide in derselben Liste, die Liste hat 218
+        Zeilen, und niemand liest sie zu Ende. Das Kennzeichen der Beugung: der
+        eine ist der Anfang des anderen.
+        """
+        return wort.startswith(ziel) or ziel.startswith(wort)
+
+    @staticmethod
+    def vorschlag_pruefen(woerter):
+        """Waere es sicher, diese Woerter in STOPWORDS aufzunehmen?
+
+        Ein Wort in STOPWORDS laesst cmdnorm in Ruhe. Steht dort aber ein
+        echter Befehl, waere die Tippfehler-Toleranz FUER diesen Befehl weg -
+        aus einer Reparatur wuerde ein neuer Schaden. cmdnorm faengt das in der
+        Klasse schon ab (STOPWORDS -= KNOWN), aber ein stiller Abfang ist keine
+        Antwort: hier wird der Konflikt benannt.
+        """
+        import cmdnorm
+        return sorted(set(woerter) & set(cmdnorm.KNOWN))
 
 
 # --- Kommandozeile ----------------------------------------------------------
@@ -1023,13 +1077,23 @@ def main(argv=None):
     zaehlung_zeigen(neu)
 
     if a.cmdnorm:
-        schaedlich, vorsorglich = CmdnormPruefung(neu).messen()
-        print(f"cmdnorm verbiegt {len(schaedlich)} laengere und "
-              f"{len(vorsorglich)} kurze Woerter auf einen Befehl:\n")
-        for wort, ziel in sorted(schaedlich.items())[:80]:
-            print(f"  {wort:24} -> {ziel}")
-        if len(schaedlich) > 80:
-            print(f"  ... und {len(schaedlich) - 80} weitere")
+        fund = CmdnormPruefung(neu).messen()
+        for art, titel in (
+                ("hijack", "HIJACK - das Wort IST ein Befehl, kommt aber nie an"),
+                ("fehlgriff", "FEHLGRIFF - ein anderes Wort landet auf einem Befehl"),
+                ("beugung", "Beugungen (so soll die Toleranz arbeiten)"),
+                ("kurz", "kurze Woerter (unter 4 Zeichen)")):
+            posten = fund[art]
+            print(f"\n{titel}: {len(posten)}")
+            for wort, ziel in sorted(posten.items())[:60]:
+                print(f"  {wort:24} -> {ziel}")
+            if len(posten) > 60:
+                print(f"  ... und {len(posten) - 60} weitere")
+        konflikt = CmdnormPruefung.vorschlag_pruefen(
+            list(fund["hijack"]) + list(fund["fehlgriff"]))
+        if konflikt:
+            print("\nACHTUNG - diese Woerter sind selbst Befehle in cmdnorm.KNOWN "
+                  "und duerfen\nNICHT einfach in STOPWORDS: " + ", ".join(konflikt))
         return 0
 
     zu_wenig = untergrenze_pruefen(neu)
