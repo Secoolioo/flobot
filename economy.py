@@ -12,6 +12,7 @@ Topf gibt.
 """
 
 import asyncio
+import bisect
 import io
 import logging
 import os
@@ -365,24 +366,52 @@ class Economy(FeatureBasis):
         nimmt alle anderen mit."""
         return cls._zahl((kv[1] or {}).get("xp", 0))
 
+    #: Ab welcher Gesamt-XP jedes Level beginnt - einmal ausgerechnet.
+    #: _SCHWELLEN[L] ist die XP-Summe, die man fuer Level L gebraucht hat.
+    #: Gebaut mit genau derselben Rechnung wie frueher die Schleife, damit die
+    #: Grenzen Zahl fuer Zahl dieselben sind.
+    _SCHWELLEN = None
+
+    @classmethod
+    def _schwellen(cls):
+        if cls._SCHWELLEN is None:
+            werte, summe = [0], 0
+            for level in range(1001):
+                summe += 100 + level * 55
+                werte.append(summe)
+            cls._SCHWELLEN = werte
+        return cls._SCHWELLEN
+
     def _level_for_xp(self, xp):
         """Rechnet Gesamt-XP in (Level, XP-im-Level, XP-bis-naechstes-Level) um.
 
         Stufe L -> L+1 kostet 100 + L*55 XP (wird mit jedem Level teurer).
+
+        Frueher lief das als Schleife von Null hoch - fuer einen Nutzer auf
+        Level 40 also vierzig Runden, und zwar bei jedem Aufruf. Das Panel ruft
+        es fuer JEDE Zeile seiner Nutzerliste, also bei 3.000 Nutzern viele
+        zehntausend Runden je Seitenaufruf. Die Schwellen haengen aber an gar
+        nichts ausser dem Level: einmal ausrechnen, danach nachschlagen.
+
+        bisect statt einer Formel, weil das nachweisbar dieselben Grenzen trifft
+        - die Tabelle entsteht aus derselben Rechnung wie frueher die Schleife.
+        Eine geschlossene Formel muesste man auf Rundung bei jedem Uebergang
+        pruefen; das waere Aufwand fuer nichts.
         """
         # Einmal normalisieren deckt beide Karten-Wege ab: _card_image rechnet
         # das Level VOR seinem try/except aus, dort greift kein Fallback mehr.
         xp = self._zahl(xp)
-        level = 0
-        needed = 0
-        while True:
-            step = 100 + level * 55
-            if xp < needed + step:
-                return level, xp - needed, step
-            needed += step
-            level += 1
-            if level > 1000:  # Sicherheitsnetz
-                return level, 0, step
+        schwellen = self._schwellen()
+        # max(0, ...): bei negativer XP liefert bisect -1, und daraus wuerde ein
+        # Level -1 mit absurdem Rest. Die Schleife vorher gab dort (0, xp, 100)
+        # zurueck - ein kaputtes Profil soll ein Level 0 haben, kein negatives.
+        level = max(0, bisect.bisect_right(schwellen, xp) - 1)
+        if level > 1000:
+            # Sicherheitsnetz wie vorher. Die Schleife brach NACH dem Hochzaehlen
+            # ab und gab dabei den Schritt von Level 1000 zurueck, nicht den von
+            # 1001 - hier steht deshalb 1000 und nicht level.
+            return level, 0, 100 + 1000 * 55
+        return level, xp - schwellen[level], 100 + level * 55
 
     def _level_only(self, xp):
         return self._level_for_xp(xp)[0]

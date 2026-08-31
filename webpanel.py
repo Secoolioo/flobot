@@ -34,6 +34,7 @@ Host/Port: WEBPANEL_HOST / WEBPANEL_PORT (Standard 0.0.0.0:9123).
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -92,6 +93,7 @@ class WebPanel(FeatureBasis):
         self._pass = "Secoolio"
         self._ttl = 12 * 3600
         self._html_cache = None
+        self._html_kennung = None
         self._av_cache = {}    # uid -> (avatar_url|None, ablauf) fuer /api/avatar
         self._fails = {}       # ip -> (Fehlversuche, gesperrt_bis) gegen Raten
         self._auth = False     # Login verlangen? (WEBPANEL_AUTH, Standard aus)
@@ -264,16 +266,22 @@ class WebPanel(FeatureBasis):
             self._spawn_save()
 
     def _spawn_save(self, topf=None):
-        """Speichert nebenher - der Knopfdruck soll nicht auf die Platte warten."""
+        """Speichern anmelden - der Knopfdruck soll nicht auf die Platte warten.
+
+        Frueher startete jeder protokollierte Knopfdruck und jede gesehene DM
+        einen eigenen Speicher-Task, und jeder davon schrieb die ganze Datei neu
+        - synchron im Event-Loop. Beim Durchklicken im Panel waren das dutzende
+        volle Serialisierungen hintereinander.
+
+        store.save_soon sammelt das auf ein Schreiben pro Sekunde zusammen.
+        Verloren gehen kann dabei nichts Wichtiges: es sind Protokollzeilen und
+        ein DM-Verzeichnis, und store.alle_sichern faengt sie vor dem Neustart
+        ohnehin ein.
+        """
         topf = topf if topf is not None else self._log_store
         if topf is None:
             return
-        try:
-            aufgabe = asyncio.get_running_loop().create_task(topf.save())
-        except RuntimeError:
-            return          # kein Loop (Tests)
-        self._log_tasks.add(aufgabe)
-        aufgabe.add_done_callback(self._log_tasks.discard)
+        topf.save_soon()
 
     async def _api_log(self, request):
         """Die letzten Panel-Aktionen, neueste zuerst."""
@@ -442,12 +450,29 @@ class WebPanel(FeatureBasis):
 
     # --- Seiten -----------------------------------------------------------
     async def _index(self, request):
+        """Die eine Seite. 168 KB - die muss nicht bei jedem Klick neu kommen.
+
+        Sie wird schon im Speicher gehalten, ging aber ohne jede Cache-Angabe
+        raus: der Browser holte sie bei jedem Neuladen komplett. Mit einer
+        Kennung (ETag) antwortet der Server beim zweiten Mal mit 304 und einer
+        leeren Antwort. Die Kennung haengt am INHALT, nicht an der Zeit - ein
+        Update aendert sie sofort, und niemand sitzt auf einer alten Seite.
+        """
         if self._html_cache is None:
             try:
                 self._html_cache = _HTML_PATH.read_text(encoding="utf-8")
             except OSError:
                 self._html_cache = ("<h1>Flo Panel</h1><p>webpanel.html fehlt.</p>")
-        return web.Response(text=self._html_cache, content_type="text/html")
+            self._html_kennung = '"%s"' % hashlib.sha1(
+                self._html_cache.encode("utf-8")).hexdigest()[:16]
+        if request.headers.get("If-None-Match") == self._html_kennung:
+            return web.Response(status=304, headers={"ETag": self._html_kennung})
+        return web.Response(text=self._html_cache, content_type="text/html",
+                            headers={"ETag": self._html_kennung,
+                                     # no-cache heisst NICHT 'nicht speichern',
+                                     # sondern 'vor dem Benutzen nachfragen' -
+                                     # genau das, was das ETag beantwortet.
+                                     "Cache-Control": "no-cache"})
 
     async def _api_config(self, request):
         """Was die Oberflaeche VOR dem Login wissen muss. Bewusst ohne Waechter -
