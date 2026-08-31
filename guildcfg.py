@@ -30,13 +30,14 @@ from dataclasses import dataclass
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 import numfmt
 from store import JsonStore
 
 log = logging.getLogger("dcbot.guildcfg")
 
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Wer will erfahren, dass sich eine Einstellung geaendert hat?
 # {key: [funktion(gid), ...]}. Gefuellt ueber horcht_auf().

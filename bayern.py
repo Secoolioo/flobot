@@ -19,12 +19,13 @@ import re
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 import guildcfg
 
 log = logging.getLogger("dcbot.bayern")
 
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 
 class Bayern(FeatureBasis):

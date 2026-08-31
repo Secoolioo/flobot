@@ -54,13 +54,14 @@ import time
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import numfmt
 from store import JsonStore
 
 log = logging.getLogger("dcbot.profil")
 
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # So lange gilt ein per fetch_user geholtes Profil (Banner/Akzentfarbe) als
 # frisch. Der Aufruf kostet jedes Mal einen echten Request, und ein Banner

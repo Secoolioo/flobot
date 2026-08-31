@@ -33,6 +33,7 @@ import time
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import economy
 import numfmt
@@ -42,7 +43,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.casino")
 
 # Sentinel: Casino hat selbst geantwortet (Embed/Bild/Buttons) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 
 MIN_BET = 1

@@ -21,6 +21,7 @@ import aiohttp
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 import guildcfg
 import render
@@ -29,7 +30,7 @@ log = logging.getLogger("dcbot.food")
 
 
 class Food(FeatureBasis):
-    HANDLED = object()
+    HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
     # In DIESEM Channel wird jedes gepostete Essensbild automatisch analysiert.
     CHANNEL_ID = int(os.getenv("KALORIEN_CHANNEL_ID", "1522294725116428329") or "0")

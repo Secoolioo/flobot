@@ -18,6 +18,7 @@ import aiohttp
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import render
 
@@ -28,7 +29,7 @@ class Media(FeatureBasis):
     """Bild-Features (Bild generieren + Quote-Meme) als Objekt gekapselt."""
 
     # bot.py erkennt das: das Modul hat selbst geantwortet (Bild gesendet).
-    HANDLED = object()
+    HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
     # Pollinations: kostenlose Bildgenerierung ohne API-Key.
     _POLLI = ("https://image.pollinations.ai/prompt/{p}"

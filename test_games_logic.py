@@ -13564,7 +13564,12 @@ def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
     """Der Rauchtest nuetzt nichts, wenn er ein Modul vergisst, das bot.py
     aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten."""
     quelle = open("bot.py", encoding="utf-8").read()
-    anfang = quelle.index("_HANDLED_SENTINELS = tuple(")
+    # Anker bewusst nur auf den NAMEN, nicht auf die Schreibweise dahinter:
+    # als _HANDLED_SENTINELS von 'tuple(' auf '(basis.HANDLED,) + tuple(' wechselte,
+    # fand dieser Test seine Stelle nicht mehr und fiel mit 'substring not found'
+    # um - ein Test, der an der Formatierung fremden Codes haengt, meldet
+    # Aenderungen statt Fehlern.
+    anfang = quelle.index("_HANDLED_SENTINELS = ")
     kette = set(re.findall(r"\((?:\w+_ENABLED)[^)]*\), (\w+)\.handle",
                            quelle[anfang:]))
     assert len(kette) >= 15, f"Kette nicht gefunden (nur {kette})"
@@ -14899,6 +14904,42 @@ def test_panel_laesst_sich_wirklich_bedienen():
     assert lauf.returncode == 0, (
         "Das Panel laesst sich nicht mehr bedienen:\n"
         + (lauf.stdout or "")[-3000:] + (lauf.stderr or "")[-1500:])
+
+
+def test_ein_sentinel_fuer_alle():
+    """Jedes HANDLED muss DASSELBE Objekt sein.
+
+    'Ich habe selbst geantwortet' erkennt bot.on_message an der IDENTITAET des
+    zurueckgegebenen Objekts. Frueher hatte jedes der 21 Module sein eigenes
+    `HANDLED = object()`, und bot.py sammelte sie aus einer von Hand gepflegten
+    Liste ein. Beim Aufteilen einer Datei waere das eine Falle mit Ansage: die
+    neue Datei macht sich ihr eigenes object(), das ist ein ANDERES, bot.py
+    erkennt es nicht - und die Antwort landet in str(antwort)[:80]. Das ist kein
+    Schweigen, sondern ein Fehler auf einem nackten object().
+
+    Seit basis.HANDLED zeigen alle auf dasselbe. Dieser Test haelt das fest,
+    damit es beim naechsten neuen Modul nicht wieder auseinanderlaeuft.
+    """
+    import importlib
+    import basis
+
+    namen = ("arbeit bayern casino economy floaktie food games giveaway "
+             "guildcfg lotto luxus media merchant moderation music profil "
+             "schulden steal terraria voicegags words").split()
+    eigen = []
+    for name in namen:
+        modul = importlib.import_module(name)
+        if getattr(modul, "HANDLED", None) is not basis.HANDLED:
+            eigen.append(name)
+    assert not eigen, (
+        f"Diese Module haben ein EIGENES HANDLED statt basis.HANDLED: {eigen}. "
+        f"bot.py erkennt es nur, solange es in seiner Liste steht - und die "
+        f"vergisst man beim Aufteilen einer Datei.")
+
+    # Und der Fangnetz-Eintrag in bot.py muss basis.HANDLED wirklich enthalten.
+    import bot
+    assert any(s is basis.HANDLED for s in bot._HANDLED_SENTINELS), (
+        "bot._HANDLED_SENTINELS kennt basis.HANDLED nicht")
 
 
 def test_lauf_kennt_jede_testdatei():

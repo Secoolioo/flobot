@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import guildcfg
 import leaderboard_img
@@ -41,7 +42,7 @@ log = logging.getLogger("dcbot.economy")
 
 # Sentinel: economy hat selbst geantwortet (interaktive Shop-/Inventar-View)
 # -> bot.py schweigt (wie bei games/casino).
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 
 class Economy(FeatureBasis):

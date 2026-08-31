@@ -34,13 +34,14 @@ from zoneinfo import ZoneInfo
 import discord
 
 import economy
+import basis
 from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.floaktie")
 
 # Sentinel: die Aktie hat selbst geantwortet (Panel gesendet) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Marke.
 NAME = "FloCorp"

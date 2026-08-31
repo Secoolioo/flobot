@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import casino
 import economy
@@ -37,7 +38,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.games")
 
 # Sentinel: games hat selbst geantwortet (Bild/Embed) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Optionaler Counting-Channel (Zahlen hochzaehlen). Leer = aus.
 COUNTING_CHANNEL_ID = int(os.getenv("COUNTING_CHANNEL_ID", "0") or "0")

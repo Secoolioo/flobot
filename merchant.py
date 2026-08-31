@@ -35,13 +35,14 @@ import discord
 
 import economy
 import titles
+import basis
 from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.merchant")
 
 # Sentinel: der Haendler hat selbst geantwortet (Panel gesendet) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Befehlswoerter, auf die der Haendler hoert.
 _CMDS = ("haendler", "händler", "merchant", "kraemer", "krämer",

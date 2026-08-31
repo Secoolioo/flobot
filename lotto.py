@@ -36,13 +36,14 @@ from zoneinfo import ZoneInfo
 import discord
 
 import economy
+import basis
 from basis import FeatureBasis
 from store import JsonStore
 
 log = logging.getLogger("dcbot.lotto")
 
 # Sentinel: das Lotto hat selbst geantwortet (Panel gesendet) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Befehlswoerter.
 _CMDS = ("lotto", "lottery", "jackpot", "lose", "los", "ziehung")

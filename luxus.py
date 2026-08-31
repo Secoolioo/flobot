@@ -29,6 +29,7 @@ import discord
 import numfmt
 
 import ai
+import basis
 from basis import FeatureBasis
 import economy
 from store import JsonStore
@@ -36,7 +37,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.luxus")
 
 # Sentinel: luxus hat selbst geantwortet -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 THRONE_START = 100_000
 THRONE_FACTOR = 1.75          # jede Eroberung: Preis x1.75

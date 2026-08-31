@@ -24,6 +24,7 @@ from pathlib import Path
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 
 log = logging.getLogger("dcbot.voice")
@@ -38,7 +39,7 @@ _KEIN_TTS = frozenset((
 ))
 
 # Sentinel: voicegags hat selbst geantwortet (Soundboard-Menue) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 SOUNDS_DIR = Path(os.getenv("SOUNDS_DIR", str(Path(__file__).resolve().parent / "sounds")))
 JOIN_DIR = SOUNDS_DIR / "join"

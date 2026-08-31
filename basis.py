@@ -71,6 +71,27 @@ def erstes_ziel(message, *, ohne_bots=True, ohne=()):
     return None
 
 
+#: "Ich habe selbst geantwortet" - EIN Objekt fuer den ganzen Bot.
+#:
+#: Jedes Modul, das seine Antwort selbst in den Kanal schickt, gibt statt eines
+#: Textes dieses Objekt zurueck. bot.on_message erkennt daran, dass es nichts
+#: mehr senden muss - und zwar per IDENTITAET (`ist es DIESES Objekt?`), nicht
+#: per Vergleich.
+#:
+#: Genau darum steht es hier und nicht 21 Mal einzeln in den Modulen. Vorher
+#: hatte jedes Modul sein eigenes `HANDLED = object()`, und bot.py sammelte sie
+#: aus einer von Hand gepflegten Liste ein. Beim Aufteilen einer Datei waere das
+#: eine Falle mit Ansage: die neue Datei macht sich ihr eigenes object(), das
+#: ist ein ANDERES, bot.py erkennt es nicht - und die Antwort landet in
+#: str(antwort)[:80]. Das ist dann kein Schweigen, sondern ein Fehler auf einem
+#: nackten object().
+#:
+#: Mit einem gemeinsamen Sentinel ist Objekt-Identitaet keine Frage der Datei
+#: mehr. Die Module behalten ihren Namen `HANDLED` - er zeigt nur alle auf
+#: dasselbe Objekt.
+HANDLED = object()
+
+
 class FeatureBasis:
     """Was jedes Feature-Modul koennen muss: seinen eigenen Namen kennen."""
 

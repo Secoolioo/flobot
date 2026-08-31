@@ -24,6 +24,7 @@ import time
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, echte_erwaehnungen
 import economy
 from store import JsonStore
@@ -33,7 +34,7 @@ log = logging.getLogger("dcbot.steal")
 # Sentinel: steal hat selbst geantwortet -> bot.py schweigt. Wir nutzen zwar die
 # Empfehlung (einfach das Embed zurueckgeben, bot.py sendet), halten das Sentinel
 # aber wie die anderen Module bereit - falls wir doch mal selbst reply() rufen.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Befehlswoerter, auf die der Raub hoert.
 _CMDS = ("steal", "klau", "klauen", "raub", "rauben", "heist")

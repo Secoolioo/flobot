@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, echte_erwaehnungen
 import guildcfg
 from store import JsonStore
@@ -42,7 +43,7 @@ log = logging.getLogger("dcbot.mod")
 
 # handle() gibt das zurueck, wenn es den Befehl SELBST erledigt und bereits
 # geantwortet hat -> bot.py soll dann nichts mehr senden.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # --- Einstellungen ------------------------------------------------------
 # Diese vier Werte stehen jetzt in guildcfg und gelten JE SERVER - sie sind

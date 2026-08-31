@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 import admin
 import ai
 import arbeit
+import basis
 import bayern
 import casino
 import cmdnorm
@@ -237,18 +238,23 @@ FEATURE_LOADED = {
     "arbeit": ARBEIT_ENABLED,
 }
 
-# Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle. Vorher war das
-# eine handgepflegte 20-fache or-Kette mitten in on_message: wer ein neues Modul
-# mit eigenem HANDLED baut und die Kette vergisst, faellt damit unten in
-# antwort[:80] und _send_reply - und das ist kein Schweigen, sondern ein
-# AttributeError auf einem object(). Ein Test prueft, dass hier jedes Modul mit
-# einem HANDLED auch wirklich drinsteht.
-_HANDLED_SENTINELS = tuple(
+# Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle.
+#
+# Seit basis.HANDLED ist das eigentlich nur noch EIN Objekt: die Module setzen
+# ihr HANDLED alle darauf. Die Liste bleibt trotzdem stehen, und zwar bewusst -
+# sie kostet nichts und faengt den Fall ab, dass ein Modul (etwa eine frisch
+# abgetrennte Datei) doch wieder ein eigenes object() baut. Ohne diesen Fang
+# faellt so eine Antwort unten in str(antwort)[:80], und das ist kein
+# Schweigen, sondern ein Fehler auf einem nackten object().
+#
+# basis.HANDLED steht IMMER drin, auch wenn kein Modul geladen wurde.
+_HANDLED_SENTINELS = (basis.HANDLED,) + tuple(
     getattr(modul, "HANDLED") for modul in (
         moderation, music, casino, games, economy, media, food, words, luxus,
         voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
         steal, bayern, guildcfg, profil, arbeit)
     if getattr(modul, "HANDLED", None) is not None
+    and getattr(modul, "HANDLED") is not basis.HANDLED
 )
 
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit

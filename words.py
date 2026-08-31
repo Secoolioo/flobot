@@ -25,6 +25,7 @@ import re
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 import economy
 import render
@@ -33,7 +34,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.words")
 
 # Sentinel: words hat selbst geantwortet (Bild) -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Debounce fuers Speichern: words.json waechst mit dem Server - nicht bei jeder
 # Nachricht schreiben, sondern gesammelt.

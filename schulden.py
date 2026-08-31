@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import economy
 import numfmt
@@ -60,7 +61,7 @@ log = logging.getLogger("dcbot.schulden")
 SAVE_DEBOUNCE = float(os.getenv("SCHULDEN_SAVE_DEBOUNCE", "3") or "3")
 
 # Sentinel: das Modul hat selbst geantwortet -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 fmt = numfmt.fmt
 

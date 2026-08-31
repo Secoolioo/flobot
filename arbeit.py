@@ -54,6 +54,7 @@ from datetime import date, datetime
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis, erstes_ziel
 import economy
 import numfmt
@@ -62,7 +63,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.arbeit")
 
 # Sentinel: wir haben selbst geantwortet -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # --- Befehlswoerter ---------------------------------------------------------
 _CMDS = ("work", "arbeit", "arbeiten", "job", "schicht", "malochen")

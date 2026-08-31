@@ -37,6 +37,7 @@ import time
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 import economy
 import numfmt
@@ -45,7 +46,7 @@ from store import JsonStore
 log = logging.getLogger("dcbot.giveaway")
 
 # Sentinel: das Modul hat selbst geantwortet -> bot.py schweigt.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 fmt = numfmt.fmt
 

@@ -38,6 +38,7 @@ import discord
 import numfmt
 
 import ai
+import basis
 from basis import FeatureBasis
 import guildcfg
 from store import JsonStore
@@ -51,7 +52,7 @@ log = logging.getLogger("dcbot.music")
 
 # Sentinel: das Modul hat selbst geantwortet (Embed + Buttons direkt gesendet).
 # bot.py erkennt das und schickt KEINE zusaetzliche Antwort.
-HANDLED = object()
+HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 MAX_QUEUE = int(os.getenv("MUSIC_MAX_QUEUE", "50") or "50")
 # ^ Vorgabewert. Was WIRKLICH gilt, sagt max_queue(gid) - jeder Server stellt

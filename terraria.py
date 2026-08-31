@@ -29,6 +29,7 @@ import aiohttp
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 
 log = logging.getLogger("dcbot.terraria")
@@ -141,7 +142,7 @@ class Terraria(FeatureBasis):
     """Terraria-Wiki-Nachschlagewerk als Objekt gekapselt."""
 
     # bot.py erkennt das: das Modul hat selbst geantwortet.
-    HANDLED = object()
+    HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
     # Prefix-Befehle, auf die das Feature reagiert (erstes Wort nach 'Flo').
     _PREFIXE = {"terraria", "terra", "twiki", "terrariawiki"}
