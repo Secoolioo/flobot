@@ -486,7 +486,7 @@ class WebPanel(FeatureBasis):
         n = economy.display_name_of(uid) if economy.is_enabled() else None
         return n or f"User {uid}"
 
-    def _user_row(self, uid, prof):
+    def _user_row(self, uid, prof, anteile=None):
         # Kaputte/halbe Profile (z. B. coins=null nach einem Absturz) duerfen die
         # Liste nicht komplett abschiessen - jedes Feld wird defensiv gelesen.
         if not isinstance(prof, dict):
@@ -495,13 +495,21 @@ class WebPanel(FeatureBasis):
         level = 0
         if economy.is_enabled():
             level = self._safe(lambda: economy.instance._level_only(xp), 0) or 0
-        shares = 0
-        try:
-            import floaktie
-            if floaktie.is_enabled():
-                shares = self._as_int(floaktie.instance.shares_of(uid), 0)
-        except Exception:  # noqa: BLE001
-            pass
+        # Die Anteile kommen als fertige Tabelle herein, wenn der Aufrufer eine
+        # hat. Vorher fragte JEDE Zeile einzeln bei floaktie nach - bei 10.000
+        # Nutzern 10.000 Nachschlagevorgaenge fuer eine Liste, die einmal zu
+        # holen gewesen waere. Und im Thread darf man ohnehin nicht mehr in
+        # fremden Speichern stoebern.
+        if anteile is not None:
+            shares = self._as_int(anteile.get(str(uid)), 0)
+        else:
+            shares = 0
+            try:
+                import floaktie
+                if floaktie.is_enabled():
+                    shares = self._as_int(floaktie.instance.shares_of(uid), 0)
+            except Exception:  # noqa: BLE001
+                pass
         name = prof.get("name")
         name = str(name).strip() if isinstance(name, (str, int, float)) else ""
         titel = prof.get("title")
@@ -531,18 +539,54 @@ class WebPanel(FeatureBasis):
         except Exception:  # noqa: BLE001
             return []
 
-    def _all_rows(self):
+    def _all_rows(self, anteile=None):
         """Alle Zeilen: economy-Profile PLUS reine Aktien-Halter.
 
         Wer nur Anteile besitzt (z. B. per Panel gesetzt, ohne je Coins gehabt zu
         haben), tauchte vorher in keiner Liste auf - zaehlte aber in den
         Boersenwert. Genau so verschwinden Anteile aus der Statistik."""
-        rows = [self._user_row(uid, p) for uid, p in list(self._users_dict().items())]
+        if anteile is None:
+            anteile = dict(self._holdings_items())
+        rows = [self._user_row(uid, p, anteile)
+                for uid, p in list(self._users_dict().items())]
         gesehen = {r["id"] for r in rows}
-        for uid, n in self._holdings_items():
+        for uid, n in anteile.items():
             if n > 0 and uid not in gesehen:
                 gesehen.add(uid)
-                rows.append(self._user_row(uid, {}))
+                rows.append(self._user_row(uid, {}, anteile))
+        return rows
+
+    async def _zeilen(self):
+        """Dasselbe wie _all_rows, aber ohne den Bot anzuhalten.
+
+        Das Panel laeuft IM Bot-Prozess und in DESSEN Event-Loop. _all_rows baut
+        fuer jeden Nutzer eine Zeile; gemessen sind das 19 ms bei 3.000 Nutzern
+        und 82 ms bei 10.000 - und die Oberflaeche fragt die Uebersicht alle
+        sechs Sekunden ab. So lange stand der ganze Bot: keine Antwort, keine
+        Musik, nichts.
+
+        Kein Zwischenspeicher, sondern ein Thread: wer im Panel Coins setzt,
+        soll sie sofort sehen. Ein Cache mit Verfallszeit wuerde da das Falsche
+        behaupten - und ein Cache mit Verwerfen waere eine Liste von Stellen,
+        die man vergessen kann.
+
+        Der Schnappschuss der beiden Speicher wird noch IM Loop gezogen (ein
+        list(), Mikrosekunden). Erst das Bauen der Zeilen wandert in den Thread:
+        ueber ein dict zu laufen, das der Bot gleichzeitig veraendert, waere
+        genau der Fehler, den man in einem Thread nicht machen darf.
+        """
+        profile = list(self._users_dict().items())
+        anteile = dict(self._holdings_items())
+        return await asyncio.to_thread(self._zeilen_bauen, profile, anteile)
+
+    def _zeilen_bauen(self, profile, anteile):
+        """Der reine Rechenteil - laeuft im Thread, fasst keinen Speicher an."""
+        rows = [self._user_row(uid, p, anteile) for uid, p in profile]
+        gesehen = {r["id"] for r in rows}
+        for uid, n in anteile.items():
+            if n > 0 and uid not in gesehen:
+                gesehen.add(uid)
+                rows.append(self._user_row(uid, {}, anteile))
         return rows
 
     def _guild(self, uid=None):
@@ -714,7 +758,7 @@ class WebPanel(FeatureBasis):
     # --- API: Uebersicht --------------------------------------------------
     async def _api_overview(self, request):
         self._guard(request)
-        rows = self._all_rows()
+        rows = await self._zeilen()
         coins_total = sum(r["coins"] for r in rows)
         top_coins = sorted(rows, key=lambda r: r["coins"], reverse=True)[:10]
         top_shares = sorted([r for r in rows if r["shares"] > 0],
@@ -811,7 +855,7 @@ class WebPanel(FeatureBasis):
         # kaputtes 'size' setzte auch die Seite still auf 1 zurueck.
         page = max(1, self._as_int(request.query.get("page", "1"), 1))
         size = min(100, max(5, self._as_int(request.query.get("size", "25"), 25)))
-        rows = self._all_rows()
+        rows = await self._zeilen()
         if q:
             rows = [r for r in rows if q in r["name"].lower() or q in r["id"]]
         keyf = {"coins": lambda r: r["coins"], "level": lambda r: r["xp"],
