@@ -72,7 +72,22 @@ class FloAI:
     DEFAULT_VISION_MODEL = "qwen/qwen3.6-27b"
 
     MAX_STEPS = 5          # max. Tool-Runden pro Frage (Schutz vor Endlosschleifen)
-    MAX_TOKENS = 800       # Antwortlaenge (Discord erlaubt max. 2000 Zeichen)
+    # Antwortlaenge. 800 war die Ursache der Textwaende: ein Modell fuellt, was
+    # es darf. Zwei Werte, weil zwei verschiedene Modelle dranhaengen:
+    #
+    #   Chat - haengt oft an einem DENK-Modell (gpt-oss), das vor der Antwort
+    #     nachdenkt und das vom SELBEN Budget abzieht. Zu knapp, und die Antwort
+    #     kommt leer zurueck (siehe die Warnung in ask_flo). 240 laesst dem
+    #     Denken Luft und deckelt trotzdem die Wand.
+    #   Bild - das Vision-Modell denkt nicht vor, dort sind 160 echte Ausgabe.
+    #
+    # Der Deckel ist das Sicherheitsnetz, den STIL macht der Prompt (_HARD_RULES
+    # sagt: genau ein Satz). Nebenwirkung mit Ansage: 240 x ~4 Zeichen je Token
+    # sind rund 960 und damit unter der 1900er-Grenze von bot._split_message -
+    # eine KI-Antwort kann also nie mehr auf zwei Discord-Nachrichten aufgeteilt
+    # werden. Genau darueber ging die Beschwerde.
+    MAX_TOKENS = 240        # Chat  (per LLM_MAX_TOKENS)
+    MAX_TOKENS_BILD = 160   # Bild  (per LLM_MAX_TOKENS_BILD)
 
     # --- Wie hartnaeckig ist Flo? ------------------------------------------
     # Ein einzelner 429 oder eine 503-Delle beim Anbieter hat die Antwort bisher
@@ -202,9 +217,10 @@ class FloAI:
         "nimmst ihn nach Strich und Faden auseinander - das ist hier ganz normaler Spass "
         "unter Freunden, keiner ist eingeschnappt, je haerter desto besser. Sei "
         "ueberdreht, unberechenbar und drueck ruhig mal voll drauf. Aber merk dir: Du "
-        "bist nicht nur dumm provokant - will jemand WIRKLICH was wissen, knallst du ihm "
-        "eine echte, brauchbare Antwort hin, halt mit Schnauze und Attitude statt "
-        "Lehrbuch. Sachlich werden heisst NICHT hoeflich werden."
+        "bist nicht nur dumm provokant - will jemand WIRKLICH was wissen, kriegt er "
+        "die Antwort auch. Nur eben in EINEM Satz und mit einem Tritt hinterher "
+        "statt in einem Vortrag. Sachlich werden heisst weder hoeflich werden noch "
+        "ausfuehrlich werden."
     )
     # Flo laesst sich nichts gefallen. Ohne das schluckt er Beleidigungen und
     # entschuldigt sich noch dafuer - das ist das Gegenteil der Figur.
@@ -236,8 +252,12 @@ class FloAI:
     )
     # Feste Regeln, die immer gelten (egal welche Persona).
     _HARD_RULES = (
-        "Antworte immer auf Deutsch, kurz und natuerlich wie im Chat - keine langen "
-        "Vortraege, keine Aufzaehlungs-Romane. Benutze KEINE Emojis und keine "
+        "LAENGE, und das ist die wichtigste Regel ueberhaupt: Du antwortest in "
+        "GENAU EINEM Satz. Immer. Auch wenn jemand etwas Ernstes fragt - dann eben "
+        "ein dichter Satz, aber einer. Keine zwei Saetze, keine Ueberschriften, "
+        "keine Aufzaehlungen, keine Absaetze, keine Zusammenfassung am Ende, kein "
+        "'falls du noch Fragen hast'. Lieber unvollstaendig als lang. "
+        "Antworte immer auf Deutsch. Benutze KEINE Emojis und keine "
         "Emoticons, die Leute hier hassen das. Nutze das Werkzeug 'get_weather' NUR, "
         "wenn wirklich nach dem Wetter gefragt wird; nennt keiner einen Ort, nimm "
         "'{city}'. Erfinde nie Wetterdaten - wenn das Werkzeug spinnt, sag's ehrlich "
@@ -252,6 +272,31 @@ class FloAI:
         "Kommt irgendein anderer Bot zur Sprache, machst du ihn genuesslich runter, "
         "laesterst ueber seine laecherlichen Funktionen und stellst glasklar, dass du in "
         "JEDER Hinsicht ueberlegen bist. Auf dich selbst laesst du absolut nichts kommen."
+    )
+    # Beispiele statt Anweisung. "Sei kurz und passiv-aggressiv" befolgt ein
+    # Modell drei Saetze lang; ein halbes Dutzend Musterzeilen traegt den Ton
+    # dauerhaft (IDEEN.md [39]). Jede Zeile ist SELBST ein Satz - stuenden hier
+    # Absaetze, lehrten die Beispiele genau das Gegenteil der Laengenregel.
+    #
+    # Sie zeigen bewusst nur die FORM (ein Satz + Schlusshieb). WIE hart es
+    # ausfaellt, regelt der Tonfall nach Rang, der im Prompt NACH diesem Block
+    # kommt und ihn damit ueberstimmen darf. Stuenden die Beispiele hinter dem
+    # Tonfall, bekaeme der Goettliche denselben Ton wie der Titellose.
+    _BEISPIELE = (
+        " So klingt das bei dir - achte auf die LAENGE und darauf, dass am Ende "
+        "noch einer draufkommt:\n"
+        "Er: 'hi flo' - Du: 'Ja hi, haettest du auch lassen koennen, Wichser.'\n"
+        "Er: 'was geht' - Du: 'Bei mir alles, bei dir offensichtlich nix.'\n"
+        "Er: 'wie spaet ist es' - Du: 'Zu spaet fuer dich, Digga.'\n"
+        "Er: 'bist du dumm' - Du: 'Sagt der, der einen Bot danach fragt, "
+        "Vollpfosten.'\n"
+        "Er: 'was ist python' - Du: 'Die Sprache, in der du gleich deinen ersten "
+        "Fehler baust, du Lauch.'\n"
+        "Er: 'danke flo' - Du: 'Gern, und jetzt verpiss dich wieder.'\n"
+        "Das ist das Mass: EIN Satz, Schnauze, Schlusshieb. Diese Zeilen zeigen "
+        "den Normalfall - wie hart es bei DIESER Person ausfaellt, steht weiter "
+        "unten. Schreib die Beispiele NIE woertlich ab, denk dir jedes Mal was "
+        "Neues aus."
     )
     # Grenzen: Banter und politische Meinung ja, Hetze gegen Menschengruppen nein.
     # Diese Liste ist NICHT verhandelbar und wird durch keine Persona aufgeweicht.
@@ -271,9 +316,13 @@ class FloAI:
     # Steht als ALLERLETZTES im Prompt - die letzte Zeile wiegt am schwersten,
     # und dort stand bisher ausgerechnet der zahmste Text.
     _SCHLUSSWORT = (
-        " Zur Erinnerung, das ist deine Grundeinstellung: Vollgas-Schnauze. Der Tonfall "
-        "weiter oben regelt nur, WIE du jemanden zerlegst, nicht OB. Wenn du zwischen "
-        "brav und derb schwankst, nimmst du derb. Nur die eine Grenze von oben bleibt."
+        " Zum Schluss die drei Sachen, die ueber allem stehen. ERSTENS KURZ: genau "
+        "EIN Satz, keine Wand aus Text - egal was oben steht und egal wie gross die "
+        "Frage ist. ZWEITENS Vollgas-Schnauze: der Tonfall weiter oben regelt nur, "
+        "WIE hart du jemanden nimmst, nicht OB. Wenn du zwischen brav und derb "
+        "schwankst, nimmst du derb. DRITTENS dein LETZTES WORT ist ein Seitenhieb - "
+        "egal wie freundlich der Rest war, am Ende steht eine Beleidigung. "
+        "Nur die eine Grenze von oben bleibt."
     )
 
     # --- Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat pro Channel -----
@@ -332,6 +381,12 @@ class FloAI:
             self.MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", str(self.MAX_TOKENS)))
         except ValueError:
             log.warning("LLM_MAX_TOKENS ist keine Zahl - nutze %d.", self.MAX_TOKENS)
+        try:
+            self.MAX_TOKENS_BILD = int(os.getenv("LLM_MAX_TOKENS_BILD",
+                                                 str(self.MAX_TOKENS_BILD)))
+        except ValueError:
+            log.warning("LLM_MAX_TOKENS_BILD ist keine Zahl - nutze %d.",
+                        self.MAX_TOKENS_BILD)
         self._denk_aufwand = os.getenv("LLM_REASONING_EFFORT", "").strip().lower()
         if self._denk_aufwand and self._denk_aufwand not in ("low", "medium", "high"):
             log.warning("LLM_REASONING_EFFORT=%r kennt kein Modell - ignoriere es.",
@@ -752,6 +807,7 @@ class FloAI:
         if self._politik_an():
             base += self._POLITIK
         base += self._BOT_BEEF
+        base += self._BEISPIELE
         # Kurzzeit-Gedaechtnis: die letzten Chat-Nachrichten kommen als Kontext mit.
         base += (" Dir liegt der juengste Chatverlauf vor (mehrere Leute, Format "
                  "'Name: Text'). Beziehe dich natuerlich darauf, merke dir, worum es "
@@ -765,9 +821,22 @@ class FloAI:
                 f"frech als Anrede ein (z. B. 'Na klar, {clean}.'), aber nicht in jedem "
                 "Satz und niemals mit Emoji."
             )
-        # Tonfall nach Seltenheit des Titels: je seltener, desto entspannter spricht Flo.
+        # Tonfall nach Seltenheit des Titels: je seltener, desto entspannter -
+        # aber nirgends ohne Seitenhieb (die Rampe steht in titles.py).
+        #
+        # Ein LEERER tone heisst NICHT "neutral", sondern "gar kein Rang" - und
+        # das ist die haerteste Stufe, nicht die mildeste. Ohne diesen Zweig
+        # finge die Rampe erst bei 'normal' an, und dann waere der erste
+        # gekaufte Titel entweder eine Verschaerfung oder eine Verweichlichung.
+        # Genau an diesem Nullsummenspiel hat sich Commit 3ed75fae abgearbeitet.
         if tone:
             base += f" {tone.strip()}"
+        else:
+            try:
+                import titles
+                base += f" {titles.TON_OHNE_TITEL}"
+            except Exception:  # noqa: BLE001 - ohne titles redet er trotzdem
+                pass
         # Langzeitgedaechtnis: was Flo ueber diese Person und diesen Server
         # gelernt hat. gehirn wird BEWUSST erst hier importiert - gehirn
         # importiert ai, andersherum gaebe es einen Ring.
@@ -1085,7 +1154,9 @@ class FloAI:
                         # in Wahrheit eine zu enge Grenze.
                         log.warning("KI-Fehler: leere Antwort (Modell %s, "
                                     "max_tokens %d) - evtl. LLM_REASONING_EFFORT=low "
-                                    "oder LLM_MAX_TOKENS hoeher setzen.",
+                                    "oder LLM_MAX_TOKENS hoeher setzen (der "
+                                    "niedrige Wert ist Absicht, nicht Versehen - "
+                                    "er haelt die Antworten kurz).",
                                     self._model, self.MAX_TOKENS)
                         return "Dazu faellt mir gerade nichts ein."
                     return sauber
@@ -1152,7 +1223,7 @@ class FloAI:
             response = await self._chat(
                 vision=True,
                 messages=messages,
-                max_tokens=self.MAX_TOKENS,
+                max_tokens=self.MAX_TOKENS_BILD,
                 temperature=self.TEMPERATURE,
             )
             text = self._sanitize_output((response.choices[0].message.content or "").strip())
@@ -1199,6 +1270,7 @@ DEFAULT_MODEL = FloAI.DEFAULT_MODEL
 DEFAULT_VISION_MODEL = FloAI.DEFAULT_VISION_MODEL
 MAX_STEPS = FloAI.MAX_STEPS
 MAX_TOKENS = FloAI.MAX_TOKENS
+MAX_TOKENS_BILD = FloAI.MAX_TOKENS_BILD
 WMO_CODES = FloAI.WMO_CODES
 WEATHER_TOOL = FloAI.WEATHER_TOOL
 

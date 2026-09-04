@@ -311,10 +311,13 @@ statt Nachricht, wenn's nur Zustimmung ist, gelegentlich zwei kurze Nachrichten
 statt einer langen.
 *klein · `bot.py`*
 
-**[39] Passiv-aggressiv gezielt statt dauerhaft.** Der beste passiv-aggressive
-Ton entsteht durch **Beispiele** im Prompt, nicht durch die Anweisung „sei passiv-
-aggressiv". Drei, vier kurze Musterantworten reingelegt („Klar. Wie letztes Mal,
-ne?") — und er trifft den Ton dauerhaft.
+**[39] Passiv-aggressiv gezielt statt dauerhaft.** ✅ **Erledigt** (04.09.2026).
+Der beste passiv-aggressive Ton entsteht durch **Beispiele** im Prompt, nicht
+durch die Anweisung „sei passiv-aggressiv". Sechs Musterzeilen liegen jetzt als
+`_BEISPIELE` in `ai.py`, jede selbst ein Satz mit Schlusshieb. Sie stehen
+bewusst **vor** dem Tonfall nach Rang, damit sie nur die *Form* vorgeben und die
+Rampe die *Härte* — stünden sie danach, bekäme der Göttliche denselben Ton wie
+der Titellose. `test_beispiele_zeigen_das_mass` hält beides fest.
 *klein · `ai.py`*
 
 **[40] Er kennt euch auseinander.** Wer viel roastet, wird härter angegangen;

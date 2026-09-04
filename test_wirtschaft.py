@@ -3004,6 +3004,106 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
 
 
 
+def test_die_tonfall_rampe_zeigt_nach_unten():
+    """DIE Richtung der Tonfall-Rampe - und zwar dauerhaft.
+
+    Wunsch des Betreibers, woertlich (04.09.2026): "umso niedriger und nicht so
+    selten der rang war den man kaufen kann per flo shop/flo luxus umso
+    beschissener war er. Je seltener der rang je angenehmer war er aber
+    dennoch."
+
+    Also: kein Rang = am uebelsten, goettlich = am angenehmsten - aber nirgends
+    ohne Seitenhieb.
+
+    Diese Richtung wurde schon ZWEIMAL versehentlich gedreht (5bb9f6b9 ->
+    3ed75fae -> 5f53f6f), jedes Mal, weil sie nur in Prosa stand und jeder sie
+    anders gelesen hat. Deshalb prueft dieser Test beides: die ZAHL und dass die
+    Prosa zur Zahl passt.
+
+    WER DIESEN TEST AENDERT, AENDERT DIE ABSICHT DES BETREIBERS. Nicht anpassen,
+    bis er gruen ist - vorher fragen."""
+    import titles
+    stufen = titles.RARITY_ORDER
+
+    # (1) Die Zahl faellt streng, und 'kein Rang' liegt ueber allem.
+    werte = [titles.RARITY[r]["haerte"] for r in stufen]
+    assert werte == sorted(werte, reverse=True), dict(zip(stufen, werte))
+    assert len(set(werte)) == len(werte), "zwei Stufen sind gleich hart"
+    assert titles.HAERTE_OHNE_TITEL > werte[0], (
+        "ein gekaufter Einstiegstitel macht Flo gemeiner als gar kein Titel - "
+        "genau das Paradox, das Commit 3ed75fae geflickt hat")
+
+    # (2) Die Prosa muss zur Zahl passen, sonst driftet sie mit der Zeit weg.
+    HART = ("volle breitseite", "gnadenlos", "vernichtung", "vorschlaghammer",
+            "hart", "derb", "roaste", "aufzuziehen")
+    WEICH = ("freundlich", "respektvoll", "ehrfuerchtig", "locker", "angenehm",
+             "nett", "kumpel", "meister", "feierlich", "ruhig", "hilfsbereit",
+             "feierst")
+
+    def punkte(text):
+        # 'mit einem Grinsen STATT mit dem Vorschlaghammer' ist weich, nicht
+        # hart - eine Stichwortzaehlung sieht das nicht. Der halbe Satz ab
+        # 'statt' faellt deshalb weg, bevor gezaehlt wird.
+        t = re.sub(r"\bstatt\b.*?(?=[.,;]|$)", " ", text.lower())
+        return sum(w in t for w in HART) - sum(w in t for w in WEICH)
+
+    texte = [titles.TON_OHNE_TITEL] + [titles.RARITY[r]["tone"] for r in stufen]
+    namen = ["kein Rang"] + list(stufen)
+    p = [punkte(t) for t in texte]
+
+    # BEWUSST grob: verglichen wird das harte DRITTEL gegen das weiche, nicht
+    # Nachbar gegen Nachbar. Eine Stichwortzaehlung ueber vier Zeilen Prosa ist
+    # zu ungenau fuer 'episch muss um 1 haerter klingen als mythisch' - dieser
+    # Test wuerde dann bei jeder Umformulierung rot, ohne dass etwas kaputt ist,
+    # und man gewoehnt sich an rote Meldungen. Die Feinreihenfolge sichert die
+    # ZAHL oben; hier geht es nur darum, dass Zahl und Prosa nicht in
+    # entgegengesetzte Richtungen laufen.
+    drittel = max(2, len(p) // 3)
+    unten = sum(p[:drittel]) / drittel                 # kein Rang, normal, ...
+    oben = sum(p[-drittel:]) / drittel                 # ... exklusiv, goettlich
+    assert unten > oben, (
+        "die Prosa laeuft der Zahl entgegen - unten muss haerter KLINGEN als "
+        "oben: " + str(dict(zip(namen, p))))
+    assert unten - oben >= 3, (
+        f"die Rampe ist flach geworden: {dict(zip(namen, p))}")
+
+    # (3) Geroastet wird auf JEDER Stufe. Seltenheit aendert das WIE, nie das OB.
+    #     Oben muss ausdruecklich ein Seitenhieb stehen, sonst ist Flo dort
+    #     wieder brav - und genau das war die Beschwerde.
+    for r in stufen:
+        t = titles.RARITY[r]["tone"].lower()
+        assert any(w in t for w in ("seitenhieb", "frechheit", "spruch", "hoch",
+                                    "roaste", "drueber", "aufzuziehen")), (
+            f"'{r}' kommt ohne Seitenhieb davon")
+
+    # (4) Und nirgends darf wieder ein Roast-VERBOT stehen.
+    for r in stufen:
+        t = titles.RARITY[r]["tone"].lower()
+        for verboten in ("kein roasten", "kein spott", "keine fiesen",
+                         "ohne jeden spott", "aggro-modus komplett ab"):
+            assert verboten not in t, f"'{r}' verbietet wieder das Roasten"
+
+
+def test_luxus_bleibt_frech():
+    """Die Milliarden-Stufen sind die Fortsetzung der Rampe nach oben.
+
+    'ohne jeden Spott' war zu weit: damit war der reichste Mensch auf dem Server
+    der einzige, mit dem Flo nicht mehr reden durfte, wie er ist. Auch der
+    Imperator kriegt einen mit."""
+    quelle = open("luxus.py", encoding="utf-8").read()
+    i = quelle.index("def get_tone_extra")
+    rumpf = quelle[i:i + 3000]
+    assert "ohne jeden Spott" not in rumpf, (
+        "die Singularitaet verbietet Flo wieder das Sticheln")
+    for stufe in ("MULTIVERSUM", "SINGULARITAET", "NOVA", "IMPERIUM", "THRON"):
+        j = rumpf.find(stufe)
+        assert j > 0, f"{stufe} kommt in get_tone_extra nicht mehr vor"
+        nahe = rumpf[j:j + 520].lower()
+        assert any(w in nahe for w in ("spruch", "seitenhieb", "frechheit",
+                                       "aufziehen")), (
+            f"{stufe} kommt ohne Seitenhieb davon")
+
+
 def test_kein_titel_verbietet_das_roasten():
     """DER Grund, warum Flo zahm wurde - und er hatte nichts mit dem Modell zu tun.
 

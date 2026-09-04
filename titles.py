@@ -49,6 +49,41 @@ class Titles:
     #
     # Vorher lagen alle Stufen zwischen 150 und 15.000: der komplette Titel-Shop
     # war nach zwei Tagen abgeraeumt und danach bedeutungslos.
+    # --- Die Tonfall-Rampe ---------------------------------------------------
+    # RICHTUNG - und die ist das Empfindlichste an dieser Datei:
+    #
+    #     kein Titel = am uebelsten   ...   goettlich = am angenehmsten
+    #
+    # Woertlich vom Betreiber (04.09.2026): "umso niedriger und nicht so selten
+    # der rang war den man kaufen kann per flo shop/flo luxus umso beschissener
+    # war er. Je seltener der rang je angenehmer war er aber dennoch."
+    #
+    # NICHT UMDREHEN. Das ist schon einmal passiert: Commit 5f53f6f ("Flo nimmt
+    # den Stock raus") hat die Rampe genau anders herum gedreht, weil ganz oben
+    # "Kein Roasten, keine fiesen Sprueche" stand und die Stammgaeste dadurch
+    # einen lieben Flo bekamen. Falsch war aber nicht die RICHTUNG, sondern nur,
+    # dass die Rampe oben bis auf null ging. Deshalb gilt jetzt beides:
+    #
+    #   1. Geroastet wird auf JEDER Stufe. Seltenheit aendert das WIE, nie das OB.
+    #      Nirgends steht mehr "kein Roasten" oder "kein Spott".
+    #   2. Auf jeder Stufe endet es mit einem Seitenhieb. Auch beim Gott.
+    #
+    # Damit die Richtung nicht wieder an der Deutung von Prosa haengt, steht
+    # neben jedem Text eine ZAHL. test_die_tonfall_rampe_zeigt_nach_unten prueft,
+    # dass sie streng faellt - und dass die Prosa zur Zahl passt.
+
+    #: Wer GAR KEINEN Titel traegt. economy.get_tone liefert dafuer "" - ohne
+    #: diesen Text finge die Rampe erst bei 'normal' an, und dann waere der erste
+    #: gekaufte Titel entweder eine Verschaerfung oder eine Verweichlichung.
+    #: Genau an diesem Nullsummenspiel hat sich Commit 3ed75fae abgearbeitet.
+    HAERTE_OHNE_TITEL = 10
+    TON_OHNE_TITEL = (
+        "Der hier hat NICHTS - keinen Titel, keinen Rang, gar nichts. Also gibt "
+        "es auch keine Sonderbehandlung: volle Breitseite, roaste ihn gnadenlos "
+        "wie jeden anderen Pleitegeier auch und lass ihn spueren, dass er hier "
+        "noch niemand ist."
+    )
+
     RARITY = {
         "normal": {
             "label": "Gewöhnlich", "emoji": "🟢", "color": 0x57F287,
@@ -58,45 +93,36 @@ class Titles:
             # Vorher stand hier "roaste ihn gnadenlos" - ohne Titel ist der Ton
             # dagegen leer (= normal). Wer sich also den Einstiegstitel kaufte,
             # zahlte Coins dafuer, dass Flo GEMEINER mit ihm wurde.
-            "tone": ("Er hat sich immerhin schon einen Titel gekauft – behandle ihn wie "
-                     "einen von den Stammgaesten. Frech und respektlos wie immer, aber "
-                     "mit einem Hauch Anerkennung, dass er ueberhaupt angefangen hat."),
+            "haerte": 9,
+            "tone": ("Er hat sich immerhin einen normalen Titel gekauft - du weisst also wenigstens, wie er heisst. Geaendert hat das fast nichts: fast volle Breitseite, roaste ihn hart, und der billige Titel ist genau der Grund, ihn aufzuziehen."),
         },
         "selten": {
             "label": "Selten", "emoji": "🔵", "color": 0x3498DB,
             "role": "Flo · Selten", "price": (3000, 9000),
             "pool_pct": 24, "shop_weight": 28,
-            "tone": ("Er traegt einen seltenen Titel – er gehoert dazu. Roaste ihn "
-                     "ganz normal hart, aber im Ton von Leuten, die sich schon "
-                     "kennen: die Sprueche duerfen persoenlicher werden."),
+            "haerte": 8,
+            "tone": ("Er traegt einen SELTENEN Titel - kein Zufallsgast mehr. Immer noch derb, aber mit Augenzwinkern statt Vernichtung: Sprueche unter Leuten, die sich kennen. Einer kommt am Ende trotzdem drueber."),
         },
         "episch": {
             "label": "Episch", "emoji": "🟪", "color": 0x7C5CFF,
             "role": "Flo · Episch", "price": (15_000, 40_000),
             "pool_pct": 16, "shop_weight": 19,
-            "tone": ("Er traegt einen EPISCHEN Titel – der Typ hat sichtbar Zeit und "
-                     "Coins versenkt. GENAU DARUEBER machst du dich lustig, "
-                     "ausfuehrlich und gnadenlos – und laesst nebenbei durchblicken, "
-                     "dass es dich insgeheim beeindruckt."),
+            "haerte": 7,
+            "tone": ("Er traegt einen EPISCHEN Titel - Stammgast, hat sichtbar Zeit und Coins versenkt. Du nimmst ihn spuerbar lockerer als die Neulinge, ziehst ihn aber genau ueber diese Versenkung auf. Ein Seitenhieb zum Schluss, mehr braucht es nicht."),
         },
         "mythisch": {
             "label": "Mythisch", "emoji": "🟣", "color": 0xC026D3,
             "role": "Flo · Mythisch", "price": (60_000, 150_000),
             "pool_pct": 9, "shop_weight": 9,
-            "tone": ("Er traegt einen MYTHISCHEN Titel – einer von den Alten. Den "
-                     "roastest du HAERTER als die Neulinge, weil er es abkann, und "
-                     "ziehst dabei alte Geschichten auf. Respekt schwingt mit, "
-                     "ausgesprochen wird er nicht."),
+            "haerte": 6,
+            "tone": ("Er traegt einen MYTHISCHEN Titel - einer von den Alten. Mit dem redest du schon fast freundlich, wie mit einem Kumpel, den man lange kennt. Geroastet wird trotzdem, nur kuerzer und mit einem Grinsen statt mit dem Vorschlaghammer."),
         },
         "legendary": {
             "label": "Legendär", "emoji": "🟡", "color": 0xF1C40F,
             "role": "Flo · Legendär", "price": (300_000, 800_000),
             "pool_pct": 4, "shop_weight": 3,
-            "tone": ("Er traegt einen LEGENDAEREN Titel – dein Lieblingsopfer. Den "
-                     "zerlegst du HAERTER als jeden anderen, gerade WEIL ihr euch so "
-                     "gut kennt: unter besten Freunden wird nicht geschont, da wird "
-                     "zugelangt. Unter all dem Spott steckt echte Zuneigung, aber "
-                     "zugeben wuerdest du das nie."),
+            "haerte": 5,
+            "tone": ("Er traegt einen LEGENDAEREN Titel - quasi dein Kumpel. Rede angenehm und locker, hilf ihm sogar. Aber der letzte Halbsatz ist trotzdem eine Frechheit - unter Freunden geht man nicht ohne Spruch auseinander."),
         },
         # RELIKT: die Spitze des TAGES-Shops. Nur 1 % aller Titel und Gewicht 1 -
         # im Schnitt taucht alle paar Wochen mal eines in den acht Slots auf.
@@ -104,11 +130,8 @@ class Titles:
             "label": "Relikt", "emoji": "🟠", "color": 0xFF7A18,
             "role": "Flo · Relikt", "price": (1_500_000, 4_000_000),
             "pool_pct": 1, "shop_weight": 1,
-            "tone": ("Er traegt ein RELIKT – Millionen in einem Namen, so etwas sieht "
-                     "man fast nie. Du behandelst ihn wie einen alten Meister UND "
-                     "ziehst ihn genau deswegen auf: wer so viel Geld in einen "
-                     "Schriftzug steckt, hat sich jeden Spruch verdient. Ehrfurcht und "
-                     "Frechheit im selben Satz."),
+            "haerte": 4,
+            "tone": ("Er traegt ein RELIKT - Millionen in einem Namen, so etwas sieht man fast nie. Du behandelst ihn wie einen alten Meister: ruhig, respektvoll, ehrlich hilfsbereit. Und genau EIN trockener Seitenhieb am Ende, weil du es nicht lassen kannst."),
         },
         # EXKLUSIV: NUR beim fahrenden Haendler (pool_pct 0 + shop_weight 0 ->
         # rarity_of vergibt die Stufe nie, sie kann also nie im Tages-Shop landen).
@@ -116,11 +139,8 @@ class Titles:
             "label": "Exklusiv", "emoji": "🔱", "color": 0xFF2D55,
             "role": "Flo · Exklusiv", "price": (6_000_000, 15_000_000),
             "pool_pct": 0, "shop_weight": 0,
-            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel – den gibt es im Shop "
-                     "NIEMALS. Er ist deine lebende Legende: du feierst ihn lautstark "
-                     "ab und nimmst ihn im selben Atemzug hoch, weil jemand fuer einen "
-                     "Titel ein Vermoegen verbrannt hat. Bewunderung ja, Zurueckhaltung "
-                     "nein."),
+            "haerte": 3,
+            "tone": ("Er traegt einen EXKLUSIVEN Haendler-Titel - den gibt es im Shop NIEMALS. Er ist deine lebende Legende: du feierst ihn lautstark ab und bist richtig nett zu ihm. Zum Schluss nimmst du ihn trotzdem einmal hoch, fuer das verbrannte Vermoegen."),
         },
         # GOETTLICH: das absolute Maximum. Der Haendler hat davon nur ganz selten
         # ueberhaupt eines im Angebot.
@@ -128,11 +148,8 @@ class Titles:
             "label": "Göttlich", "emoji": "✨", "color": 0x00E5FF,
             "role": "Flo · Göttlich", "price": (40_000_000, 90_000_000),
             "pool_pct": 0, "shop_weight": 0,
-            "tone": ("Er traegt einen GOETTLICHEN Titel – die hoechste Stufe, zig "
-                     "Millionen Coins in einem Namen. Du redest mit ihm wie mit einer "
-                     "Gottheit: feierlich, pathetisch, ehrfuerchtig – und ausgerechnet "
-                     "in dieser Ehrfurcht sitzen deine besten Seitenhiebe. Ein Gott "
-                     "haelt einen Spruch aus."),
+            "haerte": 2,
+            "tone": ("Er traegt einen GOETTLICHEN Titel - die hoechste Stufe, zig Millionen in einem Namen. Du redest mit ihm feierlich und ehrfuerchtig wie mit einer Gottheit. Und ausgerechnet da sitzt dein bester Seitenhieb: ein Gott haelt genau einen aus."),
         },
     }
 
@@ -241,6 +258,23 @@ class Titles:
         # --- Titel-Pool (lazy gebaut, dann gecacht) ------------------------------
         self._POOL = None   # rarity -> [titel, ...]
         self._ALL = None               # alle Titel (flach)
+
+    @classmethod
+    def ton_fuer(cls, rarity):
+        """Tonfall-Text zu einer Stufe - oder der Text fuer 'gar kein Titel'.
+
+        Ein leerer/unbekannter Rang ist NICHT neutral, sondern die haerteste
+        Stufe. Siehe den Kommentar bei TON_OHNE_TITEL."""
+        if not rarity:
+            return cls.TON_OHNE_TITEL
+        return cls.RARITY.get(rarity, {}).get("tone", "") or cls.TON_OHNE_TITEL
+
+    @classmethod
+    def haerte_fuer(cls, rarity):
+        """Wie hart Flo auf dieser Stufe rangeht (gross = hart)."""
+        if not rarity:
+            return cls.HAERTE_OHNE_TITEL
+        return cls.RARITY.get(rarity, {}).get("haerte", cls.HAERTE_OHNE_TITEL)
 
     # --- Hash-Helfer (deterministische Eigenschaften je Titel) ---------------
     def _h(self, text, salt):
@@ -394,6 +428,8 @@ instance = Titles()
 
 # Konstanten
 RARITY = Titles.RARITY
+HAERTE_OHNE_TITEL = Titles.HAERTE_OHNE_TITEL
+TON_OHNE_TITEL = Titles.TON_OHNE_TITEL
 RARITY_ORDER = Titles.RARITY_ORDER
 RANK = Titles.RANK
 _EMOJI = Titles._EMOJI
@@ -404,6 +440,8 @@ _PLACE = Titles._PLACE
 
 # Funktionen
 _h = instance._h
+ton_fuer = Titles.ton_fuer
+haerte_fuer = Titles.haerte_fuer
 rarity_of = instance.rarity_of
 price_of = instance.price_of
 emoji_of = instance.emoji_of

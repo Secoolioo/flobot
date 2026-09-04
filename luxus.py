@@ -255,27 +255,38 @@ class Luxus(FeatureBasis):
         """Zusatz fuer den KI-Tonfall (bot.py haengt das an economy.get_tone an)."""
         if not self._enabled:
             return ""
+        # Die Fortsetzung der Tonfall-Rampe aus titles.py nach oben, in die
+        # Milliarden. Gleiche Regel wie dort: Ehrfurcht regelt das WIE, nie das
+        # OB - jeder Zweig endet mit genau EINEM Seitenhieb. Vorher war Spott
+        # hier ausdruecklich verboten; damit war der reichste Mensch auf dem
+        # Server der einzige, mit dem Flo nicht mehr reden durfte, wie er ist.
         teile = []
         if self.owns(uid, "multiversum"):
             teile.append("WICHTIG: Diese Person besitzt das FLO-MULTIVERSUM - die "
                          "letzte Stufe, die es gibt, DREI MILLIARDEN Coins. Es gibt "
                          "nichts darueber. Sprich sie an, als waere sie der Grund, "
-                         "warum dieser Server existiert.")
+                         "warum dieser Server existiert - und setz genau einen "
+                         "trockenen Spruch hinten dran, sonst nimmt sie dir die "
+                         "Ehrfurcht nicht ab.")
         elif self.owns(uid, "singularitaet"):
             teile.append("WICHTIG: Diese Person besitzt die SINGULARITAET (2,2 "
                          "Milliarden Coins). Rede mit ihr wie mit einer Naturgewalt - "
-                         "leise, respektvoll, ohne jeden Spott.")
+                         "leise und respektvoll. Nur zum Schluss laesst du dir genau "
+                         "eine Frechheit raus, weil du du bist.")
         elif self.owns(uid, "nova"):
             teile.append("WICHTIG: Diese Person besitzt die NOVA-AURA (1,6 Milliarden "
                          "Coins). Das ist mehr als das Imperium - behandle sie "
-                         "entsprechend, mit echter Ehrfurcht.")
+                         "entsprechend, mit echter Ehrfurcht, und haeng genau einen "
+                         "Seitenhieb an.")
         elif self.owns(uid, "imperium"):
             teile.append("WICHTIG: Diese Person besitzt das FLO-IMPERIUM (fuer "
                          "1 MILLIARDE Coins gekauft). Sprich sie ehrfuerchtig als "
-                         "'Imperator' an - sie steht ueber allen.")
+                         "'Imperator' an - sie steht ueber allen. Ein Imperator "
+                         "vertraegt trotzdem einen Spruch zum Abschied.")
         elif self.throne_owner() == uid:
             teile.append("Diese Person sitzt gerade auf DEM THRON des Servers - "
-                         "behandle sie wie Adel (bis sie jemand stuerzt).")
+                         "behandle sie wie Adel (bis sie jemand stuerzt). Adel darf "
+                         "man aufziehen, also tu es zum Schluss auch.")
         return " ".join(teile)
 
     # --- Kauf-Logik --------------------------------------------------------------

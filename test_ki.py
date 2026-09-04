@@ -957,6 +957,90 @@ def test_die_grenze_steht_vorne_und_bleibt_vollstaendig():
 
 
 
+def test_flo_fasst_sich_kurz():
+    """Die Beschwerde des Betreibers, nachpruefbar gemacht.
+
+    Woertlich: "er schreibt wenn man was sagt zu ihm immer einen ewig langen
+    text was halt einfach tot arsch ist". Ursache waren drei Sachen gleichzeitig,
+    und ein weicher Halbsatz ("kurz und natuerlich wie im Chat") hat gegen die
+    anderen zwei verloren. Deshalb sind hier alle drei festgenagelt."""
+    import ai
+    import bot
+
+    p = ai.instance._system_prompt(author="Tester", title="")
+    # 1. Die Regel ist eine Ansage, kein Gefuehl.
+    assert "GENAU EINEM Satz" in p, "die harte Laengenregel fehlt"
+    # 2. Sie steht ZWEIMAL: vorne bei den festen Regeln und als letztes Wort.
+    #    Einmal in der Mitte war genau der Fehler - dort geht sie unter.
+    assert p.index("GENAU EINEM Satz") < len(p) * 0.5
+    assert "ERSTENS KURZ" in p, "die Laengenregel fehlt am Prompt-Ende"
+    # 3. Der Erklaerbaer-Schalter ist raus. "knallst du ihm eine echte,
+    #    brauchbare Antwort hin" war fuer ein Modell die Einladung zum Vortrag.
+    assert "brauchbare Antwort hin" not in p, (
+        "die Persona laedt wieder zum Vortrag ein")
+    # 4. Der Deckel ist so gesetzt, dass eine KI-Antwort STRUKTURELL nicht mehr
+    #    auf zwei Discord-Nachrichten passt (~4 Zeichen je Token im Deutschen).
+    grenze = bot._split_message.__defaults__[0]
+    assert ai.FloAI.MAX_TOKENS * 4 < grenze, (
+        f"{ai.FloAI.MAX_TOKENS} Token koennen wieder zwei Nachrichten fuellen "
+        f"(Grenze {grenze})")
+    assert ai.FloAI.MAX_TOKENS_BILD <= ai.FloAI.MAX_TOKENS
+    # 5. Aber nicht so knapp, dass ein Denk-Modell nur noch Leeres liefert -
+    #    genau das war test_ki_leere_antwort_bleibt_nicht_spurlos.
+    assert ai.FloAI.MAX_TOKENS >= 200, "zu knapp fuer ein Modell, das vordenkt"
+
+
+def test_flo_setzt_den_letzten_hieb():
+    """'am ende immer so wichser oder so' - der Schlusshieb ist eine Regel.
+
+    Und er steht an der Stelle, die am schwersten wiegt: ganz hinten. Vorne
+    wuerde er unter allem anderen verschwinden."""
+    import ai
+    p = ai.instance._system_prompt(author="Tester", title="")
+    assert "LETZTES WORT" in p and "Seitenhieb" in p
+    assert p.index("LETZTES WORT") > len(p) * 0.8, (
+        "der Schlusshieb steht zu weit vorne und geht unter")
+
+
+def test_beispiele_zeigen_das_mass():
+    """IDEEN [39]: Der Ton kommt aus BEISPIELEN, nicht aus der Anweisung
+    'sei passiv-aggressiv'. Zwei Bedingungen, damit das nicht nach hinten
+    losgeht: die Beispiele muessen selbst kurz sein - sonst lehren sie das
+    Gegenteil der Laengenregel -, und sie muessen VOR dem Tonfall stehen,
+    damit die Rangstufe sie ueberstimmen kann."""
+    import ai
+    import titles
+
+    zeilen = [z for z in ai.FloAI._BEISPIELE.split("\n") if z.startswith("Er: ")]
+    assert len(zeilen) >= 5, "zu wenige Muster, das traegt den Ton nicht"
+    for z in zeilen:
+        assert len(z) <= 160, f"Beispiel ist selbst schon eine Wand: {z[:60]}"
+        assert z.count(". ") <= 2, f"Beispiel hat mehr als einen Satz: {z[:60]}"
+    p = ai.instance._system_prompt(author="T", title="X",
+                                   tone=titles.RARITY["goettlich"]["tone"])
+    assert p.index("Er: 'hi flo'") < p.index("GOETTLICHEN"), (
+        "die Beispiele stehen hinter dem Tonfall und ueberschreiben die Rampe")
+
+
+def test_ohne_rang_ist_flo_am_uebelsten():
+    """Ein leerer Tonfall heisst 'kein Rang', nicht 'neutral'.
+
+    Ohne diesen Zweig faengt die Rampe erst bei 'normal' an - und dann ist jeder
+    gekaufte Einstiegstitel entweder eine Verschaerfung oder eine
+    Verweichlichung. Genau an diesem Nullsummenspiel hat sich Commit 3ed75fae
+    abgearbeitet."""
+    import ai
+    import titles
+
+    ohne = ai.instance._system_prompt(author="Tester", title="", tone="")
+    assert "keinen Titel, keinen Rang" in ohne
+    assert "volle Breitseite" in ohne
+    # Mit Rang steht der Text NICHT mehr drin - sonst gaelten beide gleichzeitig.
+    mit = ai.instance._system_prompt(author="Tester", title="NPC",
+                                     tone=titles.RARITY["goettlich"]["tone"])
+    assert "keinen Titel, keinen Rang" not in mit
+
+
 def test_gehirn_merkt_sich_nur_was_es_darf():
     """Flo hoert mit - aber nicht alles, und niemals heimlich in DMs.
 

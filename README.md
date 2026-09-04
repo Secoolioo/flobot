@@ -234,7 +234,8 @@ Zeile für die `.env` ins Log.
 | `LLM_VISION_MODEL` | Bild-Modell (Standard `qwen/qwen3.6-27b`) |
 | `LLM_USER_AGENT` | Client-Signatur — nur nötig, wenn Cloudflare blockt |
 | `LLM_TEMPERATURE` | 0 = brav, ~1.2 = chaotisch (Standard 0.9) |
-| `LLM_MAX_TOKENS` | Antwortlänge (Standard 800) |
+| `LLM_MAX_TOKENS` | Antwortlänge, Standard **240** — der Deckel gegen Textwände. Höher setzen, wenn Flo öfter „fällt mir nichts ein" sagt |
+| `LLM_MAX_TOKENS_BILD` | dasselbe für Bild-Kommentare (Standard 160) |
 | `LLM_REASONING_EFFORT` | `low`/`medium`/`high` — nur für Denk-Modelle wie `gpt-oss`. Antwortet Flo öfter „fällt mir nichts ein", steht das Budget im Denken statt im Reden. **Bei `gpt-oss` setzt Flo von sich aus `low`**, weil die Modelle sich beim Nachdenken selbst zahm reden |
 | `BOT_PERSONA` | ersetzt die komplette Persönlichkeit. **Achtung:** ist die gesetzt, wirkt keine Änderung an der Standard-Persona mehr |
 | `BOT_POLITIK` | `aus` nimmt Flo die politische Haltung |
@@ -243,16 +244,25 @@ Zeile für die `.env` ins Log.
 
 Passiert das, ist es fast nie „das Modell ist halt so". Der Reihe nach:
 
-1. **Der Titel.** Die Tonfall-Texte in `titles.py` waren früher eine
-   *Zahmheits-Rampe*: je seltener der Titel, desto braver Flo — ganz oben stand
-   wörtlich „Kein Roasten, keine fiesen Sprüche". Ausgerechnet die Stammgäste
-   bekamen dadurch einen lieben Flo. Heute ändert die Seltenheit nur noch, **wie**
-   geroastet wird, nie **ob**; ein Test hält das fest.
+1. **Der Titel.** Die Tonfall-Texte in `titles.py` sind eine Rampe, und sie
+   zeigt **nach unten**: kein Rang = am übelsten, göttlich = am angenehmsten.
+   So war es von Anfang an gedacht. Zweimal wurde sie versehentlich umgedreht —
+   einmal, weil ganz oben wörtlich „Kein Roasten, keine fiesen Sprüche" stand
+   und die Stammgäste dadurch einen lieben Flo bekamen. Falsch war aber nicht
+   die *Richtung*, sondern nur, dass die Rampe oben bis auf null ging. Heute
+   gilt beides: die Seltenheit ändert **wie** geroastet wird, nie **ob**, und
+   auf jeder Stufe endet es mit einem Seitenhieb. Neben jedem Text steht dafür
+   eine Zahl (`haerte`), damit die Richtung nicht an der Deutung von Prosa
+   hängt — `test_die_tonfall_rampe_zeigt_nach_unten` prüft sie.
 2. **`BOT_PERSONA` in der `.env`.** Steht die dort, ersetzt sie alles.
-3. **Das Modell.** `openai/gpt-oss-*` prüft sich vor jeder Antwort selbst und
+3. **Die Länge.** Flo antwortet absichtlich in *einem* Satz — das steht
+   zweimal im Prompt (vorne und als letztes Wort) und wird von `LLM_MAX_TOKENS`
+   gedeckelt. Wer mehr will, setzt die Variable hoch; der Prompt bleibt dann
+   trotzdem bei „ein Satz", also lieber auch dort eine Zeile ändern.
+4. **Das Modell.** `openai/gpt-oss-*` prüft sich vor jeder Antwort selbst und
    verweigert deutlich öfter. Alternative: `LLM_MODEL=qwen/qwen3.6-27b`. Erst
    `bash k` laufen lassen — dort steht die echte Modell-Liste des Anbieters.
-4. **Verweigert das Modell einen Roast**, nimmt Flo einen Fertig-Spruch — das
+5. **Verweigert das Modell einen Roast**, nimmt Flo einen Fertig-Spruch — das
    sah aus wie Langeweile und stand früher in *keinem* Log. Heute schon:
    `bash k` zeigt `KI-Fehler: Roast verweigert`.
 
