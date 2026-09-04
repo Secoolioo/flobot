@@ -1,5 +1,5 @@
 {
- "_dauer": 6.7,
+ "_dauer": 5.0,
  "_fehler": [],
  "_kollisionen": {
   "bestenliste": {
@@ -554,6 +554,12 @@
     "arbeit"
    ]
   },
+  "dauerschleife": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
   "debt": {
    "gewinner": "schulden",
    "module": [
@@ -663,6 +669,12 @@
    "gewinner": "giveaway",
    "module": [
     "giveaway"
+   ]
+  },
+  "endlosschleife": {
+   "gewinner": "music",
+   "module": [
+    "music"
    ]
   },
   "entbann": {
@@ -1095,6 +1107,12 @@
     "music"
    ]
   },
+  "join_sounds": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
   "kalorien": {
    "gewinner": "food",
    "module": [
@@ -1487,6 +1505,30 @@
    "gewinner": "profil",
    "module": [
     "profil"
+   ]
+  },
+  "loop": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "loope": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "loopen": {
+   "gewinner": "music",
+   "module": [
+    "music"
+   ]
+  },
+  "loopt": {
+   "gewinner": "music",
+   "module": [
+    "music"
    ]
   },
   "los": {
@@ -2917,6 +2959,18 @@
     "moderation"
    ]
   },
+  "warn_limit": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
+  "warn_timeout": {
+   "gewinner": "moderation",
+   "module": [
+    "moderation"
+   ]
+  },
   "warnings": {
    "gewinner": "moderation",
    "module": [
@@ -3314,7 +3368,7 @@
    ]
   }
  },
- "erzeugt": "2026-08-31 12:01",
+ "erzeugt": "2026-09-04 14:39",
  "frontend": {
   "/api/avatar": {
    "quelle": "webpanel.html"
@@ -4418,6 +4472,50 @@
   "SEASON_IMAGES:winter": {
    "label": "Winter.png",
    "quelle": "schedule_logic.SEASON_IMAGES"
+  },
+  "ZUORDNUNG:arbeit": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:bayern": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:casino": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:economy": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:floaktie": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:food": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:games": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:mod": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:music": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:schulden": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
+  },
+  "ZUORDNUNG:voice": {
+   "label": "",
+   "quelle": "einstellungen.ZUORDNUNG"
   }
  },
  "loops": {
@@ -4836,6 +4934,9 @@
   "economy.flush": {
    "art": "method"
   },
+  "economy.flush_now": {
+   "art": "method"
+  },
   "economy.get_coins": {
    "art": "method"
   },
@@ -4906,6 +5007,27 @@
    "art": "method"
   },
   "economy.vermoegenssteuer": {
+   "art": "method"
+  },
+  "einstellungen.Abschnitt": {
+   "art": "type"
+  },
+  "einstellungen.Baum": {
+   "art": "type"
+  },
+  "einstellungen.als_dicts": {
+   "art": "method"
+  },
+  "einstellungen.bauen": {
+   "art": "method"
+  },
+  "einstellungen.erfundene_funktionen": {
+   "art": "method"
+  },
+  "einstellungen.erfundene_werte": {
+   "art": "method"
+  },
+  "einstellungen.vergessene_werte": {
    "art": "method"
   },
   "features.Features": {
@@ -5043,10 +5165,16 @@
   "fun.is_enabled": {
    "art": "method"
   },
+  "fun.ist_hetze": {
+   "art": "method"
+  },
   "fun.looks_offensive": {
    "art": "method"
   },
   "fun.maybe_dm_roast": {
+   "art": "method"
+  },
+  "fun.maybe_gegenrede": {
    "art": "method"
   },
   "fun.maybe_roast_bot": {
@@ -5649,6 +5777,9 @@
   "store.JsonStore": {
    "art": "type"
   },
+  "store.alle_sichern": {
+   "art": "function"
+  },
   "terraria.Terraria": {
    "art": "type"
   },
@@ -5673,6 +5804,9 @@
   "terraria.setup": {
    "art": "method"
   },
+  "testhilfe.run": {
+   "art": "function"
+  },
   "titles.Titles": {
    "art": "type"
   },
@@ -5688,6 +5822,9 @@
   "titles.entry": {
    "art": "method"
   },
+  "titles.haerte_fuer": {
+   "art": "method"
+  },
   "titles.label_of": {
    "art": "method"
   },
@@ -5701,6 +5838,9 @@
    "art": "method"
   },
   "titles.rarity_of": {
+   "art": "method"
+  },
+  "titles.ton_fuer": {
    "art": "method"
   },
   "titles.total": {
@@ -5902,16 +6042,16 @@
   }
  },
  "umgebung": {
-  "module_geladen": 39,
+  "module_geladen": 41,
   "probe_gelaufen": true,
   "python": "3.11.15"
  },
  "zaehlung": {
-  "befehle": 536,
+  "befehle": 545,
   "frontend": 35,
-  "kataloge": 249,
+  "kataloge": 260,
   "loops": 16,
-  "modulapi": 426,
+  "modulapi": 440,
   "routen": 39
  }
 }

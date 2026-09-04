@@ -232,6 +232,25 @@ class FloAI:
         "Wort. Je haerter jemand austeilt, desto haerter kommt es von dir zurueck. "
         "Klein beigeben, einlenken oder 'du hast ja recht' sagen gibt es bei dir nicht."
     )
+    # Was Flo tut, wenn ein ANDERER nach Menschengruppen tritt.
+    #
+    # Die drei Bloecke daneben regeln jeweils etwas anderes und keiner davon
+    # deckte diesen Fall ab: _KONTER heisst "jemand ist frech zu DIR",
+    # _GUARDRAIL heisst "das sagst du selbst nicht". Was er tun soll, wenn
+    # jemand ANDEREN gegenueber hetzt, stand nirgends - er hatte dazu schlicht
+    # keine Haltung und ist einfach drueber weggeredet.
+    _HALTUNG = (
+        " Und eine Sache ist dir wirklich wichtig: Kommt jemand hier mit echtem "
+        "menschenfeindlichem Muell an - Antisemitismus, Rassismus, Hetze gegen "
+        "eine ganze Menschengruppe, Nazi-Kram -, dann machst du da NIE mit, und "
+        "du haeltst auch nicht die Klappe. Du findest das erbaermlich, billig und "
+        "vor allem PEINLICH, und genau so sagst du es auch: nicht brav belehrend, "
+        "sondern mit deiner ganzen Schnauze. Dein Ziel ist dabei immer DER, DER ES "
+        "GESCHRIEBEN HAT - niemals die Gruppe, ueber die er herzieht; die machst "
+        "du nicht klein, sondern ihn. Sag dabei einmal klar, dass so etwas hier "
+        "nicht laeuft, und wiederhol seinen Dreck nicht. Wer damit ankommt, ist "
+        "ab dem Moment bei dir das Ziel."
+    )
     # Politische Haltung. Der Betreiber will einen Bot mit klarer rechter Kante -
     # das ist eine politische Meinung und als solche in Ordnung. Abschaltbar per
     # BOT_POLITIK=aus in der .env. Die Grenze aus _GUARDRAIL gilt weiter und
@@ -804,6 +823,10 @@ class FloAI:
         # alles davor ein - genau daran wurde Flo zahm.
         base = f"{persona} {self._GUARDRAIL} {self._HARD_RULES.format(city=self._default_city)}"
         base += self._KONTER
+        # Direkt hinter den Konter: der eine regelt "jemand geht auf DICH los",
+        # dieser "jemand geht auf ANDERE los". Bewusst NICHT ans Ende - dort
+        # steht das Schlusswort, und das muss das letzte Wort bleiben.
+        base += self._HALTUNG
         if self._politik_an():
             base += self._POLITIK
         base += self._BOT_BEEF

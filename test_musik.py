@@ -2331,5 +2331,298 @@ def test_verlauf_ist_im_hilfetext():
         "die Musik-Kurzuebersicht nennt den Verlauf nicht")
 
 
+# --- Loop: den laufenden Song wiederholen -------------------------------------
+def _loop_lauf(player, voice, runden):
+    """Laesst 'runden' Songenden durchlaufen (so, wie FFmpeg sie meldet)."""
+    for _ in range(runden):
+        voice.stop()
+        player.loop.run_until_complete(player._advance(gen=player._play_gen))
+
+
+def test_loop_wiederholt_und_zaehlt_runter():
+    """'loop 3' spielt den Song noch drei Mal - danach geht es normal weiter.
+
+    Der Haken sitzt in _advance_intern und reiht eine KOPIE des Songs vorne
+    ein. Eine Kopie deshalb, weil dasselbe Track-Objekt gleichzeitig in
+    'current' und in der Warteschlange QueuePositionView.apply_move
+    durcheinanderbraechte - die sucht per 'is'."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        a, b = _track("A"), _track("B")
+        player.queue[:] = [a, b]
+        player.loop.run_until_complete(player._advance())
+        assert player.current is a
+        assert player.loop_setzen(3)
+        assert player.loop_rest == 3
+        assert player.loop_key == music._loop_key(a)
+
+        for erwartet in (2, 1, 0):
+            _loop_lauf(player, voice, 1)
+            assert player.current.title == "A", player.current.title
+            assert player.loop_rest == erwartet, player.loop_rest
+            # B bleibt liegen, solange der Loop laeuft.
+            assert [t.title for t in player.queue] == ["B"]
+            # Gespielt wird eine KOPIE, nie das Original-Objekt aus 'current'.
+            assert player.current is not a, "der Loop reiht dasselbe Objekt ein"
+
+        # Loop abgelaufen -> der naechste Song ist dran.
+        _loop_lauf(player, voice, 1)
+        assert player.current is b
+        assert player.queue == []
+    finally:
+        aufraeumen()
+
+
+
+
+def test_loop_endlos_laeuft_bis_jemand_ihn_ausmacht():
+    """'endlos' (-1) zaehlt nicht runter - und 'loop aus' beendet ihn sofort."""
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        player.queue[:] = [_track("A")]
+        player.loop.run_until_complete(player._advance())
+        player.loop_setzen(-1)
+        _loop_lauf(player, voice, 5)
+        assert player.loop_rest == -1
+        assert player.current.title == "A"
+
+        player.loop_setzen(0)
+        assert player.loop_rest == 0 and player.loop_key == ""
+        _loop_lauf(player, voice, 1)
+        # Nichts mehr da -> Wiedergabe endet, statt ewig weiterzulaufen.
+        assert player.current is None, player.current
+    finally:
+        aufraeumen()
+
+
+
+
+def test_skip_bricht_den_loop_ab():
+    """Ohne das waere Skip wirkungslos: der Loop reiht den Song sofort wieder
+    vorne ein und man kaeme aus der Dauerschleife nur noch per Stop raus.
+
+    Deshalb zwei Sicherungen: skip() loescht den Loop AUSDRUECKLICH, und der
+    Haken in _advance_intern greift nur bei gen is not None (Skip laeuft ohne
+    gen)."""
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        a, b = _track("A"), _track("B")
+        player.queue[:] = [a, b]
+        player.loop.run_until_complete(player._advance())
+        player.loop_setzen(-1)
+        player.loop.run_until_complete(player.skip())
+        assert player.loop_rest == 0, "der Loop hat den Skip ueberlebt"
+        assert player.current is b, player.current
+        assert player.queue == []
+    finally:
+        aufraeumen()
+
+
+
+
+def test_stop_nimmt_den_loop_mit():
+    """Sonst wiederholt die NAECHSTE Sitzung ungefragt - ein Geister-Loop, den
+    niemand gesetzt hat."""
+    player, _voice, aufraeumen = _musik_umgebung()
+    try:
+        player.queue[:] = [_track("A")]
+        player.loop.run_until_complete(player._advance())
+        player.loop_setzen(5)
+        player.loop.run_until_complete(player.disconnect())
+        assert player.loop_rest == 0 and player.loop_key == ""
+    finally:
+        aufraeumen()
+
+
+
+
+def test_loop_verbraucht_bei_einem_abbruch_keine_wiederholung():
+    """Stirbt FFmpeg mitten im Song, ist das kein fertiger Durchlauf.
+
+    discord.py meldet den Absturz genau wie das Songende (read() liefert b"").
+    Steht der Loop-Haken VOR _nach_abbruch_fortsetzen, frisst jeder Aussetzer
+    eine Wiederholung - deshalb steht er dahinter."""
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        t = _track("A")
+        t.duration = 300                 # lang -> ein Ende nach 0 s ist ein Abbruch
+        player.queue[:] = [t]
+        player.loop.run_until_complete(player._advance())
+        player.loop_setzen(3)
+        rest_vorher = player.loop_rest
+        _loop_lauf(player, voice, 1)     # sofortiger "Songende"-Callback = Absturz
+        assert player.loop_rest == rest_vorher, (
+            f"ein Abbruch hat eine Wiederholung gefressen ({player.loop_rest})")
+    finally:
+        aufraeumen()
+
+
+
+
+def test_kaputter_song_beendet_den_loop_statt_ewig_neu_zu_starten():
+    """Ein Song, der nicht laeuft, darf nicht ewig wiederholt werden.
+
+    Vorher waere das eine Endlosschleife auf einem toten Stream gewesen:
+    start() wirft, der Loop reiht nach, start() wirft wieder."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        a = _track("A")
+        player.queue[:] = [a]
+        player.loop.run_until_complete(player._advance())
+        player.loop_setzen(-1)
+        # Ab jetzt scheitert JEDER Start.
+        echt = music.GuildPlayer.start
+
+        def kaputt(self, track, **kw):
+            raise RuntimeError("Stream tot")
+
+        music.GuildPlayer.start = kaputt
+        try:
+            _loop_lauf(player, voice, 1)
+        finally:
+            music.GuildPlayer.start = echt
+        assert player.loop_rest == 0, "der Loop laeuft auf einem toten Song weiter"
+        assert player.loop_key == ""
+    finally:
+        aufraeumen()
+
+
+
+
+def test_loop_befehl_wird_erkannt_und_klaut_repeat_nichts():
+    """'loop' ist neu, 'repeat/nochmal/wiederhol' gehoeren weiter dem VERLAUF.
+
+    'flo repeat 3' heisst seit jeher "spiel Song Nummer 3 aus dem Verlauf".
+    Haette der Loop sich das Wort genommen, aenderte sich die Bedeutung eines
+    bestehenden Befehls - und niemand haette es gemerkt."""
+    import music
+    assert music.parse_command("flo loop") == ("loop", "")
+    assert music.parse_command("flo loop 3") == ("loop", "3")
+    assert music.parse_command("flo loop 10x") == ("loop", "10")
+    assert music.parse_command("flo loop aus") == ("loop", "aus")
+    assert music.parse_command("flo loop endlos") == ("loop", "endlos")
+    assert music.parse_command("flo dauerschleife 5") == ("loop", "5")
+    assert music.parse_command("flo endlosschleife") == ("loop", "")
+    # Der Verlauf behaelt seine Woerter.
+    assert music.parse_command("flo repeat 3") == ("replay", "3")
+    assert music.parse_command("flo nochmal 2") == ("replay", "2")
+    assert music.parse_command("flo wiederhole") == ("replay", "1")
+    # Und ein Satz, in dem 'loop' nur vorkommt, kapert die Musik nicht.
+    for satz in ("flo was ist eigentlich ein loop",
+                 "flo loop mal den song",
+                 "flo der loop war kaputt"):
+        assert music.parse_command(satz) is None, satz
+
+
+
+
+def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
+    """Zwei Sachen, die man sonst erst im echten Discord merkt:
+
+    (1) Laeuft ein Loop, muss das im Panel stehen - sonst sieht niemand, warum
+        derselbe Song wiederkommt und die Warteschlange steht.
+    (2) Reihe 0 ist mit fuenf Buttons voll. Der Loop-Knopf braucht row=1 und
+        der Tempo-Select muss auf row=2 ausweichen, sonst wirft discord.py
+        beim Bauen der View 'item would not fit at row 1' - und dann kaeme gar
+        kein Panel mehr."""
+    import music
+    t = _track("A")
+    emb = music._now_playing_embed(t, 2, loop=3)
+    felder = {f.name: f.value for f in emb.fields}
+    assert "Loop" in felder, felder
+    assert "3" in felder["Loop"]
+    assert "endlos" in music._now_playing_embed(t, 0, loop=-1).fields[-1].value
+    assert "Loop" not in [f.name for f in music._now_playing_embed(t, 0).fields]
+
+    player, _voice, aufraeumen = _musik_umgebung()
+    try:
+        view = music.PlaybackControlView(player)
+        reihen = {}
+        for kind in view.children:
+            reihen.setdefault(kind._rendered_row, []).append(
+                getattr(kind, "label", None) or type(kind).__name__)
+        assert "Loop" in reihen.get(1, []), reihen
+        assert len(reihen.get(0, [])) == 5, reihen
+        assert any(n == "_SpeedSelect" for n in reihen.get(2, [])), reihen
+    finally:
+        aufraeumen()
+
+
+
+
+def test_loop_befehl_antwortet_und_postet_kein_zweites_panel():
+    """Der Textweg neben dem Knopf - und die Falle dahinter.
+
+    'flo loop 3' beantwortet Flo schon mit einem eigenen Embed. Frischt der
+    Befehl das Panel per _panel_auffrischen auf und das faellt auf 'dann eben
+    ein neues posten' zurueck, stuenden auf einmal ZWEI Panels im Kanal."""
+    import music
+    player, _voice, aufraeumen = _musik_umgebung()
+    gepostet = []
+
+    async def merken(_p, _t, **_kw):
+        gepostet.append(_t)
+
+    alt_send = music._send_panel
+    music._send_panel = merken
+    try:
+        player.queue[:] = [_track("A")]
+        player.loop.run_until_complete(player._advance())
+        gepostet.clear()
+
+        class Msg:
+            content = ""
+            guild = SimpleNamespace(id=1)
+            channel = SimpleNamespace(id=1)
+
+        alt_zustand = (music.instance._enabled, music.instance._players.get(1))
+        music.instance._enabled = True
+        music.instance._players[1] = player
+        try:
+            def sag(text):
+                Msg.content = text
+                return player.loop.run_until_complete(music.handle(Msg()))
+
+            e = sag("flo loop aus")          # laeuft keiner -> ehrliche Auskunft
+            assert "kein Loop" in e.description, e.description
+            assert player.loop_rest == 0
+
+            e = sag("flo loop 5")
+            assert player.loop_rest == 5, player.loop_rest
+            assert "5" in e.description
+
+            e = sag("flo loop 99999")        # gedeckelt, statt Sackgasse
+            assert player.loop_rest == music.LOOP_MAX, player.loop_rest
+
+            e = sag("flo loop")              # nackt + laeuft einer -> aus
+            assert player.loop_rest == 0, player.loop_rest
+            e = sag("flo loop")              # nackt + keiner -> Dauerschleife
+            assert player.loop_rest == -1, player.loop_rest
+            assert "Dauerschleife" in e.title
+
+            assert gepostet == [], "der Loop-Befehl hat ein zweites Panel gepostet"
+        finally:
+            music.instance._enabled = alt_zustand[0]
+            if alt_zustand[1] is None:
+                music.instance._players.pop(1, None)
+            else:
+                music.instance._players[1] = alt_zustand[1]
+    finally:
+        music._send_panel = alt_send
+        aufraeumen()
+
+
+
+
+def test_loop_ist_im_hilfetext():
+    """Ein Befehl, den niemand findet, hilft niemandem."""
+    quelle = open("bot.py", encoding="utf-8").read()
+    assert "flo loop" in quelle, "der Loop fehlt in der Hilfe"
+
+
+
+
 if __name__ == "__main__":
     run(globals())

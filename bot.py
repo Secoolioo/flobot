@@ -457,6 +457,7 @@ _HELP_DATA = {
         ("flo lyrics [song]", "Songtext (auch per 🎤-Button am Panel)"),
         ("flo skip · pause · weiter · stop", "Steuerung (oder die Buttons)"),
         ("flo nochmal [n]", "letzten Song nochmal (auch `nochmal nummer 3`)"),
+        ("flo loop 3 · loop aus", "aktuellen Song wiederholen (auch 🔁 am Panel)"),
         ("flo history", "Verlauf der gespielten Songs – anklickbar"),
         ("flo queue", "Warteschlange zeigen"),
         ("flo lautstärke 50", "Lautstärke setzen"),

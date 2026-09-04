@@ -42,6 +42,7 @@ class CmdNorm:
         "spiel", "spiele", "play", "lautstärke", "lautstaerke", "lautstarke",
         "volume", "vol", "lauter", "louder", "leiser", "quieter", "leise",
         "nochmal", "nochmals", "repeat", "replay", "wiederhol", "wiederhole",
+        "loop", "loope", "loopen", "loopt", "dauerschleife", "endlosschleife",
         "random", "zufall", "zufallssong", "überrasch", "ueberrasch",
         "lyrics", "lyric", "songtext", "liedtext",
         # economy

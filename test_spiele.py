@@ -8,7 +8,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _FakeStore, _fake_person)
+    _FakeChannel, _FakeStore, _fake_person)
 
 
 
@@ -318,6 +318,20 @@ def test_befehle_kapern_kein_alltagsdeutsch():
     for satz in beleidigend:
         assert fun.instance.looks_offensive(satz), satz
 
+    # --- Gegenrede: dieselbe Falle, nur oeffentlich ------------------------
+    # Die ausfuehrliche Liste steht in test_gegenrede_erkennt_hetze_aber_kein_
+    # alltagsdeutsch; hier stehen die drei Sorten, an denen die alte
+    # Beleidigungs-Erkennung gescheitert waere - damit wer diesen Test liest
+    # sieht, dass der neue Erkenner dieselbe Pruefung besteht.
+    for satz in ("Mein Nachbar ist Türke und grillt am besten.",
+                 "Die Mülltonne muss raus, heute ist Dienstag.",
+                 "Ich hab ein Referat über den Holocaust geschrieben.",
+                 "Das war antisemitisch, sowas sagt man nicht.",
+                 'Er hat "Ausländer raus" geschrieben, ich hab das gemeldet.',
+                 "> Ausländer raus"):
+        assert not fun.instance.ist_hetze(satz), satz
+    assert fun.instance.ist_hetze("Ausländer raus")
+
     # --- 'rate' ist auch der Imperativ von RATEN --------------------------
     class _Msg:
         def __init__(self, text, mentions=()):
@@ -427,6 +441,234 @@ def test_schnell_event_lohnt_sich_wirklich():
     assert games.GAMES_DAILY_MAX > 0
     assert games.EVENT_REWARD_MAX <= games.GAMES_DAILY_MAX, (
         "ein einzelnes Event fuellt die komplette Tageskappe")
+
+
+# --- Gegenrede: Flo haelt gegen Hetze dagegen ---------------------------------
+def _hetz_msg(text, uid=7, bot=False):
+    """Nachricht mit einem Kanal, der mitschreibt - und einer Reply-Attrappe."""
+    kanal = _FakeChannel()
+    msg = SimpleNamespace(
+        content=text, channel=kanal, guild=SimpleNamespace(id=1),
+        author=_fake_person(uid=uid, global_name=f"User{uid}"))
+    msg.author.bot = bot
+    msg.antworten = []
+
+    async def reply(inhalt, **_kw):
+        msg.antworten.append(inhalt)
+        return SimpleNamespace(id=1)
+
+    msg.reply = reply
+    return msg
+
+
+def _gegenrede_frisch():
+    """Cooldowns leeren und die KI stilllegen - getestet wird der Fertig-Pool."""
+    import ai
+    import fun
+    alt = (fun.instance._enabled, fun.instance._last_gegenrede,
+           dict(fun.instance._gegenrede_cooldowns), ai.is_enabled)
+    fun.instance._enabled = True
+    fun.instance._last_gegenrede = 0.0
+    fun.instance._gegenrede_cooldowns = {}
+    ai.is_enabled = lambda: False
+
+    def zurueck():
+        (fun.instance._enabled, fun.instance._last_gegenrede,
+         fun.instance._gegenrede_cooldowns, ai.is_enabled) = alt
+        fun.ai.is_enabled = ai.is_enabled
+
+    return zurueck
+
+
+def test_gegenrede_geht_auf_den_schreiber_los_und_zwar_im_kanal():
+    """Der Kern des Wunsches: Flo schweigt bei Hetze nicht, er haelt dagegen -
+    OEFFENTLICH, als Antwort auf die Nachricht.
+
+    Das ist neu: bisher ging der einzige Konter auf Beleidigungen per DM raus,
+    und oeffentlich geredet hat Flo nur gegen fremde Bots und als Zufalls-
+    Einwurf."""
+    import fun
+    zurueck = _gegenrede_frisch()
+    try:
+        msg = _hetz_msg("ausländer raus aus deutschland")
+        assert asyncio.run(fun.instance.maybe_gegenrede(msg)) is True
+        assert len(msg.antworten) == 1, msg.antworten
+        text = msg.antworten[0]
+        # Roast + klare Ansage: mindestens zwei Saetze, und der Name des
+        # Schreibers kommt vor - Flo redet MIT IHM, nicht ueber die Gruppe.
+        assert text.count(".") + text.count("!") + text.count("?") >= 2, text
+        assert "User7" in text, text
+    finally:
+        zurueck()
+
+
+
+
+def test_gegenrede_wiederholt_den_dreck_nicht():
+    """Flo antwortet auf den Menschen, nicht auf das Wort. Wuerde er es
+    wiederholen, stuende die Hetze am Ende zweimal im Kanal - einmal von ihm."""
+    import fun
+    verboten = ("ausländer raus", "vergast", "untermensch", "kanake", "neger",
+                "sieg heil", "schwuchtel", "judensau")
+    for spruch in fun._GEGENREDE:
+        low = spruch.lower()
+        for wort in verboten:
+            assert wort not in low, f"{spruch!r} wiederholt {wort!r}"
+    # Und der KI-Prompt sagt es ausdruecklich.
+    quelle = inspect.getsource(fun.Fun._gegenrede_text)
+    assert "Wiederhole seine Woerter nicht" in quelle
+    assert "NIEMALS" in quelle and "Gruppe" in quelle, (
+        "der Prompt verbietet nicht, ueber die GRUPPE herzuziehen")
+
+
+
+
+def test_gegenrede_bremst_gegen_flut_und_ignoriert_bots():
+    """Sie feuert zuverlaessig (kein Wuerfeln) - aber nicht in Serie.
+
+    Zwei Cooldowns: pro Person und serverweit. Ohne den serverweiten koennte
+    ein zweiter Account den Kanal mit Flos eigenen Ansagen zumuellen."""
+    import fun
+    zurueck = _gegenrede_frisch()
+    try:
+        erste = _hetz_msg("juden gehören vergast", uid=7)
+        assert asyncio.run(fun.instance.maybe_gegenrede(erste)) is True
+        # Direkt danach: serverweiter Cooldown haelt, auch bei jemand anderem.
+        zweite = _hetz_msg("moslems müssen raus", uid=8)
+        assert asyncio.run(fun.instance.maybe_gegenrede(zweite)) is False
+        assert zweite.antworten == []
+        # Serverweiter Cooldown weg, Personen-Cooldown bleibt: derselbe
+        # Poebler kommt nicht sofort ein zweites Mal dran.
+        fun.instance._last_gegenrede = 0.0
+        dritte = _hetz_msg("juden gehören vergast", uid=7)
+        assert asyncio.run(fun.instance.maybe_gegenrede(dritte)) is False
+        # ... ein anderer aber schon.
+        vierte = _hetz_msg("moslems müssen raus", uid=8)
+        assert asyncio.run(fun.instance.maybe_gegenrede(vierte)) is True
+
+        # Bots loesen nie etwas aus (sonst schaukeln sich zwei Bots hoch).
+        fun.instance._last_gegenrede = 0.0
+        fun.instance._gegenrede_cooldowns = {}
+        botmsg = _hetz_msg("ausländer raus", uid=9, bot=True)
+        assert asyncio.run(fun.instance.maybe_gegenrede(botmsg)) is False
+    finally:
+        zurueck()
+
+
+
+
+def test_gegenrede_erkennt_hetze_aber_kein_alltagsdeutsch():
+    """Der wichtigste Test des ganzen Teils.
+
+    Der DM-Konter ging privat raus und lag trotzdem in 75 % der Faelle daneben
+    (siehe test_befehle_kapern_kein_alltagsdeutsch). Die Gegenrede steht
+    OEFFENTLICH im Kanal - ein Fehlalarm ist dort deutlich peinlicher. Deshalb
+    gilt hier: im Zweifel lieber schweigen.
+
+    Drei Sorten harmloser Saetze stehen hier bewusst nebeneinander:
+    Alltag, POLITISCHE MEINUNG (Flo darf rechts sein, siehe ai._POLITIK - eine
+    Meinung ist keine Hetze) und META (wer ueber Hetze redet, sie zitiert oder
+    sie meldet, wird nicht angegangen)."""
+    import fun
+    harmlos = [
+        # Alltag - die Gruppe zu NENNEN ist nie das Problem.
+        "Mein Nachbar ist Türke und der beste Grillmeister den ich kenne.",
+        "Meine Freundin ist Jüdin und feiert gerade Chanukka.",
+        "Die Flüchtlinge aus dem Camp haben gestern beim Umzug geholfen.",
+        "Schwule und Lesben feiern am Wochenende CSD, kommt jemand mit?",
+        "Behinderte Menschen brauchen bessere Rampen an den Bahnhöfen.",
+        "Die Muslime im Team fasten gerade, wir verschieben das Essen.",
+        "Die Mülltonne muss raus, heute ist Dienstag.",
+        "Die Gäste sind weg, endlich Ruhe.",
+        "Bei uns im Keller ist Ungeziefer, ekelhaft.",
+        "Die Ratten in der Kanalisation sind ein echtes Problem.",
+        "Die Noobs müssen raus aus dem Team lol",
+        "Die Gegner sind echt Ratten in dem Match.",
+        # Geschichte/Bildung - 'Holocaust' ist ein Thema, keine Hetze.
+        "Ich hab ein Referat über den Holocaust geschrieben.",
+        "Im Geschichtsunterricht ging es heute um Auschwitz.",
+        # Politische Meinung - derb erlaubt, Hetze nicht.
+        "Ich finde Massenzuwanderung kritisch, das muss man diskutieren dürfen.",
+        "Die Asylpolitik gehört reformiert.",
+        "Abschiebungen von Straftätern sollten schneller gehen.",
+        "Gendern finde ich zum Kotzen.",
+        # META - genau die duerfen NIE getroffen werden.
+        "Das war antisemitisch, sowas geht gar nicht.",
+        "Sowas sagt man nicht, ey.",
+        'Er hat "Ausländer raus" geschrieben, ich hab das gemeldet.',
+        "> Ausländer raus",
+        "Der Spruch ist rassistisch, echt widerlich.",
+        "Ich bin gegen Rassismus, immer.",
+        "Hier ist kein Platz für Hetze.",
+        "Das ist Volksverhetzung und strafbar.",
+        "Meldet den mal, das ist Hetze.",
+        "Er hat vorhin sowas Rassistisches gepostet.",
+    ]
+    for satz in harmlos:
+        assert not fun.instance.ist_hetze(satz), satz
+
+    hetze = [
+        "Ausländer raus",
+        "Juden gehören vergast",
+        "die juden sind ungeziefer",
+        "Moslems müssen raus",
+        "Migranten sind Abschaum",
+        "Behinderte sind minderwertig",
+        "du dreckiger kanake",
+        "sieg heil",
+        "der holocaust ist eine lüge",
+        "schwuchtel",
+    ]
+    for satz in hetze:
+        assert fun.instance.ist_hetze(satz), satz
+
+
+
+
+def test_gegenrede_haengt_im_passiven_hook_und_beendet_ihn():
+    """Sie laeuft ueber on_message_passive - also ueber den Schalter 'chaos',
+    ohne eine einzige Zeile in bot.py.
+
+    Und sie beendet den Hook: ein Zufalls-Emoji oder ein Kalauer daneben wuerde
+    die Ansage nur verwaessern."""
+    import fun
+    quelle = inspect.getsource(fun.Fun.on_message_passive)
+    assert "maybe_gegenrede" in quelle, "die Gegenrede haengt nirgends"
+    assert quelle.index("maybe_gegenrede") < quelle.index("maybe_dm_roast"), (
+        "die Gegenrede muss VOR dem DM-Konter stehen")
+    # 'return' direkt nach dem Aufruf: die Nachricht ist damit erledigt.
+    danach = quelle.split("maybe_gegenrede(message)")[1]
+    assert danach.lstrip().startswith(":\n            return"), danach[:80]
+
+    zurueck = _gegenrede_frisch()
+    try:
+        msg = _hetz_msg("juden gehören vergast")
+        asyncio.run(fun.instance.on_message_passive(msg))
+        assert len(msg.antworten) == 1, msg.antworten
+    finally:
+        zurueck()
+
+
+
+
+def test_flo_hat_eine_haltung_gegen_hetze_im_prompt():
+    """Die zweite Ebene: auch wenn der Hook nicht anschlaegt, weiss Flo, was er
+    von so etwas haelt.
+
+    _KONTER regelt 'jemand ist frech zu DIR', _GUARDRAIL 'das sagst du selbst
+    nicht' - was er tun soll, wenn jemand ANDEREN gegenueber hetzt, stand
+    vorher nirgends."""
+    import ai as ai_mod
+    p = ai_mod.instance._system_prompt(author="Tester", title="")
+    assert "menschenfeindlichem" in p, "die Haltung gegen Hetze fehlt"
+    assert "GESCHRIEBEN HAT" in p, (
+        "der Prompt sagt nicht, dass der SCHREIBER das Ziel ist")
+    # Reihenfolge: hinter dem Konter, aber NICHT am Ende (dort steht das
+    # Schlusswort, und das muss das letzte Wort bleiben).
+    assert p.index("NICHTS gefallen") < p.index("menschenfeindlichem")
+    assert p.rstrip().endswith("Nur die eine Grenze von oben bleibt.")
+
+
 
 
 if __name__ == "__main__":

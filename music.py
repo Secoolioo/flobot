@@ -30,7 +30,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import aiohttp
 import discord
@@ -96,6 +96,10 @@ ADVANCE_MAX_FEHLER = 2
 # aber nichts; 'Flo spiel X' reihte nur ein, weil is_active() die ganze Zeit
 # True blieb. Nur 'Flo stop' kam da raus.
 NEUSTART_MAX_VERSUCHE = 2
+# Obergrenze fuer 'flo loop <n>'. Wer wirklich ewig will, nimmt 'endlos' -
+# das steht dann auch so im Panel und laesst sich nicht mit einem Vertipper
+# ('loop 99999') aus Versehen bauen.
+LOOP_MAX = 50
 # So viele Sekunden darf am Ende eines Songs fehlen, ohne dass es als ABBRUCH
 # gilt. Alles darueber heisst: FFmpeg ist gestorben, der Song war nicht zu Ende.
 #
@@ -244,6 +248,26 @@ def _adresse_alt(track):
     if not track.geloest_um:
         return False          # unbekannt -> nicht anfassen
     return (time.monotonic() - track.geloest_um) > STREAM_MAX_ALTER
+
+
+def _loop_key(track):
+    """Kennzeichen eines Songs fuer den Loop.
+
+    Bewusst NICHT die Objekt-Identitaet: der Loop reiht eine KOPIE des Songs
+    ein (siehe _advance_intern). Dasselbe Track-Objekt gleichzeitig in
+    'current' und in der Warteschlange wuerde QueuePositionView.apply_move
+    durcheinanderbringen - die sucht per 'is'."""
+    if track is None:
+        return ""
+    return (getattr(track, "webpage_url", "") or getattr(track, "query", "")
+            or getattr(track, "title", "") or "")
+
+
+def _loop_text(rest):
+    """Wie der Loop im Panel steht. Leerer Text = kein Loop aktiv."""
+    if not rest:
+        return ""
+    return "🔁 endlos" if rest < 0 else f"🔁 noch {rest}×"
 
 
 def _url_saeubern(url):
@@ -593,6 +617,23 @@ _REPLAY_RE = re.compile(
     r"\s*(?:nummer|nr\.?|no\.?|numer|nummber|#)?"
     r"\s*(\d+)?\b", re.I)
 
+# "flo loop", "flo loop 3", "flo loop aus", "flo dauerschleife 5" -> den
+# LAUFENDEN Song wiederholen.
+#
+# Bewusst NICHT 'repeat'/'replay'/'wiederhol': die gehoeren seit jeher dem
+# VERLAUF (_REPLAY_RE oben). "flo repeat 3" heisst hier "spiel Song Nummer 3 aus
+# dem Verlauf" - wuerde der Loop sich das Wort nehmen, aendert sich die
+# Bedeutung eines bestehenden Befehls.
+#
+# Der Ausdruck ist bis ans Zeilenende verankert: "flo was ist eigentlich ein
+# loop" soll die KI beantworten, nicht die Musik kapern.
+_LOOP_RE = re.compile(
+    r"^(?:loop(?:e|en|t)?|dauerschleife|endlosschleife)"
+    r"(?:\s+(aus|off|stop|weg|an|ein|on|endlos|unendlich|dauerhaft)"
+    # [0-9] statt \d: \d faengt auch fremde Ziffernsysteme, und int() stirbt
+    # daran (siehe numfmt.ist_zahl). Passt es nicht, uebernimmt die KI.
+    r"|\s*([0-9]+)\s*(?:x|×|mal)?)?\s*$", re.I)
+
 # Lautstaerke - tolerant: "flo lautstärke 30", "flo ls 80", "flo LS", "flo vol 50",
 # "flo lautstärke auf 30" sowie gaengige Tippfehler. Ohne Zahl -> aktuelle anzeigen.
 _VOLUME_UP_RE = re.compile(r"^(?:lauter|louder|lautr)\b", re.I)
@@ -679,6 +720,14 @@ class GuildPlayer:
     # Nachricht und aller Referenzen bestehen bleiben.
     panel_view: "discord.ui.View | None" = None
     speed: float = 1.0               # 0.5 - 2.0, per Tempo-Dropdown im Panel waehlbar
+    # Loop: wie oft der LAUFENDE Song noch wiederholt wird.
+    #   0 = aus, N = noch N Wiederholungen, -1 = endlos.
+    # Gehoert bewusst an den Player und NICHT in die View - das Panel wird bei
+    # jedem Songwechsel neu gebaut. Und bewusst NICHT in den Speicher: der Loop
+    # haengt an genau einem laufenden Song, nach einem Neustart haette ein
+    # wiederhergestellter Zaehler kein Ziel mehr. Genauso haelt es 'speed'.
+    loop_rest: int = 0
+    loop_key: str = ""               # WELCHER Song gelooped wird (siehe _loop_key)
     _seg_start: float | None = None  # monotonic: Start des laufenden Abschnitts (None=aus/pausiert)
     _played: float = 0.0             # bereits gespielte Song-Sekunden vor diesem Abschnitt
     _play_gen: int = 0               # Generation des aktuell gueltigen Players (gegen Race beim Neustart)
@@ -957,12 +1006,28 @@ class GuildPlayer:
         self._advancing = True
         sitzung = self._session_gen    # gehoert dieser Lauf noch zur laufenden Sitzung?
         fehler_serie = 0        # Fehlschlaege DIREKT hintereinander
+        loop_wieder = False     # ist der naechste Pop ein Loop-Durchlauf?
         try:
             # Kam der Callback, weil der Song ZU ENDE ist - oder weil FFmpeg
             # gestorben ist? Nur beim echten Ende wird weitergeschaltet.
             # (Bei gen=None hat ein Mensch 'skip' gedrueckt - der will weiter.)
             if gen is not None and await self._nach_abbruch_fortsetzen():
                 return
+            # Loop: den gerade beendeten Song noch einmal vorne einreihen.
+            # Die Stelle ist mit Bedacht gewaehlt:
+            #  - NACH _nach_abbruch_fortsetzen: ein FFmpeg-Absturz ist kein
+            #    fertiger Durchlauf und darf keine Wiederholung verbrauchen.
+            #  - VOR dem 'not self.queue'-Ausstieg unten: der raeumt sonst
+            #    Panel und current weg, bevor der Loop ueberhaupt drankommt.
+            #  - NUR bei gen is not None, also nur am echten Songende. 'skip'
+            #    ruft _advance() ohne gen - taete der Loop dort auch etwas,
+            #    waere der Skip wirkungslos.
+            if (gen is not None and self.loop_rest and self.current is not None
+                    and _loop_key(self.current) == self.loop_key):
+                if self.loop_rest > 0:
+                    self.loop_rest -= 1
+                self.queue.insert(0, replace(self.current))
+                loop_wieder = True
             while True:
                 if gen is not None and gen != self._play_gen:
                     return          # jemand hat inzwischen selbst gestartet
@@ -971,6 +1036,9 @@ class GuildPlayer:
                     await _retire_panel(self)
                     return
                 track = self.queue.pop(0)
+                # Nur der ERSTE Pop ist der Loop-Durchlauf. Faellt er durch
+                # (nicht ladbar), holt die Schleife den naechsten echten Song.
+                wiederholung, loop_wieder = loop_wieder, False
                 try:
                     if track.stream_url and track.query and _adresse_alt(track):
                         # Die Adresse lag zu lange herum (siehe STREAM_MAX_ALTER):
@@ -995,8 +1063,18 @@ class GuildPlayer:
                     # "Track nicht ladbar" verbucht: der Song war weg, obwohl
                     # mit ihm alles in Ordnung war.
                     await self._warte_bis_still()
-                    self.start(track)
+                    # keep_speed beim Loop-Durchlauf: sonst setzte start()
+                    # _neustart_versuche zurueck - die Schwelle, die einen
+                    # kaputten Song aufgibt, koennte sich so ewig selbst
+                    # verlaengern. Nebenbei ueberlebt damit ein eingestelltes
+                    # 'slowed + reverb' die Wiederholung.
+                    self.start(track, keep_speed=wiederholung)
                 except Exception:
+                    if wiederholung:
+                        # Ein Song, der nicht laeuft, wird nicht ewig
+                        # wiederholt - Loop aus, dann ganz normal weiter.
+                        self.loop_rest = 0
+                        self.loop_key = ""
                     fehler_serie += 1
                     log.exception("Track uebersprungen (nicht ladbar): %s", track.title)
                     # Zwei Fehlschlaege HINTEREINANDER sind kein Zufall mehr,
@@ -1023,7 +1101,13 @@ class GuildPlayer:
                 # Erfolgreich gestartet. Das Panel ist nur Deko - faellt es (Netzwerk)
                 # aus, darf das den laufenden Song NICHT abbrechen.
                 try:
-                    await _send_panel(self, track)
+                    if wiederholung and self.panel_message is not None:
+                        # Loop-Durchlauf: das vorhandene Panel nur auffrischen.
+                        # Jedes Mal ein neues zu posten waere bei einem kurzen
+                        # Song sichtbares Geflacker plus Rate-Limit-Risiko.
+                        await _panel_auffrischen(self, track)
+                    else:
+                        await _send_panel(self, track)
                 except Exception:
                     log.exception("Now-Playing-Panel nach Advance fehlgeschlagen (egal)")
                 return
@@ -1034,6 +1118,8 @@ class GuildPlayer:
         self.queue.clear()
         self.current = None
         self.speed = 1.0           # frische Session startet wieder mit Normaltempo
+        self.loop_rest = 0         # sonst wiederholt die naechste Sitzung ungefragt
+        self.loop_key = ""
         self._seg_start = None
         self._played = 0.0
         self.active_channel_id = None   # bewusst raus -> Watchdog soll NICHT zurueckholen
@@ -1092,6 +1178,24 @@ class GuildPlayer:
             await asyncio.sleep(0.05)
         return False
 
+    def loop_setzen(self, anzahl):
+        """Loop fuer den LAUFENDEN Song setzen.
+
+        anzahl: 0 = aus, N = noch N Wiederholungen, -1 = endlos.
+        Rueckgabe: False, wenn gerade gar nichts laeuft (dann gibt es nichts zu
+        wiederholen). Den Song merkt sich der Loop ueber _loop_key - laeuft
+        spaeter etwas anderes, greift er nicht mehr."""
+        anzahl = int(anzahl)
+        if anzahl == 0:
+            self.loop_rest = 0
+            self.loop_key = ""
+            return True
+        if self.current is None:
+            return False
+        self.loop_rest = anzahl
+        self.loop_key = _loop_key(self.current)
+        return True
+
     async def skip(self):
         """Zum naechsten Song - und zwar VERLAESSLICH.
 
@@ -1102,6 +1206,10 @@ class GuildPlayer:
         'uebersprungen' - und es passierte nichts. Jetzt entwerten wir den
         Callback selbst und stossen den naechsten Song direkt an, damit es
         genau EINEN Weg gibt und der immer laeuft."""
+        # Wer skippt, will WEG von diesem Song - ein laufender Loop wuerde ihn
+        # sonst sofort wieder vorne einreihen und der Skip verpuffte.
+        self.loop_rest = 0
+        self.loop_key = ""
         self._play_gen += 1              # laufenden after-Callback entwerten
         if self.voice is not None:
             try:
@@ -1634,8 +1742,11 @@ class _SpeedSelect(discord.ui.Select):
 
     def __init__(self, player):
         self.player = player
+        # row=2, weil Reihe 0 mit fuenf Buttons voll ist und der Loop-Knopf
+        # Reihe 1 belegt. Ein Select wiegt eine ganze Reihe - stuende es
+        # weiterhin auf row=1, wirft discord.py "item would not fit at row 1".
         super().__init__(placeholder="🎚️ Geschwindigkeit wählen …",
-                         min_values=1, max_values=1, options=self._opts(), row=1)
+                         min_values=1, max_values=1, options=self._opts(), row=2)
 
     def _opts(self):
         cur = self.player.speed
@@ -1668,7 +1779,9 @@ class _SpeedSelect(discord.ui.Select):
         try:
             cur = self.player.current
             if cur is not None:
-                emb = _now_playing_embed(cur, len(self.player.queue), speed=self.player.speed)
+                emb = _now_playing_embed(cur, len(self.player.queue),
+                                         speed=self.player.speed,
+                                         loop=self.player.loop_rest)
                 await interaction.edit_original_response(embed=emb, view=self.view)
             else:
                 await interaction.edit_original_response(view=self.view)
@@ -1725,8 +1838,83 @@ class LyricsView(discord.ui.View):
                 pass
 
 
+# Was der Loop-Knopf zur Auswahl stellt. -1 = endlos, 0 = aus.
+_LOOP_WAHL = (
+    (2, "2× wiederholen", "der Song läuft noch 2 Mal"),
+    (3, "3× wiederholen", "der Song läuft noch 3 Mal"),
+    (5, "5× wiederholen", "der Song läuft noch 5 Mal"),
+    (10, "10× wiederholen", "der Song läuft noch 10 Mal"),
+    (-1, "endlos", "bis jemand Skip drückt oder den Loop ausmacht"),
+)
+
+
+class _LoopSelect(discord.ui.Select):
+    """Wie oft soll der laufende Song wiederholt werden?
+
+    Erscheint ephemer nach einem Klick auf den Loop-Knopf im Panel - genau der
+    Ablauf 'Knopf -> Frage -> Anzahl waehlen'. 'Aus' steht nur drin, wenn
+    ueberhaupt ein Loop laeuft."""
+
+    def __init__(self, player):
+        self.player = player
+        optionen = []
+        if player.loop_rest:
+            optionen.append(discord.SelectOption(
+                label="Loop aus", value="0", emoji="⏹️",
+                description="nach diesem Durchlauf ganz normal weiter"))
+        for wert, label, beschreibung in _LOOP_WAHL:
+            optionen.append(discord.SelectOption(
+                label=label, value=str(wert),
+                emoji="♾️" if wert < 0 else "🔁",
+                description=beschreibung,
+                default=(player.loop_rest == wert)))
+        super().__init__(placeholder="Wie oft? 🔁", min_values=1, max_values=1,
+                         options=optionen)
+
+    async def callback(self, interaction):
+        self.view.stop()
+        anzahl = int(self.values[0])
+        if not self.player.loop_setzen(anzahl):
+            await interaction.response.edit_message(
+                content="Gerade läuft nichts, was ich wiederholen könnte.", view=None)
+            return
+        titel = getattr(self.player.current, "title", "") or "der Song"
+        if anzahl == 0:
+            text = "Loop aus – nach dem Durchlauf geht es normal weiter."
+        elif anzahl < 0:
+            text = (f"🔁 **{instance._short(titel, 70)}** läuft jetzt in "
+                    f"Dauerschleife. `{instance._bot_name} loop aus` beendet sie.")
+        else:
+            text = (f"🔁 **{instance._short(titel, 70)}** läuft noch "
+                    f"**{anzahl}×**.")
+        await interaction.response.edit_message(content=text, view=None)
+        # Das oeffentliche Panel soll den neuen Zustand sofort zeigen.
+        try:
+            await _panel_auffrischen(self.player)
+        except Exception:  # noqa: BLE001 - Panel ist Deko, der Loop steht schon
+            log.debug("Panel nach Loop-Wahl nicht aufgefrischt", exc_info=True)
+
+
+class _LoopView(discord.ui.View):
+    """Die ephemere Auswahl hinter dem Loop-Knopf. Nur der Klickende sieht sie,
+    ein Timeout raeumt sie weg."""
+
+    def __init__(self, player, owner_id, *, timeout = 60.0):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+        self.add_item(_LoopSelect(player))
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.owner_id:
+            return True
+        await interaction.response.send_message(
+            "Das ist nicht deine Auswahl – drück dir einen eigenen Loop-Knopf. 🔁",
+            ephemeral=True)
+        return False
+
+
 class PlaybackControlView(discord.ui.View):
-    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue + Tempo-Dropdown.
+    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue, Loop + Tempo.
 
     timeout=None: bleibt fuer die ganze (ggf. lange) Songdauer aktiv. Beim Posten
     eines neuen Panels wird das alte ueber _send_panel sauber entschaerft.
@@ -1800,6 +1988,21 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="Queue", emoji="🎶", style=discord.ButtonStyle.secondary)
     async def _queue(self, interaction, _b):
         await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
+
+    @discord.ui.button(label="Loop", emoji="🔁", style=discord.ButtonStyle.secondary,
+                       row=1)
+    async def _loop(self, interaction, _b):
+        # row=1 ausdruecklich: Reihe 0 ist mit den fuenf Buttons oben voll.
+        # Ohne die Angabe faende discord.py zwar auch Reihe 1 - aber dann waere
+        # sie halb belegt und der Tempo-Select (row=2) muesste wieder umziehen.
+        if self.player.current is None:
+            await interaction.response.send_message(
+                "Gerade läuft nichts, was ich wiederholen könnte.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"Wie oft soll **{instance._short(self.player.current.title, 70)}** "
+            f"wiederholt werden?",
+            view=_LoopView(self.player, interaction.user.id), ephemeral=True)
 
     @discord.ui.button(label="Lyrics", emoji="🎤", style=discord.ButtonStyle.secondary)
     async def _lyrics(self, interaction, _b):
@@ -3048,6 +3251,12 @@ class Music(FeatureBasis):
         if rm:
             return ("replay", rm.group(1) or "1")
 
+        # 2b) Loop? MUSS nach dem Replay stehen - sonst nichts, die Woerter
+        #     ueberschneiden sich nicht.
+        lo = _LOOP_RE.match(cleaned)
+        if lo:
+            return ("loop", (lo.group(1) or lo.group(2) or "").lower())
+
         # 2) Steuerbefehl am Satzanfang?
         for action, pattern in _CONTROL:
             if pattern.match(cleaned):
@@ -3454,7 +3663,7 @@ class Music(FeatureBasis):
         return f"**{self._short(track.title, 90)}**"
 
     def _now_playing_embed(self, track, queue_len = 0, extra = "",
-                           speed = 1.0):
+                           speed = 1.0, loop = 0):
         """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
         e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=self._title_value(track),
                           color=_COL_PLAY)
@@ -3470,6 +3679,11 @@ class Music(FeatureBasis):
                 e.add_field(name="Effekt", value=f"🌌 `{speed:g}×` slowed + reverb", inline=True)
             else:
                 e.add_field(name="Tempo", value=f"🚀 `{speed:g}×`", inline=True)
+        # Ohne diese Anzeige sieht niemand, warum derselbe Song wiederkommt und
+        # die Warteschlange stehenbleibt.
+        lt = _loop_text(loop)
+        if lt:
+            e.add_field(name="Loop", value=lt, inline=True)
         # Fussnote: optionaler Extra-Text und (falls aktiv) die Tempo-/Effekt-Anzeige.
         foot = []
         if extra:
@@ -3560,6 +3774,32 @@ class Music(FeatureBasis):
             except discord.HTTPException:
                 pass
 
+    async def _panel_auffrischen(self, player, track = None):
+        """Nur das Embed des VORHANDENEN Panels neu setzen - Nachricht und
+        Buttons bleiben stehen.
+
+        Fuer den Loop: jeder Durchlauf laeuft ueber _advance und wuerde sonst
+        ein komplett neues Panel posten (altes loeschen, neues senden). Bei
+        einem kurzen Song ist das sichtbares Geflacker und laeuft ins
+        Rate-Limit.
+
+        Sendet AUSDRUECKLICH nie ein neues Panel: 'flo loop 3' beantwortet Flo
+        schon mit einem eigenen Embed - ein zweites, ungefragtes Panel dazu
+        waere Spam. Ist das Panel weg, meldet sich der naechste echte
+        Songwechsel ohnehin mit einem frischen."""
+        msg = player.panel_message
+        track = track or player.current
+        if msg is None or track is None:
+            return
+        emb = self._now_playing_embed(track, len(player.queue),
+                                      speed=player.speed, loop=player.loop_rest)
+        try:
+            await msg.edit(embed=emb)
+        except discord.HTTPException:
+            # Panel geloescht -> abmelden. Der naechste Songwechsel postet
+            # dann ganz normal ein neues.
+            player.panel_message = None
+
     async def _send_panel(self, player, track, *,
                          reply_to = None, extra = ""):
         """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
@@ -3574,7 +3814,8 @@ class Music(FeatureBasis):
         player._panel_gen += 1
         meine_gen = player._panel_gen
         await self._retire_panel(player)
-        emb = self._now_playing_embed(track, len(player.queue), extra=extra, speed=player.speed)
+        emb = self._now_playing_embed(track, len(player.queue), extra=extra,
+                                      speed=player.speed, loop=player.loop_rest)
         view = PlaybackControlView(player)
         try:
             if reply_to is not None:
@@ -3698,6 +3939,46 @@ class Music(FeatureBasis):
             await player.skip()
             desc = f"**{self._short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
             return self._embed(desc, title="⏭️  Skip", color=_COL_CTRL)
+
+        # --- Loop: den LAUFENDEN Song wiederholen ---------------------------
+        if action == "loop":
+            aus = ("aus", "off", "stop", "weg")
+            endlos = ("an", "ein", "on", "endlos", "unendlich", "dauerhaft")
+            if arg in aus:
+                anzahl = 0
+            elif arg in endlos:
+                anzahl = -1
+            elif numfmt.ist_zahl(arg):
+                # 0 heisst 'aus'; nach oben gedeckelt, damit 'loop 99999' kein
+                # Versehen ist, aus dem man nur noch per Stop rauskommt.
+                anzahl = min(int(arg), LOOP_MAX) or 0
+            else:
+                # Nacktes 'flo loop' schaltet um: laeuft einer, ist er weg;
+                # laeuft keiner, wird es die Dauerschleife.
+                anzahl = 0 if player.loop_rest else -1
+            if anzahl == 0:
+                if not player.loop_rest:
+                    return self._embed(
+                        f"Es läuft gar kein Loop. `{self._bot_name} loop 3` startet einen.",
+                        title="🔁  Loop", color=_COL_INFO)
+                player.loop_setzen(0)
+                await self._panel_auffrischen(player)
+                return self._embed("Loop aus – nach diesem Durchlauf geht es normal weiter.",
+                                   title="🔁  Loop aus", color=_COL_CTRL)
+            if not player.loop_setzen(anzahl):
+                return self._embed("Ich spiele gerade nichts, was ich wiederholen könnte.",
+                                   color=_COL_ERR)
+            await self._panel_auffrischen(player)
+            titel = self._short(player.current.title, 90)
+            if anzahl < 0:
+                return self._embed(
+                    f"**{titel}** läuft jetzt in Dauerschleife. "
+                    f"`{self._bot_name} loop aus` beendet sie, Skip auch.",
+                    title="🔁  Dauerschleife", color=_COL_PLAY)
+            return self._embed(
+                f"**{titel}** läuft noch **{anzahl}×**. "
+                f"Solange wartet die Warteschlange.",
+                title="🔁  Loop", color=_COL_PLAY)
 
         if action == "pause":
             if player.ist_pausiert():
@@ -4057,6 +4338,7 @@ _gone_embed = instance._gone_embed
 _queue_embed = instance._queue_embed
 _retire_panel = instance._retire_panel
 _send_panel = instance._send_panel
+_panel_auffrischen = instance._panel_auffrischen
 handle = instance.handle
 verlauf = instance.verlauf
 verlauf_notieren = instance.verlauf_notieren
