@@ -793,9 +793,16 @@ def _ist_verlauf_wort(wort):
         return False
     if w in _VERLAUF_WOERTER:
         return True
-    if len(w) < 6:
+    if len(w) < 6 or w in _KEIN_VERLAUF:
         return False
     return any(_wort_abstand(w, ziel) <= 2 for ziel in _VERLAUF_WOERTER)
+
+
+# Echte Woerter, die nur zufaellig nah an 'verlauf' liegen. 'Flo verkauf' ist
+# der Aktien-Verkauf - die Musik steht in der Kette aber VOR der Aktie und hat
+# daraus den Songverlauf gemacht.
+_KEIN_VERLAUF = frozenset({"verkauf", "verkaufe", "verkaufen", "verkauft",
+                           "verlauft", "verlaufen", "verlaufe"})
 
 
 def _ist_verlauf_vorwort(wort):

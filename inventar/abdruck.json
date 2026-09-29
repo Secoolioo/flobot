@@ -4446,26 +4446,6 @@
     "titel": ""
    }
   ],
-  "verkauf": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
-    "titel": "🕘 Musik-Verlauf"
-   }
-  ],
-  "verkaufe": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Noch keine Songs gespielt. Leg was auf: `Flo spiel <titel>` 🎵",
-    "titel": "🕘 Musik-Verlauf"
-   }
-  ],
   "verlass": [
    {
     "art": "embed",
@@ -5179,7 +5159,7 @@
  },
  "zaehlung": {
   "befragt": 489,
-  "stabil": 478,
+  "stabil": 476,
   "wackelig": 6
  }
 }

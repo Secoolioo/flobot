@@ -1623,6 +1623,13 @@ def test_verkauf_als_erstes_wort_erreicht_die_aktie():
     finally:
         restore()
 
+    # Und die Musik (steht in der Kette VOR der Aktie) haelt 'verkauf' nicht
+    # mehr fuer einen Tippfehler von 'verlauf' - nackt landete es dort.
+    import music
+    for wort in ("verkauf", "verkaufe", "verkaufen"):
+        assert not music._ist_verlauf_wort(wort), wort
+    assert music._ist_verlauf_wort("verlauf") and music._ist_verlauf_wort("verluaf")
+
 
 
 
