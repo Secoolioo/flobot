@@ -113,15 +113,15 @@ Damit nachvollziehbar ist, dass diese Punkte nicht übersehen, sondern
 
 ## 4. Noch offen
 
-35 schwere Funde wurden als „echt offen" bestätigt; davon sind die
-21 oben abgearbeitet. Der Rest ist dokumentiert und nach Schaden geordnet —
-keiner davon verursacht Datenverlust oder Coin-Verlust:
+35 schwere Funde wurden als „echt offen" bestätigt; die 21 oben sind
+abgearbeitet, mit dem Update vom 29.09.2026 auch `music.py:691` (Zustand erst
+nach `play()`), `arbeit.py:983` (`Flo top` gehört wieder der XP-Rangliste),
+`admin.py:91/318` (@-Ziele bei Admin-Befehlen) und `casino.py:3155`
+(gescheiterter Blackjack-Tisch gibt den Einsatz zurück). Offen bleibt:
 
 | Bereich | Was | Warum nicht sofort |
 |---|---|---|
-| `floaktie.py:1539` | Voice-Dividende umgeht die Tageskappe für Voice-Coins | Wirtschafts-Balance, kein Verlust — braucht eine Entscheidung, ob die Kappe überhaupt gelten soll |
-| `casino.py:3155` | Blackjack-Deal: schlägt der Edit fehl, bleibt die Runde offen | Text-Weg (`flo karte`) spielt sie zu Ende; Geld ist nicht weg |
-| `admin.py:91/318` | @-Erwähnung als Ziel funktioniert bei keinem Admin-Befehl | nur Besitzer-Befehle, ID-Form funktioniert |
+| `floaktie.py:1611` | Voice-Dividende umgeht die Tageskappe für Voice-Coins | Wirtschafts-Balance, kein Verlust — braucht eine Entscheidung, ob die Kappe überhaupt gelten soll |
 | diverse Tests | Attrappen statt echter Pfade, geborgter globaler Zustand | Testqualität, keine Betriebswirkung |
 
 ---
