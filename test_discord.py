@@ -590,6 +590,185 @@ def test_botsicht_liest_den_text_neuer_nachrichten():
     assert basis.v2_text(_rauch_nachricht("hallo")) == ""
 
 
+# --- Soundboard -----------------------------------------------------------------
+def _snd(sid, name, emoji="📢"):
+    return SimpleNamespace(id=sid, name=name, emoji=discord.PartialEmoji(name=emoji),
+                           available=True)
+
+
+def test_soundboard_hat_platz_fuer_alles_und_ueberlebt_neustarts():
+    """Vorher: hoechstens 25 Knoepfe (schon voll), nur eigene Dateien, nach zehn
+    Minuten tot. Jetzt: 15 Knoepfe, Menues fuer weitere Dateien, die Sounds des
+    Servers und die von Discord - alles DynamicItems ohne Timeout."""
+    import voicegags
+    dateien = [f"datei{i}" for i in range(20)]
+    server = [_snd(100 + i, f"server{i}") for i in range(3)]
+    standard = [_snd(i, f"discord{i}") for i in range(1, 31)]
+    view = voicegags.SoundboardView(dateien, server, standard)
+    assert view.timeout is None
+    teile = list(view.walk_children())
+    knoepfe = [t for t in teile if isinstance(t, voicegags.SoundKnopf)]
+    menues = {t.art: t for t in teile if isinstance(t, voicegags.SoundAuswahl)}
+    assert [k.sound_name for k in knoepfe] == dateien[:15]
+    assert [o.value for o in menues["datei"].item.options] == dateien[15:]
+    assert [o.value for o in menues["server"].item.options] == ["100", "101", "102"]
+    assert len(menues["discord"].item.options) == 25
+    assert len(teile) <= 40
+    # Ohne Discord-Sounds (kein Recht): nur die Dateien.
+    nur = voicegags.SoundboardView(["a"])
+    assert not [t for t in nur.walk_children() if isinstance(t, voicegags.SoundAuswahl)]
+    knopf = asyncio.run(voicegags.SoundKnopf.from_custom_id(
+        None, discord.ui.Button(custom_id="flo:sb:d:pups", emoji="💥"), {"name": "pups"}))
+    assert knopf.sound_name == "pups"
+
+
+def test_alle_dauerhaften_knoepfe_ueberschneiden_sich_nie():
+    """Jede custom_id passt auf GENAU eine Vorlage - sonst feuern zwei Klassen,
+    und die zweite stirbt an der schon beantworteten Interaktion. Und jedes
+    DynamicItem in einem Panel steht in DYNAMISCHE_KNOEPFE (sonst waere genau
+    dieser Knopf nach einem Neustart tot)."""
+    import bot
+    import music
+    import voicegags
+    alle = [bot.HilfeAuswahl]
+    for modul in (bot.lotto, bot.floaktie, bot.merchant, music, voicegags):
+        alle.extend(getattr(modul, "DYNAMISCHE_KNOEPFE", ()))
+    assert len(set(alle)) == len(alle)
+    player = music.GuildPlayer(loop=None)
+    player.current = music.Track(title="A", stream_url="x", duration=10)
+    views = {
+        music: [music.MusikPanel(player), music._klassisches_panel(player)],
+        voicegags: [voicegags.SoundboardView([f"s{i}" for i in range(20)],
+                                             [_snd(5, "srv")], [_snd(1, "std")])],
+    }
+    hilfe, _ = asyncio.run(bot.client._hilfe_nachricht(None))
+    views[bot] = [hilfe]
+    for modul, liste in views.items():
+        eigene = getattr(modul, "DYNAMISCHE_KNOEPFE", (bot.HilfeAuswahl,))
+        for view in liste:
+            for teil in view.walk_children():
+                if not isinstance(teil, discord.ui.DynamicItem):
+                    continue
+                assert type(teil) in eigene, (modul.__name__, type(teil).__name__)
+                cid = teil.custom_id
+                assert len(cid) <= 100, cid
+                passend = [k.__name__ for k in alle
+                           if k.__discord_ui_compiled_template__.fullmatch(cid)]
+                assert passend == [type(teil).__name__], (cid, passend)
+
+
+class _SoundKanal:
+    def __init__(self, cid=42, rechte=True):
+        self.id, self.name = cid, f"voice{cid}"
+        self.gesendet, self.verbunden = [], []
+        self._rechte = rechte
+
+    def permissions_for(self, _wer):
+        return SimpleNamespace(use_soundboard=self._rechte, speak=True)
+
+    async def send_sound(self, sound):
+        self.gesendet.append(sound.name)
+
+    async def connect(self, **kw):
+        self.verbunden.append(kw)
+        return _SoundVoice(self)
+
+
+class _SoundVoice:
+    def __init__(self, kanal):
+        self.channel, self.getrennt = kanal, False
+
+    def is_connected(self):
+        return not self.getrennt
+
+    def is_playing(self):
+        return False
+
+    def is_paused(self):
+        return False
+
+    async def disconnect(self, force=False):
+        self.getrennt = True
+
+    async def move_to(self, kanal):
+        self.channel = kanal
+
+
+def _sound_guild(voice=None, taub=False):
+    zustand = []
+
+    async def change_voice_state(**kw):
+        zustand.append(kw)
+
+    ich = SimpleNamespace(id=1, guild_permissions=SimpleNamespace(use_soundboard=True, speak=True),
+                          voice=SimpleNamespace(self_deaf=taub, self_mute=False) if voice else None)
+    return SimpleNamespace(id=77, me=ich, voice_client=voice,
+                           change_voice_state=change_voice_state, zustand=zustand)
+
+
+def test_discord_sound_kommt_ueber_die_musik_und_flo_ist_dafuer_nicht_taub():
+    """Soundboard-Sounds laufen UEBER die Musik (Discord mischt selbst). Dafuer
+    darf Flo nicht taub im Kanal sitzen - die Musik verbindet sich aber taub.
+    Also: nicht verbunden -> ohne Taubheit rein; taub verbunden -> umschalten."""
+    import voicegags
+    from unittest import mock
+    vg = voicegags.VoiceGags()
+    sound = _snd(3, "airhorn")
+    with mock.patch.object(vg, "_spawn", lambda coro: coro.close()):
+        # 1. Flo ist nirgends: verbindet OHNE self_deaf, spielt den Sound.
+        kanal = _SoundKanal()
+        guild = _sound_guild()
+        ok, _ = asyncio.run(vg._discord_sound_spielen(guild, kanal, sound))
+        assert ok and kanal.verbunden == [{"self_deaf": False}] and kanal.gesendet == ["airhorn"]
+
+        # 2. Flo sitzt (taub) mit Musik im selben Kanal: nicht neu verbinden,
+        #    nur die Taubheit aus - dann der Sound ueber die Musik.
+        kanal = _SoundKanal()
+        guild = _sound_guild(voice=_SoundVoice(kanal), taub=True)
+        with mock.patch.object(vg, "_voice_beschaeftigt", lambda _g: True):
+            ok, _ = asyncio.run(vg._discord_sound_spielen(guild, kanal, sound))
+        assert ok and not kanal.verbunden and kanal.gesendet == ["airhorn"]
+        assert guild.zustand and guild.zustand[0]["self_deaf"] is False
+
+        # 3. Musik laeuft in einem ANDEREN Kanal: nicht rueberziehen.
+        dort = _SoundKanal(cid=50)
+        guild = _sound_guild(voice=_SoundVoice(dort))
+        hier = _SoundKanal(cid=42)
+        with mock.patch.object(vg, "_voice_beschaeftigt", lambda _g: True):
+            ok, text = asyncio.run(vg._discord_sound_spielen(guild, hier, sound))
+        assert not ok and "voice50" in text and not hier.gesendet
+
+        # 4. Kein Recht: klare Ansage, kein Versuch.
+        kanal = _SoundKanal(rechte=False)
+        ok, text = asyncio.run(vg._discord_sound_spielen(_sound_guild(), kanal, sound))
+        assert not ok and "Soundboard verwenden" in text and not kanal.verbunden
+
+
+def test_sound_befehl_findet_auch_discord_sounds():
+    """'flo sound airhorn' ohne eigene Datei: dann eben Discords eigener."""
+    import voicegags
+    from unittest import mock
+    vg = voicegags.VoiceGags()
+    gespielt = []
+
+    async def discord_sounds(_guild):
+        return [_snd(9, "Kuhglocke")], [_snd(1, "airhorn")]
+
+    async def spielen(_g, _k, snd):
+        gespielt.append(snd.name)
+        return True, ""
+
+    msg = _rauch_nachricht("sound airhorn")
+    msg.author.voice = SimpleNamespace(channel=_SoundKanal())
+    with mock.patch.object(vg, "_discord_sounds", discord_sounds), \
+            mock.patch.object(vg, "_discord_sound_spielen", spielen), \
+            mock.patch.object(vg, "_find_sound", lambda _n: None):
+        assert asyncio.run(vg._cmd_sound(msg, "airhorn")) == "🔊 **airhorn**"
+        assert asyncio.run(vg._cmd_sound(msg, "kuhglocke")) == "🔊 **Kuhglocke**"
+        assert "kenne ich nicht" in asyncio.run(vg._cmd_sound(msg, "gibtsnicht"))
+    assert gespielt == ["airhorn", "Kuhglocke"]
+
+
 # --- Einladungslink ------------------------------------------------------------
 def test_einladelink_hat_alle_noetigen_rechte():
     """Der alte Link kannte weder Voice noch Reaktionen, Bilder, Rollen,

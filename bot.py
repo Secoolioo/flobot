@@ -644,8 +644,8 @@ _HELP_DATA = {
         ("Bild anhängen + Frage", "Flo schaut sich Bilder an"),
     ]),
     "voice": ("Voice", 0x1ABC9C, [
-        ("flo soundboard", "Sound-Buttons - drücken & lachen"),
-        ("flo sound <name>", "einzelnen Sound abspielen"),
+        ("flo soundboard", "Sound-Knöpfe + Server- & Discord-Sounds (über der Musik)"),
+        ("flo sound <name>", "einzelnen Sound abspielen (auch Discords eigene)"),
         ("flo sprich <text>", "Text-to-Speech im Voice"),
     ]),
     "mod": ("Moderation", 0xED4245, [

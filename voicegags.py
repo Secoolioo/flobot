@@ -20,6 +20,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import discord
@@ -55,60 +56,112 @@ _SB_STYLES = (discord.ButtonStyle.primary, discord.ButtonStyle.success,
               discord.ButtonStyle.danger, discord.ButtonStyle.secondary)
 
 
-class _SoundBtn(discord.ui.Button):
-    def __init__(self, name, idx):
-        super().__init__(label=name[:20], emoji=_SB_EMOJIS[idx % len(_SB_EMOJIS)],
-                         style=_SB_STYLES[idx % len(_SB_STYLES)], row=idx // 5)
+class SoundKnopf(discord.ui.DynamicItem[discord.ui.Button],
+                template=r"flo:sb:d:(?P<name>.{1,90})"):
+    """Ein Datei-Sound (sounds/<name>.*) als Knopf. Die feste custom_id macht
+    das Brett neustartfest - vorher war es nach zehn Minuten tot."""
+
+    def __init__(self, name, idx=0):
+        super().__init__(discord.ui.Button(
+            label=name[:20], emoji=_SB_EMOJIS[idx % len(_SB_EMOJIS)],
+            style=_SB_STYLES[idx % len(_SB_STYLES)], custom_id=f"flo:sb:d:{name[:90]}"))
         self.sound_name = name
 
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        knopf = cls(match["name"])
+        knopf.item.emoji, knopf.item.style = item.emoji, item.style
+        return knopf
+
     async def callback(self, interaction):
-        if not instance.soundboard_enabled(
-                getattr(getattr(interaction, "guild", None), "id", 0)):
-            await interaction.response.send_message(
-                "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
-            return
-        member = interaction.user
-        vs = getattr(member, "voice", None)
-        channel = vs.channel if vs and vs.channel else None
-        if channel is None:
-            await interaction.response.send_message(
-                "Geh erst in einen Sprachkanal, dann drück nochmal. 🎧", ephemeral=True)
-            return
-        path = instance._find_sound(self.sound_name)
-        if path is None:
-            await interaction.response.send_message(
-                f"`{self.sound_name}` ist verschwunden. 👻", ephemeral=True)
-            return
-        if instance._voice_beschaeftigt(interaction.guild):
-            await interaction.response.send_message(
-                "Gerade läuft was im Voice – gleich nochmal probieren. 🎶",
-                ephemeral=True)
-            return
-        # Sofort bestaetigen (der Sound spielt bis zu 60 s im Hintergrund).
-        await interaction.response.send_message(
-            f"🔊 **{self.sound_name}**", ephemeral=True, delete_after=6)
-        instance._spawn(instance._play_and_report(
-            interaction, interaction.guild, channel, str(path)))
+        await instance._klick(interaction, "datei", self.sound_name)
 
 
-class SoundboardView(discord.ui.View):
-    """Bunte Sound-Buttons - JEDER darf druecken (es ist ein Soundboard 😄)."""
+class SoundAuswahl(discord.ui.DynamicItem[discord.ui.Select],
+                   template=r"flo:sb:(?P<art>datei|server|discord)"):
+    """Ein Menue mit Sounds: weitere Dateien, die Sounds des Servers oder die
+    Standard-Sounds von Discord (die beiden letzten laufen per send_sound
+    UEBER die Musik drueber)."""
 
-    def __init__(self, sounds):
-        super().__init__(timeout=600)
-        self.message = None
-        for i, name in enumerate(sounds[:25]):     # Discord: max 25 Buttons
-            self.add_item(_SoundBtn(name, i))
+    PLATZHALTER = {"datei": "📁 Weitere Sounds …", "server": "🎛️ Server-Sounds …",
+                   "discord": "🔔 Discord-Sounds …"}
 
-    async def on_timeout(self):
-        for ch in self.children:
-            ch.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
-            instance._release(self.message)
+    def __init__(self, art, optionen=()):
+        optionen = list(optionen)[:25] or [discord.SelectOption(label="—", value="-")]
+        super().__init__(discord.ui.Select(custom_id=f"flo:sb:{art}",
+                                           placeholder=self.PLATZHALTER[art],
+                                           options=optionen))
+        self.art = art
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["art"], getattr(item, "options", ()))
+
+    async def callback(self, interaction):
+        await instance._klick(interaction, self.art, (self.item.values or [""])[0])
+
+
+def _auswahl_emoji(emoji):
+    """Nur Unicode-Emojis ins Menue - ein fremdes Server-Emoji laesst Discord
+    dort nicht zu, und dann kaeme gar kein Brett."""
+    if emoji is None:
+        return "🔊"
+    try:
+        if emoji.is_unicode_emoji():
+            return str(emoji)
+    except AttributeError:
+        return str(emoji) or "🔊"
+    return "🔊"
+
+
+class SoundboardView(discord.ui.LayoutView):
+    """Das Brett: Datei-Sounds als bunte Knoepfe (JEDER darf druecken - es ist
+    ein Soundboard 😄), dahinter Menues fuer weitere Dateien, die Sounds des
+    Servers und die von Discord.
+
+    Vorher: hoechstens 25 Knoepfe (und die waren schon voll), nur eigene
+    Dateien, und nach zehn Minuten tot. Jetzt DynamicItems, timeout=None, nie
+    stop() - sonst waeren die Vorlagen global weg."""
+
+    KNOEPFE = 15
+
+    def __init__(self, sounds, server=(), standard=()):
+        super().__init__(timeout=None)
+        teile = [discord.ui.TextDisplay(
+            "## 🔊 Soundboard\nAb in den Voice und **drücken**! "
+            + ("Server- und Discord-Sounds laufen über die Musik drüber."
+               if server or standard else ""))]
+        knoepfe = [SoundKnopf(name, i) for i, name in enumerate(sounds[:self.KNOEPFE])]
+        for i in range(0, len(knoepfe), 5):
+            teile.append(discord.ui.ActionRow(*knoepfe[i:i + 5]))
+        rest = sounds[self.KNOEPFE:self.KNOEPFE + 25]
+        if rest:
+            teile.append(discord.ui.ActionRow(SoundAuswahl("datei", [
+                discord.SelectOption(label=name[:100], value=name[:100], emoji="📁")
+                for name in rest])))
+        for art, liste in (("server", server), ("discord", standard)):
+            if liste:
+                teile.append(discord.ui.ActionRow(SoundAuswahl(art, [
+                    discord.SelectOption(label=str(snd.name)[:100], value=str(snd.id),
+                                         emoji=_auswahl_emoji(getattr(snd, "emoji", None)))
+                    for snd in liste[:25]])))
+        gesamt = len(sounds) + len(server) + len(standard)
+        fuss = f"-# {gesamt} Sounds · eigene Dateien einfach in {SOUNDS_DIR.name}/ legen"
+        if len(sounds) > self.KNOEPFE + 25:
+            fuss += f" · {len(sounds) - self.KNOEPFE - 25} weitere per `sound <name>`"
+        teile.append(discord.ui.TextDisplay(fuss))
+        self.add_item(discord.ui.Container(*teile, accent_colour=0x5865F2))
+
+
+# Werden in bot.setup_hook angemeldet (neustartfestes Brett).
+DYNAMISCHE_KNOEPFE = (SoundKnopf, SoundAuswahl)
+
+# Wie lange die Liste der Server-/Discord-Sounds gilt (Sekunden).
+_SOUND_CACHE_SEK = 300
+_STANDARD_CACHE_SEK = 3600
+# Wie lange Flo nach einem Discord-Sound im Kanal bleibt, wenn er NUR dafuer
+# gekommen ist (die Sounds dauern ein paar Sekunden).
+_NACH_SOUND_SEK = 8
 
 
 class VoiceGags(FeatureBasis):
@@ -118,6 +171,10 @@ class VoiceGags(FeatureBasis):
 
         # Hintergrund-Tasks (Sound spielt bis zu 60 s - Button antwortet sofort).
         self._bg = set()
+        # Server-Sounds je Server und Discords Standard-Sounds: (monotonic, liste).
+        # 'Nie geholt' = -inf, siehe Monotonic-Falle.
+        self._server_sounds = {}
+        self._standard_sounds = (float("-inf"), [])
 
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -280,6 +337,8 @@ class VoiceGags(FeatureBasis):
         name = name.strip().lower()
         if not name or "/" in name or "\\" in name or ".." in name:
             return None  # kein Pfad-Ausbruch
+        if not SOUNDS_DIR.is_dir():
+            return None  # noch keine eigenen Sounds (dann evtl. ein Discord-Sound)
         for p in SOUNDS_DIR.iterdir():
             if p.is_file() and p.suffix.lower() in _AUDIO_EXTS and p.stem.lower() == name:
                 return p
@@ -317,10 +376,11 @@ class VoiceGags(FeatureBasis):
             if not self.soundboard_enabled(message.guild.id):
                 return "Das Soundboard ist gerade **deaktiviert**. 🔇"
             sounds = self._list_sounds()
-            if not sounds:
+            server, standard = await self._discord_sounds(message.guild)
+            if not (sounds or server or standard):
                 return (f"Noch keine Sounds da. Leg Dateien in `{SOUNDS_DIR.name}/` "
                         f"(mp3/wav/ogg), dann geht `{self._bot_name} sound <name>`.")
-            return await self._open_soundboard(message, sounds)
+            return await self._open_soundboard(message, sounds, server, standard)
 
         if first in ("sound", "sb", "soundeffekt"):
             if not self.soundboard_enabled(message.guild.id):
@@ -349,42 +409,178 @@ class VoiceGags(FeatureBasis):
         vc = guild.voice_client
         return vc is not None and (vc.is_playing() or vc.is_paused())
 
-    async def _play_and_report(self, interaction, guild, channel,
-                               source):
-        ok, err = await self._play_path(guild, channel, source)
+    async def _open_soundboard(self, message, sounds, server=None, standard=None):
+        if server is None or standard is None:
+            server, standard = await self._discord_sounds(message.guild)
+        view = SoundboardView(sounds, server, standard)
+        msg = await basis.antworte(message, None, view=view)
+        if msg is None:
+            log.error("Soundboard konnte nicht gesendet werden")
+            return HANDLED
+        # Zehn Minuten vorm Auto-Loeschen geschuetzt, danach darf es weg - die
+        # Knoepfe funktionieren aber, solange die Nachricht steht.
+        self._protect(msg)
+        self._spawn(self._spaeter_freigeben(msg))
+        return HANDLED
+
+    async def _spaeter_freigeben(self, msg, sekunden=600):
+        await asyncio.sleep(sekunden)
+        self._release(msg)
+
+    # --- Discords eigene Sounds (Server-Soundboard + Standard) ----------------
+    def _darf_discord_sounds(self, guild, channel=None):
+        """Darf Flo hier Soundboard-Sounds abspielen? Ohne das Recht zeigt das
+        Brett eben nur die Datei-Sounds."""
+        try:
+            ich = guild.me
+            rechte = (channel.permissions_for(ich) if channel is not None
+                      else ich.guild_permissions)
+            return bool(rechte.use_soundboard and rechte.speak)
+        except Exception:  # noqa: BLE001 - Attrappen / fehlender Cache
+            return False
+
+    async def _discord_sounds(self, guild):
+        """(Server-Sounds, Discord-Standard-Sounds) - kurz zwischengespeichert,
+        damit nicht jedes 'Flo sounds' zwei API-Aufrufe kostet."""
+        if guild is None or not self._darf_discord_sounds(guild):
+            return [], []
+        jetzt = time.monotonic()
+        stand, server = self._server_sounds.get(guild.id, (float("-inf"), []))
+        if jetzt - stand > _SOUND_CACHE_SEK:
+            try:
+                server = [snd for snd in await guild.fetch_soundboard_sounds()
+                          if getattr(snd, "available", True)]
+            except Exception as exc:  # noqa: BLE001
+                log.info("Server-Sounds nicht abrufbar (%s)", exc)
+                server = []
+            self._server_sounds[guild.id] = (jetzt, server)
+        stand, standard = self._standard_sounds
+        client = self.client
+        if jetzt - stand > _STANDARD_CACHE_SEK and client is not None:
+            try:
+                standard = list(await client.fetch_soundboard_default_sounds())
+            except Exception as exc:  # noqa: BLE001
+                log.info("Discord-Sounds nicht abrufbar (%s)", exc)
+                standard = []
+            self._standard_sounds = (jetzt, standard)
+        return server, standard
+
+    async def _finde_discord_sound(self, guild, art, wert):
+        """Sound nach ID (Menue) oder Namen (Textbefehl) finden."""
+        server, standard = await self._discord_sounds(guild)
+        liste = {"server": server, "discord": standard}.get(art, server + standard)
+        wert = str(wert).strip().lower()
+        for snd in liste:
+            if str(snd.id) == wert or str(snd.name).lower() == wert:
+                return snd
+        return None
+
+    async def _discord_sound_spielen(self, guild, channel, sound):
+        """Spielt einen Soundboard-Sound. Anders als die Datei-Sounds laeuft der
+        UEBER die Musik (Discord mischt ihn selbst dazu) - Flo muss dafuer nur
+        im Kanal sitzen und darf nicht taub geschaltet sein."""
+        if not self._darf_discord_sounds(guild, channel):
+            return False, ("Mir fehlt hier das Recht „Soundboard verwenden“. "
+                           "Gebt's mir, dann knallt's.")
+        vc = guild.voice_client
+        neu_da = False
+        try:
+            if vc is None or not vc.is_connected():
+                vc = await channel.connect(self_deaf=False)
+                neu_da = True
+            elif vc.channel.id != channel.id:
+                if self._voice_beschaeftigt(guild):
+                    return False, (f"Ich häng gerade mit Musik in **{vc.channel.name}** "
+                                   f"– komm rüber, dann drück nochmal.")
+                await vc.move_to(channel)
+            # Die Musik verbindet sich taub (spart Bandbreite). Soundboard-Sounds
+            # nimmt Discord von einem tauben Flo aber nicht an.
+            stimme = getattr(guild.me, "voice", None)
+            if stimme is None or stimme.self_deaf or stimme.self_mute:
+                await guild.change_voice_state(channel=vc.channel, self_deaf=False,
+                                               self_mute=False)
+            await vc.channel.send_sound(sound)
+        except (discord.ClientException, discord.HTTPException, RuntimeError,
+                asyncio.TimeoutError) as exc:
+            import music
+            log.error("Discord-Sound fehlgeschlagen: %s: %s", type(exc).__name__, exc)
+            if neu_da and vc is not None:
+                await self._safe_disconnect(vc)
+            if isinstance(exc, discord.Forbidden):
+                return False, "Discord lässt mich den Sound hier nicht spielen (Rechte?)."
+            return False, music.VOICE_KAPUTT
+        if neu_da:
+            self._spawn(self._nach_sound_gehen(guild, vc))
+        return True, ""
+
+    async def _nach_sound_gehen(self, guild, vc):
+        """Nur fuer den Sound gekommen -> nach ein paar Sekunden wieder weg,
+        ausser die Musik hat den Kanal inzwischen uebernommen."""
+        await asyncio.sleep(_NACH_SOUND_SEK)
+        if vc.is_connected() and not self._voice_beschaeftigt(guild):
+            await self._safe_disconnect(vc)
+
+    async def _klick(self, interaction, art, wert):
+        """Ein Knopf oder Menue-Eintrag am Brett."""
+        guild = interaction.guild
+        if not self.soundboard_enabled(getattr(guild, "id", 0)):
+            await interaction.response.send_message(
+                "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
+            return
+        vs = getattr(interaction.user, "voice", None)
+        channel = vs.channel if vs and vs.channel else None
+        if channel is None:
+            await interaction.response.send_message(
+                "Geh erst in einen Sprachkanal, dann drück nochmal. 🎧", ephemeral=True)
+            return
+        if art == "datei":
+            path = self._find_sound(wert)
+            if path is None:
+                await interaction.response.send_message(
+                    f"`{wert}` ist verschwunden. 👻", ephemeral=True)
+                return
+            if self._voice_beschaeftigt(guild):
+                await interaction.response.send_message(
+                    "Gerade läuft Musik – Datei-Sounds müssen warten. Die Server- und "
+                    "Discord-Sounds im Menü gehen trotzdem. 🎶", ephemeral=True)
+                return
+            name, spielen = path.stem, self._play_path(guild, channel, str(path))
+        else:
+            sound = await self._finde_discord_sound(guild, art, wert)
+            if sound is None:
+                await interaction.response.send_message(
+                    "Den Sound gibt's nicht mehr. 👻", ephemeral=True)
+                return
+            name, spielen = sound.name, self._discord_sound_spielen(guild, channel, sound)
+        # Sofort bestaetigen (ein Datei-Sound spielt bis zu 60 s im Hintergrund).
+        await interaction.response.send_message(f"🔊 **{name}**", ephemeral=True,
+                                                delete_after=6)
+        self._spawn(self._melden(interaction, spielen))
+
+    async def _melden(self, interaction, spielen):
+        ok, err = await spielen
         if not ok and err:
             try:
                 await interaction.followup.send(err, ephemeral=True)
             except discord.HTTPException:
                 pass
 
-    async def _open_soundboard(self, message, sounds):
-        emb = discord.Embed(
-            title="🔊 Flo Soundboard",
-            description="Ab in den Voice und **drücken**! 👇",
-            color=discord.Color.blurple())
-        if len(sounds) > 25:
-            emb.description += f"\n({len(sounds) - 25} weitere per `{self._bot_name} sound <name>`)"
-        emb.set_footer(text=f"{len(sounds)} Sounds · eigene Dateien einfach in "
-                            f"{SOUNDS_DIR.name}/ legen")
-        view = SoundboardView(sounds)
-        try:
-            msg = await message.reply(embed=emb, view=view, mention_author=False)
-            view.message = msg
-            self._protect(msg)
-        except discord.HTTPException:
-            log.exception("Soundboard konnte nicht gesendet werden")
-        return HANDLED
-
     async def _cmd_sound(self, message, rest):
         if not rest.strip():
             return f"Welchen Sound? `{self._bot_name} sounds` zeigt alle."
         path = self._find_sound(rest)
+        sound = None
         if path is None:
-            return f"Den Sound `{rest.strip()}` kenne ich nicht. `{self._bot_name} sounds` zeigt alle."
+            sound = await self._finde_discord_sound(message.guild, "alle", rest)
+            if sound is None:
+                return (f"Den Sound `{rest.strip()}` kenne ich nicht. "
+                        f"`{self._bot_name} sounds` zeigt alle.")
         channel = self._user_voice_channel(message)
         if channel is None:
             return "Geh erst in einen Sprachkanal, dann lege ich los."
+        if sound is not None:
+            ok, err = await self._discord_sound_spielen(message.guild, channel, sound)
+            return f"🔊 **{sound.name}**" if ok else err
         ok, err = await self._play_path(message.guild, channel, str(path))
         if not ok:
             return err

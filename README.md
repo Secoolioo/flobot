@@ -403,6 +403,12 @@ jeder. Den Titel schreibt Flo als Status an den Sprachkanal, wenn er das Recht
 „Sprachkanal-Status festlegen" hat. Panels von vor dem Update räumt das
 Auto-Löschen weg.
 
+**Soundboard:** `Flo soundboard` zeigt die eigenen Dateien aus `sounds/` als
+Knöpfe und dazu Menüs mit den **Sounds des Servers** und den **Standard-Sounds von
+Discord**. Die laufen über Discords eigenes Soundboard, also **über der Musik**
+(braucht das Recht „Soundboard verwenden"); Datei-Sounds warten, bis die Musik
+aus ist. Das Brett funktioniert auch nach einem Neustart.
+
 **Schneller Start:** Flo verbindet sich schon, während er sucht (🔎 an der
 Nachricht), lädt den nächsten Song vor, während der aktuelle läuft, und merkt
 sich, welcher YouTube-Zugang geht. Ohne Musik oder allein im Kanal geht er nach
