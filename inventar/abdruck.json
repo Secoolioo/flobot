@@ -150,6 +150,12 @@
     "titel": "🗼 Tower"
    }
   ],
+  "abstimmung": [
+   {
+    "art": "text",
+    "text": "🗳️ Umfrage? Dann sag auch worüber, du Genie: `Flo umfrage bestes Fast Food` – ich denk mir die Antworten aus `Flo umfrage Pizza oder Döner? | Pizza | Döner | Beides` – genau so `Flo umfrage Nh ...` – Laufzeit vorne dran (Nh, Nt, Nw, max. N Tage)"
+   }
+  ],
   "absturz": [
    {
     "art": "object"
@@ -469,6 +475,12 @@
    {
     "art": "text",
     "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
+   }
+  ],
+  "bestenliste": [
+   {
+    "art": "datei",
+    "endung": "png"
    }
   ],
   "bewerte": [
@@ -2236,6 +2248,12 @@
     "endung": "png"
    }
   ],
+  "leaderboard": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
   "leave": [
    {
     "art": "embed",
@@ -3032,6 +3050,12 @@
     "text": "Du hast gar keine Schulden. Genieß es. ✨"
    }
   ],
+  "poll": [
+   {
+    "art": "text",
+    "text": "🗳️ Umfrage? Dann sag auch worüber, du Genie: `Flo umfrage bestes Fast Food` – ich denk mir die Antworten aus `Flo umfrage Pizza oder Döner? | Pizza | Döner | Beides` – genau so `Flo umfrage Nh ...` – Laufzeit vorne dran (Nh, Nt, Nw, max. N Tage)"
+   }
+  ],
   "prestige": [
    {
     "art": "object"
@@ -3231,6 +3255,12 @@
    }
   ],
   "rang": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
+  "rangliste": [
    {
     "art": "datei",
     "endung": "png"
@@ -3610,6 +3640,12 @@
    {
     "art": "text",
     "text": "Griaß di! Host scho a Mass ghobt?"
+   }
+  ],
+  "sell": [
+   {
+    "art": "text",
+    "text": "Was willst du verkaufen, deine Seele? `Flo verkauf N` oder `Flo verkauf alles`."
    }
   ],
   "sers": [
@@ -4200,6 +4236,12 @@
     "titel": "🎒 Inventar von Rauchtester"
    }
   ],
+  "top": [
+   {
+    "art": "datei",
+    "endung": "png"
+   }
+  ],
   "tower": [
    {
     "art": "object"
@@ -4345,6 +4387,12 @@
     "text": "So geht's: `Flo pay @jemand N`"
    }
   ],
+  "umfrage": [
+   {
+    "art": "text",
+    "text": "🗳️ Umfrage? Dann sag auch worüber, du Genie: `Flo umfrage bestes Fast Food` – ich denk mir die Antworten aus `Flo umfrage Pizza oder Döner? | Pizza | Döner | Beides` – genau so `Flo umfrage Nh ...` – Laufzeit vorne dran (Nh, Nt, Nw, max. N Tage)"
+   }
+  ],
   "unban": [
    {
     "art": "text",
@@ -4404,6 +4452,24 @@
     "fuss": false,
     "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
     "titel": ""
+   }
+  ],
+  "verkauf": [
+   {
+    "art": "text",
+    "text": "Was willst du verkaufen, deine Seele? `Flo verkauf N` oder `Flo verkauf alles`."
+   }
+  ],
+  "verkaufe": [
+   {
+    "art": "text",
+    "text": "Was willst du verkaufen, deine Seele? `Flo verkauf N` oder `Flo verkauf alles`."
+   }
+  ],
+  "verkaufen": [
+   {
+    "art": "text",
+    "text": "Was willst du verkaufen, deine Seele? `Flo verkauf N` oder `Flo verkauf alles`."
    }
   ],
   "verlass": [
@@ -4468,12 +4534,6 @@
     "text": "Von wem die Verwarnungen? z. B. `Flo warns @name`."
    }
   ],
-  "verzeih": [
-   {
-    "art": "text",
-    "text": "Wem eine Verwarnung erlassen? z. B. `Flo unwarn @name` (oder `... alle`)."
-   }
-  ],
   "vol": [
    {
     "art": "embed",
@@ -4492,6 +4552,12 @@
     "fuss": false,
     "text": "Lautstärke steht aktuell auf **N%**. Ändern z. B. mit `flo ls N`, `flo lauter` oder `flo leiser`.",
     "titel": "🔊 Lautstärke"
+   }
+  ],
+  "voting": [
+   {
+    "art": "text",
+    "text": "🗳️ Umfrage? Dann sag auch worüber, du Genie: `Flo umfrage bestes Fast Food` – ich denk mir die Antworten aus `Flo umfrage Pizza oder Döner? | Pizza | Döner | Beides` – genau so `Flo umfrage Nh ...` – Laufzeit vorne dran (Nh, Nt, Nw, max. N Tage)"
    }
   ],
   "w6": [
@@ -5118,8 +5184,8 @@
   ]
  },
  "zaehlung": {
-  "befragt": 489,
-  "stabil": 472,
+  "befragt": 494,
+  "stabil": 483,
   "wackelig": 6
  }
 }

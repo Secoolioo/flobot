@@ -404,7 +404,11 @@ def test_befehle_kapern_kein_alltagsdeutsch():
     try:
         for satz in ("sounds gut, lass uns das so machen", "sounds good!",
                      "sprich nicht so laut", "say what?",
-                     "vorlesen macht mein Kind gerne", "sprich mal mit ihm"):
+                     "vorlesen macht mein Kind gerne", "sprich mal mit ihm",
+                     # Fragen zur Sprache - bayern laesst sie fallen, dann darf
+                     # sie nicht die Sprachausgabe vorlesen.
+                     "sprich bayrisch, wie sagt man Semmel?",
+                     "sprich deutsch mit mir du lauch"):
             assert _sag(satz) is None, satz
     finally:
         voicegags.instance._enabled = alt_v

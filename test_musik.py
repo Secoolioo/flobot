@@ -1189,6 +1189,9 @@ def test_musik_verbindet_waehrend_der_suche():
         def is_active(self):
             return False
 
+        def fremden_ton_stoppen(self):
+            pass
+
         async def disconnect(self):
             ablauf.append("disconnect")
 
@@ -1591,6 +1594,118 @@ def test_musik_steuerwort_ist_nur_allein_ein_befehl():
     assert mi.parse_command("halt die musik an") is None
 
 
+
+
+def test_musik_befehle_die_nach_dem_umbau_wieder_gehen():
+    """Aus der Pruefung des Umbaus: echte Musik-Befehle, die die strengere
+    Erkennung verschluckt hatte - und die Saetze, die weiter bei der KI landen."""
+    import music
+    p = music.parse_command
+    for satz in ("flo spiel nochmal den song", "flo spiel nochmal das lied",
+                 "flo nochmal den song", "flo wiederhol den song",
+                 "flo repeat the song", "flo nochmal den letzten song"):
+        assert p(satz) == ("replay", "1"), (satz, p(satz))
+    for satz in ("flo wiederhol das", "flo nochmal bitte", "flo random frage"):
+        assert p(satz) is None, (satz, p(satz))
+    assert p("flo spiel random rap") == ("random", "")
+    link = "https://youtu.be/dQw4w9WgXcQ"
+    for satz in (f"flo {link} spielen", f"flo {link} spielen bitte", f"flo {link} play",
+                 f"flo {link} in die queue", f"flo nochmal {link}"):
+        assert p(satz) == ("play", link), (satz, p(satz))
+    assert p(f"flo was hältst du von {link}") is None
+    assert p("flo skip pls")[0] == "skip"
+    assert p("flo pause kurz")[0] == "pause"
+    assert p("flo stop it")[0] == "stop"
+    assert p("flo raus hier")[0] == "leave"
+    assert p("flo komm zu mir")[0] == "join"
+    assert p("flo komm in meinen voice")[0] == "join"
+    assert p("flo lauter auf 80") == ("volume", "+")
+    # 'halt' bleibt ohne Objekt: 'halt die fresse' stoppt nie die Musik.
+    assert p("flo halt die fresse") is None
+
+
+def test_musik_leerlauf_und_verbindung_nach_der_pruefung():
+    """(1) 'Flo komm' mit einer alten Leerlauf-Uhr: Flo ging beim naechsten
+    Watchdog-Takt wieder. (2) Aufgegebene Warteschlange + gerissene Verbindung:
+    der Watchdog verband nicht mehr neu. (3) Reconnect aufgegeben: der Server
+    galt fuer Soundboard/TTS ewig als belegt. (4) Ein Gag auf der
+    Musik-Verbindung hielt 'Flo spiel X' als #1 in der Schlange fest."""
+    import time as _t
+    import music
+
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        kanal = SimpleNamespace(id=42, name="Musik",
+                                guild=SimpleNamespace(voice_client=voice))
+        player._leer_seit = _t.monotonic() - music.MUSIC_IDLE_SEKUNDEN + 5
+        player.loop.run_until_complete(player.connect(kanal))
+        assert player._leer_seit is None
+
+        # (2) Schlange aufgegeben, Verbindung weg -> Reconnect wird versucht.
+        neu_verbunden = []
+
+        async def reconnect(_kanal):
+            neu_verbunden.append(1)
+
+        player._reconnect = reconnect
+        player.queue.append(_track("B"))
+        player._advance_aufgegeben = True
+        player.current = None
+        voice.is_connected = lambda: False
+        guild = SimpleNamespace(id=1, voice_client=None,
+                                get_channel=lambda _c: _kanal_mit([SimpleNamespace(bot=False)]))
+        player.loop.run_until_complete(player.heal(guild))
+        assert neu_verbunden == [1], "aufgegebene Schlange: kein Reconnect mehr"
+
+        # (3) Nach dem letzten Fehlversuch ist der Server wieder frei.
+        player.current = _track("A")
+        player._reconnect_fails = music.VOICE_RECONNECT_MAX_FAILS - 1
+        player._note_reconnect_fail(SimpleNamespace(name="Musik"))
+        assert player.current is None and not player.queue
+    finally:
+        aufraeumen()
+
+    # (4) Musik hat Vorrang vor einem laufenden Gag.
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        voice.spielt = True            # ein Soundboard-Sound laeuft
+        player.current = None
+        player.fremden_ton_stoppen()
+        assert not voice.spielt and voice.stops == 1
+        player.start(_track("A"))
+        player.fremden_ton_stoppen()   # eigener Song: bleibt
+        assert voice.spielt
+    finally:
+        aufraeumen()
+
+
+def test_voicegags_zieht_die_musik_nicht_in_einen_anderen_kanal():
+    import music
+    import voicegags
+    mi = music.instance
+    gid = 4717
+    alt = mi._players.get(gid)
+    vc = SimpleNamespace(is_connected=lambda: True, is_playing=lambda: False,
+                         is_paused=lambda: False, channel=SimpleNamespace(id=42, name="Musik"))
+    verschoben = []
+
+    async def move_to(k):
+        verschoben.append(k)
+
+    vc.move_to = move_to
+    player = music.GuildPlayer(loop=None, guild_id=gid)
+    player.voice, player.active_channel_id = vc, 42
+    mi._players[gid] = player
+    try:
+        guild = SimpleNamespace(id=gid, voice_client=vc)
+        ok, text = asyncio.run(voicegags.instance._play_path(
+            guild, SimpleNamespace(id=50), "x.mp3"))
+        assert not ok and "Musik" in text and not verschoben
+    finally:
+        if alt is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt
 
 
 def test_musik_alltagswort_ohne_musik_geht_an_die_ki():

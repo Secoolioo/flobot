@@ -453,13 +453,14 @@ _SC_SET_RE = re.compile(
 # dieser Aktion gehoeren ('skip den song', 'verlass den kanal'). Alles andere ist
 # ein Satz, und den beantwortet die KI.
 _FUELLWOERTER = frozenset(("bitte", "mal", "jetzt", "flo", "sofort", "doch",
-                           "schnell", "endlich", "halt"))
+                           "schnell", "endlich", "halt", "pls", "plz", "please"))
 
 # Die echten Objekte. Mit Artikel oder ohne; 'die musik' ja, 'die fresse' nie.
 _OBJ_MUSIK = (r"(?:(?:die|den|das|dem|der|diese[nmrs]?|the|this)\s+)?"
               r"(?:musik|music|mucke|mukke|song|songs|lied|track|titel|wiedergabe|"
               r"playback|gedudel)")
-_OBJ_KANAL = (r"(?:(?:den|dem|der|das|diesen|diesem|the|this)\s+)?"
+_OBJ_KANAL = (r"(?:(?:den|dem|der|das|diesen|diesem|the|this|meinen|meinem|"
+              r"unseren|unserem|unser|my|our)\s+)?"
               r"(?:kanal|channel|voice|voicechannel|voicechat|sprachkanal|"
               r"sprachchat|call|vc|talk)")
 
@@ -484,13 +485,14 @@ _CONTROL = [
      rf"{_OBJ_MUSIK}|das|den|dies|this|it|[0-9]+(?:\s+(?:songs?|lieder|tracks?))?", ()),
     ("skip",   re.compile(r"^(?:naechst\w*|nächst\w*)\b", re.I),
      _OBJ_MUSIK, ("ohne_mal",)),
-    ("pause",  re.compile(r"^(?:pause|pausier\w*)\b", re.I), _OBJ_MUSIK, ()),
+    ("pause",  re.compile(r"^(?:pause|pausier\w*)\b", re.I),
+     rf"{_OBJ_MUSIK}|kurz|(?:{_OBJ_MUSIK}\s+)?kurz", ()),
     ("resume", re.compile(r"^(?:resume|fortsetz\w*|weiterspiel\w*)\b", re.I),
      rf"(?:mit\s+)?{_OBJ_MUSIK}", ()),
     ("resume", re.compile(r"^weiter\b", re.I),
-     rf"(?:mit\s+)?{_OBJ_MUSIK}|spielen|abspielen", ("alltag",)),
+     rf"(?:mit\s+)?{_OBJ_MUSIK}|spielen|abspielen|gehts|geht\s+s", ("alltag",)),
     ("stop",   re.compile(r"^(?:stop|stopp)\b", re.I),
-     rf"(?:mit\s+)?{_OBJ_MUSIK}|alles", ()),
+     rf"(?:mit\s+)?{_OBJ_MUSIK}|alles|it|that|playing", ()),
     ("stop",   re.compile(r"^(?:aufhoer\w*|aufhör\w*|hoer auf|hör auf)\b", re.I),
      rf"mit\s+{_OBJ_MUSIK}|zu\s+spielen|mit\s+dem\s+abspielen", ("alltag",)),
     # 'halt' bekommt KEIN Objekt: 'halt die/dein ...' ist so gut wie nie die
@@ -502,14 +504,14 @@ _CONTROL = [
                           r"disconnect)\b", re.I),
      rf"(?:aus\s+)?{_OBJ_KANAL}", ()),
     ("leave",  re.compile(r"^(?:geh raus|hau ab|raus)\b", re.I),
-     rf"aus\s+{_OBJ_KANAL}", ("alltag",)),
+     rf"aus\s+{_OBJ_KANAL}|hier", ("alltag",)),
     # 'liste' zaehlt nur, wenn NICHTS dahinter steht: "liste mal auf, was du
     # kannst" ist eine Frage an die KI, keine Warteschlangen-Abfrage.
     ("queue",  re.compile(r"^(?:queue\b|warteschlange\b|liste\s*$)", re.I),
      r"(?:an)?zeigen|zeig|anzeigen|auflisten", ()),
     ("join",   re.compile(r"^(?:join\w*|connect|verbinde\w*|komm)\b", re.I),
-     rf"rein|her|rüber|rueber|dazu|dich|(?:in\s+|zu\s+uns\s+in\s+){_OBJ_KANAL}"
-     rf"|{_OBJ_KANAL}", ()),
+     rf"rein|her|rüber|rueber|dazu|dich|zu\s+(?:mir|uns)"
+     rf"|(?:in\s+|zu\s+(?:mir|uns)\s+in\s+){_OBJ_KANAL}|{_OBJ_KANAL}", ()),
 ]
 
 # Markierung im Argument eines Steuerbefehls: das Wort ist auch Alltagsdeutsch
@@ -583,7 +585,8 @@ _LINK_BEIWERK_NACKT = frozenset(("hier",))
 # Kurze Abspiel-Verben vorn; dahinter nur Beiwerk ('schau mal <link> an',
 # 'pack <link> in die queue', 'leg auf <link>', 'hör dir das an <link>').
 _LINK_VERBEN = frozenset(("queue", "add", "abspielen", "schau", "guck", "hör",
-                          "hoer", "leg", "pack", "hau", "mach", "tu", "lass"))
+                          "hoer", "leg", "pack", "hau", "mach", "tu", "lass",
+                          "spielen", "spiel", "spiele", "play", "nochmal"))
 _LINK_BEIWERK = frozenset((
     "hier", "dir", "euch", "uns", "mir", "das", "den", "die", "dieses", "diesen",
     "diese", "video", "song", "lied", "track", "an", "auf", "rein", "ab", "raus",
@@ -847,6 +850,11 @@ def verlauf_befehl(text):
 # thema', 'wiederhol das', 'repeat after me' spielten alle den letzten Song,
 # statt dass Flo antwortet. Ohne 'spiel' davor darf deshalb NUR eine Nummer
 # folgen; mit 'spiel' ist klar, was gemeint ist, dann gehen auch Fuellwoerter.
+# Was hinter 'nochmal' stehen darf ('nochmal den song', 'spiel nochmal das
+# lied', 'repeat the song', 'nochmal den letzten song'). Ein nacktes 'das'
+# nicht - 'wiederhol das' ist eine Bitte an Flo, keine Musik.
+_REPLAY_OBJ = (rf"(?:{_OBJ_MUSIK}|(?:den|das|the)\s+(?:letzten?|last)\s+"
+               r"(?:song|lied|track|titel))")
 _REPLAY_RE = re.compile(
     r"^(?P<spiel>spiel(?:e|st)?\s+)?"
     r"(?:nochmal(?:s)?|noch\s*mal|repeat|replay|wiederhol(?:e|en|st)?)"
@@ -881,7 +889,7 @@ _VOLUME_DOWN_RE = re.compile(r"^(?:leiser|quieter|leise)\b", re.I)
 # Steuerwoertern: 'leise rieselt der schnee' und 'lauter als du' drehten sonst
 # an der Lautstaerke, statt dass Flo antwortet.
 _VOLUME_REL_OBJ = (rf"(?:{_OBJ_MUSIK}\s+)?(?:machen|drehen|stellen)|{_OBJ_MUSIK}"
-                   r"|[0-9]+")
+                   r"|(?:auf\s+)?[0-9]+(?:\s+prozent)?")
 # Erstes Wort + optionale Zahl ("auf"/"%"/ohne Leerzeichen alles ok).
 # \d+ statt \d{1,3}: bei drei Ziffern wurde aus "ls 1000" ein 100-%-Befehl
 # (die Null fiel einfach weg) statt der erwarteten Klemmung auf 200 %.
@@ -1124,6 +1132,10 @@ class GuildPlayer:
                 await self._fresh_connect(channel)
             self.active_channel_id = channel.id   # ab jetzt: hier drinbleiben (Watchdog haelt's am Leben)
             self._reconnect_fails = 0
+            # Wer Flo holt ('komm', 'spiel ...'), will ihn JETZT - eine alte
+            # Leerlauf-Uhr haette ihn sonst beim naechsten Watchdog-Takt
+            # wieder rausgeworfen.
+            self._leer_seit = None
         return self.voice
 
     async def _fresh_connect(self, channel):
@@ -1158,6 +1170,17 @@ class GuildPlayer:
 
     def is_active(self):
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
+
+    def fremden_ton_stoppen(self):
+        """Laeuft auf unserer Verbindung gerade ein Soundboard-/TTS-Gag (kein
+        eigener Song), hat die Musik Vorrang: den Gag abbrechen. Sonst hielt
+        is_active() den Gag fuer Musik, und 'Flo spiel X' landete als #1 in der
+        Warteschlange, bis der Watchdog ihn nach 15 s anstiess."""
+        v = self.voice
+        if (self.current is None and v is not None and v.is_connected()
+                and v.is_playing()):
+            log.info("Musik: breche einen laufenden Sound fuer die Musik ab.")
+            v.stop()
 
     def start(self, track, *, seek = 0.0, keep_speed = False):
         """Startet einen Track sofort (nutzt die bereits aufgeloeste Stream-URL).
@@ -1805,7 +1828,10 @@ class GuildPlayer:
             return True
         # Nichts zu spielen = nichts zu heilen. Vor allem KEIN Reconnect, nur um
         # in einem Kanal herumzusitzen, aus dem die Verbindung gerade gefallen ist.
-        return leer
+        # AUSSER es wartet eine aufgegebene Warteschlange: die gab _advance auf,
+        # weil das Netz weg war - und oft ist dabei auch die Voice-Verbindung
+        # gerissen. Der Reconnect holt sie zurueck und versucht die Schlange neu.
+        return leer and not self.queue
 
     async def _reconnect(self, channel):
         """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
@@ -1881,6 +1907,11 @@ class GuildPlayer:
                       channel.name, self._reconnect_fails)
             self.active_channel_id = None
             self._reconnect_fails = 0
+            # Sonst hiesse der Server fuer is_voice_busy ewig 'belegt' (Song
+            # steht noch in current) - Soundboard und TTS waeren bis 'Flo
+            # stop' gesperrt.
+            self.current = None
+            self.queue.clear()
         else:
             log.warning("Voice-Reconnect fehlgeschlagen (%d/%d).",
                         self._reconnect_fails, VOICE_RECONNECT_MAX_FAILS)
@@ -2856,6 +2887,13 @@ class Music(FeatureBasis):
         if player is not None:
             await player.heal(guild)
 
+    def gehoert_der_musik(self, guild_id, voice):
+        """Ist diese Voice-Verbindung die der Musik (Sitzung offen)? voicegags
+        zieht sie dann nicht in einen anderen Kanal."""
+        player = self._players.get(guild_id)
+        return (player is not None and voice is not None and player.voice is voice
+                and player.active_channel_id is not None)
+
     def is_voice_busy(self, guild_id):
         """True, wenn die Musik den Voice-Channel dieses Servers WIRKLICH belegt:
         es laeuft ein Song, er ist pausiert, es wartet etwas in der Schlange oder
@@ -3804,8 +3842,10 @@ class Music(FeatureBasis):
         woerter = [w for w in _restwoerter(rest) if w != _LINK_PLATZ]
         if all(w in _LINK_BEIWERK_NACKT for w in woerter):
             return True
-        return (woerter[0] in _LINK_VERBEN
-                and all(w in _LINK_BEIWERK for w in woerter[1:]))
+        # Ein Abspiel-Verb - vorn oder hinten ('<link> spielen', 'pack <link>
+        # in die queue', '<link> in die queue') - und sonst nur Beiwerk.
+        return (any(w in _LINK_VERBEN for w in woerter)
+                and all(w in _LINK_VERBEN or w in _LINK_BEIWERK for w in woerter))
 
     @staticmethod
     def _link_aktion(url):
@@ -3900,8 +3940,10 @@ class Music(FeatureBasis):
             # ausser der Nummer - 'nochmal bitte' ist "sag's nochmal". Passt es
             # nicht, geht es unten weiter ('spiel nochmal despacito' ist eine
             # Suche, 'wiederhol das' landet bei der KI).
-            eindeutig = (not _restwoerter(rest) if rm.group("spiel")
-                         else not re.findall(r"[^\W_]+", rest))
+            woerter = (_restwoerter(rest) if rm.group("spiel")
+                       else re.findall(r"[^\W_]+", rest.lower()))
+            eindeutig = (not woerter
+                         or re.fullmatch(_REPLAY_OBJ, " ".join(woerter), re.I))
             if eindeutig:
                 return ("replay", rm.group("nr") or "1")
 
@@ -3936,8 +3978,10 @@ class Music(FeatureBasis):
         zm = _RANDOM_RE.match(cleaned)
         if zm:
             rest = _restwoerter(zm.group("rest") or "")
-            if rest and not re.fullmatch(_RANDOM_OBJ, " ".join(rest), re.I):
+            if (rest and not re.fullmatch(_RANDOM_OBJ, " ".join(rest), re.I)
+                    and not re.match(r"^(?:spiel|play)", cleaned, re.I)):
                 return None         # 'random frage', 'zufall oder nicht'
+            # 'spiel random rap' ist klar Musik - das Genre-Menue.
             return ("random", "")
 
         # 3c) "lyrics [song]" / "songtext [song]" -> Songtext (aktueller Song oder
@@ -4250,6 +4294,7 @@ class Music(FeatureBasis):
             await player.connect(channel)
         except VOICE_CONNECT_FEHLER as exc:
             return self._voice_kaputt(exc, "Mehrfach")
+        player.fremden_ton_stoppen()
 
         deckel = max_queue(player.guild_id)
         space = deckel - len(player.queue)
@@ -5060,6 +5105,7 @@ class Music(FeatureBasis):
     async def _einzeln_spielen(self, player, message, action, arg, voice_state):
         """Ein einzelner Song (Link oder Suche): aufloesen, verbinden, spielen
         oder einreihen."""
+        player.fremden_ton_stoppen()
         # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
         try:
             if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
@@ -5166,6 +5212,7 @@ is_enabled = instance.is_enabled
 _player_for = instance._player_for
 heal_voice = instance.heal_voice
 is_voice_busy = instance.is_voice_busy
+gehoert_der_musik = instance.gehoert_der_musik
 flo_getrennt = instance.flo_getrennt
 _extract = instance._extract
 _resolve_input = instance._resolve_input

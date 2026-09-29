@@ -38,6 +38,11 @@ _KEIN_TTS = frozenset((
     "weiter", "ist", "war", "du", "mir", "wieder", "so", "leise", "laut",
     "what", "was", "wat", "wie", "warum", "wer", "wann", "macht", "kann",
     "koennen", "können", "gerne", "gern",
+    # 'Flo sprich bayrisch, wie sagt man Semmel?' ist eine Frage an Flo, kein
+    # Vorlese-Auftrag. Den Dialekt-Schalter erledigt bayern.py davor; laesst
+    # der den Satz fallen, soll ihn die KI beantworten und nicht TTS vorlesen.
+    "bayrisch", "boarisch", "bairisch", "bayerisch", "dialekt", "deutsch",
+    "hochdeutsch", "englisch", "normal", "anders",
 ))
 
 # Sentinel: voicegags hat selbst geantwortet (Soundboard-Menue) -> bot.py schweigt.
@@ -689,6 +694,13 @@ class VoiceGags(FeatureBasis):
                         return (False, "Ich bin gerade im Voice beschäftigt (Musik läuft). "
                                        "Kurz warten oder `Flo stop`.")
                 if vc.channel.id != channel.id and not (vc.is_playing() or vc.is_paused()):
+                    # Die Verbindung der Musik (Sitzung offen, gerade still) NICHT
+                    # in einen anderen Kanal ziehen - ein Join-Sound hat sie
+                    # sonst dorthin verschleppt und dort gelassen.
+                    import music
+                    if music.gehoert_der_musik(guild.id, vc):
+                        return (False, f"Ich häng mit der Musik in **{vc.channel.name}** "
+                                       f"– komm rüber.")
                     await vc.move_to(channel)
         except (discord.ClientException, discord.HTTPException, RuntimeError,
                 asyncio.TimeoutError) as exc:

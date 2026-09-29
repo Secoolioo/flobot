@@ -1,36 +1,7 @@
 {
- "_dauer": 5.0,
+ "_dauer": 5.3,
  "_fehler": [],
- "_kollisionen": {
-  "bestenliste": {
-   "gewinner": "arbeit",
-   "module": [
-    "arbeit",
-    "economy"
-   ]
-  },
-  "leaderboard": {
-   "gewinner": "arbeit",
-   "module": [
-    "arbeit",
-    "economy"
-   ]
-  },
-  "rangliste": {
-   "gewinner": "arbeit",
-   "module": [
-    "arbeit",
-    "economy"
-   ]
-  },
-  "top": {
-   "gewinner": "arbeit",
-   "module": [
-    "arbeit",
-    "economy"
-   ]
-  }
- },
+ "_kollisionen": {},
  "_nicht_geprobt": {
   "admin": "Owner-Befehle: Neustart, Update, Sendepause - Nebenwirkungen",
   "giveaway": "legt Verlosungen an und startet Timer",
@@ -127,6 +98,12 @@
    "gewinner": "giveaway",
    "module": [
     "giveaway"
+   ]
+  },
+  "abstimmung": {
+   "gewinner": "umfrage",
+   "module": [
+    "umfrage"
    ]
   },
   "absturz": {
@@ -390,9 +367,8 @@
    ]
   },
   "bestenliste": {
-   "gewinner": "arbeit",
+   "gewinner": "economy",
    "module": [
-    "arbeit",
     "economy"
    ]
   },
@@ -1410,9 +1386,8 @@
    ]
   },
   "leaderboard": {
-   "gewinner": "arbeit",
+   "gewinner": "economy",
    "module": [
-    "arbeit",
     "economy"
    ]
   },
@@ -1881,6 +1856,12 @@
     "schulden"
    ]
   },
+  "poll": {
+   "gewinner": "umfrage",
+   "module": [
+    "umfrage"
+   ]
+  },
   "prestige": {
    "gewinner": "luxus",
    "module": [
@@ -2002,9 +1983,8 @@
    ]
   },
   "rangliste": {
-   "gewinner": "arbeit",
+   "gewinner": "economy",
    "module": [
-    "arbeit",
     "economy"
    ]
   },
@@ -2280,6 +2260,12 @@
    "gewinner": "bayern",
    "module": [
     "bayern"
+   ]
+  },
+  "sell": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
    ]
   },
   "sendepause": {
@@ -2680,9 +2666,8 @@
    ]
   },
   "top": {
-   "gewinner": "arbeit",
+   "gewinner": "economy",
    "module": [
-    "arbeit",
     "economy"
    ]
   },
@@ -2790,6 +2775,12 @@
     "economy"
    ]
   },
+  "umfrage": {
+   "gewinner": "umfrage",
+   "module": [
+    "umfrage"
+   ]
+  },
   "unban": {
    "gewinner": "moderation",
    "module": [
@@ -2845,15 +2836,21 @@
    ]
   },
   "verkauf": {
-   "gewinner": "music",
+   "gewinner": "floaktie",
    "module": [
-    "music"
+    "floaktie"
    ]
   },
   "verkaufe": {
-   "gewinner": "music",
+   "gewinner": "floaktie",
    "module": [
-    "music"
+    "floaktie"
+   ]
+  },
+  "verkaufen": {
+   "gewinner": "floaktie",
+   "module": [
+    "floaktie"
    ]
   },
   "verlass": {
@@ -2910,12 +2907,6 @@
     "moderation"
    ]
   },
-  "verzeih": {
-   "gewinner": "moderation",
-   "module": [
-    "moderation"
-   ]
-  },
   "vol": {
    "gewinner": "music",
    "module": [
@@ -2933,6 +2924,12 @@
    "gewinner": "voicegags",
    "module": [
     "voicegags"
+   ]
+  },
+  "voting": {
+   "gewinner": "umfrage",
+   "module": [
+    "umfrage"
    ]
   },
   "w6": {
@@ -3368,7 +3365,7 @@
    ]
   }
  },
- "erzeugt": "2026-09-04 14:39",
+ "erzeugt": "2026-09-29 10:29",
  "frontend": {
   "/api/avatar": {
    "quelle": "webpanel.html"
@@ -3631,6 +3628,10 @@
   },
   "CATALOG:terraria": {
    "label": "Terraria-Wiki",
+   "quelle": "features.CATALOG"
+  },
+  "CATALOG:umfrage": {
+   "label": "Umfragen",
    "quelle": "features.CATALOG"
   },
   "CATALOG:voice": {
@@ -4118,6 +4119,10 @@
    "quelle": "bot.FEATURE_LOADED"
   },
   "FEATURE_LOADED:terraria": {
+   "label": "True",
+   "quelle": "bot.FEATURE_LOADED"
+  },
+  "FEATURE_LOADED:umfrage": {
    "label": "True",
    "quelle": "bot.FEATURE_LOADED"
   },
@@ -4829,10 +4834,19 @@
   "basis.FeatureBasis": {
    "art": "type"
   },
+  "basis.antworte": {
+   "art": "function"
+  },
+  "basis.bausteine": {
+   "art": "function"
+  },
   "basis.echte_erwaehnungen": {
    "art": "function"
   },
   "basis.erstes_ziel": {
+   "art": "function"
+  },
+  "basis.v2_text": {
    "art": "function"
   },
   "bayern.Bayern": {
@@ -4854,6 +4868,9 @@
    "art": "type"
   },
   "bot.HelpView": {
+   "art": "type"
+  },
+  "bot.HilfeAuswahl": {
    "art": "type"
   },
   "bot.RestartConfirmView": {
@@ -5183,6 +5200,9 @@
   "fun.on_message_passive": {
    "art": "method"
   },
+  "fun.roast_text": {
+   "art": "method"
+  },
   "fun.setup": {
    "art": "method"
   },
@@ -5205,6 +5225,9 @@
    "art": "method"
   },
   "gehirn.Gehirn": {
+   "art": "type"
+  },
+  "gehirn.VergessenView": {
    "art": "type"
   },
   "gehirn.flush_now": {
@@ -5492,6 +5515,15 @@
   "music.Music": {
    "art": "type"
   },
+  "music.MusikKnopf": {
+   "art": "type"
+  },
+  "music.MusikPanel": {
+   "art": "type"
+  },
+  "music.MusikTempo": {
+   "art": "type"
+  },
   "music.PlaybackControlView": {
    "art": "type"
   },
@@ -5507,6 +5539,9 @@
   "music.VerlaufView": {
    "art": "type"
   },
+  "music.flo_getrennt": {
+   "art": "method"
+  },
   "music.handle": {
    "art": "method"
   },
@@ -5517,6 +5552,9 @@
    "art": "method"
   },
   "music.is_voice_busy": {
+   "art": "method"
+  },
+  "music.ist_panel": {
    "art": "method"
   },
   "music.max_queue": {
@@ -5548,6 +5586,9 @@
   },
   "music.verlauf_speichern": {
    "art": "method"
+  },
+  "music.voice_fehlt": {
+   "art": "function"
   },
   "numfmt.fmt": {
    "art": "function"
@@ -5780,6 +5821,9 @@
   "store.alle_sichern": {
    "art": "function"
   },
+  "store.einzelbetrieb_sichern": {
+   "art": "function"
+  },
   "terraria.Terraria": {
    "art": "type"
   },
@@ -5845,6 +5889,27 @@
   },
   "titles.total": {
    "art": "method"
+  },
+  "umfrage.Umfrage": {
+   "art": "type"
+  },
+  "umfrage.ergebnis": {
+   "art": "method"
+  },
+  "umfrage.handle": {
+   "art": "method"
+  },
+  "umfrage.is_enabled": {
+   "art": "method"
+  },
+  "umfrage.setup": {
+   "art": "method"
+  },
+  "voicegags.SoundAuswahl": {
+   "art": "type"
+  },
+  "voicegags.SoundKnopf": {
+   "art": "type"
   },
   "voicegags.SoundboardView": {
    "art": "type"
@@ -6042,16 +6107,16 @@
   }
  },
  "umgebung": {
-  "module_geladen": 41,
+  "module_geladen": 42,
   "probe_gelaufen": true,
   "python": "3.11.15"
  },
  "zaehlung": {
-  "befehle": 545,
+  "befehle": 550,
   "frontend": 35,
-  "kataloge": 260,
+  "kataloge": 262,
   "loops": 16,
-  "modulapi": 440,
+  "modulapi": 460,
   "routen": 39
  }
 }
