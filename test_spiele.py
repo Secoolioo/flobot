@@ -530,7 +530,8 @@ def test_spielwoerter_starten_nur_als_eindeutiger_befehl():
         # Die eindeutigen Befehle starten weiter - auch mit Einsatz oder 'bitte'.
         for n, befehl in enumerate(("raten", "zahlenraten bitte", "raten los",
                                     "mathe", "mathe 100", "reaktion 1k",
-                                    "anagramm"), start=1):
+                                    "anagramm", "mathe 100 coins", "reaktion um 50",
+                                    "anagramm mit 1k"), start=1):
             assert asyncio.run(g.handle(msg(befehl, 5000 + n))) is not None, befehl
         assert 5001 in g._guess, "'Flo raten' startet keine Runde mehr"
     finally:

@@ -68,13 +68,15 @@ class Bayern(FeatureBasis):
         r"(an|ein|on|aus|off|weg)?(?:\s+bitte)?\s*[.!?]*$", re.I)
     # "red/sprich (mal) bayerisch" ist die natuerlichste Formulierung ueberhaupt -
     # ohne diese Variante landete sie bei voicegags in der Sprachausgabe.
-    # Bewusst NICHT am Ende verankert: 'red/sprich bayrisch ...' ist schon vom
-    # Satzbau her eine Aufforderung. Laesst bayern den Satz fallen, landet er
-    # bei voicegags ('sprich ...' = vorlesen) - das waere der schlechtere Tausch.
+    # Am Ende verankert, mit kurzem Nachsatz ('... mit mir', '... bitte'):
+    # 'sprich bayrisch ist doch doof' schaltete sonst den Dialekt fuer den
+    # ganzen Server an. Laesst bayern den Satz fallen, antwortet die KI -
+    # voicegags liest 'sprich bayrisch ...' nicht mehr vor (siehe _KEIN_TTS).
     _TOGGLE_LOSE_RE = re.compile(
         r"^(?:red|redn|rede|sprich|schreib|schreibe|antworte?)\s+(?:mal\s+|bitte\s+)?"
         r"(?:auf\s+)?(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*"
-        r"(an|ein|on|aus|off|weg)?", re.I)
+        r"(an|ein|on|aus|off|weg)?(?:\s+(?:mit\s+(?:mir|uns)|bitte|jetzt|ab\s+jetzt))?"
+        r"\s*[.!?]*$", re.I)
 
     # So viele Woerter duerfen nach einem Gruss noch kommen, damit es ein
     # GRUSS bleibt ('servus leute', 'pfiat di, bis morgen'). Alles darueber ist

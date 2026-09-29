@@ -831,7 +831,9 @@ def test_bayern_kapert_keine_saetze():
         # Saetze ueber den Dialekt: KI ist dran, am Schalter dreht sich nichts.
         for satz in ("bayrisch ist echt komisch", "dialekt nervt",
                      "bayerisch versteht doch keiner", "boarisch klingt wie husten",
-                     "dialekt an sich find ich gut"):
+                     "dialekt an sich find ich gut",
+                     # auch mit 'sprich/red' davor: ein Satz, kein Schalter
+                     "sprich bayrisch ist doch doof", "red bayrisch klingt furchtbar"):
             assert frag(satz) is None, satz
             assert bayern.is_on(A) is False, f"{satz!r} hat den Dialekt angeschaltet"
 

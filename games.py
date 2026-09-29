@@ -104,7 +104,9 @@ _NIE = float("-inf")
 # Befehl ein Satz wird ('Flo raten bitte', 'Flo mathe 100'). Siehe _nur_spielargs.
 _SPIEL_FUELLWOERTER = frozenset((
     "bitte", "mal", "los", "start", "starten", "spielen", "nochmal", "jetzt",
-    "!", "?", "pls", "plz"))
+    "!", "?", "pls", "plz",
+    # 'mathe 100 coins', 'reaktion um 500', 'anagramm mit 1k'
+    "coins", "coin", "flo", "um", "mit", "einsatz", "für", "fuer"))
 # Die Spiel-Starter, die nur als EINDEUTIGER Befehl starten (siehe handle).
 _SPIEL_STARTER = frozenset((
     "quiz", "trivia", "quizzz", "zahlenraten", "raten", "errate",

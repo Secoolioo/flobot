@@ -345,6 +345,22 @@ def test_admin_befehle_treffen_das_erwaehnte_ziel():
                      "Flo flüster mir die Lösung",
                      "Flo dm mir das morgen nochmal"):
             assert asyncio.run(admin.handle(chef(satz))) is None, satz
+        # Ziel UND Zahl im Satz, aber drumherum Gerede: keine Coins, keine DM.
+        vorher = economy.get_coins(ZIEL)
+        for satz in (f"Flo gib mir 5 tipps wie ich <@{ZIEL}> besiege",
+                     f"Flo gib <@{ZIEL}> 5 minuten ruhe",
+                     f"Flo nimm dir 2 minuten für <@{ZIEL}>"):
+            assert asyncio.run(admin.handle(chef(satz, bob))) is None, satz
+        assert economy.get_coins(ZIEL) == vorher
+        post.clear()
+        for satz in (f"Flo flüster mir was über <@{ZIEL}>",
+                     f"Flo dm mir die nummer von <@{ZIEL}>"):
+            assert asyncio.run(admin.handle(chef(satz, bob))) is None, satz
+        assert post == [], "DM an jemanden, der nur im Satz vorkam"
+        # 'gib 500 an @wer' und 'gib @wer 500 coins' bleiben Befehle.
+        asyncio.run(admin.handle(chef(f"Flo gib 500 coins an <@{ZIEL}>", bob)))
+        assert economy.get_coins(ZIEL) == vorher + 500
+
         # Der blanke Befehl bekommt weiter den Hinweis.
         assert "So:" in str(asyncio.run(admin.handle(chef("Flo gib 100"))))
         assert "So:" in str(asyncio.run(admin.handle(chef("Flo dm"))))

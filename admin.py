@@ -39,6 +39,14 @@ class Admin(FeatureBasis):
 
     _MENTION_RE = re.compile(r"<@!?(\d{15,20})>")
     _ID_RE = re.compile(r"\b(\d{15,20})\b")
+    # Eine NACKTE ID - nicht die Ziffern in einer Erwaehnung '<@123...>'.
+    _NACKTE_ID_RE = re.compile(r"(?<![<@!&#\d])(\d{15,20})(?![\d>])")
+    # Was bei 'gib @wer 500' ausser Ziel und Betrag noch stehen darf. Alles
+    # andere ist ein Satz: 'Flo gib mir 5 tipps wie ich @Bob besiege' gab Bob
+    # sonst 5 Coins.
+    _GIB_BEIWERK = frozenset(("coins", "coin", "münzen", "muenzen", "flo", "bitte",
+                              "mal", "als", "geschenk", "an", "extra", "zurück",
+                              "zurueck", "xp"))
     _AMOUNT_RE = re.compile(r"-?\d{1,12}")
 
     def __init__(self):
@@ -255,6 +263,11 @@ class Admin(FeatureBasis):
             # 'nimm @wer mal mit ins Kino') ist ein Satz, kein Befehl. Nur
             # 'gib 100' oder 'gib @wer' allein bekommen den Hinweis.
             return None
+        if any(w.lower().strip(".,;:!?") not in self._GIB_BEIWERK for w in uebrig):
+            # Ziel UND Zahl gefunden, aber drumherum ein Satz ('gib @Bob 5
+            # minuten ruhe', 'nimm dir 2 minuten fuer @Bob') - da wandern
+            # keine Coins.
+            return None
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
         verb = "gib" if sign > 0 else "nimm"
@@ -358,16 +371,18 @@ class Admin(FeatureBasis):
         Nachricht (siehe _ziel_aus) - im Rest steht nach ai.strip_lead keine
         Erwaehnung mehr."""
         rest = rest or ""
-        ziel = self._ziel_aus(message)
-        if ziel is not None:
-            # Nur DIESE eine Erwaehnung raus - weitere gehoeren zum Text.
-            text = re.sub(rf"<@!?{int(ziel.id)}>", " ", rest, count=1)
-            return int(ziel.id), text.strip()
-        m = self._MENTION_RE.search(rest) or self._ID_RE.search(rest)
-        if not m:
-            return None, ""
-        text = (rest[:m.start()] + rest[m.end():]).strip()
-        return int(m.group(1)), text
+        # Der Empfaenger steht VORN ('dm @Bob hallo', 'dm 1234... hallo') ...
+        m = re.match(r"\s*(?:<@!?(\d{15,20})>|(\d{15,20}))(?!\d)", rest)
+        if m:
+            return int(m.group(1) or m.group(2)), rest[m.end():].strip()
+        # ... oder als nackte ID irgendwo - die tippt niemand aus Versehen.
+        # Eine ERWAEHNUNG mitten im Satz ist dagegen Gerede: 'Flo fluester
+        # mir was ueber @Bob' hat Bob sonst privat 'mir was ueber' geschickt,
+        # und eine zugestellte DM laesst sich nicht zurueckholen.
+        m = self._NACKTE_ID_RE.search(rest)
+        if m:
+            return int(m.group(1)), (rest[:m.start()] + rest[m.end():]).strip()
+        return None, ""
 
     @staticmethod
     def _roher_rest(message, wort):
