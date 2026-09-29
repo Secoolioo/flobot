@@ -7,7 +7,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 """
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
-from testhilfe import _RauchKanal, _rauch_nachricht  # noqa: F401
+from testhilfe import _FakeStore, _RauchKanal, _rauch_nachricht  # noqa: F401
 
 import datetime
 from unittest import mock
@@ -767,6 +767,111 @@ def test_sound_befehl_findet_auch_discord_sounds():
         assert asyncio.run(vg._cmd_sound(msg, "kuhglocke")) == "🔊 **Kuhglocke**"
         assert "kenne ich nicht" in asyncio.run(vg._cmd_sound(msg, "gibtsnicht"))
     assert gespielt == ["airhorn", "Kuhglocke"]
+
+
+# --- Tempo: erst reagieren, dann speichern ------------------------------------------
+def test_zaehlspiel_reagiert_ohne_auf_die_platte_zu_warten():
+    """Jede Zahl im Zaehlkanal wartete auf einen kompletten Schreibvorgang des
+    Stores, bevor das ✅ kam. Jetzt: Haken sofort, gespeichert wird gesammelt."""
+    import games
+    import guildcfg
+    from unittest import mock
+    g = games.instance
+    alt = g._store
+    g._store = _FakeStore({"counting": {}})
+    reaktionen = []
+
+    async def reagieren(e):
+        reaktionen.append((e, g._store.gespeichert))
+
+    msg = _rauch_nachricht("1")
+    msg.add_reaction = reagieren
+    msg.channel.id = 5150
+    try:
+        with mock.patch.object(guildcfg, "get", lambda _g, k: 5150 if k == "zaehl_channel" else 0), \
+                mock.patch.object(games.economy, "is_enabled", lambda: False):
+            assert asyncio.run(g._check_counting(msg))
+            msg.content, msg.author = "5", SimpleNamespace(id=9, display_name="B")
+            asyncio.run(g._check_counting(msg))
+    finally:
+        daten, g._store = g._store, alt
+    assert reaktionen == [("✅", 0), ("❌", 0)], reaktionen
+    assert daten.gespeichert == 0 and daten.angemeldet == 2
+
+
+def test_aktie_takt_und_impulse_speichern_gesammelt():
+    """Livestream-/Call-Impulse schrieben jedes Mal den ganzen Aktien-Store
+    sofort. Kaeufe bleiben beim sofortigen Speichern (Geld + Anteile)."""
+    import floaktie
+    from unittest import mock
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._store = _FakeStore({"price": 1000, "holdings": {}, "history": [], "ticks": []})
+    fa._enabled = True
+
+    async def nix(*_a, **_k):
+        return None
+    try:
+        with mock.patch.object(fa, "is_off", lambda *a: False), \
+                mock.patch.object(fa, "_puls", lambda *a: True), \
+                mock.patch.object(fa, "_refresh_live", nix):
+            asyncio.run(fa.note_stream_start())
+            asyncio.run(fa.note_voice_join())
+        assert fa._store.gespeichert == 0 and fa._store.angemeldet == 2
+    finally:
+        fa._store, fa._enabled = alt
+
+
+def test_level_karte_merkt_sich_das_profilbild():
+    """Jede 'flo level'-Abfrage lud das Profilbild neu von Discord (bis 6 s).
+    Die Adresse enthaelt den Bild-Hash - ein neues Bild ist eine neue Adresse."""
+    import economy
+    geladen = []
+
+    def person(url):
+        async def lesen():
+            geladen.append(url)
+            return b"PNG" + url.encode()
+        asset = SimpleNamespace(url=url, read=lesen)
+        return SimpleNamespace(display_avatar=SimpleNamespace(with_size=lambda _n: asset))
+
+    eco = economy.Economy()
+    assert asyncio.run(eco._karten_avatar(person("http://cdn/a.png"))) == b"PNGhttp://cdn/a.png"
+    asyncio.run(eco._karten_avatar(person("http://cdn/a.png")))
+    asyncio.run(eco._karten_avatar(person("http://cdn/b.png")))   # neues Bild
+    assert geladen == ["http://cdn/a.png", "http://cdn/b.png"]
+
+
+def test_bestenliste_loest_namen_parallel_auf():
+    import economy
+    import time as zeit
+    eco = economy.Economy()
+
+    async def langsam(uid, guild):
+        await asyncio.sleep(0.05)
+        return f"Name{uid}"
+
+    eco.resolve_display_name = langsam
+    zeilen = [{"id": i, "name": ""} for i in range(1, 9)] + [{"id": 99, "name": "Anna"}]
+    start = zeit.monotonic()
+    asyncio.run(eco._resolve_names(zeilen, None))
+    dauer = zeit.monotonic() - start
+    assert [z["name"] for z in zeilen][:2] == ["Name1", "Name2"] and zeilen[-1]["name"] == "Anna"
+    assert dauer < 0.3, f"nacheinander statt parallel ({dauer:.2f} s)"
+
+
+def test_bild_kodieren_blockiert_den_bot_nicht():
+    """Das PNG-Kodieren eines generierten Bildes lief auf dem Event-Loop."""
+    import inspect
+    import io as _io
+    import media
+    from PIL import Image
+    quelle = inspect.getsource(media.Media.generate_image)
+    assert "to_thread(self._als_png" in quelle
+    roh = _io.BytesIO()
+    Image.new("RGB", (4, 4), "red").save(roh, format="JPEG")
+    assert media.Media._als_png(roh.getvalue()).startswith(b"\x89PNG")
+    assert "basis.antworte" in inspect.getsource(media.Media._cmd_generate)
 
 
 # --- Einladungslink ------------------------------------------------------------

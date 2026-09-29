@@ -432,6 +432,15 @@ class FloAktie(FeatureBasis):
         if self._store is not None:
             await self._store.save()
 
+    def _save_bald(self):
+        """Gesammelt speichern - fuer den Minuten-Takt, die Livestream-/Call-
+        Impulse und den Analysten. Die schrieben jedes Mal den ganzen Store
+        sofort (json.dumps blockiert den Event-Loop). Kaeufe und Verkaeufe
+        bleiben bei _save: dort gehoeren Geld und Anteile sofort zusammen auf
+        die Platte."""
+        if self._store is not None:
+            self._store.save_soon()
+
     def _today(self):
         return datetime.now(TIMEZONE).strftime("%Y-%m-%d")
 
@@ -1312,7 +1321,7 @@ class FloAktie(FeatureBasis):
         st["ki_text"] = text
         st["ki_zeit"] = jetzt
         log.info("FloCorp Analyst: %+.0f %% - %s", faktor * 100, text or "(ohne Kommentar)")
-        await self._save()
+        self._save_bald()
         return faktor, text
 
     @staticmethod
@@ -1502,7 +1511,7 @@ class FloAktie(FeatureBasis):
         if not self._enabled or self.is_off():
             return
         if self._puls(PULSE_STREAM, "Livestream an"):
-            await self._save()
+            self._save_bald()
             await self._refresh_live()
 
     async def note_voice_join(self, member=None):
@@ -1510,7 +1519,7 @@ class FloAktie(FeatureBasis):
         if not self._enabled or self.is_off():
             return
         if self._puls(PULSE_JOIN, "Call-Beitritt"):
-            await self._save()
+            self._save_bald()
             await self._refresh_live()
 
     async def sample_and_tick(self, guild, dt=60.0):
@@ -1543,7 +1552,7 @@ class FloAktie(FeatureBasis):
                     st["history"] = []
                 st["history"].append({"day": today, "price": self.price()})
                 st["history"] = st["history"][-HISTORY_MAX:]
-            await self._save()
+            self._save_bald()
             # Aendert sich der Kurs (und damit der Boersenwert), Panel UND Chart
             # (das jeweils zuletzt gepostete) live nachziehen.
             if neu != alt:

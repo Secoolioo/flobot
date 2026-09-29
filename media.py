@@ -103,14 +103,20 @@ class Media(FeatureBasis):
         if not raw:
             return None
         try:
-            from PIL import Image
-            im = Image.open(io.BytesIO(raw)).convert("RGB")
-            buf = io.BytesIO()
-            im.save(buf, format="PNG")
-            return buf.getvalue()
+            # In einen Thread: ein 1024er-Bild als PNG zu kodieren dauert
+            # ~100 ms - auf dem Event-Loop stand in der Zeit der ganze Bot.
+            return await asyncio.to_thread(self._als_png, raw)
         except Exception:  # noqa: BLE001
             log.exception("Generiertes Bild nicht lesbar")
             return None
+
+    @staticmethod
+    def _als_png(raw):
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return buf.getvalue()
 
     async def _cmd_generate(self, message, prompt):
         if not prompt:
@@ -129,12 +135,10 @@ class Media(FeatureBasis):
         emb = discord.Embed(description=f"🎨  **{prompt[:230]}**", color=discord.Color.purple())
         emb.set_image(url="attachment://flo_bild.png")
         emb.set_footer(text=f"für {message.author.display_name} · generiert von {self._bot_name}")
-        try:
-            await message.reply(embed=emb,
-                                file=discord.File(io.BytesIO(data), "flo_bild.png"),
-                                mention_author=False)
-        except discord.HTTPException:
-            log.exception("Bild senden fehlgeschlagen")
+        # Ueber basis.antworte: das Malen dauert bis zu 75 s - in einem
+        # Aufraeum-Kanal ist die Frage bis dahin laengst geloescht.
+        if await basis.antworte(message, embed=emb,
+                                file=discord.File(io.BytesIO(data), "flo_bild.png")) is None:
             return "Konnte das Bild gerade nicht senden."
         return self.HANDLED
 

@@ -204,6 +204,7 @@ class Economy(FeatureBasis):
         # jedem 'top' neu versuchen.
         self._AVATAR_CACHE = {}
         self._AVATAR_FAIL = {}
+        self._karten_avatare = {}   # Bild-Adresse -> Bytes (Level-Karte)
         # Offene Rueckfragen bei teuren Kaeufen: uid -> (nummer, ablauf_zeit).
         # Bewusst nur im Speicher - eine Rueckfrage soll einen Neustart nicht
         # ueberleben.
@@ -1287,12 +1288,7 @@ class Economy(FeatureBasis):
         prof = self._profile(member.id)
         level, into, step = self._level_for_xp(prof["xp"])
         place, total = self._rank_of(member.id)
-        avatar = None
-        try:
-            avatar = await asyncio.wait_for(
-                member.display_avatar.with_size(256).read(), timeout=6)
-        except Exception:  # noqa: BLE001 - Avatar ist nur Deko
-            pass
+        avatar = await self._karten_avatar(member)
         # Luxus-Rahmen (Flo Luxus Shop) - lazy, damit kein Import-Zyklus entsteht.
         frame = None
         try:
@@ -1420,11 +1416,14 @@ class Economy(FeatureBasis):
 
     async def _resolve_names(self, rows, guild):
         """Sorgt dafuer, dass in der Rangliste ueberall ein echter Name steht -
-        auch bei Konten, die nur per ID angefasst wurden."""
-        for r in rows:
+        auch bei Konten, die nur per ID angefasst wurden.
+
+        Parallel: vorher ein API-Aufruf nach dem anderen - bei zehn unbekannten
+        Namen wartete die Bestenliste zehnmal auf Discord."""
+        async def einer(r):
             name = (r.get("name") or "").strip()
             if name and not numfmt.ist_zahl(name):
-                continue                       # schon ein brauchbarer Name
+                return                         # schon ein brauchbarer Name
             uid = int(r.get("id") or 0)
             neu = None
             try:
@@ -1433,6 +1432,32 @@ class Economy(FeatureBasis):
                 log.exception("Namensauflösung fehlgeschlagen (%s)", uid)
             # Letzte Rettung: die ID zeigen (identifizierbar) statt 'Unbekannt'.
             r["name"] = neu or (f"ID {uid}" if uid else "Unbekannt")
+
+        await asyncio.gather(*(einer(r) for r in rows))
+
+    # Profilbilder fuer die Level-Karte: je Bild-Adresse gemerkt. Die Adresse
+    # enthaelt den Bild-Hash - aendert jemand sein Bild, ist es eine neue.
+    _KARTEN_AVATAR_MAX = 256
+
+    async def _karten_avatar(self, member):
+        """Das Profilbild fuer die Level-Karte, beim zweiten Mal aus dem Speicher.
+        Vorher lud jede 'flo level'-Abfrage das Bild neu von Discord (bis 6 s)."""
+        try:
+            asset = member.display_avatar.with_size(256)
+            schluessel = str(asset.url)
+        except Exception:  # noqa: BLE001 - Attrappen ohne Avatar
+            return None
+        treffer = self._karten_avatare.get(schluessel)
+        if treffer is not None:
+            return treffer
+        try:
+            daten = await asyncio.wait_for(asset.read(), timeout=6)
+        except Exception:  # noqa: BLE001 - Avatar ist nur Deko
+            return None
+        if len(self._karten_avatare) >= self._KARTEN_AVATAR_MAX:
+            self._karten_avatare.pop(next(iter(self._karten_avatare)))
+        self._karten_avatare[schluessel] = daten
+        return daten
 
     async def _money_leaderboard(self, guild, limit = 10):
         """Geld-Rangliste als BILD (Pillow): wer hat aktuell am meisten Flo Coins?

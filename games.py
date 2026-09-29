@@ -1414,7 +1414,10 @@ class Games(FeatureBasis):
         if num == expected and state.get("last") != str(message.author.id):
             state["count"] = expected
             state["last"] = str(message.author.id)
-            await self._store.save()
+            # Erst der Haken, dann die Platte (gesammelt): vorher wartete jede
+            # Zahl im Zaehlkanal auf einen kompletten Schreibvorgang, bevor das
+            # ✅ kam - bei einer schnellen Kette sichtbar zaeh.
+            self._store.save_soon()
             try:
                 await message.add_reaction("✅" if expected % 50 else "🎉")
             except discord.HTTPException:
@@ -1430,7 +1433,7 @@ class Games(FeatureBasis):
                  else f"erwartet war {expected}")
         state["count"] = 0
         state["last"] = ""
-        await self._store.save()
+        self._store.save_soon()
         try:
             await message.add_reaction("❌")
             await message.channel.send(
