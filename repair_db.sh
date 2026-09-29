@@ -92,6 +92,15 @@ if [ "$APPLY" = "1" ] && [ "$FORCE" = "0" ]; then
     echo "     sudo systemctl start flobot"
     exit 1
   fi
+  # Flo kann auch in Docker laufen - dann weiss systemctl nichts davon. Die
+  # Sperre im Datenordner haelt aber JEDER laufende Flo (store.einzelbetrieb_sichern).
+  if command -v flock >/dev/null 2>&1 && [ -e "$DATA_DIR/.flobot.lock" ] \
+      && ! flock -n "$DATA_DIR/.flobot.lock" true 2>/dev/null; then
+    echo "❌ Der Bot laeuft noch ($(cat "$DATA_DIR/.flobot.lock" 2>/dev/null))."
+    echo "   Erst stoppen (systemctl stop flobot bzw."
+    echo "   docker compose -f docker/compose.yaml down), dann nochmal."
+    exit 1
+  fi
 fi
 
 # --- Backup vor jeder Aenderung ---------------------------------------------

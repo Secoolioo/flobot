@@ -1195,6 +1195,13 @@ class WebPanel(FeatureBasis):
         data = await self._json_objekt(request)
         neustart = self._flag(data.get("restart"), True)
         verzeichnis = str(Path(__file__).resolve().parent)
+        # In Docker steckt der Code im Image: ein git pull im Container waere
+        # beim naechsten Neuaufbau weg, und neue Pakete kaemen nie an.
+        if os.getenv("FLO_LAUFZEIT", "").strip().lower() == "docker":
+            return web.json_response({
+                "ok": False,
+                "error": "Flo läuft in Docker – Update auf dem Server mit:  k n  "
+                         "(macht git pull und baut das Image neu)"}, status=400)
 
         async def lauf(*args, timeout=120):
             proc = await asyncio.create_subprocess_exec(
@@ -1231,6 +1238,20 @@ class WebPanel(FeatureBasis):
                  else "schon aktuell")
         antwort = {"ok": True, "changed": geaendert, "log": ausgabe[-1500:],
                    "commit": nachher[:8] if rc_nach == 0 else ""}
+        # Neue Pakete gleich mitnehmen. Vorher holte der Knopf nur den Code -
+        # brauchte der ein neues Paket, startete Flo danach gar nicht mehr.
+        if geaendert:
+            rc_diff, dateien = await lauf("git", "diff", "--name-only", vorher, nachher)
+            if rc_diff == 0 and "requirements.txt" in dateien.split():
+                rc_pip, pip_aus = await lauf(sys.executable, "-m", "pip", "install", "-q",
+                                             "-r", "requirements.txt", timeout=900)
+                antwort["pakete"] = rc_pip == 0
+                if rc_pip != 0:
+                    log.error("Panel-Update: neue Pakete nicht installierbar (%s)",
+                              pip_aus[-400:])
+                    antwort["hinweis"] = ("Neue Pakete ließen sich nicht installieren – "
+                                          "auf dem Server:  k n")
+                    neustart = False
         if neustart and geaendert:
             antwort["restarting"] = True
             # Erst die Antwort rausgeben, DANN neu starten - sonst sieht das Panel

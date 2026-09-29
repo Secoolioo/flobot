@@ -1,15 +1,27 @@
-discord.py>=2.3
+# discord.py >= 2.7.1 ist PFLICHT: seit dem 01.03.2026 laesst Discord nur noch
+# Ende-zu-Ende-verschluesselte Voice-Verbindungen zu (DAVE) - das kann discord.py
+# erst ab 2.7 (mit 'davey'). Die dauerhaften Knoepfe (DynamicItem) und die neuen
+# Panels (Components V2) brauchen 2.7.1. Das Extra [voice] bringt davey + PyNaCl.
+discord.py[voice]>=2.7.1,<3
 python-dotenv>=1.0
-openai>=1.40
+# 1.58+: reasoning_effort als Parameter (gpt-oss denkt sonst zu lang nach).
+openai>=1.58
 # Musik-Feature (Voice):
 #   davey  = Discord-Voice-Verschluesselung (DAVE-Protokoll). Bei discord.py >= 2.7
 #            ZWINGEND fuer Voice - ohne davey: "RuntimeError: davey library needed".
 #   PyNaCl = aeltere Voice-Verschluesselung (Fallback, schadet nicht).
-#   yt-dlp = YouTube-Audio.
+#   yt-dlp = YouTube-Audio. [default] bringt yt-dlp-ejs mit: YouTube verlangt
+#            inzwischen, dass JavaScript-Aufgaben geloest werden, und dafuer
+#            braucht yt-dlp diese Skripte PLUS eine JS-Laufzeit (deno, unten).
+#            Ohne beides spielt YouTube still nicht mehr ab.
 # Zusaetzlich noetig (System-Paket, NICHT pip): ffmpeg  ->  z. B.  apt install ffmpeg
 davey>=0.1.5
 PyNaCl>=1.5
-yt-dlp>=2024.8
+yt-dlp[default]>=2026.8.19
+# deno = die JS-Laufzeit fuer yt-dlp (siehe oben). Als pip-Paket, damit sie auf
+# dem Server UND im Docker-Image ohne Extra-Schritt da ist. Flo findet sie auch
+# dann, wenn venv/bin nicht im PATH des Dienstes steht.
+deno>=2.6.6
 # Spass-Features (Level/Coins, Mini-Games, Chaos): brauchen KEINE neuen Pakete
 #   - Level & SigmaCoins speichern in data/economy.json (Standardbibliothek)
 #   - Mini-Games & Chaos nutzen die schon vorhandene KI (openai) bzw. nur stdlib

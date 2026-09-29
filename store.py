@@ -53,6 +53,61 @@ async def alle_sichern():
                           getattr(laden, "path", "?"))
 
 
+# --- Nur EIN Flo gleichzeitig ---------------------------------------------
+#: Die offene Sperrdatei, solange dieser Prozess der Flo ist. MUSS am Leben
+#: bleiben: schliesst sie, ist die Sperre weg.
+_SPERRE = None
+SPERR_DATEI = ".flobot.lock"
+
+
+def einzelbetrieb_sichern():
+    """Nimmt die Sperre im Datenordner - oder meldet, dass schon ein Flo laeuft.
+
+    Seit es Docker neben systemd gibt, koennen zwei Flos auf dieselben Daten
+    losgehen: beide mit demselben Token eingeloggt, jede Nachricht bekommt zwei
+    Antworten, XP und Coins zaehlen doppelt, Lotto und Giveaways werden zweimal
+    gezogen - und weil jeder Prozess beim Speichern seinen GANZEN Stand schreibt,
+    ueberschreiben sich die zwei gegenseitig still.
+
+    fcntl.flock sperrt die DATEI (den Inode), nicht den Prozess - deshalb greift
+    sie auch zwischen Host und Container, solange beide denselben Datenordner
+    eingehaengt haben (genau so ist docker/compose.yaml gebaut).
+
+    Nach einem Neustart per os.execv ist die Datei zu (Python oeffnet sie nicht
+    vererbbar), die Sperre also frei, und der neue Prozess nimmt sie wieder.
+
+    Rueckgabe: (True, "") wenn wir der einzige sind, sonst (False, wer_haelt)."""
+    global _SPERRE
+    if _SPERRE is not None:
+        return True, ""
+    try:
+        import fcntl
+    except ImportError:          # Windows kennt kein flock - dort ohne Sperre
+        return True, ""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    pfad = DATA_DIR / SPERR_DATEI
+    datei = open(pfad, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(datei.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            datei.seek(0)
+            wer = datei.read().strip()
+        except OSError:
+            wer = ""
+        datei.close()
+        return False, wer or "unbekannt"
+    import socket
+    datei.seek(0)
+    datei.truncate()
+    datei.write(f"pid {os.getpid()} auf {socket.gethostname()} "
+                f"({os.getenv('FLO_LAUFZEIT', 'systemd/direkt')}) seit "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    datei.flush()
+    _SPERRE = datei
+    return True, ""
+
+
 class JsonStore:
     """Ein einfacher Schluessel-Wert-Speicher, der als JSON-Datei persistiert."""
 

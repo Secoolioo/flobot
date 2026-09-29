@@ -74,6 +74,37 @@ class MusikCheck(Arzt):
             self.fehler("ffmpeg fehlt - ohne das spielt gar nichts.")
             self.merke("ffmpeg fehlt", "apt install ffmpeg")
 
+        # Seit 01.03.2026 laesst Discord nur noch verschluesselte Voice zu
+        # (DAVE) - discord.py 2.7 braucht dafuer 'davey'. Ohne: jeder Join
+        # scheitert, obwohl alles andere gruen ist.
+        try:
+            import davey  # noqa: F401
+            self.ok("davey da (Voice-Verschluesselung DAVE)")
+        except ImportError:
+            self.fehler("Paket 'davey' fehlt - Flo kommt in KEINEN Sprachkanal mehr.")
+            self.merke("davey fehlt", "venv/bin/pip install -r requirements.txt")
+
+        # YouTube verlangt JavaScript-Rechenaufgaben - yt-dlp braucht dafuer
+        # eine JS-Laufzeit (deno) und die Skripte aus yt-dlp-ejs.
+        deno = shutil.which("deno")
+        if deno is None:
+            try:
+                import deno as _deno_paket
+                deno = _deno_paket.find_deno_bin()
+            except Exception:  # noqa: BLE001 - Paket fehlt oder kaputt
+                deno = None
+        if deno:
+            self.ok(f"deno gefunden ({deno}) - YouTube-Aufgaben loesbar")
+        else:
+            self.fehler("deno fehlt - YouTube spielt dann oft still nichts ab.")
+            self.merke("deno fehlt", "venv/bin/pip install -r requirements.txt")
+        try:
+            import yt_dlp_ejs  # noqa: F401
+            self.ok("yt-dlp-ejs da")
+        except ImportError:
+            self.warn("yt-dlp-ejs fehlt - yt-dlp holt die Skripte sonst nicht selbst.")
+            self.merke("yt-dlp-ejs fehlt", 'venv/bin/pip install "yt-dlp[default]"')
+
     def _ytdlp_alter(self, version):
         """yt-dlp veraltet schnell: YouTube aendert staendig etwas, und eine alte
         Fassung faellt dann bei JEDEM Video um - auch bei Spotify-Links, weil die

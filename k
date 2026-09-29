@@ -11,7 +11,12 @@
 #     bash k p        Panel-Zugang: das gewuerfelte Passwort aus dem Log
 #     bash k a        ALLES pruefen und einen Bericht in diagnose.txt schreiben
 #     bash k r        Dienst neu starten
+#     bash k d        Docker: Flo als Container starten (statt systemd)
+#     bash k s        systemd: Flo wieder als Dienst starten (statt Docker)
 #     bash k setup    einmalig: danach reicht ueberall  k
+#
+# Laeuft Flo in Docker (docker/compose.yaml), gehen Log, Neustart und die
+# Aerzte automatisch ueber den Container - dieselben Buchstaben wie immer.
 #
 # Absichtlich ein Buchstabe und ohne Schraegstrich im Aufruf - auf einer
 # US-belegten Konsole ist "/" schwer zu tippen und Copy-Paste gibt es nicht.
@@ -20,6 +25,16 @@ cd "$(dirname "$0")" || exit 1
 
 PY="venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
+
+# Docker: laeuft der Flo-Container? Dann sind Log und Aerzte im Container.
+COMPOSE="docker compose -f docker/compose.yaml"
+in_docker() {
+    command -v docker >/dev/null 2>&1 \
+        && [ -n "$($COMPOSE ps -q --status running flobot 2>/dev/null)" ]
+}
+if in_docker; then
+    PY="$COMPOSE exec -T flobot python"
+fi
 
 trenner() { printf '\033[2m%s\033[0m\n' "----------------------------------------"; }
 
@@ -41,6 +56,17 @@ logs() {
     trenner
     printf '\033[1m%s\033[0m\n' "${1:-Letzte KI-Fehler im Journal}"
     muster="${2:-$KIMUSTER}"
+    if in_docker; then
+        # Docker schreibt keinen Journal-Vorspann davor - nichts abzuschneiden.
+        treffer="$($COMPOSE logs --since 6h --no-log-prefix flobot 2>/dev/null \
+            | grep -E "$muster" | tail -8)"
+        if [ -n "$treffer" ]; then
+            echo "$treffer" | cut -c1-200
+        else
+            echo "  Nichts dazu in den letzten 6 Stunden (Docker)."
+        fi
+        return
+    fi
     if ! command -v journalctl >/dev/null 2>&1; then
         echo "  (journalctl gibt es hier nicht)"
         return
@@ -73,7 +99,16 @@ MUSIKMUSTER="Musik-Fehler|Musik-Selbsttest|Musik-Feature|Spotify|yt-dlp|403 Forb
 case "${1:-}" in
     n|neu)
         printf '\033[1mHole neuen Stand...\033[0m\n'
+        vorher="$(git rev-parse HEAD)"
         git pull --ff-only || exit 1
+        if in_docker; then
+            # Code steckt im Image: neu bauen und den Container ersetzen.
+            $COMPOSE up -d --build || exit 1
+        elif git diff --name-only "$vorher" HEAD | grep -qx requirements.txt; then
+            # Neue Pakete - ohne die startet Flo nach dem Update nicht.
+            printf '\033[1mNeue Pakete...\033[0m\n'
+            venv/bin/pip install -q -r requirements.txt || exit 1
+        fi
         exec bash k
         ;;
     l|log)
@@ -99,7 +134,23 @@ case "${1:-}" in
         logs "Letzte YouTube-Meldungen im Journal" "$MUSIKMUSTER"
         ;;
     r|neustart)
-        systemctl restart flobot && echo "flobot neu gestartet." && sleep 3 && logs
+        if in_docker; then
+            $COMPOSE restart flobot && echo "Flo-Container neu gestartet." && sleep 3 && logs
+        else
+            systemctl restart flobot && echo "flobot neu gestartet." && sleep 3 && logs
+        fi
+        ;;
+    d|docker)
+        # Umziehen systemd -> Docker. ERST den Dienst stoppen: zwei Flos
+        # gleichzeitig verhindert die Sperre im Datenordner zwar, aber der
+        # zweite wuerde nur still warten.
+        systemctl disable --now flobot 2>/dev/null || true
+        $COMPOSE up -d --build && echo "Flo laeuft jetzt in Docker. Zurueck:  k s"
+        ;;
+    s|systemd)
+        # Umziehen Docker -> systemd.
+        $COMPOSE down 2>/dev/null || true
+        systemctl enable --now flobot && echo "Flo laeuft wieder als Dienst. Zu Docker:  k d"
         ;;
     setup)
         # Winziger Starter in den Pfad, damit ueberall nur noch  k  reicht.
@@ -120,5 +171,6 @@ case "${1:-}" in
         trenner
         echo "k a = ALLES | k n = neu holen | k l = Log | k m = Musik"
         echo "k y = YouTube einrichten | k r = Neustart"
+        echo "k d = in Docker starten | k s = zurueck zu systemd"
         ;;
 esac

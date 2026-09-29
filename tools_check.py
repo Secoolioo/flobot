@@ -41,6 +41,8 @@ class GesamtCheck(Arzt):
         ("openai", "openai", "die KI"),
         ("yt_dlp", "yt-dlp", "Musik"),
         ("nacl", "PyNaCl", "Voice (Musik, Soundboard)"),
+        ("davey", "davey", "Voice ueberhaupt - Discord verlangt seit 03/2026 DAVE"),
+        ("deno", "deno", "YouTube (JS-Aufgaben fuer yt-dlp)"),
         ("PIL", "Pillow", "alle Bilder (Level-Karten, Wordle, Bestenliste)"),
     )
 

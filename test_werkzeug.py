@@ -246,5 +246,176 @@ def test_abdruck_flo_antwortet_noch_genauso():
         + (lauf.stdout or "")[-4000:] + (lauf.stderr or "")[-1500:])
 
 
+
+# --- Betrieb: Docker neben systemd ------------------------------------------------
+def test_docker_bringt_keine_geheimnisse_ins_image():
+    """.env (Discord-Token, KI-Schluessel), data/ (alle Konten) und die
+    YouTube-Cookies (eine Google-Anmeldung) duerfen NIE in einer Image-Schicht
+    landen - wer das Image bekommt, haette sie sonst alle."""
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    zeilen = {z.strip() for z in open(os.path.join(wurzel, ".dockerignore"),
+                                       encoding="utf-8") if z.strip() and not z.startswith("#")}
+    for muss in (".env", "data/", "cookies.txt", "youtube.txt", "youtube_cookies.txt",
+                 "venv/", ".git/"):
+        assert muss in zeilen, f".dockerignore laesst {muss} ins Image"
+
+    datei = open(os.path.join(wurzel, "docker", "Dockerfile"), encoding="utf-8").read()
+    # Gleiche Pfade wie systemd - sonst stimmen Pfade aus der .env nicht.
+    assert "WORKDIR /opt/flobot" in datei
+    # 'Flo restart' startet per os.execv neu, und execv sucht NICHT im PATH.
+    assert 'CMD ["/usr/local/bin/python", "bot.py"]' in datei
+    for paket in ("ffmpeg", "libopus0", "tzdata", "fonts-dejavu-core", "espeak-ng"):
+        assert paket in datei, f"{paket} fehlt im Image"
+    assert "FLO_LAUFZEIT=docker" in datei
+
+    compose = open(os.path.join(wurzel, "docker", "compose.yaml"), encoding="utf-8").read()
+    # Derselbe Datenordner wie der systemd-Dienst - nur dann greift die Sperre.
+    assert "source: ../data" in compose and "target: /opt/flobot/data" in compose
+    assert "source: ../.env" in compose
+    assert "init: true" in compose            # SIGTERM kommt bei Flo an
+    assert "network_mode: host" in compose    # keine Firewall-Umgehung durch ports:
+    echte_zeilen = [z for z in compose.splitlines() if not z.strip().startswith("#")]
+    assert not any(z.strip().startswith("ports:") for z in echte_zeilen)
+
+
+
+
+def test_nur_ein_flo_gleichzeitig():
+    """systemd UND Docker mit demselben Token waeren zwei Flos: doppelte
+    Antworten, doppelte XP, Lotto zweimal gezogen - und die zwei Prozesse
+    ueberschreiben sich gegenseitig die Daten. Die Sperre im Datenordner
+    verhindert das, und zwar prozessuebergreifend."""
+    import subprocess
+    import sys
+    import tempfile
+    ordner = tempfile.mkdtemp(prefix="flobot-sperre-")
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    umgebung = dict(os.environ, DATA_DIR=ordner, FLO_LAUFZEIT="probe")
+    code = ("import store, sys, time; ok, wer = store.einzelbetrieb_sichern(); "
+            "print(ok, wer, flush=True); time.sleep(float(sys.argv[1]))")
+    erster = subprocess.Popen([sys.executable, "-c", code, "4"], cwd=wurzel,
+                              env=umgebung, stdout=subprocess.PIPE, text=True)
+    try:
+        assert erster.stdout.readline().startswith("True"), "der erste bekam die Sperre nicht"
+        zweiter = subprocess.run([sys.executable, "-c", code, "0"], cwd=wurzel,
+                                 env=umgebung, capture_output=True, text=True, timeout=30)
+        assert zweiter.stdout.startswith("False"), zweiter.stdout
+        assert "probe" in zweiter.stdout, "der zweite erfaehrt nicht, WER schon laeuft"
+    finally:
+        erster.wait(timeout=30)
+    # Ist der erste weg, ist die Sperre frei.
+    dritter = subprocess.run([sys.executable, "-c", code, "0"], cwd=wurzel,
+                             env=umgebung, capture_output=True, text=True, timeout=30)
+    assert dritter.stdout.startswith("True"), dritter.stdout
+
+
+
+
+def test_env_kommt_vor_den_modulen_und_nie_im_testlauf():
+    """Stand load_dotenv() hinter den Feature-Importen, lasen alle Module, die
+    eine Einstellung schon beim Import holen, die .env nie (GUILD_ID -> Server-
+    Icon und Aktie auf dem Hauptserver aus). Und ein Testlauf auf dem Server
+    darf die echte .env nicht ziehen."""
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    quelle = open(os.path.join(wurzel, "bot.py"), encoding="utf-8").read()
+    assert quelle.index("load_dotenv()") < quelle.index("\nimport admin"), (
+        "die .env wird wieder erst nach den Modulen geladen")
+    assert 'os.getenv("FLO_TESTLAUF", "") != "1"' in quelle
+    assert os.environ.get("FLO_TESTLAUF") == "1"
+    import bot
+    # Beim Import (Tests, Werkzeuge) laufen die Startwachen NICHT - die sind nur
+    # fuer den echten Dauerbetrieb.
+    assert bot._DAUERBETRIEB is False
+
+
+
+
+def test_beenden_sichert_alles_auch_schulden_und_handel():
+    """SIGTERM (systemctl stop, docker stop) beendete Python bisher sofort -
+    und 'flo restart' sicherte Schulden, Handel und Profil nicht. Wurde in
+    deren 3-s-Sammelfenster neu gestartet, stand eine Tilgung schon in
+    economy.json, der Posten aber noch offen in schulden.json: doppelt bezahlt."""
+    import bot
+    import handel
+    import schulden
+    gesichert = []
+
+    async def merke(name):
+        gesichert.append(name)
+
+    alt = (schulden.instance._store, getattr(schulden.instance, "_save", None),
+           handel.instance._store, bot.client.close)
+    schulden.instance._store = _FakeStore({})
+    schulden.instance._save = lambda: merke("schulden")
+    handel.instance._store = SimpleNamespace(save=lambda: merke("handel"))
+    geschlossen = []
+
+    async def zu():
+        geschlossen.append(True)
+
+    bot.client.close = zu
+    try:
+        asyncio.run(bot.client._sauber_beenden("SIGTERM"))
+        asyncio.run(bot.client._sauber_beenden("SIGTERM"))   # zweites Signal: nichts doppelt
+    finally:
+        (schulden.instance._store, schulden.instance._save,
+         handel.instance._store, bot.client.close) = alt
+        bot.client._beendet_schon = False
+    assert "schulden" in gesichert and "handel" in gesichert, gesichert
+    assert geschlossen == [True], geschlossen
+    # Und der Signal-Weg ist wirklich angeschlossen.
+    quelle = inspect.getsource(bot.FloBot.setup_hook)
+    assert "SIGTERM" in quelle and "add_signal_handler" in quelle
+
+
+
+
+def test_herzschlag_nur_bei_echter_verbindung():
+    """Der Docker-Healthcheck prueft das Alter dieser Datei. Ein Prozess, der
+    laeuft, aber keine Verbindung zu Discord hat, darf nicht als gesund gelten."""
+    import bot
+    import tempfile
+    alt = bot.HERZSCHLAG_DATEI
+    bot.HERZSCHLAG_DATEI = __import__("pathlib").Path(tempfile.mkdtemp()) / "herz"
+    try:
+        tot = SimpleNamespace(latency=float("inf"), is_closed=lambda: False,
+                              is_ready=lambda: True)
+        bot._herzschlag(tot)
+        assert not bot.HERZSCHLAG_DATEI.exists()
+        lebt = SimpleNamespace(latency=0.05, is_closed=lambda: False, is_ready=lambda: True)
+        bot._herzschlag(lebt)
+        assert bot.HERZSCHLAG_DATEI.exists()
+    finally:
+        bot.HERZSCHLAG_DATEI = alt
+
+
+
+
+def test_panel_update_in_docker_nennt_den_richtigen_weg():
+    """Im Container steckt der Code im Image: ein git pull dort waere beim
+    naechsten Neubau weg, und neue Pakete kaemen nie an."""
+    import webpanel
+    wp = webpanel.WebPanel()
+
+    class Anfrage(dict):
+        async def json(self):
+            return {"restart": False}
+
+    alt = os.environ.get("FLO_LAUFZEIT")
+    os.environ["FLO_LAUFZEIT"] = "docker"
+    try:
+        antwort = asyncio.run(wp._update_lauf(Anfrage()))
+    finally:
+        if alt is None:
+            os.environ.pop("FLO_LAUFZEIT", None)
+        else:
+            os.environ["FLO_LAUFZEIT"] = alt
+    assert antwort.status == 400
+    assert "k n" in antwort.text
+    # Und ausserhalb von Docker holt der Knopf neue Pakete gleich mit.
+    quelle = inspect.getsource(webpanel.WebPanel._update_lauf)
+    assert "requirements.txt" in quelle and '"pip", "install"' in quelle
+
+
 if __name__ == "__main__":
     run(globals())

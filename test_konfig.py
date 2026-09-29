@@ -115,6 +115,58 @@ def test_cmdnorm_admin_sicherheit():
 
 
 
+def test_hilfe_und_neustart_nur_als_befehl():
+    """'Flo hilfe mir mal mit Mathe' bekam das Hilfe-Menue, 'Flo neustart von
+    windows nervt' die Neustart-Abfrage. Beides sind Saetze - die KI soll
+    antworten. Der Befehl selbst geht weiter, mit Fuellwoertern."""
+    import bot
+    for befehl in ("flo hilfe", "flo help", "flo befehle", "flo hilfe bitte",
+                   "flo was kannst du", "flo was kannst du alles?", "Flo menü!"):
+        assert bot._is_help(befehl), befehl
+    for satz in ("flo hilfe mir mal mit mathe", "flo helpt mir keiner",
+                 "flo befehle mir nichts", "flo was kannst du mir zu python sagen"):
+        assert not bot._is_help(satz), satz
+    # 'hilfe <kategorie>' zeigt direkt die Seite.
+    assert bot._help_category_key("flo hilfe musik") == "musik"
+    assert bot._help_category_key("flo moderation?") == "mod"
+    for befehl in ("flo restart", "flo neustarten", "flo neu starten bitte", "flo reboot!"):
+        assert bot._is_restart(befehl), befehl
+    for satz in ("flo neustart von windows nervt", "flo restart dein leben mal",
+                 "flo reboot mein hirn ist leer"):
+        assert not bot._is_restart(satz), satz
+
+
+
+
+def test_tippfehler_korrektur_behaelt_die_erwaehnungen():
+    """Die Korrektur baute den Text aus 'Botname + Rest' neu - und der Rest kam
+    aus strip_lead, das ALLE Erwaehnungen entfernt. Nach 'Flo zahlen @Bob 100'
+    (-> zahle) stand kein @Bob mehr im Text; jedes Modul, das sein Ziel ueber
+    basis.erstes_ziel sucht, fand danach niemanden."""
+    import bot
+    assert bot._korrigiert("Flo zahlen <@222> 100", "zahle 100") == "Flo zahle <@222> 100"
+    assert bot._korrigiert("<@111> skpi", "skip") == "<@111> skip"
+    assert bot._korrigiert("Florian, minees 50", "mines 50") == "Florian, mines 50"
+    # Kommt das Wort nicht vor (sollte nie passieren), bleibt der alte Weg.
+    assert bot._korrigiert("", "skip") == f"{bot.ai.bot_name()} skip"
+
+
+
+
+def test_status_passt_zur_figur_und_nervt_discord_nicht():
+    """Im Status standen sanfte Kalenderweisheiten ('Geduld ist auch eine
+    Staerke') - das Gegenteil von Flo. Und sie wechselten alle 10 s:
+    8.640 Presence-Updates am Tag."""
+    import bot
+    assert bot.STATUS_WECHSEL_SEKUNDEN >= 60
+    sanft = ("Geduld", "Kleine Schritte", "Mut beginnt", "Ruhe ist die Kraft")
+    for spruch in bot.WEISHEITEN:
+        assert not any(w in spruch for w in sanft), spruch
+        assert len(spruch) <= 128, spruch        # Discords Grenze fuer den Status
+
+
+
+
 def test_guildcfg_trennt_die_server():
     """Zwei Server, zwei Meinungen: was der eine einstellt, geht den anderen
     nichts an. Ohne eigenen Wert gilt weiterhin der Standard."""

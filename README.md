@@ -3,7 +3,8 @@
 Deutschsprachiger Discord-Bot: Level & Coins, Aktie, Casino, Spiele, Musik,
 Moderation — dazu ein Web-Panel zum Verwalten.
 
-Läuft als systemd-Dienst (`flobot.service`), Konfiguration über `.env`,
+Läuft als systemd-Dienst (`flobot.service`) **oder in Docker** — beides mit
+denselben Daten, umschalten mit `k d` / `k s`. Konfiguration über `.env`,
 **Einstellungen je Server** über `Flo einstellungen` oder das Panel.
 
 ---
@@ -119,14 +120,69 @@ kein Server-Admin zurück.
 ### Aktualisieren
 
 ```bash
-cd /opt/flobot
-git pull
-sudo systemctl restart flobot
+k n                           # git pull + neue Pakete (systemd) bzw. Image neu bauen (Docker)
 ```
 
 Oder ohne Terminal: im Web-Panel unter **Steuerung** auf **Update** — der Bot
-zieht selbst `git pull --ff-only` und startet neu, wenn es wirklich neue Commits
-gab.
+zieht selbst `git pull --ff-only`, installiert neue Pakete, wenn sich
+`requirements.txt` geändert hat, und startet neu, wenn es wirklich neue Commits
+gab. In Docker nennt der Knopf stattdessen `k n` (der Code steckt dort im Image).
+
+> **Einmalig nach dem Update vom September 2026:** der alte Update-Knopf kannte
+> noch keine neuen Pakete. Also einmal von Hand:
+> `cd /opt/flobot && venv/bin/pip install -r requirements.txt && sudo systemctl restart flobot`.
+> Ohne das bricht Flo beim Start mit einem klaren Satz ab (discord.py zu alt).
+
+Zurück auf einen älteren Stand: `git log --oneline` und `git checkout <hash>`,
+danach `k r`.
+
+### Docker statt systemd
+
+Flo läuft auch als Container — **zusätzlich** zum systemd-Dienst, nicht statt.
+Beide benutzen denselben Datenordner (`/opt/flobot/data`) und dieselbe `.env`,
+deshalb kann man jederzeit hin und her:
+
+```bash
+k d        # systemd-Dienst stoppen, Container bauen und starten
+k s        # Container stoppen, systemd-Dienst wieder an
+```
+
+Von Hand geht es genauso:
+
+```bash
+sudo systemctl disable --now flobot
+docker compose -f docker/compose.yaml up -d --build
+```
+
+Was dabei zu wissen ist:
+
+- **Nie zwei Flos gleichzeitig.** Eine Sperre im Datenordner
+  (`data/.flobot.lock`) sorgt dafür: ein zweiter Start (egal ob Dienst oder
+  Container) schreibt „Flo läuft schon …“ ins Log, wartet eine Minute und
+  beendet sich — ohne sich bei Discord anzumelden. Zwei Flos hießen doppelte
+  Antworten und Daten, die sich gegenseitig überschreiben.
+- **Dieselben Pfade.** Im Container liegt Flo ebenfalls unter `/opt/flobot`;
+  Pfade in der `.env` (z. B. `YTDLP_COOKIES=/opt/flobot/data/cookies.txt`)
+  stimmen in beiden. YouTube-Cookies gehören nach `data/` (`k y datei …` legt
+  sie dort ab) — eine `cookies.txt` direkt neben `bot.py` sieht der Container
+  nicht. Browser-Cookies (`k y browser …`) gehen im Container nicht.
+- **Host-Netz.** Der Container benutzt das Netz des Servers: das Web-Panel
+  bindet wie gewohnt an `WEBPANEL_HOST`, Dienste auf `127.0.0.1` (Proxy,
+  PO-Token-Server, Ollama) bleiben erreichbar, und die Firewall des Servers
+  gilt weiter.
+- **Sauber beenden.** `docker stop`/`systemctl stop` sichern jetzt vorher alles
+  (vorher gingen bis zu 60 s Wortzähler, Schulden und Gedächtnis verloren).
+- **`k` weiß Bescheid.** Läuft der Container, zeigen `k l`, `k m`, `k r` & Co.
+  automatisch dessen Log und fragen die Ärzte im Container.
+- **Gesund?** `docker ps` zeigt `healthy`, solange Flo wirklich mit Discord
+  verbunden ist.
+- Nach Änderungen an der `.env`: `k r` (die Werte gelten ab dem Start).
+
+> Seit diesem Update wird die `.env` **vor** allen Modulen geladen. Werte, die
+> vorher still ignoriert wurden, wirken jetzt — vor allem `GUILD_ID`: auf dem
+> Hauptserver sind Server-Icon-Automatik und $FLO-Aktie damit wieder von Haus
+> aus an, so wie `Flo einstellungen` es beschreibt. Zeigt ein `DATA_DIR` in der
+> `.env` auf einen leeren Ordner, startet Flo nicht (statt mit leeren Konten).
 
 ### Wirtschaft zurücksetzen
 
@@ -144,11 +200,13 @@ Das Skript weigert sich, während der Bot läuft.
 ### Tests
 
 ```bash
-python3 lauf.py                # alle 339 Tests, alle Fehler auf einmal
+python3 lauf.py                # alle Tests, alle Fehler auf einmal
 python3 lauf.py --misch        # zufällige Reihenfolge (deckt Abhängigkeiten auf)
 python3 lauf.py --nur musik    # nur ein Thema
 python3 test_musik.py          # eine einzelne Themendatei
-python3 bot.py --check         # lädt alle Module ohne zu verbinden
+python3 bot.py --check         # prüft Login, Rechte, Bilder (meldet sich an!)
+python3 werkzeug/kiprobe.py    # Flo gegen einen zickigen KI-Anbieter laufen lassen
+docker compose -f docker/compose.yaml exec flobot python lauf.py   # Tests im Container
 ```
 
 Kein pytest nötig — `lauf.py` ist der Runner, und jede Themendatei läuft auch
@@ -177,7 +235,19 @@ k l              nur das Log (KI)
 k p              Panel-Zugang + das gewuerfelte Passwort
 k m              Musik/Spotify pruefen
 k r              Dienst neu starten
+k d / k s        zu Docker / zurueck zu systemd
 ```
+
+Die häufigsten Gründe, warum Flo „plötzlich nicht antwortet“, fängt er seit
+September 2026 selbst ab — nachstellbar mit `python3 werkzeug/kiprobe.py`:
+leere Antwort, weil das Denk-Modell sein Budget verdacht hat (Flo fasst einmal
+mit mehr Luft nach), kaputter Werkzeug-Aufruf (nochmal, dann ohne Werkzeug),
+429 mit `Retry-After`, ein Tageslimit (dann wird bis zum Reset gar nicht erst
+gefragt), ein hängender Anbieter (nach 30 s sagt Flo derb, dass die KI pennt),
+eine gelöschte Frage und `@Flo` als Rolle erwähnt. In `k l` steht jeder dieser
+Fälle mit `KI-Fehler:` davor. Gedächtnis und Aktien-Analyst laufen auf einem
+eigenen Modell (`LLM_HINTERGRUND_MODEL`, auf Groq automatisch `gpt-oss-20b`) —
+mit eigenem Kontingent, damit sie dem Chat nichts wegfressen.
 
 `tools_ki_check.py` fragt den Anbieter direkt und sagt in Klartext, woran es
 liegt — statt eines Tracebacks, den auf dem Handy niemand liest. Der Schlüssel

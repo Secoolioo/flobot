@@ -1,0 +1,57 @@
+# Flo in Docker - NEBEN systemd, nicht statt.
+#
+#   docker compose -f docker/compose.yaml up -d --build
+#
+# Oder bequemer:  k d  (stoppt den systemd-Dienst und startet den Container)
+#                 k s  (zurueck zu systemd)
+#
+# Die Datei liegt bewusst in docker/ und nicht neben bot.py: Compose liest eine
+# .env im selben Ordner automatisch fuer seine eigenen ${VARIABLEN} - und
+# parst dabei strenger als Flo. Eine .env, mit der Flo problemlos laeuft, koennte
+# Compose sonst den Start verweigern.
+name: flobot
+
+services:
+  flobot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: flobot:latest
+    container_name: flobot
+    restart: unless-stopped
+    # tini als PID 1: reicht SIGTERM an Flo weiter (der sichert dann alles) und
+    # raeumt verwaiste ffmpeg-Prozesse ab.
+    init: true
+    # Zeit zum Sichern beim Stoppen (bot.py _alles_sichern).
+    stop_grace_period: 30s
+    # Host-Netz: exakt wie unter systemd. Das Web-Panel bindet an dieselbe
+    # Adresse (WEBPANEL_HOST aus der .env), Dienste auf 127.0.0.1 des Servers
+    # (YTDLP_PROXY, PO-Token-Server, Ollama) sind erreichbar - und die Firewall
+    # des Servers gilt weiter. Mit 'ports:' wuerde Docker sie umgehen und das
+    # Panel womoeglich ins Netz stellen.
+    network_mode: host
+    volumes:
+      # DIESELBEN Daten wie der systemd-Dienst - deshalb kann man hin und her
+      # wechseln. Die Sperre data/.flobot.lock verhindert zwei Flos zugleich.
+      - type: bind
+        source: ../data
+        target: /opt/flobot/data
+        bind:
+          create_host_path: false
+      # Die .env wird eingehaengt statt per env_file gelesen: so liest Flo sie
+      # genau wie unter systemd (python-dotenv), und die Aerzte finden sie auch.
+      # Nach dem Bearbeiten:  k r  (die Werte gelten ab dem Start).
+      - type: bind
+        source: ../.env
+        target: /opt/flobot/.env
+        bind:
+          create_host_path: false
+      # Eigene Sounds und Join-Sounds.
+      - type: bind
+        source: ../sounds
+        target: /opt/flobot/sounds
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

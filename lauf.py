@@ -34,6 +34,8 @@ import traceback
 # Ohne das schreibt ein Testlauf in die ECHTEN Daten (siehe den ausfuehrlichen
 # Kommentar im Kopf von testhilfe.py).
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="flobot-lauf-"))
+# Und nie die echte .env (siehe testhilfe.py).
+os.environ["FLO_TESTLAUF"] = "1"
 
 # Die Testdateien, die es gibt. Neue kommen hier dazu - ein Test haelt die
 # Liste gegen den Ordner, damit keine vergessen wird.

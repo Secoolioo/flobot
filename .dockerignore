@@ -1,0 +1,20 @@
+# Was NIE ins Image darf: Geheimnisse und Laufzeitdaten. data/ und .env werden
+# beim Start vom Host eingehaengt (docker/compose.yaml) - im Image haetten sie
+# nichts verloren, und jeder, der das Image bekommt, haette Token und Konten.
+.env
+.env.*
+data/
+backups/
+venv/
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+diagnose.txt
+# YouTube-Cookies sind eine Anmeldung bei Google.
+cookies.txt
+youtube.txt
+youtube_cookies.txt

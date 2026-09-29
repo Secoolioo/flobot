@@ -26,6 +26,10 @@ import tempfile
 import time
 from types import SimpleNamespace
 
+# Tests duerfen nie die echte .env ziehen (bot.py laedt sie sonst VOR den
+# Modulen - auf dem Server stuenden dann dessen Werte in jedem Test).
+os.environ["FLO_TESTLAUF"] = "1"
+
 import store                                    # noqa: E402
 
 

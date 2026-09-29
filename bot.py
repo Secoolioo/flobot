@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import re
+import signal
 import sys
 import time
 from datetime import datetime, time as dtime, timedelta, timezone
@@ -22,6 +23,20 @@ from zoneinfo import ZoneInfo
 import discord
 from discord.ext import tasks
 from dotenv import load_dotenv
+
+# Die .env MUSS vor den Feature-Modulen geladen werden. Stand sie wie frueher
+# erst hinter allen Importen, lasen alle Module, die eine Einstellung schon beim
+# Import holen, die .env nie: unter systemd (ohne EnvironmentFile) blieb u. a.
+# GUILD_ID fuer die Server-Einstellungen 0 - Server-Icon und $FLO-Aktie waren
+# auf dem Hauptserver deshalb von Haus aus AUS, obwohl die Einstellungen selbst
+# "auf dem Hauptserver an" versprechen. In Docker (Werte als echte Umgebung)
+# waeren dieselben Werte dagegen wirksam gewesen - zwei Betriebsarten, zwei
+# verschiedene Flos. Jetzt verhalten sich beide gleich.
+#
+# FLO_TESTLAUF=1 (setzt testhilfe/lauf.py): Tests auf dem Server duerfen nicht
+# die echte .env ziehen.
+if os.getenv("FLO_TESTLAUF", "") != "1":
+    load_dotenv()
 
 import admin
 import ai
@@ -70,14 +85,69 @@ import words
 if __name__ == "__main__":
     sys.modules.setdefault("bot", sys.modules[__name__])
 
-load_dotenv()
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("dcbot")
+
+# Laeuft Flo in Docker? (docker/Dockerfile setzt FLO_LAUFZEIT=docker)
+IN_DOCKER = (os.getenv("FLO_LAUFZEIT", "").strip().lower() == "docker"
+             or Path("/.dockerenv").exists())
+# Dauerbetrieb = der echte Bot (nicht --once/--check, nicht importiert von
+# Tests oder Werkzeugen). Nur dann gelten die Startwachen unten.
+_DAUERBETRIEB = __name__ == "__main__" and not ({"--once", "--check"} & set(sys.argv[1:]))
+
+
+def _startwachen():
+    """Drei Pruefungen, BEVOR irgendein Modul seine Daten laedt.
+
+    1. discord.py muss neu genug sein. Seit dem 01.03.2026 laesst Discord nur
+       noch Ende-zu-Ende-verschluesselte Voice-Verbindungen zu (DAVE) - das
+       kann discord.py erst ab 2.7 (mit dem Paket 'davey'). Die neuen Panels
+       brauchen 2.7.1. Ein altes venv soll klar sagen, was fehlt, statt mit
+       einem ImportError irgendwo in der Mitte umzufallen.
+    2. Der Datenordner muss der richtige sein. Seit die .env VOR den Modulen
+       geladen wird, wirkt ein DATA_DIR aus der .env zum ersten Mal wirklich.
+       Zeigt es auf einen leeren Ordner, waehrend neben bot.py die echten Daten
+       liegen, wuerde Flo mit leeren Konten starten - also lieber gar nicht.
+    3. Nur EIN Flo gleichzeitig (systemd UND Docker waeren zwei) - siehe
+       store.einzelbetrieb_sichern.
+    Ein Fehler beendet den Prozess nach einer Minute Wartezeit - so kreist ein
+    Neustart-Automat (systemd, Docker) nicht im Sekundentakt."""
+    import store
+    if discord.version_info < (2, 7, 1):
+        _abbruch(f"discord.py {discord.__version__} ist zu alt (gebraucht: 2.7.1 fuer "
+                 "Voice/DAVE und die neuen Panels). Auf dem Server einmal:  "
+                 "venv/bin/pip install -r requirements.txt")
+    eigen = Path(__file__).resolve().parent / "data"
+    ziel = Path(store.DATA_DIR)
+    try:
+        anders = ziel.resolve() != eigen.resolve()
+    except OSError:
+        anders = False
+    if anders and any(eigen.glob("*.json")) and not (ziel.is_dir() and any(ziel.glob("*.json"))):
+        _abbruch(f"DATA_DIR zeigt auf {ziel} - dort liegen keine Daten, in {eigen} "
+                 f"aber schon. Mit dem falschen Ordner startet Flo mit leeren Konten. "
+                 f"DATA_DIR aus der .env nehmen oder die Daten dorthin kopieren.")
+    frei, wer = store.einzelbetrieb_sichern()
+    if not frei:
+        _abbruch(f"Flo laeuft schon ({wer}) - zweimal gleichzeitig gaebe doppelte "
+                 f"Antworten und verlorene Daten. Erst den anderen stoppen "
+                 f"(systemctl stop flobot bzw. docker compose -f docker/compose.yaml down).",
+                 code=0)
+    log.info("Datenordner: %s (Sperre gehalten)%s", ziel, " [Docker]" if IN_DOCKER else "")
+
+
+def _abbruch(text, code=1):
+    log.error("Start abgebrochen: %s", text)
+    time.sleep(float(os.getenv("FLO_ABBRUCH_WARTEN", "60") or "60"))
+    sys.exit(code)
+
+
+if _DAUERBETRIEB:
+    _startwachen()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 APPLICATION_ID = os.getenv("APPLICATION_ID", "")
@@ -297,19 +367,25 @@ elif "--check" in sys.argv:
 else:
     MODE = "loop"
 
-# 10 kurze Weisheiten, die rotierend im Bot-Status erscheinen.
+# Die Sprueche im Bot-Status. Vorher standen hier sanfte Kalenderweisheiten
+# ("Geduld ist auch eine Stärke") - das Gegenteil der Figur, die im Chat alle
+# zerlegt. Der Name WEISHEITEN bleibt, nur der Inhalt passt jetzt zu Flo.
 WEISHEITEN = [
-    "Wer fällt, lernt aufzustehen.",
-    "Kleine Schritte führen weit.",
-    "Geduld ist auch eine Stärke.",
-    "Mut beginnt mit einem Atemzug.",
-    "Wissen wächst, wenn man es teilt.",
-    "Ruhe ist die Kraft der Klugen.",
-    "Wer zuhört, versteht mehr.",
-    "Aus Fehlern werden Wege.",
-    "Jeder Tag ist ein neuer Anfang.",
-    "Heute ist der jüngste Tag deines Lebens.",
+    "Hör auf zu starren und schreib endlich was.",
+    "Einziger Bot hier, der was taugt.",
+    "Frag mich was – aber was Gescheites.",
+    "Heute schon wen beleidigt? Ich schon.",
+    "Euer Server ist nur wegen mir erträglich.",
+    "Die Antwort ist nein. Egal was du fragst.",
+    "Ich les alles mit. Leider.",
+    "Andere Bots sind nur Beilage.",
+    "Wer mich pingt, kriegt eine gedrückt.",
+    "Level 1 im Leben, Level 99 im Labern.",
 ]
+# Wie oft der Status-Spruch wechselt. Vorher alle 10 s = 8.640 Presence-Updates
+# am Tag fuer ein Detail, das kaum einer liest. status_loop laeuft trotzdem
+# weiter im 10-s-Takt - er schreibt nebenbei den Namensverlauf weg.
+STATUS_WECHSEL_SEKUNDEN = float(os.getenv("STATUS_WECHSEL_SEKUNDEN", "60") or "60")
 
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
@@ -355,9 +431,32 @@ def _split_message(text, limit = 1900):
     return chunks
 
 
+# Nur der BEFEHL, nicht der Satzanfang. Vorher reichte "^hilfe\b": "Flo hilfe
+# mir mal mit Mathe" bekam das Hilfe-Menue statt einer Antwort. Erlaubt sind
+# Fuellwoerter und Satzzeichen - und eine Kategorie dahinter ("hilfe musik"),
+# die zeigt dann direkt diese Seite (siehe _help_category_key).
 _HELP_RE = re.compile(
-    r"^(hilfe|help|befehle|commands?|men[uü]|was kannst du)\b", re.IGNORECASE
-)
+    r"^(?:(?:hilfe|help|befehle|commands?|men[uü])(?:\s+(?:bitte|pls|please|mal|flo|nochmal))*"
+    r"|was kannst du(?:\s+(?:alles|so|eigentlich|ueberhaupt|überhaupt))*)\s*[?.!]*$",
+    re.IGNORECASE)
+
+
+def _korrigiert(content, norm):
+    """Setzt die Tippfehler-Korrektur in den ORIGINALtext - nur das erste
+    Befehlswort wird getauscht.
+
+    Vorher wurde der Text aus 'Botname + korrigierter Rest' neu gebaut. Der
+    Rest kam aber aus strip_lead, und das entfernt ALLE Erwaehnungen: nach
+    "Flo zahlen @Bob 100" (-> 'zahle') stand kein @Bob mehr im Text, und jedes
+    Modul, das sein Ziel ueber basis.erstes_ziel sucht, fand niemanden."""
+    rest = ai.strip_lead(content).split()
+    neu = (norm or "").split()
+    if not rest or not neu:
+        return f"{ai.bot_name()} {norm}"
+    treffer = re.search(rf"(?<![\w@]){re.escape(rest[0])}(?!\w)", content)
+    if treffer is None:
+        return f"{ai.bot_name()} {norm}"
+    return content[:treffer.start()] + neu[0] + content[treffer.end():]
 
 
 def _is_help(content):
@@ -379,14 +478,19 @@ _HELP_CATEGORY_ALIASES = {
 
 def _help_category_key(content):
     """Kategorie-Schluessel, wenn die Nachricht NUR aus einem Kategorie-Wort
-    besteht ('Flo moderation?'), sonst None."""
+    besteht ('Flo moderation?') - auch mit 'hilfe' davor ('Flo hilfe musik').
+    Sonst None."""
     word = ai.strip_lead(content).lower().strip(" ?!.,")
+    word = re.sub(r"^(?:hilfe|help)\s+", "", word)
     return _HELP_CATEGORY_ALIASES.get(word)
 
 
 # --- Neustart (nur Bot-Besitzer) -----------------------------------------
+# Nur der nackte Befehl: "Flo neustart von windows ist nervig" ist Gerede und
+# bekam bisher die Neustart-Abfrage (bzw. "Nur mein Besitzer darf ...").
 _RESTART_RE = re.compile(
-    r"^(?:restart|reboot|neustart\w*|neu\s*starten?|neue?\s*starten?|starte?\s+neu)\b",
+    r"^(?:restart|reboot|neustart\w*|neu\s*starten?|neue?\s*starten?|starte?\s+neu)"
+    r"(?:\s+(?:bitte|pls|mal|jetzt|dich|flo))*\s*[?.!]*$",
     re.IGNORECASE,
 )
 
@@ -489,7 +593,7 @@ _HELP_DATA = {
         ("flo steal @wer", "Coin-Raub: 🥷 klau Coins (Cooldown, Risiko!)"),
         ("flo händler", "🛒 fahrender Händler: exklusive Titel kaufen & tauschen"),
         ("flo lotto · lotto kauf 5", "🎰 Monats-Jackpot in Millionen - Lose kaufen"),
-        ("flo aktie · kauf 10 · verkauf alles", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
+        ("flo aktie · aktie kauf 10 · aktie verkauf alles", "📈 FloCorp-Aktie ($FLO) handeln + Voice-Dividende"),
         ("flo aktienkurs · aktie top", "📊 Kursverlauf als Chart (1 Tag/7 Tage/…) & Aktionäre"),
         ("flo giveaway", "🎉 eigene Coins verlosen - Flo fragt Einsatz, Grund & Dauer ab"),
     ]),
@@ -635,6 +739,38 @@ def invite_url():
     )
 
 
+#: Datei, deren Alter der Docker-HEALTHCHECK prueft. Bewusst NICHT im
+#: Datenordner: der ist vom Host eingehaengt und soll nur Daten enthalten.
+HERZSCHLAG_DATEI = Path(os.getenv("FLO_HERZSCHLAG", "/tmp/flo-herzschlag"))
+
+
+def _herzschlag(client):
+    """Schreibt die Uhrzeit - aber nur, wenn Flo WIRKLICH verbunden ist. Ein
+    Prozess, der laeuft, aber seit Minuten keine Verbindung zu Discord hat,
+    soll im Healthcheck als krank auffallen."""
+    try:
+        latenz = client.latency
+        if client.is_closed() or not client.is_ready() or latenz != latenz \
+                or latenz == float("inf"):
+            return
+        HERZSCHLAG_DATEI.write_text(f"{time.time():.0f}\n", encoding="utf-8")
+    except Exception:  # noqa: BLE001 - Deko, darf nie den Status-Takt stoeren
+        pass
+
+
+def _task_fehler_melden(task):
+    """Ein nebenher gestarteter Task ist mit einer Ausnahme geendet - sofort ins
+    Log, mit dem Namen der Aufgabe. Sonst meldet asyncio das erst, wenn der
+    Task eingesammelt wird, und dann ohne Hinweis, wer ihn gestartet hat."""
+    if task.cancelled():
+        return
+    fehler = task.exception()
+    if fehler is not None:
+        log.error("Hintergrund-Aufgabe %s ist gescheitert: %s: %s",
+                  task.get_coro().__qualname__ if task.get_coro() else "?",
+                  type(fehler).__name__, fehler, exc_info=fehler)
+
+
 def _rolle_erwaehnt(message, content):
     """Wurde Flos eigene Bot-Rolle erwaehnt statt Flo selbst?
 
@@ -719,6 +855,8 @@ class FloBot(discord.Client):
         # editiert wird (Discord limitiert Server-Aenderungen).
         self._current_filename = {}
         self._weisheit_index = 0
+        # monotonic des letzten Status-Wechsels (-inf: gleich beim ersten Takt).
+        self._status_gewechselt = float("-inf")
         # Zwischenspeicher der gerenderten Hilfe-Karten (PNG je Kategorie).
         self._help_png_cache = {}
         # Schutz aktiver Spiele vorm Auto-Loeschen (siehe PROTECT_RELEASE_GRACE oben).
@@ -744,10 +882,39 @@ class FloBot(discord.Client):
         # und loeschen sie gebuendelt (Bulk-Delete: bis 100 Nachrichten = 1 API-Call).
         self._pending_deletes = {}
 
+    async def setup_hook(self):
+        """Laeuft genau EINMAL pro Prozess, nach dem Login und vor der
+        Gateway-Verbindung - anders als on_ready, das bei jedem Reconnect
+        wieder feuert.
+
+        Hier melden sich die Knoepfe an, die einen Neustart ueberleben: ein
+        DynamicItem erkennt man an seiner custom_id, egal welche Nachricht es
+        traegt. Vorher waren die Panels von Lotto, Aktie und Haendler nach jedem
+        Neustart tot ("Diese Interaktion ist fehlgeschlagen")."""
+        for modul in (lotto, floaktie, merchant, music, voicegags):
+            knoepfe = getattr(modul, "DYNAMISCHE_KNOEPFE", ()) or ()
+            if knoepfe:
+                self.add_dynamic_items(*knoepfe)
+                log.info("Dauerhafte Knoepfe angemeldet: %s (%d).",
+                         modul.__name__, len(knoepfe))
+        # SIGTERM (systemctl stop/restart, docker stop) und SIGINT (Strg+C):
+        # erst sichern, dann sauber abmelden. Vorher beendete SIGTERM Python
+        # sofort - bis zu 60 s Wortzaehler, 3 s Schulden/Handel und das
+        # Gedaechtnis waren weg. Und in Docker ist Python PID 1: dort ignoriert
+        # der Kernel ein SIGTERM ohne Handler ganz, docker stop wartete 10 s
+        # und schoss dann mit SIGKILL.
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, lambda s=sig: self._spawn(self._sauber_beenden(s)))
+            except (NotImplementedError, RuntimeError, ValueError):
+                pass        # Windows / nicht im Hauptthread - dann ohne
+
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
+        task.add_done_callback(_task_fehler_melden)
 
     async def _reply_chunks(self, message, text):
         """Schickt eine (ggf. lange) Antwort: erstes Stueck als Antwort, Rest normal.
@@ -794,33 +961,60 @@ class FloBot(discord.Client):
             pass
         await self._restart_bot()
 
+    async def _alles_sichern(self):
+        """Alles, was noch im Speicher wartet, auf die Platte - vor Neustart UND
+        vor dem Beenden (SIGTERM).
+
+        Schulden, Handel und Profil fuehren eigene "geaendert"-Merker und hingen
+        NICHT an store.alle_sichern. Wurde innerhalb ihrer 3 s Sammelzeit neu
+        gestartet, stand die Umbuchung schon in economy.json, der Posten in
+        schulden.json aber noch nicht - der Schuldner zahlte dann doppelt.
+        Deshalb hier ausdruecklich und bedingungslos: einmal zu viel schreiben
+        kostet Millisekunden, einmal zu wenig kostet Coins."""
+        schritte = []
+        if WORDS_ENABLED:
+            schritte.append(("Wort-Zaehler", words.flush_now))
+        if GEHIRN_ENABLED:
+            schritte.append(("Gedaechtnis", gehirn.flush_now))
+        if MUSIC_ENABLED:
+            schritte.append(("Musik-Verlauf", music.verlauf_speichern))
+        if PROFIL_ENABLED:
+            schritte.append(("Namensverlauf", profil.flush))
+        for name, modul in (("Schulden", schulden), ("Handel", handel)):
+            inst = getattr(modul, "instance", None)
+            if inst is None or getattr(inst, "_store", None) is None:
+                continue
+            speichern = getattr(inst, "_save", None) or inst._store.save
+            schritte.append((name, speichern))
+        # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
+        # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
+        schritte.append(("Speicher", store.alle_sichern))
+        for name, schritt in schritte:
+            try:
+                await schritt()
+            except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
+                log.exception("%s: Sichern vor dem Beenden fehlgeschlagen", name)
+
+    async def _sauber_beenden(self, sig=None):
+        """SIGTERM/SIGINT: sichern, abmelden, fertig. Zweimal hintereinander
+        (ungeduldiges Strg+C) laeuft es nur einmal."""
+        if getattr(self, "_beendet_schon", False):
+            return
+        self._beendet_schon = True
+        log.warning("Signal %s - sichere alles und melde mich ab.",
+                    getattr(sig, "name", sig) or "?")
+        await self._alles_sichern()
+        try:
+            await self.close()
+        except Exception:  # noqa: BLE001
+            log.exception("Abmelden beim Beenden fehlgeschlagen")
+
     async def _restart_bot(self):
         """Startet den GANZEN Prozess neu (re-exec) - funktioniert lokal und unter
         systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
         schliessen, damit ffmpeg-Subprozesse nicht verwaisen."""
         await asyncio.sleep(0.4)  # der Interaktions-Antwort Zeit zum Rausgehen geben
-        # Wort-Zaehler speichert debounced - vor dem Neustart einmal hart sichern.
-        if WORDS_ENABLED:
-            try:
-                await words.flush_now()
-            except Exception:
-                log.exception("Wort-Zaehler-Flush vor Neustart fehlgeschlagen")
-        if GEHIRN_ENABLED:
-            try:
-                await gehirn.flush_now()
-            except Exception:
-                log.exception("Gedaechtnis-Flush vor Neustart fehlgeschlagen")
-        if MUSIC_ENABLED:
-            try:
-                await music.verlauf_speichern()
-            except Exception:
-                log.exception("Musik-Verlauf-Flush vor Neustart fehlgeschlagen")
-        # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
-        # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
-        try:
-            await store.alle_sichern()
-        except Exception:
-            log.exception("Sichern der Speicher vor Neustart fehlgeschlagen")
+        await self._alles_sichern()
         try:
             await self.close()
         except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
@@ -1005,17 +1199,22 @@ class FloBot(discord.Client):
 
     @tasks.loop(seconds=STATUS_INTERVAL_SECONDS)
     async def status_loop(self):
-        """Wechselt alle paar Sekunden den Status-Text (Bot bleibt 'idle')."""
-        weisheit = WEISHEITEN[self._weisheit_index % len(WEISHEITEN)]
-        self._weisheit_index += 1
-        try:
-            await self.change_presence(
-                status=discord.Status.idle,
-                activity=discord.CustomActivity(name=weisheit),
-            )
-            log.debug("Status (idle): %s", weisheit)
-        except Exception as exc:
-            log.error("Status-Update fehlgeschlagen: %s", exc)
+        """Wechselt den Status-Text (Bot bleibt 'idle') - hoechstens alle
+        STATUS_WECHSEL_SEKUNDEN - und schreibt den Namensverlauf weg."""
+        jetzt = time.monotonic()
+        if jetzt - self._status_gewechselt >= STATUS_WECHSEL_SEKUNDEN:
+            self._status_gewechselt = jetzt
+            weisheit = WEISHEITEN[self._weisheit_index % len(WEISHEITEN)]
+            self._weisheit_index += 1
+            try:
+                await self.change_presence(
+                    status=discord.Status.idle,
+                    activity=discord.CustomActivity(name=weisheit),
+                )
+                log.debug("Status (idle): %s", weisheit)
+            except Exception as exc:
+                log.error("Status-Update fehlgeschlagen: %s", exc)
+        _herzschlag(self)
         # Gesammelte Namensaenderungen wegschreiben. BEWUSST hier und nicht im
         # Voice-Takt: der startet nur mit eingeschalteter Wirtschaft, und dann
         # waere der Namensverlauf ohne economy nie auf der Platte gelandet.
@@ -1614,7 +1813,7 @@ class FloBot(discord.Client):
         except Exception:  # noqa: BLE001
             _norm = None
         if _norm is not None:
-            message.content = f"{ai.bot_name()} {_norm}"
+            message.content = _korrigiert(content, _norm)
 
         antwort = None
         if ADMIN_ENABLED:
@@ -1813,7 +2012,7 @@ class FloBot(discord.Client):
         except Exception:  # noqa: BLE001
             _norm = None
         if _norm is not None:
-            message.content = f"{ai.bot_name()} {_norm}"
+            message.content = _korrigiert(content, _norm)
 
         # Befehls-Handler der Reihe nach durchgehen. Jeder gibt entweder eine Antwort
         # (Text ODER Embed = Befehl erkannt, fertig) oder None (= naechster ist dran).
@@ -2031,7 +2230,15 @@ class FloBot(discord.Client):
     async def _begruessen(self, guild):
         """Eine DM an den Server-Besitzer mit dem Noetigsten. Wirft nie."""
         name = ai.bot_name(guild.id)
+        # guild.owner ist ein Cache-Nachschlagen - und ohne members-Intent ist
+        # der Besitzer beim Beitritt praktisch nie im Cache. Die Begruessung kam
+        # deshalb nie an. Notfalls also nachfragen.
         besitzer = getattr(guild, "owner", None)
+        if besitzer is None and getattr(guild, "owner_id", None):
+            try:
+                besitzer = await self.fetch_user(guild.owner_id)
+            except Exception:  # noqa: BLE001 - dann eben keine Begruessung
+                besitzer = None
         if besitzer is None:
             return
         try:
@@ -2281,6 +2488,7 @@ def _reexec_self():
 def main():
     if not TOKEN:
         log.error("DISCORD_TOKEN fehlt in der .env-Datei.")
+        time.sleep(float(os.getenv("FLO_FATAL_WARTEN", "300" if IN_DOCKER else "0") or "0"))
         sys.exit(1)
     if not GUILD_ID:
         # KEIN Abbruch mehr: Flo laeuft auf jedem Server, auf den man ihn
@@ -2291,6 +2499,14 @@ def main():
                     "und Aktien-Zaehlung sind dann ueberall aus; einschalten mit "
                     "'%s einstellungen'.", ai.bot_name())
     log.info("Starte Bot im Modus: %s", MODE)
+    # Bis setup_hook den richtigen Handler anmeldet (der vorher alles sichert),
+    # beendet SIGTERM sofort. Noetig, weil Python als PID 1 (Container ohne
+    # init) ein SIGTERM ohne Handler schlicht IGNORIERT - docker stop wartete
+    # dann 10 s und schoss mit SIGKILL. Vor dem Login gibt es nichts zu sichern.
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    except (ValueError, OSError):
+        pass
     try:
         # reconnect=True (Standard): discord.py faengt Verbindungsabbrueche im
         # laufenden Betrieb selbst ab und verbindet sich mit Backoff neu.
@@ -2299,6 +2515,11 @@ def main():
         # Falscher Token / fehlende Intents -> KEIN Auto-Neustart, das muss der
         # Betreiber beheben (sonst Endlosschleife).
         log.exception("Fataler Konfigurationsfehler - bitte Token/Intents pruefen.")
+        # Docker startet einen beendeten Container nach spaetestens einer
+        # Minute neu - mit einem kaputten Token waeren das ~60 Logins pro Stunde,
+        # und genau dafuer sperrt Discord Tokens. systemd hat dafuer seine
+        # wachsenden Pausen (flobot.service), Docker nicht - also hier warten.
+        time.sleep(float(os.getenv("FLO_FATAL_WARTEN", "300" if IN_DOCKER else "0") or "0"))
         sys.exit(1)
     except (OSError, discord.GatewayNotFound, discord.ConnectionClosed,
             discord.HTTPException) as exc:
