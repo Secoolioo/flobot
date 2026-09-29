@@ -2016,6 +2016,81 @@ def test_giveaway_schnellstart_und_assistent():
 
 
 
+def test_giveaway_gw_heisst_meistens_glueckwunsch():
+    """Owner-Bug: 'gw' ist im Chat "Glueckwunsch". 'Flo gw zum Geburtstag'
+    startete den Giveaway-Assistenten, und der schluckte danach jede weitere
+    Nachricht dieses Nutzers im Kanal. 'gw' gilt jetzt nur allein oder mit
+    einem Einsatz dahinter - sonst None, und die KI gratuliert mit."""
+    import cmdnorm
+    import giveaway
+    assert "gw" in giveaway._CMDS and "gw" in cmdnorm.KNOWN
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        for satz in ("Flo gw zum Geburtstag", "Flo gw bro", "Flo gw, du Sack",
+                     "Flo gw zur Beförderung!", "Flo gw euch allen",
+                     "Flo gw jetzt hast du es geschafft", "Flo gw abbrechen"):
+            gw._wizards = {}
+            antwort = asyncio.run(gw.handle(_giveaway_msg(host=1, text=satz)))
+            assert antwort is None, f"{satz!r} startet ein Giveaway: {antwort!r}"
+            assert not gw._wizards, f"{satz!r} hat einen Assistenten geoeffnet"
+        for befehl in ("Flo gw", "Flo gw 5k 2h", "Flo gw 5000", "Flo gw alles",
+                       "Flo giveaway zum Geburtstag"):
+            gw._wizards = {}
+            antwort = asyncio.run(gw.handle(_giveaway_msg(host=1, text=befehl)))
+            assert antwort is not None and gw._wizards, befehl
+    finally:
+        restore()
+
+
+def test_giveaway_assistent_gibt_auf_und_laesst_flo_durch():
+    """Der Assistent hat jede Nachricht des Nutzers im Kanal geschluckt und bei
+    jeder unbrauchbaren Antwort seine Frist verlaengert - wer weiterchattete,
+    wurde ihn nie los. Jetzt: Fehlversuche verlaengern nichts, nach dem dritten
+    auf dieselbe Frage ist er weg. Und was an Flo geht (Name, Alias, @Flo),
+    ist keine Antwort an den Assistenten."""
+    import giveaway
+    restore, gw = _giveaway_setup({1: 100_000})
+    try:
+        msg = _giveaway_msg(host=1)
+        asyncio.run(gw.start_wizard(msg))
+        key = (msg.channel.id, 1)
+        w = gw._wizards[key]
+        frist = w["deadline"] = time.time() + 5     # fest, damit man sie sieht
+
+        # An Flo gerichtet: nicht geschluckt, der Assistent bleibt.
+        bot_msg = _giveaway_msg(host=1, text="<@4242> was geht")
+        bot_msg.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=4242))
+        for m in (_giveaway_msg(host=1, text="Flo wie gehts"),
+                  _giveaway_msg(host=1, text="Florian, was weisst du ueber Rom?"),
+                  _giveaway_msg(host=1, text="flo: 5k"),
+                  bot_msg):
+            assert asyncio.run(gw.on_message_passive(m)) is False, m.content
+        assert key in gw._wizards
+
+        # Unbrauchbar: wird geschluckt, verlaengert aber nichts.
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="lol")))
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="hä")))
+        assert gw._wizards[key]["deadline"] == frist, "Fehlversuch verlaengert die Frist"
+        vorher = len(msg.channel.sent)
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="egal")))
+        assert key not in gw._wizards, "nach 3 Fehlversuchen laeuft er immer noch"
+        assert "Assistent ist aus" in (msg.channel.sent[vorher]["content"] or "")
+        assert economy.get_coins(1) == 100_000 and not gw._active()
+        # Danach wird wieder nichts mehr geschluckt.
+        assert asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="5k"))) is False
+
+        # Eine brauchbare Antwort setzt die Fehlversuche fuer die naechste Frage zurueck.
+        asyncio.run(gw.start_wizard(msg))
+        w = gw._wizards[key]
+        asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="lol")))
+        asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="lol")))
+        asyncio.run(gw.on_message_passive(_giveaway_msg(host=1, text="5k")))
+        assert w["step"] == "reason" and w["fehler"] == 0
+        assert giveaway.MAX_FEHLVERSUCHE == 3
+    finally:
+        restore()
+
+
 def test_admin_meldet_das_echte_delta():
     """'Flo nimm @wer 1000' meldete den gewuenschten Betrag, auch wenn gar nicht
     so viel da war - add_coins klemmt bei 0 ab.

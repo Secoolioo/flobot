@@ -34,6 +34,7 @@ import time
 import discord
 
 import ai
+import basis
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -73,9 +74,22 @@ _HEIKEL = (
                r"personalausweis|geburtstag am)\b)", re.I),
 )
 
-_CMD_ZEIGEN = ("gedaechtnis", "gedächtnis", "erinnerung", "was weisst du",
-               "was weißt du")
-_CMD_VERGESSEN = ("vergiss", "vergessen")
+# Befehle NUR in genau diesen Formen - alles andere ist ein Satz an Flo und
+# gehoert der KI. Frueher reichte ein startswith auf 'was weisst du' bzw. das
+# erste Wort 'vergiss', und das ging im Betrieb dreimal schief:
+#   'Flo was weisst du ueber Napoleon?'  -> Embed "Was ich ueber dich weiss"
+#   'Flo vergiss es, du Opfer'           -> das GANZE Gedaechtnis des Autors weg
+#   (Antwort mit Ping) 'Flo vergiss das' -> das Gedaechtnis eines Fremden weg
+# Deshalb Vollabgleich: zeigen nur 'gedaechtnis'/'erinnerung(en)' und
+# 'was weisst du (ueber mich)'; vergessen nur 'vergiss', 'vergiss mich' und
+# 'vergiss @wer' (die Erwaehnung hat strip_lead schon aus dem Text geholt).
+_ZEIGEN_RE = re.compile(
+    r"(?:(?:dein|mein)\s+)?(?:gedaechtnis|gedächtnis|erinnerungen?)"
+    r"|was\s+wei(?:ss|ß)t\s+du(?:\s+(?:ueber|über|von)\s+(?:mich|mir))?")
+_VERGESSEN_RE = re.compile(r"vergiss(?P<mich>\s+mich)?")
+
+# So lange wartet die Rueckfrage vor dem Loeschen auf den Knopf.
+BESTAETIGEN_TIMEOUT = 60
 
 _EXTRAKT_SYSTEM = (
     "Du ziehst aus einem Discord-Chat DAUERHAFTE Fakten ueber die Leute heraus. "
@@ -364,20 +378,23 @@ class Gehirn(FeatureBasis):
 
     # --- Befehle ------------------------------------------------------------
     async def handle(self, message):
-        """'Flo gedaechtnis' und 'Flo vergiss mich'. None | Text | Embed."""
+        """'Flo gedaechtnis' und 'Flo vergiss mich'. None | Text | Embed | HANDLED.
+
+        Nur eindeutige Befehle (siehe _ZEIGEN_RE/_VERGESSEN_RE) - alles andere
+        gibt None, damit die KI den Satz beantwortet."""
         if not self.is_enabled():
             return None
         gid = getattr(getattr(message, "guild", None), "id", 0)
         if not gid:
             return None
-        text = ai.strip_lead(getattr(message, "content", "") or "").strip().lower()
+        text = ai.strip_lead(getattr(message, "content", "") or "").lower()
+        text = re.sub(r"\s+", " ", text).strip(" .,!?")
         if not text:
             return None
-        erstes = text.split()[0].strip(".,!?")
-        if erstes in _CMD_VERGESSEN:
-            return self._vergessen(message, gid, text)
-        # 'was weisst du ueber mich' ist mehrteilig - deshalb startswith.
-        if erstes in _CMD_ZEIGEN or any(text.startswith(w) for w in _CMD_ZEIGEN):
+        treffer = _VERGESSEN_RE.fullmatch(text)
+        if treffer:
+            return await self._vergessen(message, gid, bool(treffer.group("mich")))
+        if _ZEIGEN_RE.fullmatch(text):
             return self._zeigen(message, gid)
         return None
 
@@ -397,11 +414,18 @@ class Gehirn(FeatureBasis):
         emb.set_footer(text=f"{self._bot_name} vergiss mich · loescht alles davon")
         return emb
 
-    def _vergessen(self, message, gid, text):
+    async def _vergessen(self, message, gid, nur_mich):
+        """Loeschen - aber erst nach einem Klick auf den Knopf.
+
+        Ziel ist eine GETIPPTE Erwaehnung (basis.erstes_ziel), nie der rohe
+        message.mentions: der enthaelt bei einer Antwort-mit-Ping den Autor der
+        beantworteten Nachricht, und 'Flo vergiss' als Antwort auf Bob haette
+        Bobs Gedaechtnis geloescht. Und weil ein Loeschen nicht rueckgaengig zu
+        machen ist, fragt Flo nach, sobald wirklich etwas weg waere."""
         ziel = message.author
-        fremd = [m for m in (getattr(message, "mentions", None) or [])
-                 if not getattr(m, "bot", False)]
-        if fremd and fremd[0].id != message.author.id:
+        fremd = None if nur_mich else basis.erstes_ziel(
+            message, ohne=[message.author.id])
+        if fremd is not None:
             # Fremde Erinnerungen loescht nur, wer den Server verwaltet.
             rechte = getattr(getattr(message.author, "guild_permissions", None),
                              "manage_guild", False)
@@ -409,13 +433,86 @@ class Gehirn(FeatureBasis):
                 return ("Fremde Erinnerungen loescht hier nur die "
                         "Server-Verwaltung. Dein eigenes Zeug schon: "
                         f"`{self._bot_name} vergiss mich`.")
-            ziel = fremd[0]
-        weg = self.vergiss(gid, ziel.id)
+            ziel = fremd
         wen = "dich" if ziel.id == message.author.id else f"**{ziel.display_name}**"
-        if not weg:
+        fakten = self.weiss_ueber(gid, ziel.id)
+        if not fakten:
+            # Nichts, was verloren gehen koennte - den Puffer raeumen schadet
+            # niemandem, dafuer braucht es keine Rueckfrage.
+            self.vergiss(gid, ziel.id)
             return f"Ueber {wen} weiss ich sowieso nichts."
+        view = VergessenView(gid, message.author.id, ziel.id, wen)
+        gesendet = await basis.antworte(
+            message,
+            f"Ich weiss {len(fakten)} Sache(n) ueber {wen}. Echt alles loeschen? "
+            f"Ueberleg's dir, du hast {BESTAETIGEN_TIMEOUT} Sekunden.",
+            view=view)
+        if gesendet is None:
+            # Nachricht kam nicht an - dann gibt es auch keinen Knopf, und ein
+            # "HANDLED" waere Schweigen. Die View haengt an nichts: weg damit.
+            view.stop()
+            return None
+        view.message = gesendet
+        self.schuetzen(gesendet)
+        return basis.HANDLED
+
+    def _vergessen_text(self, weg, wen):
+        if not weg:
+            return f"Ueber {wen} weiss ich sowieso nichts mehr."
         return (f"Vergessen. {weg} Sache(n) ueber {wen} sind weg – "
                 f"und der Puffer gleich mit.")
+
+
+class VergessenView(discord.ui.View):
+    """Die Rueckfrage vor dem Loeschen. Klicken darf nur, wer gefragt hat.
+
+    Keine DynamicItems drin - stop() ist hier also gefahrlos. Nach einem
+    Neustart ist der Knopf tot, das ist Absicht: 60 Sekunden ueberlebt eine
+    Rueckfrage, keinen Neustart."""
+
+    def __init__(self, gid, wer_fragt, ziel_id, wen):
+        super().__init__(timeout=BESTAETIGEN_TIMEOUT)
+        self.gid = gid
+        self.wer_fragt = int(wer_fragt)
+        self.ziel_id = int(ziel_id)
+        self.wen = wen
+        self.message = None
+
+    async def interaction_check(self, interaction):
+        if getattr(interaction.user, "id", None) == self.wer_fragt:
+            return True
+        await interaction.response.send_message(
+            "Finger weg, das ist nicht dein Knopf, du Lauch.", ephemeral=True)
+        return False
+
+    async def _fertig(self, interaction, text):
+        self.stop()
+        try:
+            await interaction.response.edit_message(content=text, view=None)
+        except discord.HTTPException:
+            # Geloescht ist trotzdem (bzw. bleibt trotzdem) - nur die Anzeige fehlt.
+            log.warning("Gedaechtnis: Rueckfrage liess sich nicht aktualisieren.")
+        instance.freigeben(self.message)
+
+    @discord.ui.button(label="Ja, weg damit", emoji="🧹",
+                       style=discord.ButtonStyle.danger)
+    async def _ja(self, interaction, _knopf):
+        weg = instance.vergiss(self.gid, self.ziel_id)
+        await self._fertig(interaction, instance._vergessen_text(weg, self.wen))
+
+    @discord.ui.button(label="Doch nicht", style=discord.ButtonStyle.secondary)
+    async def _nein(self, interaction, _knopf):
+        await self._fertig(interaction, "Dann halt nicht. Alles bleibt drin, Feigling.")
+
+    async def on_timeout(self):
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(
+                content="Zu langsam. Ich behalt alles, Pech gehabt.", view=None)
+        except discord.HTTPException:
+            pass
+        instance.freigeben(self.message)
 
 
 instance = Gehirn()

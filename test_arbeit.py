@@ -85,6 +85,43 @@ def test_cmdnorm_kapert_keine_alltagswoerter():
                  + arbeit._TAGES_CMDS):
         assert wort in cmdnorm.KNOWN, f"{wort!r} fehlt in cmdnorm.KNOWN"
 
+    # --- Alltagsdeutsch auf Befehlen, die etwas TUN (Owner-Bug) -------------
+    # Nachgemessen: 'Flo halte mal die Klappe' machte die Musik aus, 'Flo
+    # komme gleich' holte Flo in den Voice, 'Flo trivial, oder?' startete ein
+    # Quiz, 'Flo isst du gern Pizza?' war ein ROAST, 'Flo spricht er deutsch?'
+    # las im Voice vor, 'Flo stehlen ist verboten' war ein Blackjack-Stand.
+    for wort in ("halte", "komme", "weitere", "weiters", "trivial", "rolle",
+                 "reicht", "reiche", "setzen", "isst", "spricht", "stehlen",
+                 "zahlen", "zahlt", "kauft", "hist", "ratten", "zehen",
+                 "zahlte", "verlieh"):
+        for satz in (wort, f"{wort} 5", f"{wort} mal die klappe"):
+            assert cmdnorm.normalize(satz) is None, (satz, cmdnorm.normalize(satz))
+    for satz in ("halte mal die Klappe", "komme gleich", "weitere Fragen?",
+                 "trivial, oder?", "isst du gern Pizza?", "spricht er deutsch?",
+                 "stehlen ist verboten", "zahlen bitte", "kauft das wer?",
+                 "rolle rückwärts", "reicht jetzt"):
+        assert cmdnorm.normalize(satz) is None, (satz, cmdnorm.normalize(satz))
+
+    # Und fuer die Faelle, die noch keiner gemessen hat: ein Vertipper wird
+    # auf einen Befehl, der etwas TUT, nur korrigiert, wenn der Rest wie
+    # Befehls-Argumente aussieht (nichts, Zahl, Erwaehnung/ID, 'alles').
+    # Mit Fliesstext dahinter ist es ein Satz - die KI antwortet.
+    for satz in ("stopt die musik jetzt", "skpi den mist bitte",
+                 "sprihc mal lauter", "kikc den typen raus", "purg das alles weg"):
+        assert cmdnorm.normalize(satz) is None, (satz, cmdnorm.normalize(satz))
+    for falsch, richtig in (("stopt", "stop"), ("skpi 2", "skip 2"),
+                            ("purg 50", "purge 50"), ("timout 10m", "timeout 10m"),
+                            ("kikc <@777>", "kick <@777>"),
+                            ("zhale <@777> 500", "zahle <@777> 500"),
+                            ("minees alles", "mines alles"),
+                            ("roulete 100 rot", "roulette 100 rot")):
+        assert cmdnorm.normalize(falsch) == richtig, (falsch, cmdnorm.normalize(falsch))
+    # Harmlose Ziele behalten ihre Toleranz auch mit Text dahinter.
+    assert cmdnorm.normalize("woerterr pizza") == "woerter pizza"
+    assert cmdnorm.normalize("lottoo kauf 5") == "lotto kauf 5"
+    # Ein Eintrag in ZUSTAND, den KNOWN nicht kennt, waere tot.
+    assert not (cmdnorm.ZUSTAND - cmdnorm.KNOWN), cmdnorm.ZUSTAND - cmdnorm.KNOWN
+
 
 
 
@@ -921,6 +958,38 @@ def test_arbeit_lohnzettel_und_rangliste_als_karte():
         restore()
 
 
+
+
+def test_arbeit_nimmt_economy_die_bestenliste_nicht_weg():
+    """Owner-Bug (AUDIT.md §4): arbeit steht in der Handler-Kette VOR economy
+    und hat 'Flo top/rangliste/bestenliste/leaderboard' abgefangen - man bekam
+    die Werk-Rangliste statt der XP-Bestenliste. arbeit behaelt nur 'werk' und
+    die Zweiwort-Formen ('arbeit top'); der Rest gibt None fuer economy."""
+    arbeit, restore = _arbeit_frisch({5: 0})
+    wp = arbeit.instance
+    gerufen = []
+    alt = wp._rangliste
+
+    async def rangliste(message):
+        gerufen.append(message.content)
+        return arbeit.HANDLED
+    wp._rangliste = rangliste
+    try:
+        def msg(text):
+            return SimpleNamespace(content=text, guild=SimpleNamespace(id=42),
+                                   author=SimpleNamespace(id=5, display_name="T"),
+                                   channel=SimpleNamespace(id=9), mentions=[])
+        for text in ("Flo top", "Flo rangliste", "Flo bestenliste",
+                     "Flo leaderboard", "Flo top 10"):
+            assert asyncio.run(arbeit.handle(msg(text))) is None, text
+        assert not gerufen, gerufen
+        for text in ("Flo werk", "Flo arbeit top", "Flo work top",
+                     "Flo schicht rangliste", "Flo arbeit leaderboard"):
+            assert asyncio.run(arbeit.handle(msg(text))) is arbeit.HANDLED, text
+        assert len(gerufen) == 5, gerufen
+    finally:
+        wp._rangliste = alt
+        restore()
 
 
 def test_arbeit_karriere_steigt_wirklich_und_faellt_nie_zurueck():

@@ -83,7 +83,7 @@ class Food(FeatureBasis):
         return self._enabled
 
     def _image_of(self, message):
-        for att in message.attachments:
+        for att in (getattr(message, "attachments", None) or []):
             ct = (att.content_type or "").lower()
             if ct.startswith("image/") or att.filename.lower().endswith(self._IMAGE_EXTS):
                 return att
@@ -237,27 +237,58 @@ class Food(FeatureBasis):
         if att is not None:
             await self._respond(message, att)
 
+    async def _bild_der_antwort(self, message):
+        """Das Foto der Nachricht, auf die geantwortet wurde - oder None.
+
+        reference.resolved ist nur gefuellt, wenn Discord die Nachricht
+        mitgeschickt hat; sonst einmal nachladen."""
+        ref = getattr(message, "reference", None)
+        if ref is None:
+            return None
+        ziel = getattr(ref, "resolved", None)
+        if ziel is None and getattr(ref, "message_id", None):
+            try:
+                ziel = await message.channel.fetch_message(ref.message_id)
+            except (discord.HTTPException, AttributeError):
+                ziel = None
+        # Eine geloeschte Nachricht (DeletedReferencedMessage) hat keine Anhaenge.
+        return self._image_of(ziel) if ziel is not None else None
+
     async def handle(self, message):
-        """Expliziter Befehl: 'Flo kalorien' mit Bild (angehaengt oder als Reply)."""
+        """Expliziter Befehl: 'Flo kalorien' mit Bild (angehaengt oder als Reply).
+
+        Frueher gab der Befehl im Kalorien-Channel IMMER HANDLED zurueck, noch
+        bevor er nach einem Bild gesucht hat - 'Flo kalorien von 100 g Reis?'
+        und 'Flo kalorien' als Antwort auf ein Essensfoto verschwanden dort
+        spurlos (Owner-Bug). Jetzt:
+          - Bild an der Nachricht selbst: im Kalorien-Channel analysiert es
+            schon der passive Hook (HANDLED, nicht doppelt), sonst hier.
+          - Bild in der beantworteten Nachricht: hier analysieren - auch im
+            Kalorien-Channel, der passive Hook sieht es nicht.
+          - Kein Bild, aber eine Frage dahinter: None, die KI antwortet.
+          - Kein Bild, nur 'Flo kalorien': der Hinweis."""
         if not self._enabled or message.guild is None:
             return None
-        if not self._CMD_RE.match(ai.strip_lead(message.content or "")):
+        text = ai.strip_lead(message.content or "")
+        treffer = self._CMD_RE.match(text)
+        if not treffer:
             return None
-        # Im Kalorien-Channel analysiert schon der passive Hook jedes Bild -
-        # hier nicht doppelt antworten. Welcher Kanal das ist, sagt der Server.
-        kanal = guildcfg.get(message.guild.id, "kalorien_channel")
-        if kanal and message.channel.id == kanal:
-            return self.HANDLED
         att = self._image_of(message)
-        if att is None and message.reference is not None:
-            ref = message.reference.resolved
-            if isinstance(ref, discord.Message):
-                att = self._image_of(ref)
-        if att is None:
-            return (f"Haeng ein Foto von deinem Essen an (oder antworte auf eins) - "
-                    f"dann sag ich dir Kalorien & Naehrwerte. z. B. `{self._bot_name} kalorien` + Bild.")
-        await self._respond(message, att)
-        return self.HANDLED
+        if att is not None:
+            # Welcher Kanal der Kalorien-Channel ist, sagt der Server.
+            kanal = guildcfg.get(message.guild.id, "kalorien_channel")
+            if kanal and message.channel.id == kanal:
+                return self.HANDLED
+            await self._respond(message, att)
+            return self.HANDLED
+        att = await self._bild_der_antwort(message)
+        if att is not None:
+            await self._respond(message, att)
+            return self.HANDLED
+        if text[treffer.end():].strip(" .,;:!?"):
+            return None
+        return (f"Haeng ein Foto von deinem Essen an (oder antworte auf eins) - "
+                f"dann sag ich dir Kalorien & Naehrwerte. z. B. `{self._bot_name} kalorien` + Bild.")
 
 
 instance = Food()

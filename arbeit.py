@@ -69,7 +69,13 @@ HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 # --- Befehlswoerter ---------------------------------------------------------
 _CMDS = ("work", "arbeit", "arbeiten", "job", "schicht", "malochen")
 _LOHN_CMDS = ("lohnzettel", "lohn", "gehalt", "arbeitszeugnis")
-_TOP_CMDS = ("top", "rangliste", "bestenliste", "leaderboard", "werk")
+# Die Werk-Rangliste. Allein nur 'werk' - 'top', 'rangliste', 'bestenliste'
+# und 'leaderboard' sind die XP-Bestenliste aus economy. arbeit steht in der
+# Handler-Kette VOR economy und hat sie ihr frueher weggeschnappt: 'Flo top'
+# zeigte die Arbeits-Rangliste statt der Level (AUDIT.md §4). Die anderen
+# Woerter gelten hier nur noch hinter einem Arbeitsbefehl ('arbeit top').
+_TOP_CMDS = ("werk",)
+_TOP_ZWEIT = ("top", "rangliste", "bestenliste", "leaderboard", "werk")
 # Spass-Wordle: die Tippfehler, die Leute WIRKLICH machen, gleich mit drin.
 # cmdnorm faengt zwar Vertipper ab, aber nur bei Woertern, die es kennt - und
 # nur einen Fehler. 'wordl' und 'wordel' sind so haeufig, dass sie hier direkt
@@ -998,7 +1004,7 @@ class Arbeit(FeatureBasis):
         zweit = teile[1].lower().strip(".,!?") if len(teile) > 1 else ""
         if zweit in ("liste", "list", "was", "hilfe", "help"):
             return self._schichtliste()
-        if zweit in _TOP_CMDS:
+        if zweit in _TOP_ZWEIT:
             return await self._rangliste(message)
         if zweit in _LOHN_CMDS or zweit in ("bilanz", "statistik", "stats"):
             return await self._lohnzettel(message)

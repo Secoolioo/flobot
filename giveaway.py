@@ -57,6 +57,18 @@ OWNER_ID = int(os.getenv("OWNER_ID", "1040135855710404659") or "0")
 _CMDS = ("giveaway", "giveaways", "gewinnspiel", "gewinnspiele", "verlosung",
          "verlosungen", "verlosen", "raffle", "gw")
 
+# 'gw' heisst im Chat fast immer "Glueckwunsch". 'Flo gw zum Geburtstag' hat
+# den Assistenten gestartet, und der hat danach jede Nachricht dieses Nutzers
+# im Kanal geschluckt. Als Befehl gilt 'gw' deshalb nur allein oder mit einem
+# Einsatz direkt dahinter ('gw 5k 2h').
+_GW_EINSATZ_RE = re.compile(
+    r"(?i)\d[\d.,]*\s*(?:k|m|mio|mrd|b|%)?|alles|all|allin|hälfte|haelfte|max")
+
+# Nach so vielen unbrauchbaren Antworten auf DIESELBE Frage gibt der Assistent
+# auf. Vorher fragte er ewig weiter und schob bei jedem Fehlversuch seine
+# Frist nach hinten - wer einfach weiterchattete, wurde ihn nie los.
+MAX_FEHLVERSUCHE = 3
+
 # --- Grenzen (per .env justierbar) -------------------------------------------
 MIN_STAKE = int(os.getenv("GIVEAWAY_MIN_STAKE", "100") or "100")
 MAX_STAKE = int(os.getenv("GIVEAWAY_MAX_STAKE", "1000000000") or "1000000000")
@@ -551,7 +563,9 @@ class Giveaway(FeatureBasis):
         """Stellt die naechste offene Frage (ueberspringt bereits Bekanntes)."""
         data = w["data"]
         guthaben = economy.get_coins(w["host"])
+        # Neue Frage: neue Frist, neue Fehlversuche (siehe _daneben).
         w["deadline"] = time.time() + WIZARD_TIMEOUT
+        w["fehler"] = 0
         if "stake" not in data:
             w["step"] = "stake"
             await self._send(channel, self._frage_einsatz(guthaben))
@@ -603,8 +617,9 @@ class Giveaway(FeatureBasis):
         text = (message.content or "").strip()
         if not text:
             return False
-        # Der Nutzer ruft einen anderen Flo-Befehl auf -> Assistent nicht im Weg stehen.
-        if re.match(r"(?i)^\s*(flo|hey flo|ok flo)\b", text) and not self.is_cancel(text):
+        # Der Nutzer spricht Flo an -> Assistent nicht im Weg stehen, der Satz
+        # gehoert den Befehlen bzw. der KI.
+        if self._an_flo(message, text) and not self.is_cancel(text):
             return False
         if self.is_cancel(text):
             self._wizards.pop(key, None)
@@ -619,32 +634,68 @@ class Giveaway(FeatureBasis):
                              content="Da ist beim Giveaway-Assistenten etwas schiefgelaufen.")
             return True
 
+    def _an_flo(self, message, text):
+        """Ist die Nachricht an Flo gerichtet statt an den Assistenten?
+
+        Vorher kannte der Assistent nur ein woertliches 'flo' vorne. Auf einem
+        Server mit eigenem Praefix, mit 'Florian' oder mit '@Flo' davor war
+        jede Nachricht eine "Antwort" - und wurde geschluckt. Jetzt derselbe
+        Lead wie ueberall (ai.lead_re) plus eine fuehrende Erwaehnung von Flo
+        selbst oder seiner Bot-Rolle."""
+        guild = getattr(message, "guild", None)
+        try:
+            if ai.lead_re(getattr(guild, "id", 0)).match(text):
+                return True
+        except Exception:  # noqa: BLE001 - lieber durchlassen als abstuerzen
+            log.debug("Lead-Pruefung im Giveaway-Assistenten fehlgeschlagen", exc_info=True)
+        m = re.match(r"\s*<@([!&]?)(\d+)>", text)
+        if not m:
+            return False
+        ziel = int(m.group(2))
+        if m.group(1) == "&":
+            rolle = getattr(guild, "self_role", None)
+            return rolle is not None and getattr(rolle, "id", None) == ziel
+        ich = (getattr(getattr(guild, "me", None), "id", None)
+               or getattr(getattr(self.client, "user", None), "id", None))
+        return ich is not None and int(ich) == ziel
+
+    async def _daneben(self, message, w, hinweis):
+        """Eine Antwort, mit der der Assistent nichts anfangen kann.
+
+        Die Frist wird dabei BEWUSST nicht verlaengert (nur eine brauchbare
+        Antwort tut das, in _naechste_frage), und nach MAX_FEHLVERSUCHE auf
+        dieselbe Frage ist Schluss - sonst schluckt ein vergessener Assistent
+        endlos jede Nachricht dieses Nutzers im Kanal."""
+        w["fehler"] = int(w.get("fehler", 0)) + 1
+        if w["fehler"] >= MAX_FEHLVERSUCHE:
+            self._wizards.pop(self._wizard_key(message), None)
+            await self._send(message.channel, content=(
+                "Dreimal Bahnhof. Assistent ist aus, du Lauch – "
+                f"`{self._bot_name} giveaway`, wenn du weisst, was du willst."))
+            return True
+        await self._send(message.channel, content=hinweis)
+        return True
+
     async def _wizard_step(self, message, w, text):
         data = w["data"]
         guthaben = economy.get_coins(w["host"])
         if w["step"] == "stake":
             betrag, hinweis = self.parse_stake(text, guthaben)
             if betrag is None:
-                await self._send(message.channel, content=(
+                return await self._daneben(message, w, (
                     "Das habe ich nicht als Betrag erkannt. Probier `5000`, `5k`, "
                     "`10.000`, `zwei tausend`, `alles` oder `die hälfte`."))
-                w["deadline"] = time.time() + WIZARD_TIMEOUT
-                return True
             if betrag < MIN_STAKE:
-                await self._send(message.channel, content=(
+                return await self._daneben(message, w, (
                     f"Mindestens **{fmt(MIN_STAKE)}** {economy.COIN} müssen es sein. "
                     "Wie viel soll es sein?"))
-                w["deadline"] = time.time() + WIZARD_TIMEOUT
-                return True
             if betrag > MAX_STAKE:
                 betrag = MAX_STAKE
                 hinweis = f"auf das Maximum von {fmt(MAX_STAKE)} begrenzt"
             if betrag > guthaben:
-                await self._send(message.channel, content=(
+                return await self._daneben(message, w, (
                     f"Du hast nur **{fmt(guthaben)}** {economy.COIN}. "
                     "Nenn einen kleineren Betrag (oder `alles`)."))
-                w["deadline"] = time.time() + WIZARD_TIMEOUT
-                return True
             data["stake"] = int(betrag)
             if hinweis:
                 await self._send(message.channel,
@@ -661,11 +712,9 @@ class Giveaway(FeatureBasis):
         if w["step"] == "seconds":
             secs = self.parse_duration(text)
             if secs is None or secs <= 0:
-                await self._send(message.channel, content=(
+                return await self._daneben(message, w, (
                     "Die Dauer habe ich nicht verstanden. Probier `10min`, `1h`, "
                     "`1h 30m`, `eine halbe stunde`, `2 tage` – oder `kurz`/`mittel`/`lang`."))
-                w["deadline"] = time.time() + WIZARD_TIMEOUT
-                return True
             gedeckelt = ""
             if secs < MIN_SECONDS:
                 secs, gedeckelt = MIN_SECONDS, f"auf {self.dauer_text(MIN_SECONDS)} angehoben"
@@ -682,11 +731,9 @@ class Giveaway(FeatureBasis):
                 await self._send(message.channel, content="Okay, nichts passiert. 👍")
                 return True
             if not self.is_yes(text):
-                await self._send(message.channel, content=(
+                return await self._daneben(message, w, (
                     "Sag `ja` (oder `passt`, `los`, `start`) zum Starten – "
                     "`nein`/`abbrechen` lässt es."))
-                w["deadline"] = time.time() + WIZARD_TIMEOUT
-                return True
             self._wizards.pop(self._wizard_key(message), None)
             await self._starten(message, data)
             return True
@@ -979,6 +1026,9 @@ class Giveaway(FeatureBasis):
         teile = roh.split()
         if not teile or teile[0].lower().strip(".,!?") not in _CMDS:
             return None
+        if (teile[0].lower().strip(".,!?") == "gw" and len(teile) > 1
+                and not _GW_EINSATZ_RE.fullmatch(teile[1].strip(".,!?"))):
+            return None             # 'gw' = Glueckwunsch, siehe _GW_EINSATZ_RE
         rest = " ".join(teile[1:]).strip()
         low = rest.lower()
         # Uebersicht

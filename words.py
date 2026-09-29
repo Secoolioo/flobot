@@ -302,7 +302,7 @@ class Words(FeatureBasis):
         await self._flush_now()
 
     async def _flush_now(self):
-        """Sofort speichern (vor Abfragen), damit die Zahlen frisch sind."""
+        """Sofort speichern - fuer den Neustart (flush_now), nicht fuer Abfragen."""
         if self._store is None or not self._dirty or self._backfill_running:
             return
         self._dirty = False
@@ -466,7 +466,11 @@ class Words(FeatureBasis):
         first = parts[0].lower().strip(".,;:!?")
         if first not in _ALIASES:
             return None
-        await self._flush_now()
+        # KEIN Speichern vor der Abfrage: die Zahlen stehen im Speicher, und
+        # frueher schrieb jede 'Flo woerter pizza'-Frage erst die GANZE
+        # words.json (bis ~50.000 Woerter, dumps haelt dabei die GIL) - nur
+        # damit die Datei frisch ist, die hier gar nicht gelesen wird.
+        # Gespeichert wird weiter gesammelt (_flush_later) und vor dem Neustart.
         args = parts[1:]
         if not args:
             return await self._top_command(message)

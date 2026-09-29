@@ -302,6 +302,62 @@ def test_terraria_erkennt_kein_alltagsdeutsch():
 
 
 
+def test_terraria_kapert_keinen_slang():
+    """Owner-Bug: 'flo du npc, du goblin' ergab zwei schwache Treffer und
+    damit ein Wiki-Embed statt Flos Konter. Jetzt ist 'npc' raus, und zwei
+    schwache Begriffe reichen nur MIT Fragesignal. Eindeutige Begriffe und
+    das Wort 'terraria' tragen weiter allein."""
+    import terraria
+    assert "npc" not in terraria._TERRA_KEYWORDS
+    for slang in ("flo du npc, du goblin", "du goblin, du slime",
+                  "halt die klappe du slime goblin", "du bist so ein npc",
+                  "flo du mana-loser goblin"):
+        assert not terraria.erkennt_frage(slang), slang
+    for echt in ("wo finde ich slime und goblin?",
+                 "wie farm ich goblin und slime",
+                 "welche wings droppt der goblin im snow biome",
+                 "flo terraria du goblin"):
+        assert terraria.erkennt_frage(echt), echt
+
+
+def test_terraria_auto_antwort_schweigt_nicht_bei_sendefehler():
+    """_send meldete HANDLED, auch wenn Discord die Antwort abgelehnt hat -
+    bot.py hielt die Frage fuer beantwortet, und der Nutzer bekam NICHTS.
+    Die Auto-Antwort (beantworte) gibt dann None, damit die KI antwortet."""
+    import discord
+    import terraria
+    t = terraria.instance
+
+    async def titel(_frage):
+        return "Plantera"
+
+    async def seite(_titel, voll=False):
+        return {"titel": "Plantera", "extract": "Ein Boss.", "url": ""}
+
+    async def antwort(_frage, _seite):
+        return discord.Embed(title="Plantera"), None
+
+    async def kaputt(*_a, **_k):
+        raise discord.HTTPException(SimpleNamespace(status=403, reason="x"), "nein")
+
+    async def geht(*_a, **_k):
+        return SimpleNamespace(id=1)
+
+    orig = (t._suche_titel, t._seite_laden, t._build_answer)
+    t._suche_titel, t._seite_laden, t._build_answer = titel, seite, antwort
+    try:
+        msg = SimpleNamespace(content="wo spawnt plantera", reply=kaputt,
+                              channel=SimpleNamespace(send=kaputt),
+                              author=SimpleNamespace(mention="<@1>"))
+        assert asyncio.run(terraria.beantworte(msg, "wo spawnt plantera")) is None
+        msg = SimpleNamespace(content="wo spawnt plantera", reply=geht,
+                              channel=SimpleNamespace(send=geht),
+                              author=SimpleNamespace(mention="<@1>"))
+        assert asyncio.run(terraria.beantworte(msg, "wo spawnt plantera")) is terraria.HANDLED
+    finally:
+        t._suche_titel, t._seite_laden, t._build_answer = orig
+
+
 def test_bildauftrag_braucht_wirklich_einen_auftrag():
     """Ein Bild kostet echtes Geld bei der KI. Nachgemessen loesten SECHS
     voellig normale deutsche Woerter einen Auftrag aus:
@@ -331,6 +387,59 @@ def test_bildauftrag_braucht_wirklich_einen_auftrag():
         assert loest_aus(satz), f"{satz!r} wird nicht mehr erkannt"
 
 
+
+
+def test_food_verschluckt_im_kalorienkanal_nichts():
+    """Owner-Bug: im Kalorien-Channel gab 'Flo kalorien' IMMER HANDLED zurueck,
+    bevor ueberhaupt nach einem Bild gesucht wurde. 'Flo kalorien von 100 g
+    Reis?' und 'Flo kalorien' als Antwort auf ein Essensfoto verschwanden
+    spurlos. HANDLED gibt es dort nur noch, wenn die Nachricht selbst ein Bild
+    hat (das analysiert der passive Hook); ein Bild in der beantworteten
+    Nachricht wird analysiert, und eine Frage ohne Bild bekommt die KI."""
+    import food
+    import guildcfg
+    f = food.instance
+    analysiert = []
+
+    async def respond(message, att):
+        analysiert.append(att.url)
+
+    orig = (f._enabled, f._respond, guildcfg.get)
+    f._enabled, f._respond = True, respond
+    guildcfg.get = lambda gid, key: 555 if key == "kalorien_channel" else None
+    foto = SimpleNamespace(content_type="image/png", filename="essen.png",
+                           url="http://x/essen.png", size=10)
+
+    def msg(text, kanal=555, anhang=(), antwort_auf=None):
+        ref = None
+        if antwort_auf is not None:
+            ref = SimpleNamespace(resolved=antwort_auf, message_id=1)
+        return SimpleNamespace(content=text, guild=SimpleNamespace(id=7),
+                               channel=SimpleNamespace(id=kanal),
+                               attachments=list(anhang), reference=ref)
+    try:
+        # Frage ohne Bild: KI, in UND ausserhalb des Kalorien-Channels.
+        for kanal in (555, 999):
+            for satz in ("Flo kalorien von 100 g Reis?", "Flo kcal in einer Banane",
+                         "Flo nährwerte von Haferflocken?"):
+                assert asyncio.run(food.handle(msg(satz, kanal))) is None, (satz, kanal)
+        # Antwort auf ein Essensfoto im Kalorien-Channel: wird analysiert.
+        essen = SimpleNamespace(attachments=[foto])
+        assert asyncio.run(food.handle(
+            msg("Flo kalorien", antwort_auf=essen))) is food.HANDLED
+        assert analysiert == ["http://x/essen.png"]
+        # Bild an der Nachricht selbst im Kanal: der passive Hook macht das.
+        analysiert.clear()
+        assert asyncio.run(food.handle(msg("Flo kalorien", anhang=[foto]))) is food.HANDLED
+        assert analysiert == [], "doppelt analysiert"
+        # ... ausserhalb des Kanals analysiert der Befehl selbst.
+        assert asyncio.run(food.handle(
+            msg("Flo kalorien", kanal=999, anhang=[foto]))) is food.HANDLED
+        assert analysiert == ["http://x/essen.png"]
+        # Nur 'Flo kalorien' ohne jedes Bild: der Hinweis, keine Stille.
+        assert "Foto" in str(asyncio.run(food.handle(msg("Flo kalorien"))))
+    finally:
+        f._enabled, f._respond, guildcfg.get = orig
 
 
 def test_food_liest_deutsche_tausenderpunkte():

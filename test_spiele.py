@@ -90,6 +90,40 @@ def test_words_migriert_den_alten_topf():
 
 
 
+def test_words_abfrage_schreibt_nicht_die_ganze_datei():
+    """words.handle hat vor JEDER Abfrage die ganze words.json synchron
+    geschrieben (await _flush_now), obwohl die Zahlen im Speicher stehen. Bei
+    einem vollen Index haelt json.dumps dabei die GIL - jede 'Flo woerter'-
+    Frage liess den Bot kurz stehen. Die Abfrage liest nur noch; gespeichert
+    wird gesammelt und vor dem Neustart."""
+    from werkzeug.attrappe import rauch_nachricht
+    w = words.instance
+    alt = (w._store, w._enabled, w._dirty)
+    speicher = []
+
+    async def nicht_speichern():
+        speicher.append(1)
+    alt_save = w._save_store
+    w._store = _FakeStore({"guilds": {}})
+    w._store._lock = asyncio.Lock()      # die Top-Liste friert den Index darueber ein
+    w._enabled = True
+    w._save_store = nicht_speichern
+    try:
+        words._count_text("pizza pizza salat", "111", 77)
+        w._dirty = True
+        for befehl in ("woerter", "wort pizza", "woerter salat"):
+            antwort = asyncio.run(words.handle(rauch_nachricht(befehl)))
+            assert antwort is not None, befehl
+        assert not speicher, "die Abfrage hat die ganze Datei geschrieben"
+        assert w._dirty, "der Speicher-Vermerk ist weg, obwohl nichts gesichert wurde"
+        # Der Neustart-Weg sichert weiterhin.
+        asyncio.run(words.flush_now())
+        assert speicher == [1]
+    finally:
+        w._save_store = alt_save
+        w._store, w._enabled, w._dirty = alt
+
+
 def test_fun_dm_roast():
     """Beleidigung im Chat -> Flo schickt (im Test sicher) eine DM-Retoure; harmlose
     Nachrichten NICHT; Cooldown pro Person greift; Bots werden nicht angeschrieben."""

@@ -162,7 +162,10 @@ class Terraria(FeatureBasis):
         # hell?"). Die Unterwelt findet man ueber "underworld" und "hellstone".
         "ocean", "snow", "desert", "meteorite", "biome",
         # Items / Mechaniken / Erze / Tools
-        "hardmode", "expert mode", "master mode", "calamity", "npc", "pickaxe",
+        # "npc" ist raus: im Chat eine Beleidigung ('du NPC'), keine Frage.
+        # Mit 'goblin' zusammen ergab 'flo du npc, du goblin' zwei Treffer und
+        # damit ein Wiki-Embed statt Flos Konter.
+        "hardmode", "expert mode", "master mode", "calamity", "pickaxe",
         # "boss" ebenfalls raus - im Deutschen die normale Anrede/das Wort fuer
         # den Chef. Die einzelnen Bossnamen oben tragen die Erkennung.
         "hamaxe", "molten", "hellstone", "wing", "grappling hook", "mana",
@@ -186,6 +189,12 @@ class Terraria(FeatureBasis):
         "crimtane", "chlorophyte", "luminite", "zenith", "terra blade", "terrablade",
         "terraprisma", "meowmere", "adamantite", "orichalcum", "hellevator", "hoik",
     }
+
+    # Schwache Begriffe allein sind oft Slang ('du goblin, du slime'). Mit
+    # zwei davon wird nur dann eine Terraria-Frage daraus, wenn der Satz auch
+    # wirklich fragt - nach einem Weg, einem Ort, einem Drop.
+    _FRAGE_RE = re.compile(
+        r"\?|\b(?:wie|wo|was|welche[rsnm]?|bekomm\w*|craft\w*|drop\w*|farm\w*)\b")
 
     # Zufalls-Fakten fuer den Hinweis, wenn jemand nur 'Flo terraria' schreibt.
     _ZUFALLS_TIPPS = (
@@ -297,8 +306,11 @@ class Terraria(FeatureBasis):
         terraria' davorstehen muss (fuer den KI-Fallback in bot.py).
 
         Steht 'terraria' selbst drin -> immer True. Sonst reicht EIN eindeutiger
-        Terraria-Begriff (Boss/Erz/Item) oder ZWEI schwaechere/mehrdeutige. So
-        klingeln Alltagssaetze (Wetter, Essen, Mathe) nicht faelschlich an."""
+        Terraria-Begriff (Boss/Erz/Item) oder ZWEI schwaechere/mehrdeutige PLUS
+        ein Fragesignal ('?', wie, wo, was, welche, bekommen, craften, droppen,
+        farmen). So klingeln Alltagssaetze (Wetter, Essen, Mathe) nicht an -
+        und Slang wie 'flo du goblin, du slime' bekommt Flos Konter statt eines
+        Wiki-Embeds (Owner-Bug)."""
         if not content:
             return False
         text = content.lower()
@@ -320,7 +332,7 @@ class Terraria(FeatureBasis):
                     stark += 1
         if stark >= 1:
             return True
-        return treffer >= 2
+        return treffer >= 2 and bool(self._FRAGE_RE.search(text))
 
     # --- Wiki-Abrufe (alle fehlertolerant -> None) ---------------------------
     async def _api_get(self, params):
@@ -556,17 +568,27 @@ class Terraria(FeatureBasis):
         return emb
 
     # --- oeffentliche Schnittstelle ------------------------------------------
-    async def _send(self, message, emb, view=None):
+    async def _send(self, message, emb, view=None, *, bei_fehler=HANDLED):
         """Sendet ein Embed (+ optional View) als Antwort und gibt HANDLED zurueck.
-        Merkt sich die Nachricht in der View (fuer das Deaktivieren beim Timeout)."""
-        kwargs = {"embed": emb, "mention_author": False}
+        Merkt sich die Nachricht in der View (fuer das Deaktivieren beim Timeout).
+
+        Kam nichts an, gibt es 'bei_fehler' zurueck. Frueher war das IMMER
+        HANDLED - bot.py hielt die Frage damit fuer beantwortet, und der Nutzer
+        bekam gar nichts. Die Auto-Antwort (beantworte) nimmt deshalb None: dann
+        antwortet eben die KI."""
+        kwargs = {"embed": emb}
         if view is not None:
             kwargs["view"] = view
         try:
-            msg = await message.reply(**kwargs)
+            # basis.antworte kommt auch an, wenn die Frage schon geloescht ist.
+            msg = await basis.antworte(message, **kwargs)
         except discord.HTTPException:
-            log.exception("Terraria-Antwort konnte nicht gesendet werden")
-            return self.HANDLED
+            msg = None
+        if msg is None:
+            log.warning("Terraria-Antwort konnte nicht gesendet werden")
+            if view is not None:
+                view.stop()
+            return bei_fehler
         if view is not None:
             view.message = msg
         return self.HANDLED
@@ -589,7 +611,7 @@ class Terraria(FeatureBasis):
         if not seite:
             return None
         emb, view = await self._build_answer(frage, seite)
-        return await self._send(message, emb, view)
+        return await self._send(message, emb, view, bei_fehler=None)
 
     async def handle(self, message):
         """Erkennt die Prefix-Befehle ('terraria'/'terra'/'twiki'/'terrariawiki')

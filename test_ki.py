@@ -1186,6 +1186,131 @@ def test_gehirn_bleibt_auf_seinem_server_und_ist_loeschbar():
 
 
 
+def _gehirn_befehl(uid, text, mentions=(), manage_guild=False):
+    """Nachricht mit Kanal fuer gehirn.handle - Antworten landen in kanal.gesendet."""
+    from werkzeug.attrappe import RauchKanal
+    kanal = RauchKanal()
+    rechte = SimpleNamespace(manage_guild=manage_guild)
+    autor = SimpleNamespace(id=uid, bot=False, display_name="Anna",
+                            mention=f"<@{uid}>", guild_permissions=rechte)
+    return SimpleNamespace(guild=SimpleNamespace(id=77), author=autor,
+                           content=text, mentions=list(mentions), channel=kanal,
+                           reply=kanal.send, reference=None), kanal
+
+
+def test_gehirn_kapert_keine_saetze():
+    """Owner-Bug: 'Flo was weisst du ueber Napoleon?' zeigte "Was ich ueber dich
+    weiss", und 'Flo vergiss es, du Opfer' LOESCHTE das Gedaechtnis des Autors
+    sofort. Befehl ist jetzt nur, was eindeutig einer ist - alles andere gibt
+    None, und die KI beantwortet den Satz."""
+    gehirn, restore = _gehirn_frisch()
+    try:
+        g = gehirn.instance
+        gehirn.Gehirn._merge(g._person(77, 1)["fakten"], "spielt Terraria", 25)
+        harmlos = (
+            "Flo was weißt du über Napoleon?",
+            "Flo was weisst du ueber Katzen",
+            "Flo was weißt du von der Schlacht bei Waterloo",
+            "Flo was weißt du schon, du Bot",
+            "Flo vergiss es, du Opfer",
+            "Flo vergiss das",
+            "Flo vergiss es einfach",
+            "Flo vergiss mich nicht",
+            "Flo vergessen hab ich das auch",
+            "Flo erinnerung an gestern war geil",
+            "Flo gedächtnis wie ein goldfisch hast du",
+        )
+        for satz in harmlos:
+            msg, kanal = _gehirn_befehl(1, satz)
+            antwort = asyncio.run(gehirn.handle(msg))
+            assert antwort is None, f"{satz!r} wird zum Gedaechtnis-Befehl: {antwort!r}"
+            assert not kanal.gesendet, f"{satz!r} schickt selbst etwas"
+        assert gehirn.weiss_ueber(77, 1) == ["spielt Terraria"], (
+            "ein harmloser Satz hat das Gedaechtnis geloescht")
+
+        # Die echten Befehle kommen weiter an.
+        for befehl in ("Flo gedaechtnis", "Flo gedächtnis", "Flo erinnerungen",
+                       "Flo was weißt du über mich?", "Flo was weisst du von mir",
+                       "Flo was weisst du"):
+            msg, _k = _gehirn_befehl(1, befehl)
+            antwort = asyncio.run(gehirn.handle(msg))
+            assert "Terraria" in _embed_text(antwort), befehl
+    finally:
+        restore()
+
+
+def test_gehirn_vergessen_fragt_nach_und_trifft_nie_den_falschen():
+    """Loeschen ist nicht rueckgaengig zu machen. Deshalb:
+
+    (1) Ziel ist nur eine GETIPPTE Erwaehnung. Als Antwort-mit-Ping steht der
+        Autor der beantworteten Nachricht in message.mentions, ohne dass ihn
+        jemand getippt hat - 'Flo vergiss' loeschte dann DESSEN Gedaechtnis.
+    (2) Ist etwas zu verlieren, fragt Flo erst mit einem Knopf, den nur der
+        Fragende druecken darf. Geloescht wird erst beim Klick."""
+    import discord
+    import basis
+    gehirn, restore = _gehirn_frisch()
+    try:
+        g = gehirn.instance
+        gehirn.Gehirn._merge(g._person(77, 1)["fakten"], "spielt Terraria", 25)
+        gehirn.Gehirn._merge(g._person(77, 2)["fakten"], "hasst Montage", 25)
+        bob = SimpleNamespace(id=2, bot=False, display_name="Bob")
+
+        async def ablauf():
+            # Antwort-mit-Ping auf Bob, nichts getippt: trifft Anna selbst.
+            msg, kanal = _gehirn_befehl(1, "Flo vergiss", mentions=[bob])
+            assert await gehirn.handle(msg) is basis.HANDLED
+            (text, _emb, view), = kanal.gesendet
+            assert isinstance(view, gehirn.VergessenView)
+            assert view.ziel_id == 1, "die Antwort-mit-Ping trifft den Fremden"
+            assert view.timeout == 60
+            assert gehirn.weiss_ueber(77, 1), "geloescht, bevor jemand geklickt hat"
+
+            # Nur Anna darf klicken.
+            gesagt = []
+
+            async def sag(inhalt=None, **kw):
+                gesagt.append((inhalt, kw))
+            fremd = SimpleNamespace(user=SimpleNamespace(id=2), response=SimpleNamespace(
+                send_message=sag, edit_message=sag))
+            assert await view.interaction_check(fremd) is False
+            assert gesagt and gesagt[0][1].get("ephemeral")
+            selbst = SimpleNamespace(user=SimpleNamespace(id=1), response=SimpleNamespace(
+                send_message=sag, edit_message=sag))
+            assert await view.interaction_check(selbst) is True
+
+            # "Doch nicht" laesst alles stehen, "Ja" loescht.
+            knoepfe = {k.label: k for k in view.children
+                       if isinstance(k, discord.ui.Button)}
+            msg, kanal = _gehirn_befehl(1, "Flo vergiss mich")
+            assert await gehirn.handle(msg) is basis.HANDLED
+            nein_view = kanal.gesendet[0][2]
+            nein = {k.label: k for k in nein_view.children}["Doch nicht"]
+            await nein.callback(selbst)
+            assert gehirn.weiss_ueber(77, 1), "'Doch nicht' hat trotzdem geloescht"
+            await knoepfe["Ja, weg damit"].callback(selbst)
+            assert gehirn.weiss_ueber(77, 1) == []
+            assert gehirn.weiss_ueber(77, 2) == ["hasst Montage"], "Bob ist mit weg"
+
+            # Leeres Gedaechtnis: keine Rueckfrage, einfach eine Antwort.
+            msg, kanal = _gehirn_befehl(1, "Flo vergiss mich")
+            assert "sowieso nichts" in await gehirn.handle(msg)
+            assert not kanal.gesendet
+
+            # Getippte Erwaehnung eines Fremden: nur mit Server-Verwaltung.
+            msg, kanal = _gehirn_befehl(1, "Flo vergiss <@2>", mentions=[bob])
+            assert "Server-Verwaltung" in await gehirn.handle(msg)
+            msg, kanal = _gehirn_befehl(1, "Flo vergiss <@2>", mentions=[bob],
+                                        manage_guild=True)
+            assert await gehirn.handle(msg) is basis.HANDLED
+            assert kanal.gesendet[0][2].ziel_id == 2
+            assert gehirn.weiss_ueber(77, 2) == ["hasst Montage"]
+
+        asyncio.run(ablauf())
+    finally:
+        restore()
+
+
 def test_gehirn_haengt_nicht_an_einem_kaputten_ki_aufruf_fest():
     """Scheitert die Auswertung, darf der Puffer nicht ewig neu geschickt werden.
 

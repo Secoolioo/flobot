@@ -9,7 +9,9 @@ Befehl. Vier Toepfe, in genau dieser Reihenfolge:
 3. DIALECT  - boarisch/oesterreichisch ('spui' -> 'spiel', 'hackln' -> 'arbeit').
 4. Tippfehler - genau EINE Einfuegung/Loeschung/Nachbar-Vertauschung zu einem
               KNOWN-Wort, und nur wenn eindeutig ('skpi' -> 'skip').
-              STOPWORDS bremst hier Alltagswoerter aus.
+              STOPWORDS bremst hier Alltagswoerter aus. Auf Befehle, die
+              etwas TUN (ZUSTAND), nur wenn der Rest nach Argumenten aussieht
+              ('skpi 2' ja, 'skpi den mist bitte' nein).
 
 Der Unterschied zwischen 1 und 2/3 ist wichtig: ein Synonym in KNOWN waere tot.
 KNOWN bedeutet 'schon gueltig, nicht anfassen' - das Wort ginge unveraendert an
@@ -20,6 +22,8 @@ So reagieren ALLE Feature-Module tolerant, ohne dass jedes einzeln angepasst
 werden muss. bot.py setzt danach message.content kurz auf die korrigierte Form
 und stellt sie nach dem Befehls-Durchlauf wieder her (die KI bekommt immer den
 Originaltext, falls kein Befehl passte)."""
+
+import re
 
 
 #: Eigener "nichts gemerkt"-Wert. None geht nicht: None IST ein gueltiges
@@ -367,9 +371,96 @@ class CmdNorm:
         "rasten", "rauten", "reichte", "relay", "reply", "saetze", "sätze",
         "setzte", "spielte", "starts", "states", "status", "strand", "tage",
         "tagen", "traege", "träge", "verrate", "worst",
+        # --- Nachgemessen mit cmdnorm.normalize (29.09.2026): Alltagsdeutsch,
+        # das auf einem Befehl landete, der etwas TUT. Owner-sichtbar:
+        #   'Flo halte mal die Klappe'   -> 'halt ...'   Musik aus
+        #   'Flo komme gleich'           -> 'komm ...'   Flo springt in den Voice
+        #   'Flo weitere Fragen?'        -> 'weiter ...' Musik weiter
+        #   'Flo trivial, oder?'         -> 'trivia'     startet ein Quiz
+        #   'Flo isst du gern Pizza?'    -> 'disst ...'  ein ROAST
+        #   'Flo spricht er deutsch?'    -> 'sprich ...' Vorlesen im Voice
+        #   'Flo stehlen ist verboten'   -> 'stehen ...' Blackjack-Stand
+        #   'Flo zahlen bitte'/'zahlt'   -> 'zahle'/'zahl' Coin-Ueberweisung
+        "halte", "komme", "weitere", "weiters", "trivial", "rolle", "reicht",
+        "reiche", "setzen", "isst", "spricht", "stehlen", "zahlen", "zahlt",
+        "kauft",
+        # Aus derselben Messung (inventar.py --cmdnorm, Abschnitt FEHLGRIFF):
+        # echte Woerter auf Raub, Ratespiel, Blackjack-Ziehen, Coins, Kredit.
+        "hist", "ratten", "zehen", "zahlte", "verlieh", "quip",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
+
+    # Befehlswoerter, die etwas TUN: Musik steuern, Spiele und Einsaetze
+    # starten, Coins bewegen, vorlesen, roasten, moderieren, Bilder bezahlen.
+    # Die Tippfehler-Korrektur darf AUF diese Woerter nur, wenn der Rest der
+    # Nachricht nach der Grammatik eines Befehls aussieht: nichts, eine Zahl,
+    # eine Erwaehnung/ID, 'alles' (siehe _rest_ist_argument). Ein Vertipper
+    # mit Fliesstext dahinter ist mehrdeutig - dann antwortet lieber die KI,
+    # statt dass 'Flo halte die Klappe' die Musik ausmacht. STOPWORDS allein
+    # reicht dafuer nicht: das ist eine Liste bekannter Faelle, das hier
+    # faengt auch die, die noch keiner gemessen hat.
+    ZUSTAND = {
+        # music
+        "skip", "ueberspring", "überspring", "naechst", "nächst", "next",
+        "pause", "pausier", "resume", "weiter", "fortsetz", "weiterspiel",
+        "stop", "stopp", "halt", "aufhoer", "aufhör", "leave", "verlass",
+        "verlasse", "raus", "disconnect", "join", "connect", "verbinde", "komm",
+        "spiel", "spiele", "play", "lautstärke", "lautstaerke", "lautstarke",
+        "volume", "lauter", "louder", "leiser", "quieter", "leise",
+        "nochmal", "nochmals", "repeat", "replay", "wiederhol", "wiederhole",
+        "wiederholen", "loop", "loope", "loopen", "loopt", "dauerschleife",
+        "endlosschleife", "random", "zufall", "zufallssong", "überrasch",
+        "ueberrasch",
+        # economy: Coins bewegen, kaufen, Titel anlegen
+        "pay", "zahl", "zahle", "überweis", "ueberweis", "überweise",
+        "kaufen", "buy", "kauf", "equip", "anlegen", "trage", "tragen",
+        "anziehen", "setze",
+        # moderation
+        "lösch", "loesch", "delete", "clear", "purge", "aufräum", "aufraeum",
+        "cleanup", "nuke", "warn", "verwarn", "unwarn", "entwarn", "verzeih",
+        "timeout", "time-out", "mute", "muten", "stumm", "knebel", "auszeit",
+        "untimeout", "enttimeout", "unmute", "unmuten", "entmute", "entstumm",
+        "entknebel", "kick", "rauswerf", "rausschmeis", "rausschmeiss",
+        "rausschmeiß", "ban", "bann", "banne", "verbann", "sperr", "unban",
+        "unbann", "entbann", "entsperr", "del",
+        # games
+        "quiz", "trivia", "quizduell", "quizduel", "quizzz", "zahlenraten",
+        "raten", "errate", "schnickschnack", "coinflip", "münzwurf",
+        "muenzwurf", "flip", "slot", "slots", "spielautomat", "automat",
+        "würfel", "wuerfel", "würfeln", "wuerfeln", "dice", "roll", "rps",
+        "sss", "ssp", "mathe", "rechnen", "kopfrechnen", "anagramm",
+        "wortsalat", "reaktion", "reaktionstest", "reflex",
+        # casino
+        "blackjack", "bj", "karte", "ziehen", "zieh", "stand", "stehen",
+        "bleiben", "bleib", "genug", "fertig", "double", "doppeln",
+        "verdoppeln", "doppelt", "crash", "absturz", "rakete", "rocket", "keno",
+        "roulette", "roul", "kessel", "mines", "mine", "minen", "minesweeper",
+        "bomben", "cashout", "auszahlen", "glücksrad", "gluecksrad", "wheel",
+        "rad", "rubbellos", "rubbel", "scratch", "duell", "duel", "hilo",
+        "höhertiefer", "hoehertiefer", "tower", "turm", "sieben", "baccarat",
+        "bakkarat", "punto", "hit", "pass", "don",
+        # steal / schulden / luxus
+        "steal", "klau", "klauen", "raub", "rauben", "heist",
+        "leih", "leihe", "leihen", "verleih", "verleihe", "kredit", "borg",
+        "borge", "borgen", "anschreiben", "tilg", "tilge", "tilgen", "abzahl",
+        "abzahlen", "insolvenz", "privatinsolvenz", "bankrott", "pleite",
+        "prestige", "thron", "throne",
+        # admin (nur Besitzer - trotzdem nichts, was aus Versehen passieren soll)
+        "gib", "nimm", "setcoins", "gibxp", "give", "schenk", "schenke",
+        "take", "entzieh", "entziehe", "coinsset", "givexp", "xpgeben",
+        "ansage", "announce", "dm", "flüster", "fluester", "shopneu",
+        "shoprefresh", "sendepause", "sendpause", "funkstille", "lockdown",
+        # fun / voicegags / media (Bilder kosten echtes Geld)
+        "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped",
+        "props", "sprich", "vorlesen", "tts", "say", "sound", "soundeffekt",
+        "male", "zeichne", "generier", "generiere", "generiert", "generierst",
+        "bild", "img",
+        # giveaway / umfrage / arbeit
+        "giveaway", "gewinnspiel", "verlosung", "verlosen", "raffle", "gw",
+        "umfrage", "poll", "abstimmung", "voting",
+        "work", "arbeit", "arbeiten", "job", "schicht", "malochen",
+    }
 
     def _one_typo(self, a, b):
         """True, wenn b aus a durch GENAU EINEN typischen Tippfehler entsteht:
@@ -493,9 +584,32 @@ class CmdNorm:
             if core in self.STOPWORDS:
                 return None                      # normales Wort in Ruhe lassen
             target = self._fuzzy(core)
+            if (target and target != core and target in self.ZUSTAND
+                    and not self._rest_ist_argument(rest)):
+                # Vertipper + Fliesstext auf einen Befehl, der etwas TUT:
+                # mehrdeutig, also kein Befehl - die KI bekommt den Satz.
+                return None
         if not target or target == core:
             return None
         return f"{target} {rest}".strip()
+
+    #: Was hinter einem Befehl stehen darf, damit ein Vertipper davor noch als
+    #: Befehl zaehlt: eine Zahl (auch 5k, 10m, 50%, 1.000), eine Erwaehnung
+    #: oder Kanal/Rolle, eine nackte ID, ein getipptes @name - oder eines der
+    #: festen Argumentwoerter. Alles andere ist ein Satz.
+    _ARGUMENT_RE = re.compile(
+        r"<[@#][!&]?\d+>|@\S+|[+-]?\d[\d.,:]*[a-zäöü%]{0,4}"
+        r"|alles|all|max|allin|all-in|hälfte|haelfte"
+        # Einsatz-Argumente der Spiele: Roulette-Farben, Muenze, Hi-Lo
+        r"|rot|schwarz|grün|gruen|gerade|ungerade|kopf|zahl|hoch|tief")
+
+    def _rest_ist_argument(self, rest):
+        """True, wenn der Rest nur aus Befehls-Argumenten besteht (oder leer ist)."""
+        for token in (rest or "").split():
+            token = token.lower().strip(".,;:!?")
+            if token and not self._ARGUMENT_RE.fullmatch(token):
+                return False
+        return True
 
 
 # Modul-Instanz + Aliase, damit die bisherigen Modulnamen weiter funktionieren.
@@ -505,6 +619,7 @@ ALIAS = CmdNorm.ALIAS
 DIALECT = CmdNorm.DIALECT
 NUR_ALLEIN = CmdNorm.NUR_ALLEIN
 STOPWORDS = CmdNorm.STOPWORDS
+ZUSTAND = CmdNorm.ZUSTAND
 _one_typo = instance._one_typo
 _fuzzy = instance._fuzzy
 normalize = instance.normalize
