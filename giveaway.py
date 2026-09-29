@@ -62,7 +62,13 @@ _CMDS = ("giveaway", "giveaways", "gewinnspiel", "gewinnspiele", "verlosung",
 # im Kanal geschluckt. Als Befehl gilt 'gw' deshalb nur allein oder mit einem
 # Einsatz direkt dahinter ('gw 5k 2h').
 _GW_EINSATZ_RE = re.compile(
-    r"(?i)\d[\d.,]*\s*(?:k|m|mio|mrd|b|%)?|alles|all|allin|hälfte|haelfte|max")
+    r"(?i)\d[\d.,]*\s*(?:k|m|mio|mrd|b|%)?|alles|all|allin|hälfte|haelfte|max"
+    # Dauer zuerst ('gw 2h 5k') und die Unterbefehle, die niemand als
+    # Glueckwunsch schreibt.
+    r"|\d+\s*(?:s|sek|min|m|h|std|d|t|w)|liste|list|laufend|hilfe|help|abbrechen"
+    r"|abbruch|cancel|ziehen|auslosen|#\d+")
+# Eine getippte Erwaehnung hinter 'gw' ist ein Glueckwunsch an jemanden.
+_ERWAEHNUNG_RE = re.compile(r"<@!?(\d+)>")
 
 # Nach so vielen unbrauchbaren Antworten auf DIESELBE Frage gibt der Assistent
 # auf. Vorher fragte er ewig weiter und schob bei jedem Fehlversuch seine
@@ -634,6 +640,16 @@ class Giveaway(FeatureBasis):
                              content="Da ist beim Giveaway-Assistenten etwas schiefgelaufen.")
             return True
 
+    def _gratuliert_wem(self, message):
+        """'Flo gw @Bob' - strip_lead nimmt die Erwaehnung weg, uebrig bliebe ein
+        nacktes 'gw', und das hat den Assistenten gestartet. Erwaehnt ist aber
+        jemand anderes als Flo: das ist ein Glueckwunsch."""
+        guild = getattr(message, "guild", None)
+        ich = {getattr(getattr(guild, "me", None), "id", None),
+               getattr(getattr(self.client, "user", None), "id", None)}
+        return any(int(uid) not in ich
+                   for uid in _ERWAEHNUNG_RE.findall(message.content or ""))
+
     def _an_flo(self, message, text):
         """Ist die Nachricht an Flo gerichtet statt an den Assistenten?
 
@@ -643,6 +659,8 @@ class Giveaway(FeatureBasis):
         Lead wie ueberall (ai.lead_re) plus eine fuehrende Erwaehnung von Flo
         selbst oder seiner Bot-Rolle."""
         guild = getattr(message, "guild", None)
+        # 'hey flo ...', 'ok flo ...' - die alte Pruefung kannte das, lead_re nicht.
+        text = re.sub(r"(?i)^\s*(?:hey|hei|ok|okay|yo|ey|na|hallo)\s*,?\s+", "", text)
         try:
             if ai.lead_re(getattr(guild, "id", 0)).match(text):
                 return True
@@ -1026,8 +1044,9 @@ class Giveaway(FeatureBasis):
         teile = roh.split()
         if not teile or teile[0].lower().strip(".,!?") not in _CMDS:
             return None
-        if (teile[0].lower().strip(".,!?") == "gw" and len(teile) > 1
-                and not _GW_EINSATZ_RE.fullmatch(teile[1].strip(".,!?"))):
+        if teile[0].lower().strip(".,!?") == "gw" and (
+                (len(teile) > 1 and not _GW_EINSATZ_RE.fullmatch(teile[1].strip(".,!?")))
+                or self._gratuliert_wem(message)):
             return None             # 'gw' = Glueckwunsch, siehe _GW_EINSATZ_RE
         rest = " ".join(teile[1:]).strip()
         low = rest.lower()

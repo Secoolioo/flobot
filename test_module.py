@@ -8,7 +8,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _fake_msg)
+    _fake_msg, _rauch_nachricht)
 
 
 
@@ -79,6 +79,28 @@ def test_terraria_logic():
 
 
 
+def test_terraria_befehl_sagt_bei_sendefehler_nicht_nichts_gefunden():
+    """'Flo terraria <frage>': fand das Wiki etwas, aber das Senden scheiterte,
+    kam 'nichts gefunden' - das stimmt nicht. Die Auto-Antwort bekommt dagegen
+    None (dann antwortet die KI)."""
+    import terraria
+    t = terraria.instance
+    gefragt = []
+
+    async def beantworte(message, frage, *, bei_fehler=None):
+        gefragt.append(bei_fehler)
+        return bei_fehler
+
+    alt = (t._enabled, t.beantworte)
+    t._enabled, t.beantworte = True, beantworte
+    try:
+        msg = _rauch_nachricht("terraria wie besiege ich plantera")
+        assert asyncio.run(t.handle(msg)) is terraria.HANDLED
+        assert gefragt == [terraria.HANDLED]
+    finally:
+        t._enabled, t.beantworte = alt
+
+
 def test_terraria_random_und_kategorie():
     """Pagination, Kategorie-Map/Random-Pool und das handle-Routing: 'random' ->
     Zufalls-Seite, ein Kategorie-Wort -> Kategorie, mehrere Woerter -> Frage."""
@@ -106,7 +128,7 @@ def test_terraria_random_und_kategorie():
     async def fake_send(message, emb, view=None):
         return terraria.HANDLED
 
-    async def fake_beantworte(message, frage):
+    async def fake_beantworte(message, frage, **_kw):
         calls.setdefault("frage", frage)
         return None
 

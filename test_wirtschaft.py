@@ -2028,13 +2028,15 @@ def test_giveaway_gw_heisst_meistens_glueckwunsch():
     try:
         for satz in ("Flo gw zum Geburtstag", "Flo gw bro", "Flo gw, du Sack",
                      "Flo gw zur Beförderung!", "Flo gw euch allen",
-                     "Flo gw jetzt hast du es geschafft", "Flo gw abbrechen"):
+                     "Flo gw jetzt hast du es geschafft",
+                     # Die haeufigste Form: Glueckwunsch an jemanden.
+                     "Flo gw <@222333444555666777>", "<@222333444555666777> Flo gw"):
             gw._wizards = {}
             antwort = asyncio.run(gw.handle(_giveaway_msg(host=1, text=satz)))
             assert antwort is None, f"{satz!r} startet ein Giveaway: {antwort!r}"
             assert not gw._wizards, f"{satz!r} hat einen Assistenten geoeffnet"
         for befehl in ("Flo gw", "Flo gw 5k 2h", "Flo gw 5000", "Flo gw alles",
-                       "Flo giveaway zum Geburtstag"):
+                       "Flo gw 2h 5k", "Flo giveaway zum Geburtstag"):
             gw._wizards = {}
             antwort = asyncio.run(gw.handle(_giveaway_msg(host=1, text=befehl)))
             assert antwort is not None and gw._wizards, befehl
@@ -2061,6 +2063,8 @@ def test_giveaway_assistent_gibt_auf_und_laesst_flo_durch():
         bot_msg = _giveaway_msg(host=1, text="<@4242> was geht")
         bot_msg.guild = SimpleNamespace(id=1, me=SimpleNamespace(id=4242))
         for m in (_giveaway_msg(host=1, text="Flo wie gehts"),
+                  _giveaway_msg(host=1, text="hey flo wie gehts"),
+                  _giveaway_msg(host=1, text="ok flo, was geht"),
                   _giveaway_msg(host=1, text="Florian, was weisst du ueber Rom?"),
                   _giveaway_msg(host=1, text="flo: 5k"),
                   bot_msg):

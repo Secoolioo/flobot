@@ -593,7 +593,7 @@ class Terraria(FeatureBasis):
             view.message = msg
         return self.HANDLED
 
-    async def beantworte(self, message, frage):
+    async def beantworte(self, message, frage, *, bei_fehler=None):
         """Beantwortet eine freie Terraria-Frage mit echten Wiki-Daten + Bild und
         SENDET die Antwort selbst (Embed + Buttons). Rueckgabe: HANDLED, wenn eine
         Antwort verschickt wurde, sonst None (dann findet sich nichts - der
@@ -611,7 +611,7 @@ class Terraria(FeatureBasis):
         if not seite:
             return None
         emb, view = await self._build_answer(frage, seite)
-        return await self._send(message, emb, view, bei_fehler=None)
+        return await self._send(message, emb, view, bei_fehler=bei_fehler)
 
     async def handle(self, message):
         """Erkennt die Prefix-Befehle ('terraria'/'terra'/'twiki'/'terrariawiki')
@@ -645,8 +645,9 @@ class Terraria(FeatureBasis):
             emb, view = await self._build_category(self._KATEGORIEN[low], f"🗂️ {rest.capitalize()}")
             return await self._send(message, emb, view) if emb else self._keine_seite_embed(rest)
 
-        # Sonst: freie Frage ans Wiki.
-        res = await self.beantworte(message, rest)
+        # Sonst: freie Frage ans Wiki. Kam die Antwort nicht raus (Sendefehler),
+        # ist das nicht "nichts gefunden" - dann HANDLED (geloggt ist es schon).
+        res = await self.beantworte(message, rest, bei_fehler=HANDLED)
         return res if res is not None else self._keine_seite_embed(rest)
 
 

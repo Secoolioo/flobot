@@ -601,7 +601,8 @@ class CmdNorm:
         r"<[@#][!&]?\d+>|@\S+|[+-]?\d[\d.,:]*[a-zäöü%]{0,4}"
         r"|alles|all|max|allin|all-in|hälfte|haelfte"
         # Einsatz-Argumente der Spiele: Roulette-Farben, Muenze, Hi-Lo
-        r"|rot|schwarz|grün|gruen|gerade|ungerade|kopf|zahl|hoch|tief")
+        r"|rot|schwarz|grün|gruen|gerade|ungerade|kopf|zahl|hoch|tief"
+        r"|red|black|green|even|odd|\d+-\d+")
 
     def _rest_ist_argument(self, rest):
         """True, wenn der Rest nur aus Befehls-Argumenten besteht (oder leer ist)."""
