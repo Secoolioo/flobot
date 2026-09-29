@@ -600,12 +600,12 @@ def test_kein_modul_zielt_wieder_auf_die_rohe_mention_liste():
     erlaubt = {
         # nur: ist Flo ueberhaupt angesprochen?
         ("bot.py", "if not angesprochen and self.user in message.mentions:"),
-        # nur: ist ueberhaupt jemand genannt?
-        ("economy.py", "if not message.mentions:"),
-        # nur eine Nachschlagetabelle - das Ziel waehlt _pay danach aus dem Text
-        ("economy.py", "by_id = {u.id: u for u in message.mentions}"),
-        # Rueckfall, nachdem der Text nichts hergab
-        ("economy.py", "ziel = ziel or message.mentions[0]"),
+        # economy.py steht hier NICHT mehr: _pay hatte drei Ausnahmen (Leer-
+        # Pruefung, Nachschlagetabelle, Rueckfall message.mentions[0]) - und
+        # genau dieser Rueckfall zahlte bei einer Antwort-mit-Ping an den
+        # Falschen, waehrend '@Flo pay @Bob 100' an Flo selbst haengenblieb.
+        # _pay nimmt jetzt basis.erstes_ziel und fragt sonst nach; siehe
+        # test_pay_zahlt_an_den_getippten_menschen in test_wirtschaft.py.
         # nur: ist ueberhaupt jemand genannt?
         ("fun.py", 'if (first in ("rate", "bewerte") and not message.mentions'),
         # Rueckfall hinter erstes_ziel(...)

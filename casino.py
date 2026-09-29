@@ -1288,10 +1288,18 @@ async def _start_per_edit(interaction, uid, bet, view, emb, file=None):
     Damit startet auch ihr Timeout nie - und genau dort haengt das
     Rueckgabe-Netz (on_timeout). Bei HiLo, Tower und D.O.N. war das still;
     man hat nur gemerkt, dass die Coins fehlen. Mines machte es an derselben
-    Stelle schon richtig, die anderen Startpfade nicht."""
+    Stelle schon richtig, die anderen Startpfade nicht.
+
+    Die Knopf-Wege bestaetigen inzwischen ZUERST (_bestaetigen) - dann ist die
+    Antwort schon vergeben, und die Runde kommt ueber edit_original_response."""
     try:
-        await interaction.response.edit_message(
-            embed=emb, view=view, attachments=[file] if file else [])
+        anhang = [file] if file else []
+        if interaction.response.is_done():
+            await interaction.edit_original_response(
+                embed=emb, view=view, attachments=anhang)
+        else:
+            await interaction.response.edit_message(
+                embed=emb, view=view, attachments=anhang)
     except Exception:  # noqa: BLE001 - jeder Fehler MUSS zur Rueckgabe fuehren
         log.exception("Casino: Rundenstart nicht anzeigbar - %s Coins an %s zurueck.",
                       bet, uid)
@@ -1312,6 +1320,110 @@ async def _start_per_edit(interaction, uid, bet, view, emb, file=None):
     view.message = interaction.message
     _protect(interaction.message)
     return True
+
+
+async def _bestaetigen(interaction, uid, bet):
+    """Klick SOFORT bestaetigen - direkt nachdem der Einsatz eingezogen ist.
+
+    Discord gibt einer Interaktion 3 Sekunden. Die Knoepfe haben aber zuerst
+    gespielt (GIF im Thread rendern, auszahlen, Bilanz schreiben) und erst dann
+    geantwortet. Dauerte das Rendern laenger, kam "Interaktion fehlgeschlagen":
+    der Einsatz war weg, das Ergebnis nie zu sehen - und wer nochmal klickte,
+    setzte doppelt. defer() reserviert die Antwort; das Ergebnis kommt danach
+    per edit_original_response.
+
+    Scheitert schon das Bestaetigen, laeuft KEINE Runde: der Einsatz geht
+    zurueck. Rueckgabe: True = weiter, False = abgebrochen (Geld ist zurueck)."""
+    try:
+        await interaction.response.defer()
+        return True
+    except discord.HTTPException:
+        log.exception("Casino: Klick nicht bestaetigbar - %s Coins an %s zurueck.",
+                      bet, uid)
+        if bet > 0:
+            economy.add_coins(uid, bet, reason="casino-rueckgabe")
+            await economy.flush()
+        return False
+
+
+async def _erst_bestaetigen(interaction):
+    """Klick in einer LAUFENDEN Runde (HiLo, D.O.N.) bestaetigen, bevor gemalt
+    wird. Kein Einsatz im Spiel - scheitert es, steht es nur im Log."""
+    if interaction.response.is_done():
+        return
+    try:
+        await interaction.response.defer()
+    except discord.HTTPException:
+        log.warning("Casino: Klick nicht bestaetigbar", exc_info=True)
+
+
+async def _zug_zeigen(interaction, emb, view, file):
+    """Zeigt den neuen Stand einer laufenden Runde - nach _erst_bestaetigen ueber
+    edit_original_response. Scheitert es, wird das Ergebnis nachgereicht."""
+    try:
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=emb, view=view,
+                                                     attachments=[file])
+        else:
+            await interaction.response.edit_message(embed=emb, view=view,
+                                                    attachments=[file])
+    except discord.HTTPException:
+        log.exception("Casino: Zug nicht anzeigbar (ist verbucht)")
+        await _ergebnis_nachreichen(interaction, emb)
+
+
+async def _ergebnis_nachreichen(interaction, emb):
+    """Die Runde ist verbucht, nur die Anzeige ist gescheitert.
+
+    Dann nicht still sein (der Spieler saehe weder Gewinn noch Verlust),
+    sondern das Ergebnis als eigene, nur fuer ihn sichtbare Nachricht
+    nachreichen. Ohne Bild - das haengt an der gescheiterten Nachricht."""
+    try:
+        kopie = emb.copy()
+        kopie.set_image(url=None)
+        await interaction.followup.send(embed=kopie, ephemeral=True)
+    except Exception:  # noqa: BLE001 - Hinweis ist nice-to-have
+        log.debug("Casino: Ergebnis liess sich auch nicht nachreichen", exc_info=True)
+
+
+async def _bj_per_klick(interaction, ch, uid, bet):
+    """Blackjack aus einem Knopf austeilen (Einsatz eingezogen, Klick bestaetigt).
+
+    Vorher wurde ein gescheiterter Tisch nur ins Log geschrieben. Die Runde
+    blieb aber offen und angemeldet: niemand konnte sie spielen (die Knoepfe
+    waren nie zu sehen), und nach dem Timeout war der Einsatz still verloren.
+    Jetzt: Runde abmelden und den Einsatz zurueckgeben. War es ein Natural,
+    ist die Runde schon abgerechnet - dann nur das Ergebnis nachreichen.
+    Rueckgabe: True, wenn der Tisch steht."""
+    emb, file, view, ended = await _bj_deal(ch, uid, bet)
+    view.message = interaction.message
+    if not ended:
+        # Vor dem Edit registrieren: so greifen die Text-Befehle
+        # (flo karte/stand) selbst dann, wenn der Edit langsam ist.
+        _bj_views[(ch, uid)] = view
+    try:
+        await interaction.edit_original_response(embed=emb, attachments=[file], view=view)
+    except discord.HTTPException:
+        log.exception("Blackjack-Deal: Anzeige fehlgeschlagen")
+        if ended:
+            await _ergebnis_nachreichen(interaction, emb)
+            return False
+        view.settled = True     # kein Timeout-Eintrag 'verloren' in der Bilanz
+        view._unregister()
+        view.stop()
+        economy.add_coins(uid, bet, reason="casino-rueckgabe")
+        await economy.flush()
+        try:
+            await interaction.followup.send(
+                f"⚠️ Discord hat den Tisch verschluckt – dein Einsatz von "
+                f"**{numfmt.fmt(bet)}** {economy.COIN} ist zurück.", ephemeral=True)
+        except Exception:  # noqa: BLE001 - Hinweis ist nice-to-have
+            pass
+        return False
+    _protect(interaction.message)
+    return True
+
+
 _release = instance._release
 setup = instance.setup
 is_enabled = instance.is_enabled
@@ -1398,6 +1510,8 @@ class BlackjackView(discord.ui.View):
         # eine Runde ausgezahlt wird. Ein zweiter Klick/Text-Befehl im selben
         # Moment (eigener Task!) darf _settle nie zweimal durchlaufen.
         self.settled = False
+        # Ein Klick wird gerade verarbeitet (siehe _do) - Doppelklick-Riegel.
+        self._zieht = False
         self._sync_buttons()
 
     # -- Hilfen --
@@ -1566,8 +1680,33 @@ class BlackjackView(discord.ui.View):
         if self.settled or self.is_finished():
             await interaction.response.defer()
             return
-        emb, file, view, ended = await self._step(action)
-        await interaction.response.edit_message(embed=emb, view=view, attachments=[file])
+        # ERST bestaetigen, DANN ziehen/rendern. _step malt den Tisch als GIF
+        # (Thread) - das dauerte oft laenger als Discords 3 Sekunden, und dann
+        # kam "Interaktion fehlgeschlagen", obwohl die Karte laengst gezogen
+        # (oder die Runde laengst abgerechnet) war.
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            log.exception("Blackjack: Klick nicht bestaetigbar - nichts gezogen")
+            return
+        # Zweiter Blick nach dem await: ein paralleler Klick kann die Runde in
+        # genau dieser Luecke abgerechnet haben - oder zieht gerade selbst
+        # (Doppelklick auf 'Karte' = EINE Karte, nicht zwei). Ab hier kein
+        # await, bis _mutate settled bzw. _zieht gesetzt hat.
+        if self.settled or self.is_finished() or self._zieht:
+            return
+        self._zieht = True
+        try:
+            emb, file, view, ended = await self._step(action)
+            try:
+                await interaction.edit_original_response(embed=emb, view=view,
+                                                         attachments=[file])
+            except discord.HTTPException:
+                log.exception("Blackjack: Anzeige fehlgeschlagen (Zug ist verbucht)")
+                if ended:
+                    await _ergebnis_nachreichen(interaction, emb)
+        finally:
+            self._zieht = False
         if ended:
             view.message = interaction.message
             self.stop()
@@ -2052,6 +2191,9 @@ class _SerienRestart(discord.ui.Button):
             return
         v.stop()                                     # vor dem Abzug: Doppelklick-Schutz
         economy.add_coins(interaction.user.id, -bet)
+        # Erst bestaetigen, dann die neue Runde rendern (siehe _bestaetigen).
+        if not await _bestaetigen(interaction, interaction.user.id, bet):
+            return
         neu, emb, file = await self.factory(interaction.user.id, bet)
         await _start_per_edit(interaction, interaction.user.id, bet, neu, emb, file)
 
@@ -2090,10 +2232,12 @@ class HiloView(_SerienView):
         return emb
 
     async def _zeige(self, interaction, emb, state = ""):
+        # Erst bestaetigen, dann die Karte malen (3-Sekunden-Frist, siehe
+        # _bestaetigen) - der Zug selbst ist hier schon verbucht.
+        await _erst_bestaetigen(interaction)
         file = await self._file(state)
         emb.set_image(url=f"attachment://{file.filename}")
-        await interaction.response.edit_message(embed=emb, view=self,
-                                                attachments=[file])
+        await _zug_zeigen(interaction, emb, self, file)
 
     async def _guess(self, interaction, hoeher):
         if self.settled:
@@ -2268,11 +2412,13 @@ class DonView(_SerienView):
         return emb
 
     async def _zeige(self, interaction, emb, face):
+        # Erst bestaetigen, dann die Muenz-Animation rendern (GIF im Thread -
+        # das riss die 3-Sekunden-Frist). Der Wurf ist hier schon verbucht.
+        await _erst_bestaetigen(interaction)
         buf, ext = await _anim(render.coin_flip_anim, render.coin_flip, face)
         fn = f"don_{self.uid}_{random.randint(1000, 9999)}.{ext}"
         emb.set_image(url=f"attachment://{fn}")
-        await interaction.response.edit_message(
-            embed=emb, view=self, attachments=[discord.File(buf, filename=fn)])
+        await _zug_zeigen(interaction, emb, self, discord.File(buf, filename=fn))
 
     @discord.ui.button(label="Verdoppeln", emoji="🎲",
                        style=discord.ButtonStyle.danger, row=0)
@@ -2560,32 +2706,24 @@ class _AgainView(discord.ui.View):
         self.stop()
         economy.add_coins(uid, -bet)
         params = {**self.params, "bet": bet}
+        # Erst bestaetigen, dann spielen/rendern (siehe _bestaetigen).
+        if not await _bestaetigen(interaction, uid, bet):
+            return
 
         if self.kind == "blackjack":
-            emb, file, view, ended = await _bj_deal(ch, uid, bet)
-            view.message = interaction.message
-            if not ended:
-                # Vor dem Edit registrieren: so greifen die Text-Befehle
-                # (flo karte/stand) selbst dann, wenn der Edit fehlschlaegt.
-                _bj_views[(ch, uid)] = view
-            try:
-                await interaction.response.edit_message(embed=emb, view=view,
-                                                        attachments=[file])
-            except discord.HTTPException:
-                log.exception("Blackjack-Nochmal: Anzeige fehlgeschlagen")
-                return
-            _protect(interaction.message)
+            await _bj_per_klick(interaction, ch, uid, bet)
             return
 
         emb, file = await _replay(uid, self.kind, params)
         again = _AgainView(uid, self.kind, params, channel_id=self.channel_id)
         attachments = [file] if file is not None else []
         try:
-            await interaction.response.edit_message(embed=emb, view=again,
-                                                    attachments=attachments)
+            await interaction.edit_original_response(embed=emb, view=again,
+                                                     attachments=attachments)
         except discord.HTTPException:
             log.exception("Nochmal: Anzeige fehlgeschlagen (Runde ist verbucht)")
             _release(interaction.message)
+            await _ergebnis_nachreichen(interaction, emb)
             return
         again.message = interaction.message
         _protect(interaction.message)
@@ -2791,7 +2929,11 @@ class _Setup(discord.ui.View):
     async def _claim_bet(self, interaction):
         """Doppelklick-sicher spielen: prueft den Einsatz, entwertet das Menue
         (stop) und zieht ein - alles SYNCHRON am Stueck, damit ein zweiter,
-        parallel dispatchter Klick nie ein zweites Mal abbuchen kann."""
+        parallel dispatchter Klick nie ein zweites Mal abbuchen kann.
+
+        Danach wird der Klick SOFORT bestaetigt (siehe _bestaetigen): das
+        Spielen und Rendern kommt erst hinterher. Geht das Bestaetigen schief,
+        ist der Einsatz schon wieder zurueck und es gibt None."""
         if self.is_finished():
             try:
                 await interaction.response.defer()
@@ -2804,13 +2946,30 @@ class _Setup(discord.ui.View):
             return None
         self.stop()
         economy.add_coins(self.uid, -bet)
+        if not await _bestaetigen(interaction, self.uid, bet):
+            return None
         return bet
 
     async def _finish(self, interaction, emb,
                       file, again):
-        """Ersetzt das Aufbau-Menue durch das Ergebnis (+ Nochmal-Buttons)."""
+        """Ersetzt das Aufbau-Menue durch das Ergebnis (+ Nochmal-Buttons).
+
+        Die Runde ist hier schon verbucht. Scheitert die Anzeige, wird das
+        Ergebnis nachgereicht - zurueckgezahlt wird NICHTS (sonst gaebe es
+        Gewinn plus Einsatz)."""
         attachments = [file] if file is not None else []
-        await interaction.response.edit_message(embed=emb, attachments=attachments, view=again)
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(
+                    embed=emb, attachments=attachments, view=again)
+            else:
+                await interaction.response.edit_message(
+                    embed=emb, attachments=attachments, view=again)
+        except discord.HTTPException:
+            log.exception("Casino: Ergebnis nicht anzeigbar (Runde ist verbucht)")
+            _release(interaction.message or self.message)   # kein Schutz-Leak
+            await _ergebnis_nachreichen(interaction, emb)
+            return
         again.message = interaction.message or self.message
         _protect(again.message)
         self.stop()
@@ -2933,6 +3092,10 @@ class _NumberBetModal(discord.ui.Modal):
             return
         s.stop()   # synchron VOR dem Abzug: entwertet Doppel-Wege ins Menue
         economy.add_coins(s.uid, -bet)
+        # Erst bestaetigen, dann drehen: vorher kam defer() erst NACH dem
+        # GIF-Rendern - das Formular zeigte dann "Etwas ist schiefgelaufen".
+        if not await _bestaetigen(interaction, s.uid, bet):
+            return
         emb, file = await _play_roulette(s.uid, bet, raw)
         again = _AgainView(s.uid, "roulette", {"bet": bet, "target": raw},
                            channel_id=s.channel_id)
@@ -2944,10 +3107,7 @@ class _NumberBetModal(discord.ui.Modal):
             except discord.HTTPException:
                 log.exception("Roulette-Zahl: Ergebnis konnte nicht angezeigt werden")
                 _release(s.message)   # kein Schutz-Leak: Nachricht freigeben
-        try:
-            await interaction.response.defer()
-        except discord.HTTPException:
-            pass
+                await _ergebnis_nachreichen(interaction, emb)
 
 
 class _RouletteSetup(_Setup):
@@ -3034,6 +3194,9 @@ class _CrashTargetModal(discord.ui.Modal):
             return
         s.stop()   # synchron VOR dem Abzug: entwertet Doppel-Wege ins Menue
         economy.add_coins(s.uid, -bet)
+        # Erst bestaetigen, dann starten (siehe Roulette-Formular oben).
+        if not await _bestaetigen(interaction, s.uid, bet):
+            return
         emb, file = await _play_crash(s.uid, bet, target)
         again = _AgainView(s.uid, "crash", {"bet": bet, "target": target},
                            channel_id=s.channel_id)
@@ -3045,10 +3208,7 @@ class _CrashTargetModal(discord.ui.Modal):
             except discord.HTTPException:
                 log.exception("Crash: Ergebnis konnte nicht angezeigt werden")
                 _release(s.message)   # kein Schutz-Leak: Nachricht freigeben
-        try:
-            await interaction.response.defer()
-        except discord.HTTPException:
-            pass
+                await _ergebnis_nachreichen(interaction, emb)
 
 
 class _CrashSetup(_Setup):
@@ -3126,21 +3286,12 @@ class _BlackjackSetup(_Setup):
                 "Du hast schon eine Blackjack-Runde offen – nutz die Buttons drunter. 👇",
                 ephemeral=True)
             return
-        bet = await self._ensure_bet(interaction)
+        # Einsatz pruefen, Menue entwerten, einziehen, SOFORT bestaetigen -
+        # erst danach wird der Tisch gerendert (siehe _claim_bet).
+        bet = await self._claim_bet(interaction)
         if bet is None:
             return
-        self.stop()   # synchron VOR dem Abzug: schliesst das Doppelklick-Fenster
-        economy.add_coins(self.uid, -bet)
-        emb, file, view, ended = await _bj_deal(ch, self.uid, bet)
-        view.message = interaction.message
-        if not ended:
-            _bj_views[(ch, self.uid)] = view   # vor dem Edit: Text-Fallback greift
-        try:
-            await interaction.response.edit_message(embed=emb, attachments=[file], view=view)
-        except discord.HTTPException:
-            log.exception("Blackjack-Deal: Anzeige fehlgeschlagen")
-            return
-        _protect(interaction.message)
+        await _bj_per_klick(interaction, ch, self.uid, bet)
 
 
 # --- Gluecksrad: Einsatz waehlen, dann Drehen -----------------------------
@@ -3287,14 +3438,10 @@ class _SiebenSetup(_Setup):
         return emb
 
     async def _wurf(self, interaction, tip):
-        if self.is_finished():        # Doppelklick: nur der erste Wurf zaehlt
-            await interaction.response.defer()
-            return
-        bet = await self._ensure_bet(interaction)
+        # Doppelklick-Schutz, Abzug und sofortiges Bestaetigen: _claim_bet.
+        bet = await self._claim_bet(interaction)
         if bet is None:
             return
-        self.stop()   # synchron VOR dem Abzug: kein doppelter Einsatz
-        economy.add_coins(self.uid, -bet)
         emb, file = await _play_sieben(self.uid, bet, tip)
         again = _AgainView(self.uid, "sieben", {"bet": bet, "target": tip},
                            channel_id=self.channel_id)
@@ -3328,14 +3475,10 @@ class _BaccaratSetup(_Setup):
         return emb
 
     async def _setze(self, interaction, tip):
-        if self.is_finished():        # Doppelklick: nur der erste Einsatz zaehlt
-            await interaction.response.defer()
-            return
-        bet = await self._ensure_bet(interaction)
+        # Doppelklick-Schutz, Abzug und sofortiges Bestaetigen: _claim_bet.
+        bet = await self._claim_bet(interaction)
         if bet is None:
             return
-        self.stop()   # synchron VOR dem Abzug: kein doppelter Einsatz
-        economy.add_coins(self.uid, -bet)
         emb, file = await _play_baccarat(self.uid, bet, tip)
         again = _AgainView(self.uid, "baccarat", {"bet": bet, "target": tip},
                            channel_id=self.channel_id)
@@ -3363,14 +3506,11 @@ class _SerienSetup(_Setup):
 
     @discord.ui.button(label="Start", emoji="▶️", style=discord.ButtonStyle.success, row=1)
     async def _start(self, interaction, _b):
-        if self.is_finished():        # Doppelklick: nur der erste Klick startet
-            await interaction.response.defer()
-            return
-        bet = await self._ensure_bet(interaction)
+        # Doppelklick-Schutz, Abzug und sofortiges Bestaetigen: _claim_bet.
+        # Erst danach wird die Runde gebaut und gerendert.
+        bet = await self._claim_bet(interaction)
         if bet is None:
             return
-        self.stop()   # synchron VOR dem Abzug: schliesst das Doppelklick-Fenster
-        economy.add_coins(self.uid, -bet)
         view, emb, file = await type(self).factory(self.uid, bet)
         await _start_per_edit(interaction, self.uid, bet, view, emb, file)
 

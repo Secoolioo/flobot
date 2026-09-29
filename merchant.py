@@ -591,10 +591,45 @@ class Merchant(FeatureBasis):
 
 
 # --- Interaktive Views -------------------------------------------------------
-class _BuySelect(discord.ui.Select):
+# Die beiden Menues am Haendler-Panel sind DynamicItems mit fester custom_id
+# ('flo:haendler:kauf', 'flo:haendler:tausch').
+#
+# Vorher: eine View mit timeout=None, aber ohne custom_id. Nach JEDEM Neustart
+# war das Panel der laufenden Ankunft tot ("Interaktion fehlgeschlagen") - der
+# Haendler stand noch eine Stunde da, man kam nur nicht mehr an ihn heran. Und
+# jedes 'Flo händler' und jede Ankunft liess eine View fuer immer im Speicher.
+#
+# Ein Menue braucht keinen eigenen Zustand: was im Angebot ist, steht im Modul
+# (instance._state()), wer kauft, steht in der Interaktion, was gewaehlt wurde,
+# in interaction.data. bot.py meldet die Klassen beim Start an
+# (DYNAMISCHE_KNOEPFE). Eine View nur aus DynamicItems legt discord.py gar nicht
+# erst ab - kein Leck.
+#
+# WICHTIG: HaendlerView NIE stop()pen und keinen Timeout geben. stop() (und
+# ein Timeout ruft intern dasselbe) entfernt die Muster ALLER enthaltenen
+# DynamicItems GLOBAL aus discord.py - danach waeren alle Haendler-Panels tot.
+# Die Klassennamen sind geblieben (Abdruck, Inventar, bot.py kennen sie).
+
+async def _panel_nachziehen(interaction):
+    """Nach einem Kauf die Restmengen im Panel aktualisieren (best effort).
+
+    Mit einer FRISCHEN HaendlerView: das setzt die Auswahl im Menue zurueck,
+    und eine frische View hat keinen alten Schnappschuss, den discord.py beim
+    Ablegen gegenrechnen koennte."""
+    panel = getattr(interaction, "message", None)
+    if panel is None:
+        return
+    try:
+        await panel.edit(embed=instance._panel_embed(), view=HaendlerView())
+    except discord.HTTPException:
+        pass
+
+
+class _BuySelect(discord.ui.DynamicItem[discord.ui.Select],
+                 template=r"flo:haendler:kauf"):
     """Dropdown mit den Verkaufs-Titeln des Haendlers."""
 
-    def __init__(self, stock):
+    def __init__(self, stock, *, optionen=None):
         opts = []
         for e in stock:
             meta = titles.RARITY.get(e["rarity"], titles.RARITY["normal"])
@@ -603,28 +638,58 @@ class _BuySelect(discord.ui.Select):
                 value=e["id"],
                 description=f"{meta['label']} · {instance._fmt(e['price'])} {economy.COIN}"[:100],
                 emoji=meta["emoji"]))
+        opts = opts or list(optionen or [])
         if not opts:
             opts = [discord.SelectOption(label="– nichts im Angebot –", value="_none")]
-        super().__init__(placeholder="🛒 Titel kaufen…", min_values=1, max_values=1,
-                         options=opts, row=0)
+        super().__init__(discord.ui.Select(
+            placeholder="🛒 Titel kaufen…", min_values=1, max_values=1,
+            options=opts[:25], row=0, custom_id="flo:haendler:kauf"))
+
+    @property
+    def placeholder(self):
+        return self.item.placeholder
+
+    @property
+    def values(self):
+        return self.item.values
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        # Nichts aus dem Modul lesen: die Optionen stehen in der Nachricht, und
+        # der Knopf muss auch dann entstehen, wenn der Haendler nicht (mehr)
+        # bereit ist - die Absage kommt dann aus buy().
+        return cls([], optionen=getattr(item, "options", None))
 
     async def callback(self, interaction):
-        if self.values[0] == "_none":
+        wahl = self.values[0] if self.values else "_none"
+        if wahl == "_none":
             await interaction.response.send_message("Gerade nichts zu kaufen.", ephemeral=True)
             return
+        # ERST bestaetigen, DANN kaufen: buy() gibt die Rolle (bis zu drei
+        # REST-Aufrufe) und speichert - das riss Discords 3-Sekunden-Frist, der
+        # Kaeufer sah "Interaktion fehlgeschlagen" und kaufte nochmal.
         try:
-            text = await instance.buy(interaction.user, self.values[0])
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            log.exception("Haendler-Kauf: Bestaetigen fehlgeschlagen - kein Kauf")
+            return
+        try:
+            text = await instance.buy(interaction.user, wahl)
         except Exception:  # noqa: BLE001
             log.exception("Haendler-Kauf fehlgeschlagen")
             text = "Beim Kauf ist etwas schiefgelaufen - versuch's gleich nochmal."
-        await interaction.response.send_message(text, ephemeral=True)
-        await self.view._refresh(interaction)
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("Haendler-Kauf: Antwort fehlgeschlagen (Kauf ist gebucht)")
+        await _panel_nachziehen(interaction)
 
 
-class _TradeSelect(discord.ui.Select):
+class _TradeSelect(discord.ui.DynamicItem[discord.ui.Select],
+                   template=r"flo:haendler:tausch"):
     """Dropdown mit den Tausch-Deals des Haendlers."""
 
-    def __init__(self, trades):
+    def __init__(self, trades, *, optionen=None):
         opts = []
         for t in trades:
             need_meta = titles.RARITY.get(t["need_rarity"], titles.RARITY["normal"])
@@ -634,17 +699,41 @@ class _TradeSelect(discord.ui.Select):
                 description=(f"gib {need_meta['label']}-Titel + "
                              f"{instance._fmt(t['surcharge'])} {economy.COIN}")[:100],
                 emoji="🔄"))
+        opts = opts or list(optionen or [])
         if not opts:
             opts = [discord.SelectOption(label="– keine Tausch-Deals –", value="_none")]
-        super().__init__(placeholder="🔄 Titel eintauschen…", min_values=1, max_values=1,
-                         options=opts, row=1)
+        super().__init__(discord.ui.Select(
+            placeholder="🔄 Titel eintauschen…", min_values=1, max_values=1,
+            options=opts[:25], row=1, custom_id="flo:haendler:tausch"))
+
+    @property
+    def placeholder(self):
+        return self.item.placeholder
+
+    @property
+    def values(self):
+        return self.item.values
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls([], optionen=getattr(item, "options", None))
 
     async def callback(self, interaction):
-        if self.values[0] == "_none":
+        # Hier wird nur geprueft und das Auswahl-Menue geschickt - nichts, was
+        # ueber die 3-Sekunden-Frist kaeme. Der teure Teil (Tausch + Rolle)
+        # sitzt in _GiveSelect und bestaetigt dort zuerst.
+        wahl = self.values[0] if self.values else "_none"
+        if wahl == "_none":
             await interaction.response.send_message("Gerade keine Tausch-Deals.", ephemeral=True)
             return
+        # Altes Panel (der Haendler ist weitergezogen, Neustart dazwischen):
+        # gleich absagen, statt erst nach dem Einsatz-Menue.
+        if not instance.is_present():
+            await interaction.response.send_message(
+                "🐫 Zu spät - der Händler ist schon weitergezogen.", ephemeral=True)
+            return
         st = instance._state()
-        t = next((x for x in st.get("trades", []) if x["id"] == self.values[0]), None)
+        t = next((x for x in st.get("trades", []) if x["id"] == wahl), None)
         if t is None:
             await interaction.response.send_message(
                 "Diesen Tausch gibt's nicht mehr.", ephemeral=True)
@@ -669,7 +758,11 @@ class _TradeSelect(discord.ui.Select):
 
 
 class _GiveSelect(discord.ui.Select):
-    """Dropdown der eigenen Titel, die als Tausch-Einsatz taugen."""
+    """Dropdown der eigenen Titel, die als Tausch-Einsatz taugen.
+
+    Bewusst KEIN DynamicItem: die Auswahl ist ephemer, gehoert einem Klicker
+    und laeuft nach zwei Minuten ab - nach einem Neustart fragt man ohnehin
+    neu."""
 
     def __init__(self, trade, eligible):
         self.trade = trade
@@ -690,22 +783,37 @@ class _GiveSelect(discord.ui.Select):
                          min_values=1, max_values=1, options=opts, row=0)
 
     async def callback(self, interaction):
+        # Ephemere Auswahl SOFORT entschaerfen (Doppelklick: stop() vor dem
+        # ersten await, dann verwirft discord.py jede weitere Auswahl) und
+        # bestaetigen - trade() gibt Rollen und speichert, das riss vorher die
+        # 3 Sekunden.
+        for child in self.view.children:
+            child.disabled = True
+        self.view.stop()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            log.exception("Haendler-Tausch: Bestaetigen fehlgeschlagen - kein Tausch")
+            return
         try:
             text = await instance.trade(interaction.user, self.trade["id"], self.values[0])
         except Exception:  # noqa: BLE001
             log.exception("Haendler-Tausch fehlgeschlagen")
             text = "Beim Tausch ist etwas schiefgelaufen - versuch's gleich nochmal."
-        # Ephemere Auswahl entschaerfen (Buttons/Selects raus) und Ergebnis zeigen.
-        for child in self.view.children:
-            child.disabled = True
         try:
-            await interaction.response.edit_message(content=text, view=self.view)
+            await interaction.edit_original_response(content=text, view=self.view)
         except discord.HTTPException:
-            await interaction.response.send_message(text, ephemeral=True)
+            try:
+                await interaction.followup.send(text, ephemeral=True)
+            except discord.HTTPException:
+                log.exception("Haendler-Tausch: Antwort fehlgeschlagen")
 
 
 class _GiveView(discord.ui.View):
-    """Ephemere Zwischen-Ansicht: eigenen Titel für den Tausch wählen."""
+    """Ephemere Zwischen-Ansicht: eigenen Titel für den Tausch wählen.
+
+    Normale View mit Timeout - hier steckt kein DynamicItem drin, stop() ist
+    also ungefaehrlich."""
 
     def __init__(self, trade, eligible):
         super().__init__(timeout=120)
@@ -713,7 +821,10 @@ class _GiveView(discord.ui.View):
 
 
 class HaendlerView(discord.ui.View):
-    """Das Haendler-Panel: Kaufen + Tauschen. Jeder kauft/tauscht fuer sich."""
+    """Das Haendler-Panel: Kaufen + Tauschen. Jeder kauft/tauscht fuer sich.
+
+    Nur noch ein Behaelter fuer die DynamicItems oben. Kein Timeout, nie
+    stop()."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -724,12 +835,12 @@ class HaendlerView(discord.ui.View):
 
     async def _refresh(self, interaction):
         """Nach einem Kauf die Restmengen im Panel aktualisieren (best effort)."""
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(embed=instance._panel_embed(), view=self)
-        except discord.HTTPException:
-            pass
+        await _panel_nachziehen(interaction)
+
+
+#: Alle DynamicItem-Klassen dieses Moduls. bot.py meldet sie im setup_hook an
+#: (client.add_dynamic_items), damit alte Panels nach einem Neustart weiterleben.
+DYNAMISCHE_KNOEPFE = (_BuySelect, _TradeSelect)
 
 
 class TickResult:

@@ -208,6 +208,10 @@ class Economy(FeatureBasis):
         # Bewusst nur im Speicher - eine Rueckfrage soll einen Neustart nicht
         # ueberleben.
         self._kauf_offen = {}
+        # Laufende Rollen-Syncs im Hintergrund (siehe rolle_spaeter). Die
+        # Referenz MUSS gehalten werden: asyncio merkt sich Tasks nur schwach,
+        # ein unreferenzierter Task kann mitten im Lauf eingesammelt werden.
+        self._hintergrund = set()
 
     def setup(self):
         """Aktiviert das Feature. Laeuft immer (keine externen Voraussetzungen)."""
@@ -618,6 +622,32 @@ class Economy(FeatureBasis):
         besessenen Seltenheit (andere Module rufen das nach grant/remove auf)."""
         await self._sync_role(member)
 
+    def rolle_spaeter(self, member):
+        """Rollen-Sync im HINTERGRUND - fuer Knoepfe, NACHDEM geantwortet wurde.
+
+        _sync_role macht bis zu drei REST-Aufrufe (Rollen weg, Rolle anlegen,
+        Rolle geben), und jeder davon kann am Rate-Limit haengen. Lief das VOR
+        der Antwort auf einen Klick, riss Discords 3-Sekunden-Frist: der Nutzer
+        sah "Interaktion fehlgeschlagen", obwohl der Titel laengst gekauft war -
+        und klickte nochmal. Die Rolle ist Deko; sie darf ein paar Sekunden
+        spaeter kommen, die Antwort nicht.
+
+        Fehler landen im Log statt im Nichts (ein vergessener Task schluckt
+        seine Ausnahme sonst still). Rueckgabe: der Task (oder None ohne Loop)."""
+        async def lauf():
+            try:
+                await self._sync_role(member)
+            except Exception:  # noqa: BLE001 - Deko darf nichts sprengen
+                log.exception("Rollen-Sync im Hintergrund fehlgeschlagen (%s)",
+                              getattr(member, "id", "?"))
+        try:
+            task = asyncio.get_running_loop().create_task(lauf())
+        except RuntimeError:
+            return None
+        self._hintergrund.add(task)
+        task.add_done_callback(self._hintergrund.discard)
+        return task
+
     # --- Taeglicher Shop -----------------------------------------------------
     def _shop_state(self):
         assert self._store is not None
@@ -889,21 +919,32 @@ class Economy(FeatureBasis):
     async def _do_buy(self, member, item):
         """Kauft (oder legt an) den Titel 'item' fuer 'member', vergibt die Rolle und
         gibt eine Antwort als Text zurueck."""
+        text, rolle_noetig = await self._kaufen(member, item)
+        if rolle_noetig:
+            await self._sync_role(member)
+        return text
+
+    async def _kaufen(self, member, item):
+        """Der Kauf selbst, OHNE Rollen-Sync. Rueckgabe: (text, rolle_noetig).
+
+        Getrennt, damit der Shop-Knopf erst antworten und die Rolle danach im
+        Hintergrund nachziehen kann (siehe rolle_spaeter). Der Textbefehl
+        'kaufen 3' geht weiter ueber _do_buy und wartet wie bisher."""
         prof = self._profile(member.id)
         owned = self._owned_list(prof)
         meta = titles.RARITY[item["rarity"]]
         already = next((o for o in owned if o.get("text") == item["text"]), None)
         if already:
             if prof.get("title") == item["label"]:
-                return f"Den Titel **{item['label']}** trägst du schon. 😎"
+                return f"Den Titel **{item['label']}** trägst du schon. 😎", False
             prof["title"] = item["label"]
             prof["title_rarity"] = item["rarity"]
-            await self._sync_role(member)
             await self._flush()
-            return f"Den hast du schon – ich hab dir **{item['label']}** angelegt. 😎"
+            return (f"Den hast du schon – ich hab dir **{item['label']}** angelegt. 😎",
+                    True)
         if prof["coins"] < item["price"]:
             fehlt = item["price"] - prof["coins"]
-            return f"Zu teuer – dir fehlen noch {fmt(fehlt)} {self.COIN}."
+            return f"Zu teuer – dir fehlen noch {fmt(fehlt)} {self.COIN}.", False
         # Ueber add_coins buchen statt direkt am Profil zu rechnen: EINE Tuer fuer
         # jede Geldbewegung (Handelsbuch, Deckel, Klemmung). Danach gegenpruefen,
         # dass der Preis WIRKLICH abgebucht wurde - sonst gaebe es den Titel
@@ -912,12 +953,12 @@ class Economy(FeatureBasis):
         self.add_coins(member.id, -item["price"], reason="shop")
         if vorher - int(prof["coins"]) != item["price"]:
             self.add_coins(member.id, vorher - int(prof["coins"]), reason="shop-rueck")
-            return f"Zu teuer – dir fehlen noch {fmt(item['price'] - vorher)} {self.COIN}."
+            return (f"Zu teuer – dir fehlen noch {fmt(item['price'] - vorher)} "
+                    f"{self.COIN}.", False)
         owned.append({"text": item["text"], "label": item["label"],
                       "rarity": item["rarity"]})
         prof["title"] = item["label"]
         prof["title_rarity"] = item["rarity"]
-        await self._sync_role(member)
         await self._flush()
         # Ab Mythisch AUFWAERTS (also auch Relikt/Exklusiv/Göttlich) wird Flo
         # merklich freundlicher - vorher stand hier eine feste Zweier-Liste, in der
@@ -927,7 +968,7 @@ class Economy(FeatureBasis):
                  else "Flo spricht dich ab jetzt damit an")
         return (f"🎉 Gekauft! Du trägst jetzt **{item['label']}** "
                 f"({meta['emoji']} {meta['label']}) und hast die Rolle "
-                f"**{meta['role']}** bekommen – {chill}.")
+                f"**{meta['role']}** bekommen – {chill}.", True)
 
     # --- Passiver Hook: XP pro Nachricht -------------------------------------
     async def on_message(self, message):
@@ -943,7 +984,11 @@ class Economy(FeatureBasis):
 
         key = str(message.author.id)
         now = time.monotonic()
-        if now - self._last_msg_xp.get(key, 0.0) < self.MSG_COOLDOWN:
+        # "Noch nie" ist -inf, NICHT 0.0: monotonic() zaehlt ab dem Hochfahren
+        # des Rechners. Mit 0.0 galt in den ersten 45 s nach einem Server-
+        # Neustart JEDER als "hat gerade geschrieben" - die erste Nachricht nach
+        # dem Reboot brachte keine XP, ohne dass man es je gesehen haette.
+        if now - self._last_msg_xp.get(key, float("-inf")) < self.MSG_COOLDOWN:
             return
         self._last_msg_xp[key] = now
 
@@ -1151,24 +1196,81 @@ class Economy(FeatureBasis):
             return f"💰 {wer} **{fmt(c)} {self.COIN}**."
         if first in ("top", "bestenliste", "rangliste", "leaderboard", "lb"):
             return await self._leaderboard(message.guild)
-        if first in ("reichste", "reich", "geld", "vermögen", "vermoegen",
-                     "reichtum", "geldtop", "moneytop", "coinlb"):
+        if first in self._GELD_EINDEUTIG:
             return await self._money_leaderboard(message.guild)
+        if first in self._GELD_MEHRDEUTIG:
+            # 'Flo geld her!' / 'Flo reich mir mal das Salz' sind Saetze, keine
+            # Befehle - die zeigten trotzdem die Reichen-Liste. Nur das nackte
+            # Wort oder ein klares Listen-Wort ('geld top') ist der Befehl.
+            if len(parts) == 1 or (len(parts) == 2 and parts[1] in self._LISTEN_WOERTER):
+                return await self._money_leaderboard(message.guild)
+            return None
         if first in ("daily", "täglich", "taeglich", "tagesbonus"):
             return await self._daily(message.author)
-        if first in ("pay", "zahl", "zahle", "überweis", "ueberweis", "überweise"):
+        if first in ("zahl", "zahle"):
+            # 'Flo zahl mir ein Bier' ist kein Ueberweisungsauftrag. Mit Text
+            # dahinter, aber ohne getippten Empfaenger ist 'zahl' ein ganz
+            # normales Wort. Nackt bleibt es der Befehl (dann die Anleitung).
+            if len(parts) > 1 and erstes_ziel(message) is None:
+                return None
+            return await self._pay(message)
+        if first in ("pay", "überweis", "ueberweis", "überweise"):
             return await self._pay(message)
         if first in ("shop", "laden", "store"):
             return await self._shop(message)
         if first in ("kaufen", "buy", "kauf"):
-            return await self._buy_text(message.author, parts)
+            # 'kaufen 3' kauft Titel Nr. 3. 'Flo kauf mir ein Eis' oder
+            # 'Flo kauf 5 aktien' sind aber keine Shop-Kaeufe - der zweite
+            # kaufte frueher sogar Titel Nr. 5. Nur nackt (dann die Hilfe) oder
+            # mit genau einer Nummer ist es der Shop.
+            rest = [p for p in parts[1:] if p not in self._HOEFLICH]
+            if rest and not (len(rest) == 1 and numfmt.ist_zahl(rest[0])):
+                return None
+            return await self._buy_text(message.author, [first] + rest)
         if first in ("inventar", "inventory", "inv", "titel", "titles", "title"):
             # 'titel ab/<name>' aendert den getragenen Titel; sonst Inventar zeigen.
             if first in ("titel", "title", "titles") and len(parts) > 1:
                 return await self._equip(message.author, low)
             return await self._inventory(message)
-        if first in ("equip", "anlegen", "trage", "tragen", "anziehen", "setze"):
+        if first == "equip":
             return await self._equip(message.author, low)
+        if first in ("anlegen", "trage", "tragen", "anziehen", "setze"):
+            # 'Flo setze dich hin' antwortete "Den Titel **dich hin** besitzt du
+            # nicht". Mit Text dahinter sind diese Woerter nur dann ein Befehl,
+            # wenn der Text einen Titel trifft, den man WIRKLICH besitzt. Nackt
+            # bleiben sie der Befehl (dann kommt die Anleitung).
+            if (len(parts) > 1
+                    and self._eigener_titel(message.author.id,
+                                            " ".join(parts[1:])) is None):
+                return None
+            return await self._equip(message.author, low)
+        return None
+
+    # Reichen-Liste: diese Woerter meinen sie immer ...
+    _GELD_EINDEUTIG = ("reichste", "geldtop", "moneytop", "coinlb")
+    # ... diese nur nackt oder mit einem Listen-Wort dahinter.
+    _GELD_MEHRDEUTIG = ("reich", "geld", "vermögen", "vermoegen", "reichtum")
+    _LISTEN_WOERTER = ("top", "liste", "rangliste", "bestenliste", "lb",
+                       "leaderboard", "ranking")
+    # Was hinter einem Befehl stehen darf, ohne ihn mehrdeutig zu machen.
+    _HOEFLICH = ("bitte", "pls", "plz", "please")
+
+    def _eigener_titel(self, uid, name):
+        """Der besessene Titel, den 'name' meint - oder None.
+
+        Strenger als _equip: dort reicht jeder Teilstring (der Nutzer hat
+        ausdruecklich 'titel'/'equip' gesagt). Hier geht es um Alltagswoerter
+        wie 'setze'/'trage' - da muss der Name den Titel erkennbar treffen:
+        ganz, oder als Teil mit mindestens vier Zeichen."""
+        name = (name or "").strip().lower()
+        if not name:
+            return None
+        for o in self._owned_list(self._profile(uid)):
+            text = (o.get("text") or "").lower()
+            if not text:
+                continue
+            if name == text or (len(name) >= 4 and name in text):
+                return o
         return None
 
     def _rarity_accent(self, prof):
@@ -1609,23 +1711,22 @@ class Economy(FeatureBasis):
         return e
 
     async def _pay(self, message):
-        if not message.mentions:
+        # Empfaenger = der erste GETIPPTE Mensch, in Text-Reihenfolge.
+        #
+        # Vorher nahm _pay die erste Erwaehnung im Text - und bei '@Flo pay @Bob
+        # 100' ist das Flo selbst. Antwort: "Bots brauchen kein Geld", Bob ging
+        # leer aus. Wer Flo per @ anspricht, konnte also nie jemandem Geld geben.
+        # Und stand gar kein @ im Text, griff der Rueckfall message.mentions[0]:
+        # bei einer Antwort-mit-Ping ist das der Autor der beantworteten
+        # Nachricht - der bekam das Geld, ohne dass ihn jemand genannt hatte.
+        # Jetzt: kein getippter Mensch -> nachfragen, nie raten.
+        ziel = erstes_ziel(message)
+        if ziel is None:
+            if self._bot_als_empfaenger(message):
+                return "Bots brauchen kein Geld. 🤖"
             return f"So geht's: `{self._bot_name} pay @jemand 100`"
-        # Empfaenger = erste @-Erwaehnung IN DER REIHENFOLGE DES TEXTES. message.mentions
-        # ist unsortiert und enthaelt bei einer Antwort-mit-Ping auch den Autor der
-        # beantworteten Nachricht - deshalb die ID aus dem geschriebenen Text ziehen.
-        by_id = {u.id: u for u in message.mentions}
-        ziel = None
-        for token in re.findall(r"<@!?(\d+)>", message.content or ""):
-            u = by_id.get(int(token))
-            if u is not None:
-                ziel = u
-                break
-        ziel = ziel or message.mentions[0]
         if ziel.id == message.author.id:
             return "Dir selbst Geld geben? Netter Versuch. 😄"
-        if ziel.bot:
-            return "Bots brauchen kein Geld. 🤖"
         # Betrag: auch '1k', '2,5k', '1m' usw. (erster passender Token).
         rest = re.sub(r"<@!?\d+>", " ", self._clean_lead(message.content or ""))
         betrag = next((self.parse_amount(t) for t in rest.split()
@@ -1666,6 +1767,18 @@ class Economy(FeatureBasis):
         except Exception:  # noqa: BLE001 - Notiz ist nie kritisch
             log.exception("Kreide-Notiz nach 'pay' fehlgeschlagen")
         return self._pay_embed(message.author, ziel, betrag, block)
+
+    @staticmethod
+    def _bot_als_empfaenger(message):
+        """Wurde ein Bot als EMPFAENGER getippt (nicht nur Flo als Anrede)?
+
+        '@Flo pay 100' -> nein, das @Flo vorne ist die Anrede.
+        'Flo pay @MEE6 100' -> ja - dafuer gibt es die alte Abfuhr."""
+        inhalt = (getattr(message, "content", "") or "").lstrip()
+        anrede = re.match(r"<@!?(\d+)>", inhalt)
+        anrede_id = int(anrede.group(1)) if anrede else None
+        return any(getattr(u, "bot", False) and int(getattr(u, "id", 0)) != anrede_id
+                   for u in basis.echte_erwaehnungen(message))
 
     def _pay_embed(self, autor, ziel, betrag, block=None):
         """Bestaetigung fuer 'pay' als Karte. Farbe: gruen = alles glatt,
@@ -1928,12 +2041,22 @@ class _ShopView(discord.ui.View):
             await interaction.response.send_message(
                 "Diesen Titel gibt's nicht mehr.", ephemeral=True)
             return
+        # ERST antworten, DANN die Rolle. _do_buy zog vorher die Rolle VOR der
+        # Antwort nach (bis zu drei REST-Aufrufe) - dauerte das laenger als
+        # Discords 3 Sekunden, sah der Kaeufer "Interaktion fehlgeschlagen",
+        # obwohl der Titel gebucht war, und kaufte im Zweifel nochmal.
+        rolle = False
         try:
-            text = await instance._do_buy(interaction.user, e)
+            text, rolle = await instance._kaufen(interaction.user, e)
         except Exception:  # noqa: BLE001
             log.exception("Kauf fehlgeschlagen")
             text = "Da ist beim Kauf etwas schiefgelaufen. Versuch's gleich nochmal."
-        await interaction.response.send_message(text, ephemeral=True)
+        try:
+            await interaction.response.send_message(text, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("Shop-Kauf: Antwort fehlgeschlagen (Kauf ist gebucht)")
+        if rolle:
+            instance.rolle_spaeter(interaction.user)
 
     @discord.ui.button(label="Luxus", emoji="🏆", style=discord.ButtonStyle.primary, row=1)
     async def _luxus(self, interaction, _b):
@@ -2005,7 +2128,10 @@ class _InventoryView(discord.ui.View):
     async def _refresh(self, interaction):
         prof = instance._profile(self.uid)
         emb = instance._inventory_embed(interaction.user, prof, instance._owned_list(prof))
-        await interaction.response.edit_message(embed=emb, view=self)
+        try:
+            await interaction.response.edit_message(embed=emb, view=self)
+        except discord.HTTPException:
+            log.exception("Inventar: Anzeige fehlgeschlagen (Titel ist gesetzt)")
 
     async def _equip(self, interaction, text):
         prof = instance._profile(self.uid)
@@ -2022,9 +2148,10 @@ class _InventoryView(discord.ui.View):
             return
         prof["title"] = o.get("label")
         prof["title_rarity"] = o.get("rarity", "")
-        await instance._sync_role(interaction.user)
         await instance._flush()
+        # Erst die Ansicht, dann die Rolle - siehe _ShopView._buy.
         await self._refresh(interaction)
+        instance.rolle_spaeter(interaction.user)
 
     @discord.ui.button(label="Titel ablegen", emoji="🫥",
                        style=discord.ButtonStyle.secondary, row=1)
@@ -2033,9 +2160,9 @@ class _InventoryView(discord.ui.View):
         prof = instance._profile(self.uid)
         prof["title"] = ""
         prof["title_rarity"] = ""
-        await instance._sync_role(interaction.user)
         await instance._flush()
         await self._refresh(interaction)
+        instance.rolle_spaeter(interaction.user)
 
     async def on_timeout(self):
         for child in self.children:

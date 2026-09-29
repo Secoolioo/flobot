@@ -534,8 +534,24 @@ class _LuxusSelect(discord.ui.Select):
 
     async def callback(self, interaction):
         item = _BY_KEY[self.values[0]]
-        text = await instance._buy(interaction.user, item)
-        await interaction.response.send_message(text, ephemeral=True)
+        # ERST bestaetigen, DANN kaufen. _buy speichert und legt beim Imperium
+        # sogar eine Rolle an und vergibt sie (zwei REST-Aufrufe) - das riss
+        # Discords 3-Sekunden-Frist: "Interaktion fehlgeschlagen" bei einem
+        # Kauf ueber eine MILLIARDE, der laengst gebucht war.
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            log.exception("Luxus-Kauf: Bestaetigen fehlgeschlagen - kein Kauf")
+            return
+        try:
+            text = await instance._buy(interaction.user, item)
+        except Exception:  # noqa: BLE001
+            log.exception("Luxus-Kauf fehlgeschlagen")
+            text = "Da ist beim Kauf was geplatzt. Nochmal, und diesmal mit Gefühl."
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("Luxus-Kauf: Antwort fehlgeschlagen (Kauf ist gebucht)")
         # Uebersicht aktualisieren (Besitz-Haken, Kontostand).
         view = self.view  # type: ignore[assignment]
         if view.message is not None:

@@ -38,6 +38,7 @@ import discord
 import economy
 import basis
 import laufzeit
+import numfmt
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -48,6 +49,14 @@ HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 # Befehlswoerter.
 _CMDS = ("lotto", "lottery", "jackpot", "lose", "los", "ziehung")
+# Diese beiden sind auch ganz normale Woerter: 'Flo los, sag was' oder 'Flo lose
+# Schraube' oeffneten das Lotto-Panel. Sie sind nur dann das Lotto, wenn sie
+# allein stehen oder ein echtes Lotto-Wort folgt (siehe _ist_lotto_argument).
+_MEHRDEUTIG = ("los", "lose")
+_KAUF_WOERTER = ("kauf", "kaufen", "buy", "los", "lose")
+_KASSE_WOERTER = ("kasse", "tresor", "konto", "house")
+_ABBUCHEN_WOERTER = ("abbuchen", "auszahlen", "withdraw", "cashout", "entnehmen",
+                     "abheben")
 
 TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 # Besitzer (nur er darf die Kasse abbuchen). Wie in bot.py/admin.py.
@@ -434,19 +443,23 @@ class Lotto(FeatureBasis):
         except Exception:  # noqa: BLE001
             cmd = message.content or ""
         parts = cmd.split()
-        if not parts or parts[0].lower().strip(".,;:!?") not in _CMDS:
+        erstes = parts[0].lower().strip(".,;:!?") if parts else ""
+        if erstes not in _CMDS:
             return None
+        if (erstes in _MEHRDEUTIG and len(parts) > 1
+                and not self._ist_lotto_argument(parts[1])):
+            return None     # ein Satz, kein Befehl - die KI antwortet
         if not economy.is_enabled():
             return "💤 Gerade gibt's keine Coins - das Economy-System schläft."
         sub = parts[1].lower() if len(parts) >= 2 else ""
         arg = parts[2].lower() if len(parts) >= 3 else ""
         # Kasse ansehen / abbuchen (nur Besitzer bekommt echte Zahlen).
-        if sub in ("kasse", "tresor", "konto", "house"):
+        if sub in _KASSE_WOERTER:
             return self._kasse_text(message.author)
-        if sub in ("abbuchen", "auszahlen", "withdraw", "cashout", "entnehmen", "abheben"):
+        if sub in _ABBUCHEN_WOERTER:
             return await self.withdraw(message.author, arg or "alles")
         # Lose kaufen.
-        if sub in ("kauf", "kaufen", "buy", "los", "lose"):
+        if sub in _KAUF_WOERTER:
             count = self._resolve_count(message.author, arg or "1")
             return await self.buy(message.author, count)
         # sonst: Panel mit Kauf-Buttons.
@@ -459,6 +472,52 @@ class Lotto(FeatureBasis):
             log.exception("Lotto-Panel konnte nicht gesendet werden")
             return "Das Lotto klemmt gerade - versuch's gleich nochmal."
         return HANDLED
+
+    @staticmethod
+    def _ist_lotto_argument(wort):
+        """Macht dieses zweite Wort aus 'los'/'lose' eindeutig das Lotto?
+
+        Ja: ein Unterbefehl (kauf/kasse/abbuchen), eine Anzahl oder max/alles.
+        Nein: alles andere - 'los, sag was', 'lose Schraube', 'los gehts'."""
+        w = (wort or "").lower().strip(".,;:!?")
+        return (w in _KAUF_WOERTER or w in _KASSE_WOERTER or w in _ABBUCHEN_WOERTER
+                or w in ("max", "alles", "all", "maximum")
+                or numfmt.ist_zahl(w))
+
+    # --- Kauf-Knoepfe am Panel -------------------------------------------
+    async def knopf_kauf(self, interaction, anzahl):
+        """Ein Kauf-Knopf am Panel wurde gedrueckt: ERST bestaetigen, DANN kaufen.
+
+        Vorher kaufte der Knopf zuerst (Speichern, Coins buchen) und antwortete
+        danach. Hing das Speichern, riss Discords 3-Sekunden-Frist - der Nutzer
+        sah "Interaktion fehlgeschlagen", obwohl die Lose gebucht waren, und
+        klickte nochmal: doppelt gekauft. defer() reserviert die Antwort sofort.
+
+        Geht schon das Bestaetigen schief, wird NICHT gekauft: der Nutzer sieht
+        dann ohnehin einen Fehler, und ein stiller Kauf waere genau der Doppel-
+        kauf von oben."""
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            log.exception("Lotto-Knopf: Bestaetigen fehlgeschlagen - kein Kauf")
+            return
+        try:
+            text = await self.buy(interaction.user, anzahl)
+        except Exception:  # noqa: BLE001
+            log.exception("Los-Kauf fehlgeschlagen")
+            text = "Beim Kauf ist etwas schiefgelaufen - versuch's gleich nochmal."
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("Lotto-Knopf: Antwort fehlgeschlagen (Kauf ist gebucht)")
+        # Panel nachziehen (Jackpot/Lose). Die Knoepfe bleiben, wie sie sind -
+        # sie tragen ihren Zustand in der custom_id.
+        panel = getattr(interaction, "message", None)
+        if panel is not None:
+            try:
+                await panel.edit(embed=self._panel_embed(interaction.user))
+            except discord.HTTPException:
+                pass
 
     # --- Panel ------------------------------------------------------------
     def _panel_embed(self, member=None):
@@ -522,18 +581,60 @@ class Lotto(FeatureBasis):
 
 
 # --- Interaktive View --------------------------------------------------------
-class _BuyButton(discord.ui.Button):
-    def __init__(self, count, label, emoji):
-        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.primary)
+# Die Knoepfe sind DynamicItems mit fester custom_id ('flo:lotto:kauf:5').
+#
+# Vorher: eine View mit timeout=None, aber ohne custom_id. Discord.py kennt so
+# eine View nur, solange der Prozess lebt - nach JEDEM Neustart waren alle
+# Lotto-Panels im Kanal tot ("Interaktion fehlgeschlagen"). Und weil sie nie
+# ablief, blieb jede einzelne View fuer immer im Speicher: jedes 'Flo lotto'
+# ein Leck.
+#
+# Jetzt steckt alles, was ein Klick wissen muss, in der custom_id (wie viele
+# Lose) und im Modul (Preis, Konto). bot.py meldet die Klassen beim Start an
+# (DYNAMISCHE_KNOEPFE), dann baut discord.py den Knopf aus der Nachricht neu -
+# auch Wochen spaeter, auch nach einem Neustart. Eine View nur aus
+# DynamicItems legt discord.py gar nicht erst ab: kein Leck.
+#
+# WICHTIG: diese Views NIE stop()pen und keinen Timeout geben. stop() (und
+# ein Timeout ruft intern dasselbe) entfernt die Muster aller enthaltenen
+# DynamicItems GLOBAL aus discord.py - danach waeren ALLE Lotto-Panels tot.
+class _BuyButton(discord.ui.DynamicItem[discord.ui.Button],
+                 template=r"flo:lotto:kauf:(?P<n>[0-9]{1,4})"):
+    """'N Lose' - der Name ist geblieben (der Abdruck kennt ihn)."""
+
+    def __init__(self, count):
+        count = int(count)
+        super().__init__(discord.ui.Button(
+            label=f"{count} Los" if count == 1 else f"{count} Lose", emoji="🎟️",
+            style=discord.ButtonStyle.primary, custom_id=f"flo:lotto:kauf:{count}"))
         self.count = count
 
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["n"]))
+
     async def callback(self, interaction):
-        await self.view._buy(interaction, self.count)
+        await instance.knopf_kauf(interaction, self.count)
 
 
-class _MaxButton(discord.ui.Button):
+class _MaxButton(discord.ui.DynamicItem[discord.ui.Button],
+                 template=r"flo:lotto:kauf:max"):
     def __init__(self):
-        super().__init__(label="Max", emoji="🤑", style=discord.ButtonStyle.success)
+        super().__init__(discord.ui.Button(
+            label="Max", emoji="🤑", style=discord.ButtonStyle.success,
+            custom_id="flo:lotto:kauf:max"))
+
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
 
     async def callback(self, interaction):
         n = instance._resolve_count(interaction.user, "max")
@@ -541,32 +642,30 @@ class _MaxButton(discord.ui.Button):
             await interaction.response.send_message(
                 "Für ein Los reicht dein Guthaben gerade nicht. 😬", ephemeral=True)
             return
-        await self.view._buy(interaction, n)
+        await instance.knopf_kauf(interaction, n)
 
 
 class LottoView(discord.ui.View):
-    """Lotto-Panel: Lose kaufen. Jeder kauft für sich."""
+    """Lotto-Panel: Lose kaufen. Jeder kauft für sich.
+
+    Nur noch ein Behaelter fuer die DynamicItems oben - der Name bleibt, weil
+    bot.py/Tests/Inventar ihn kennen. Kein Timeout, nie stop() (siehe oben)."""
 
     def __init__(self):
         super().__init__(timeout=None)
         self.message = None
-        self.add_item(_BuyButton(1, "1 Los", "🎟️"))
-        self.add_item(_BuyButton(5, "5 Lose", "🎟️"))
-        self.add_item(_BuyButton(10, "10 Lose", "🎟️"))
+        self.add_item(_BuyButton(1))
+        self.add_item(_BuyButton(5))
+        self.add_item(_BuyButton(10))
         self.add_item(_MaxButton())
 
     async def _buy(self, interaction, count):
-        try:
-            text = await instance.buy(interaction.user, count)
-        except Exception:  # noqa: BLE001
-            log.exception("Los-Kauf fehlgeschlagen")
-            text = "Beim Kauf ist etwas schiefgelaufen - versuch's gleich nochmal."
-        await interaction.response.send_message(text, ephemeral=True)
-        if self.message is not None:
-            try:
-                await self.message.edit(embed=instance._panel_embed(interaction.user), view=self)
-            except discord.HTTPException:
-                pass
+        await instance.knopf_kauf(interaction, count)
+
+
+#: Alle DynamicItem-Klassen dieses Moduls. bot.py meldet sie im setup_hook an
+#: (client.add_dynamic_items), damit alte Panels nach einem Neustart weiterleben.
+DYNAMISCHE_KNOEPFE = (_BuyButton, _MaxButton)
 
 
 class LottoResult:

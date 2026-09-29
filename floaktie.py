@@ -36,6 +36,7 @@ import discord
 import economy
 import basis
 import laufzeit
+import numfmt
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -53,6 +54,20 @@ _CMDS = ("floaktie", "floaktien", "aktie", "aktien", "flostock", "floshare",
          "flonyse", "$flo", "floboerse")
 # Befehlswoerter, die direkt den Kurs-Chart (mit Zeitraum-Buttons) zeigen.
 _CHART_CMDS = ("aktienkurs", "kurs", "kursverlauf", "chart", "flokurs")
+# Handeln OHNE 'aktie' davor: 'Flo verkauf 5', 'Flo verkaufe alles'. Das kam
+# vorher bei niemandem an - die Aktie las kauf/verkauf nur als ZWEITES Wort
+# ('aktie verkauf 5'), und economy verkauft nichts. Siehe _direkt_handeln.
+_VERKAUF_DIREKT = ("verkauf", "verkaufe", "verkaufen", "sell")
+# 'kauf' gehoert dem Titel-Shop ('kaufen 3' = Titel Nr. 3). Hierher kommt es
+# nur, wenn ausdruecklich die Aktie genannt ist: 'Flo kauf 5 aktien'.
+_KAUF_DIREKT = ("kauf", "kaufe", "kaufen", "buy")
+# Woerter, die in so einem Satz die Aktie meinen.
+_AKTIEN_WOERTER = ("aktie", "aktien", "anteil", "anteile", "$flo",
+                   "floaktie", "floaktien", "flocorp", "stück", "stueck", "stk")
+# Fuellwoerter, die den Satz nicht mehrdeutig machen.
+_FUELL_WOERTER = ("meine", "mein", "meinen", "die", "den", "das", "bitte", "pls")
+# Mengenangaben ausser Zahlen.
+_ALLES_WOERTER = ("alles", "all", "alle", "max", "maximum")
 # Zeitraeume fuer den Chart: (Label, Tage).
 _RANGES = (("1 Tag", 1), ("7 Tage", 7), ("30 Tage", 30), ("Gesamt", 100000))
 HISTORY_TICKS_MAX = 20000   # ~14 Tage Minuten-Takte (vorher 50 h -> 7/30/Gesamt sahen gleich aus)
@@ -397,6 +412,10 @@ class FloAktie(FeatureBasis):
             cmd = message.content or ""
         parts = cmd.split()
         first = parts[0].lower().strip(".,;:!?") if parts else ""
+        if first in _VERKAUF_DIREKT or first in _KAUF_DIREKT:
+            # 'Flo verkauf 5' bei geschlossener Boerse: dieselbe klare Absage
+            # wie bei 'aktie verkauf 5' - aber ein Satz bleibt ein Satz.
+            return self.aus_embed() if self._ist_direkt_befehl(first, parts[1:]) else None
         if first not in _CMDS and first not in _CHART_CMDS:
             return None
         return self.aus_embed()
@@ -2053,6 +2072,8 @@ class FloAktie(FeatureBasis):
             cmd = message.content or ""
         parts = cmd.split()
         first = parts[0].lower().strip(".,;:!?") if parts else ""
+        if first in _VERKAUF_DIREKT or first in _KAUF_DIREKT:
+            return await self._direkt_handeln(message, first, parts[1:])
         if first not in _CMDS and first not in _CHART_CMDS:
             return None
         if self.is_off(getattr(getattr(message, "guild", None), "id", None)):
@@ -2105,6 +2126,64 @@ class FloAktie(FeatureBasis):
             return "Die Börse klemmt gerade - versuch's gleich nochmal."
         return HANDLED
 
+    @staticmethod
+    def _direkt_lesen(rest):
+        """Liest 'verkauf 5 aktien' & Co. -> (menge, aktie_genannt) oder None.
+
+        None heisst: da steht ein Wort, das weder Menge noch Aktie noch Fuell-
+        wort ist - also ein Satz ('Flo verkauf mir das'), kein Befehl."""
+        menge, aktie = None, False
+        for roh in rest:
+            w = roh.lower().strip(".,;:!?")
+            if not w:
+                continue
+            if w in _AKTIEN_WOERTER:
+                aktie = True
+            elif menge is None and w in _ALLES_WOERTER:
+                menge = "alles" if w == "alle" else w
+            elif menge is None and numfmt.ist_zahl(w):
+                menge = w
+            elif w in _FUELL_WOERTER:
+                continue
+            else:
+                return None
+        return menge, aktie
+
+    def _ist_direkt_befehl(self, wort, rest):
+        """Ist 'verkauf ...'/'kauf ...' (ohne 'aktie' vorne) ein Aktien-Befehl?"""
+        gelesen = self._direkt_lesen(rest)
+        if gelesen is None:
+            return False
+        _menge, aktie = gelesen
+        return wort in _VERKAUF_DIREKT or aktie
+
+    async def _direkt_handeln(self, message, wort, rest):
+        """'Flo verkauf 5' / 'Flo verkaufe alles' / 'Flo kauf 3 aktien'.
+
+        Verkaufen: die Aktie ist das Einzige, was man bei Flo verkaufen kann -
+        eine Menge oder das Wort 'aktie' reicht. Nackt kommt die Anleitung.
+        Kaufen: nur mit ausdruecklich genannter Aktie; sonst gehoert 'kauf'
+        dem Titel-Shop in economy (dort ist 'kaufen 3' Titel Nr. 3), und der
+        kommt in der Kette erst nach uns dran.
+
+        Alles andere ist ein Satz -> None, die KI antwortet."""
+        if not self._ist_direkt_befehl(wort, rest):
+            return None
+        menge, aktie = self._direkt_lesen(rest)
+        verkaufen = wort in _VERKAUF_DIREKT
+        if self.is_off(getattr(getattr(message, "guild", None), "id", None)):
+            return self.aus_embed()
+        if not economy.is_enabled():
+            return "💤 Gerade gibt's keine Coins - das Economy-System schläft."
+        if verkaufen and menge is None and not aktie:
+            return (f"Was willst du verkaufen, deine Seele? "
+                    f"`{self._bot_name} verkauf 5` oder `{self._bot_name} verkauf alles`.")
+        if verkaufen:
+            return await self.sell(message.author, self._resolve_count(
+                message.author, menge or "1", selling=True))
+        return await self.buy(message.author, self._resolve_count(
+            message.author, menge or "1"))
+
     # --- Auto-Loesch-Schutz -----------------------------------------------
     def _protect(self, msg, *, slot="panel"):
         """Neues Panel schuetzen und das VORIGE freigeben.
@@ -2127,20 +2206,116 @@ class FloAktie(FeatureBasis):
 
 
 # --- Interaktive View --------------------------------------------------------
-class _TradeButton(discord.ui.Button):
+# Alle Knoepfe hier sind DynamicItems mit fester custom_id:
+#     flo:aktie:kauf:10    flo:aktie:verkauf:alles    flo:aktie:info:depot
+#     flo:aktie:kurs:7
+#
+# Vorher: Views mit timeout=None (Panel) bzw. 300 s (Chart), aber ohne
+# custom_id. Nach JEDEM Neustart waren alle Aktien-Panels im Kanal tot
+# ("Interaktion fehlgeschlagen") - obwohl das Panel ja weiter live
+# nachgezogen wird und zum Klicken einlaedt. Und jedes 'Flo aktie' liess eine
+# View fuer immer im Speicher liegen.
+#
+# Jetzt steht alles, was ein Klick braucht, in der custom_id; Kurs, Depot und
+# Konto kommen aus dem Modul, der Klicker aus der Interaktion. bot.py meldet die
+# Klassen beim Start an (DYNAMISCHE_KNOEPFE). Eine View nur aus DynamicItems
+# legt discord.py gar nicht erst ab - kein Leck.
+#
+# Die Muster sind absichtlich SCHARF getrennt (kauf|verkauf / info / kurs):
+# passt eine custom_id auf zwei Muster, feuern beide Klassen - und der zweite
+# Callback stirbt an einer schon beantworteten Interaktion.
+#
+# WICHTIG: diese Views NIE stop()pen und keinen Timeout geben. stop() (und ein
+# Timeout ruft intern dasselbe) entfernt die Muster ALLER enthaltenen
+# DynamicItems GLOBAL aus discord.py - danach waeren alle Panels tot.
+# Die Klassennamen sind geblieben (Abdruck, Inventar, Tests kennen sie).
+
+async def _handeln(interaction, action, count):
+    """Kauf/Verkauf per Knopf - fuer jeden Klicker sein eigenes Depot."""
+    # ZUERST bestaetigen, DANN handeln. Discord gibt einer Interaktion nur
+    # 3 Sekunden; buy()/sell() speichern aber, ziehen das Panel nach und
+    # rendern den Chart neu. Wurde das langsamer, starb die Interaktion mit
+    # "Interaktion fehlgeschlagen" - obwohl der Kauf laengst gebucht war.
+    # Wer das sah, hat verstaendlicherweise nochmal geklickt und ein zweites
+    # Mal gekauft. Mit defer() ist die Antwort sofort reserviert.
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+    except discord.HTTPException:
+        log.exception("FloCorp-Trade (Button): defer fehlgeschlagen")
+        return
+
+    async def melden(inhalt):
+        try:
+            if isinstance(inhalt, discord.Embed):
+                await interaction.followup.send(embed=inhalt, ephemeral=True)
+            else:
+                await interaction.followup.send(str(inhalt), ephemeral=True)
+        except discord.HTTPException:
+            log.exception("FloCorp-Trade (Button): Antwort fehlgeschlagen")
+
+    antwort = None
+    try:
+        if action == "buy":
+            n = instance._resolve_count(interaction.user, str(count))
+            if n < 1:
+                await melden("Dein Guthaben reicht gerade für keinen ganzen "
+                             "Anteil. 😬 Auf Pump gibt es hier nichts – erst "
+                             "verdienen oder Anteile verkaufen.")
+                return
+            antwort = await instance.buy(interaction.user, n)
+        else:
+            n = instance._resolve_count(interaction.user, str(count), selling=True)
+            antwort = await instance.sell(interaction.user, n)
+    except Exception:  # noqa: BLE001
+        log.exception("FloCorp-Trade (Button) fehlgeschlagen")
+        antwort = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
+    # buy()/sell() antworten mit einem Embed (Bestaetigung) oder mit Text
+    # (Fehlerfall) - beides muss hier durchgehen.
+    await melden(antwort)
+    # Das Panel-Embed selbst wird von buy()/sell() ueber _refresh_last_panel()
+    # aktualisiert (das zuletzt gepostete Panel bleibt so immer live).
+
+
+class _TradeButton(discord.ui.DynamicItem[discord.ui.Button],
+                   template=r"flo:aktie:(?P<akt>kauf|verkauf):(?P<n>[0-9]{1,4}|max|alles)"):
     def __init__(self, label, emoji, style, action, count, row=0):
-        super().__init__(label=label, emoji=emoji, style=style, row=row)
+        teil = "kauf" if action == "buy" else "verkauf"
+        super().__init__(discord.ui.Button(
+            label=label, emoji=emoji, style=style, row=row,
+            custom_id=f"flo:aktie:{teil}:{count}"))
         self.action = action     # "buy" | "sell"
         self.count = count       # int oder "max"/"alles"
 
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        n = match["n"]
+        return cls(item.label, item.emoji, item.style,
+                   "buy" if match["akt"] == "kauf" else "sell",
+                   int(n) if numfmt.ist_zahl(n) else n, row=None)
+
     async def callback(self, interaction):
-        await self.view._trade(interaction, self.action, self.count)
+        await _handeln(interaction, self.action, self.count)
 
 
-class _InfoButton(discord.ui.Button):
-    def __init__(self, label, emoji, kind):
-        super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.secondary, row=2)
+class _InfoButton(discord.ui.DynamicItem[discord.ui.Button],
+                  template=r"flo:aktie:info:(?P<art>depot|top)"):
+    def __init__(self, label, emoji, kind, row=2):
+        super().__init__(discord.ui.Button(
+            label=label, emoji=emoji, style=discord.ButtonStyle.secondary, row=row,
+            custom_id=f"flo:aktie:info:{kind}"))
         self.kind = kind         # "depot" | "top"
+
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(item.label, item.emoji, match["art"], row=None)
 
     async def callback(self, interaction):
         if self.kind == "top":
@@ -2151,7 +2326,10 @@ class _InfoButton(discord.ui.Button):
 
 
 class FloAktieView(discord.ui.View):
-    """Handels-Panel: kaufen/verkaufen + Depot/Top. Jeder handelt für sich."""
+    """Handels-Panel: kaufen/verkaufen + Depot/Top. Jeder handelt für sich.
+
+    Nur noch ein Behaelter fuer die DynamicItems oben. Kein Timeout, nie
+    stop() (siehe Kommentar ueber _handeln)."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -2168,66 +2346,68 @@ class FloAktieView(discord.ui.View):
         self.add_item(_InfoButton("Top", "🏆", "top"))
 
     async def _trade(self, interaction, action, count):
-        # ZUERST bestaetigen, DANN handeln. Discord gibt einer Interaktion nur
-        # 3 Sekunden; buy()/sell() speichern aber, ziehen das Panel nach und
-        # rendern den Chart neu. Wurde das langsamer, starb die Interaktion mit
-        # "Interaktion fehlgeschlagen" - obwohl der Kauf laengst gebucht war.
-        # Wer das sah, hat verstaendlicherweise nochmal geklickt und ein zweites
-        # Mal gekauft. Mit defer() ist die Antwort sofort reserviert.
+        await _handeln(interaction, action, count)
+
+
+async def _kurs_zeigen(interaction, days):
+    """Zeitraum-Knopf am Kurs-Chart: Bild neu rendern und austauschen.
+
+    Erst bestaetigen, dann rendern - das Chart-Bild entsteht in einem Thread
+    und kann bei vollem Verlauf laenger als Discords 3 Sekunden brauchen."""
+    # Dieser Chart ist jetzt der 'aktuelle' - Live-Refresh nutzt seinen Zeitraum.
+    if getattr(interaction, "message", None) is not None:
+        instance._chart_msg = interaction.message
+    instance._chart_days = days
+    try:
+        await interaction.response.defer()
+    except discord.HTTPException:
+        log.exception("Kurs-Chart: Bestaetigen fehlgeschlagen")
+        return
+    try:
+        file = await instance._chart_file(days, instance._range_label(days))
+        await interaction.edit_original_response(attachments=[file], view=KursView(days))
+    except Exception:  # noqa: BLE001
+        log.exception("Kurs-Chart-Update fehlgeschlagen")
         try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
+            await interaction.followup.send(
+                "Der Chart klemmt gerade - versuch's gleich nochmal.", ephemeral=True)
         except discord.HTTPException:
-            log.exception("FloCorp-Trade (Button): defer fehlgeschlagen")
-            return
-
-        async def melden(inhalt):
-            try:
-                if isinstance(inhalt, discord.Embed):
-                    await interaction.followup.send(embed=inhalt, ephemeral=True)
-                else:
-                    await interaction.followup.send(str(inhalt), ephemeral=True)
-            except discord.HTTPException:
-                log.exception("FloCorp-Trade (Button): Antwort fehlgeschlagen")
-
-        antwort = None
-        try:
-            if action == "buy":
-                n = instance._resolve_count(interaction.user, str(count))
-                if n < 1:
-                    await melden("Dein Guthaben reicht gerade für keinen ganzen "
-                                 "Anteil. 😬 Auf Pump gibt es hier nichts – erst "
-                                 "verdienen oder Anteile verkaufen.")
-                    return
-                antwort = await instance.buy(interaction.user, n)
-            else:
-                n = instance._resolve_count(interaction.user, str(count), selling=True)
-                antwort = await instance.sell(interaction.user, n)
-        except Exception:  # noqa: BLE001
-            log.exception("FloCorp-Trade (Button) fehlgeschlagen")
-            antwort = "Beim Handeln ist etwas schiefgelaufen - versuch's gleich nochmal."
-        # buy()/sell() antworten mit einem Embed (Bestaetigung) oder mit Text
-        # (Fehlerfall) - beides muss hier durchgehen.
-        await melden(antwort)
-        # Das Panel-Embed selbst wird von buy()/sell() ueber _refresh_last_panel()
-        # aktualisiert (das zuletzt gepostete Panel bleibt so immer live).
+            pass
 
 
-class _KursButton(discord.ui.Button):
+class _KursButton(discord.ui.DynamicItem[discord.ui.Button],
+                  template=r"flo:aktie:kurs:(?P<tage>[0-9]{1,6})"):
     def __init__(self, label, days, active):
-        super().__init__(
+        super().__init__(discord.ui.Button(
             label=label,
-            style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary)
-        self.days = days
+            style=discord.ButtonStyle.primary if active else discord.ButtonStyle.secondary,
+            custom_id=f"flo:aktie:kurs:{int(days)}"))
+        self.days = int(days)
+
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        tage = int(match["tage"])
+        label = next((lbl for lbl, dv in _RANGES if dv == tage), item.label)
+        return cls(label, tage, False)
 
     async def callback(self, interaction):
-        await self.view.show(interaction, self.days)
+        await _kurs_zeigen(interaction, self.days)
 
 
 class KursView(discord.ui.View):
-    """Kurs-Chart mit Zeitraum-Buttons (1 Tag / 7 Tage / 30 Tage / Gesamt)."""
+    """Kurs-Chart mit Zeitraum-Buttons (1 Tag / 7 Tage / 30 Tage / Gesamt).
+
+    Vorher lief sie nach 5 Minuten ab und war nach einem Neustart tot - der
+    Chart selbst wird aber weiter live nachgezogen. Jetzt: DynamicItems, kein
+    Timeout, nie stop(). Ein Klick baut eine FRISCHE KursView mit dem neuen
+    aktiven Zeitraum (siehe _kurs_zeigen) statt diese hier umzubauen."""
 
     def __init__(self, days=1):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         self.message = None
         self.days = days
         self._rebuild()
@@ -2238,31 +2418,12 @@ class KursView(discord.ui.View):
             self.add_item(_KursButton(lbl, dv, dv == self.days))
 
     async def show(self, interaction, days):
-        self.days = days
-        self._rebuild()
-        # Dieser Chart ist jetzt der 'aktuelle' - Live-Refresh nutzt seinen Zeitraum.
-        if self.message is not None:
-            instance._chart_msg = self.message
-        instance._chart_days = days
-        try:
-            file = await instance._chart_file(days, instance._range_label(days))
-            await interaction.response.edit_message(attachments=[file], view=self)
-        except Exception:  # noqa: BLE001
-            log.exception("Kurs-Chart-Update fehlgeschlagen")
-            try:
-                await interaction.response.send_message(
-                    "Der Chart klemmt gerade - versuch's gleich nochmal.", ephemeral=True)
-            except discord.HTTPException:
-                pass
+        await _kurs_zeigen(interaction, days)
 
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
+
+#: Alle DynamicItem-Klassen dieses Moduls. bot.py meldet sie im setup_hook an
+#: (client.add_dynamic_items), damit alte Panels nach einem Neustart weiterleben.
+DYNAMISCHE_KNOEPFE = (_TradeButton, _InfoButton, _KursButton)
 
 
 # --- Singleton + Modul-API ---------------------------------------------------

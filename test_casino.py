@@ -22,6 +22,158 @@ def test_blackjack_handwert():
 
 
 
+def _knopf(klasse, name):
+    """Die Funktion hinter einem @discord.ui.button - genau das, was ein Klick ruft."""
+    f = getattr(klasse, name)
+    f = getattr(f, "callback", f)
+    return getattr(f, "callback", f)
+
+
+def test_casino_knoepfe_bestaetigen_vor_dem_spielen():
+    """Discord gibt einem Klick 3 Sekunden. Die Casino-Knoepfe zogen den
+    Einsatz ein, SPIELTEN (GIF im Thread rendern, auszahlen) und antworteten
+    erst dann. Dauerte das Rendern laenger: "Interaktion fehlgeschlagen" - das
+    Geld war weg, das Ergebnis nie zu sehen, und wer nochmal klickte, setzte
+    doppelt. Jetzt: Einsatz einziehen, SOFORT bestaetigen, dann spielen.
+
+    Geht schon das Bestaetigen schief, laeuft keine Runde und der Einsatz ist
+    zurueck. Geht erst die Anzeige schief, ist die Runde verbucht - dann wird
+    das Ergebnis nachgereicht, aber NICHT erstattet (sonst Gewinn + Einsatz)."""
+    import discord
+    from testhilfe import _Klick
+    uid = 515151
+    restore = _with_economy({uid: 100_000})
+    alt_rad = casino._play_wheel
+    klick = None
+
+    async def rad_attrappe(_uid, bet):
+        klick.protokoll.append(("spiel",))
+        return discord.Embed(title="🍀 Glücksrad"), None
+    casino._play_wheel = rad_attrappe
+    drehen = _knopf(casino._WheelSetup, "_spin")
+    try:
+        # Normalfall: bestaetigen -> spielen -> Ergebnis zeigen.
+        klick = _Klick(uid=uid)
+        asyncio.run(drehen(casino._WheelSetup(uid, channel_id=5, bet=1_000), klick, None))
+        assert klick.arten() == ["defer", "spiel", "edit_original"], klick.protokoll
+        assert economy.get_coins(uid) == 99_000
+
+        # Bestaetigen scheitert -> keine Runde, Einsatz zurueck.
+        klick = _Klick(uid=uid, kaputt={"defer"})
+        asyncio.run(drehen(casino._WheelSetup(uid, channel_id=5, bet=1_000), klick, None))
+        assert "spiel" not in klick.arten() and economy.get_coins(uid) == 99_000
+
+        # Anzeige scheitert -> Runde bleibt verbucht, Ergebnis wird nachgereicht.
+        klick = _Klick(uid=uid, kaputt={"edit_original"})
+        asyncio.run(drehen(casino._WheelSetup(uid, channel_id=5, bet=1_000), klick, None))
+        assert klick.arten() == ["defer", "spiel", "followup"], klick.protokoll
+        assert economy.get_coins(uid) == 98_000
+
+        # Sieben: derselbe Weg (lief vorher an _claim_bet vorbei).
+        alt_sieben = casino._play_sieben
+
+        async def sieben_attrappe(_uid, bet, tip):
+            klick.protokoll.append(("spiel",))
+            return discord.Embed(title="🎲 Sieben"), None
+        casino._play_sieben = sieben_attrappe
+        try:
+            klick = _Klick(uid=uid)
+            wurf = _knopf(casino._SiebenSetup, "_u")
+            asyncio.run(wurf(casino._SiebenSetup(uid, channel_id=5, bet=1_000), klick, None))
+            assert klick.arten() == ["defer", "spiel", "edit_original"], klick.protokoll
+        finally:
+            casino._play_sieben = alt_sieben
+
+        # Laufende Runden (HiLo, D.O.N.) malen ihr Bild ebenfalls erst NACH
+        # dem Bestaetigen - die Muenz-Animation ist ein GIF.
+        alt_anim = casino._anim
+
+        async def anim_attrappe(*_a, **_k):
+            klick.protokoll.append(("malen",))
+            return io.BytesIO(b"x"), "gif"
+        casino._anim = anim_attrappe
+        try:
+            klick = _Klick(uid=uid)
+            don = casino.DonView(uid, 1_000)
+            asyncio.run(don._zeige(klick, discord.Embed(title="🪙"), "kopf"))
+            assert klick.arten() == ["defer", "malen", "edit_original"], klick.protokoll
+        finally:
+            casino._anim = alt_anim
+    finally:
+        casino._play_wheel = alt_rad
+        restore()
+
+
+def test_blackjack_verliert_keinen_einsatz_an_discord():
+    """Der Blackjack-Deal per Knopf renderte den Tisch VOR der Antwort (3-s-
+    Frist). Und scheiterte die Anzeige, stand nur etwas im Log: die Runde blieb
+    offen und angemeldet, niemand konnte sie spielen, und nach dem Timeout war
+    der Einsatz still weg (vom Betreiber gemeldet).
+
+    Jetzt: bestaetigen, austeilen, zeigen - und scheitert das Zeigen, wird die
+    Runde abgemeldet und der Einsatz zurueckgegeben. Auch 'Karte/Stand'
+    bestaetigen zuerst, und ein Doppelklick zieht nur EINE Karte."""
+    import discord
+    from testhilfe import _Klick
+    uid, ch = 525252, 5
+    restore = _with_economy({uid: 100_000})
+    alt_deal = casino._bj_deal
+    klick = None
+    tische = []
+
+    async def deal_attrappe(kanal, spieler, bet):
+        klick.protokoll.append(("austeilen",))
+        view = casino.BlackjackView(kanal, spieler, bet)
+        tische.append(view)
+        return (discord.Embed(title="🂡 Blackjack"),
+                discord.File(io.BytesIO(b"x"), filename="bj.png"), view, False)
+    casino._bj_deal = deal_attrappe
+    deal = _knopf(casino._BlackjackSetup, "_deal")
+    try:
+        # Normalfall.
+        klick = _Klick(uid=uid)
+        asyncio.run(deal(casino._BlackjackSetup(uid, channel_id=ch, bet=1_000), klick, None))
+        assert klick.arten() == ["defer", "austeilen", "edit_original"], klick.protokoll
+        assert casino._bj_views.get((ch, uid)) is tische[-1]
+        assert economy.get_coins(uid) == 99_000
+        casino._bj_views.pop((ch, uid), None)
+
+        # Anzeige scheitert -> abgemeldet, Einsatz zurueck, Spieler erfaehrt es.
+        klick = _Klick(uid=uid, kaputt={"edit_original"})
+        asyncio.run(deal(casino._BlackjackSetup(uid, channel_id=ch, bet=1_000), klick, None))
+        assert (ch, uid) not in casino._bj_views, "tote Runde bleibt angemeldet"
+        assert economy.get_coins(uid) == 99_000, "Einsatz verloren"
+        assert tische[-1].settled and tische[-1].is_finished()
+        nachricht = [e for e in klick.protokoll if e[0] == "followup"]
+        assert nachricht and "zurück" in str(nachricht[0][1]), klick.protokoll
+
+        # 'Karte': erst bestaetigen, dann ziehen. Doppelklick = EINE Karte.
+        tisch = casino.BlackjackView(ch, uid, 1_000)
+        zuege = []
+
+        async def zug_attrappe(aktion):
+            zuege.append(aktion)
+            await asyncio.sleep(0)            # hier gibt der Task ab
+            return (discord.Embed(title="🂡"), discord.File(io.BytesIO(b"x"),
+                                                         filename="bj.png"), tisch, False)
+        tisch._step = zug_attrappe
+        karte = _knopf(casino.BlackjackView, "_karte")
+        a, b = _Klick(uid=uid), _Klick(uid=uid)
+
+        async def doppelklick():
+            await asyncio.gather(karte(tisch, a, None), karte(tisch, b, None))
+        asyncio.run(doppelklick())
+        assert zuege == ["hit"], zuege
+        assert a.arten()[0] == "defer" and b.arten()[0] == "defer"
+        assert "edit_original" in a.arten() + b.arten()
+    finally:
+        casino._bj_deal = alt_deal
+        casino._bj_views.pop((ch, uid), None)
+        restore()
+
+
+
+
 # --- Einsatz-Parsing ---------------------------------------------------------
 def test_resolve_bet():
     assert casino._resolve_bet("50", 0) == 50

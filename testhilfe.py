@@ -805,6 +805,134 @@ def _als_coro(wert):
     return lauf()
 
 
+# --- Knopf-Klicks ------------------------------------------------------------
+def _http_fehler(text="kaputt"):
+    """Ein echtes discord.HTTPException - so, wie es aus der REST-Schicht kommt."""
+    import discord
+    return discord.HTTPException(SimpleNamespace(status=500, reason="Attrappe"), text)
+
+
+class _KlickNachricht:
+    """Die Nachricht, an der ein Knopf haengt (fuer Klick-Attrappen)."""
+
+    def __init__(self, protokoll, mid=4242):
+        self.id = mid
+        self.protokoll = protokoll
+        self.channel = SimpleNamespace(id=5)
+        self.components = []
+        self.flags = SimpleNamespace(components_v2=False)
+
+    async def edit(self, **kw):
+        self.protokoll.append(("panel_edit", kw))
+        return self
+
+
+class _Klick:
+    """Klick-/Auswahl-Attrappe fuer Knoepfe und Menues.
+
+    Merkt sich in self.protokoll, WIE und in welcher REIHENFOLGE geantwortet
+    wurde: ('defer', kw), ('send', text, kw), ('edit', kw), ('followup', ...),
+    ('edit_original', kw), ('panel_edit', kw). Tests koennen eigene Eintraege
+    dazwischenschreiben (z. B. ('rolle',) aus einem gepatchten Rollen-Sync) und
+    so pruefen, dass die Antwort VOR der langsamen Arbeit kam - genau daran
+    haengt Discords 3-Sekunden-Frist.
+
+    'kaputt' ist eine Menge von Schritten, die mit discord.HTTPException
+    scheitern sollen: {'defer', 'send', 'edit', 'edit_original', 'followup'}."""
+
+    def __init__(self, uid=1, *, gid=1, werte=None, kaputt=(), member=None):
+        klick = self
+        self.protokoll = []
+        self.kaputt = set(kaputt)
+        # Ohne Server (member=False): Rollen-Syncs kehren dann sofort um,
+        # statt an einer halben Guild-Attrappe zu scheitern.
+        self.user = member or _fake_person(uid, name=f"u{uid}", global_name=f"U{uid}",
+                                           member=False)
+        self.guild_id = gid
+        self.channel_id = 5
+        self.id = 777
+        self.message = _KlickNachricht(self.protokoll)
+        self.data = {"custom_id": "", "component_type": 2, "values": list(werte or [])}
+        self._fertig = False
+
+        class Antwort:
+            def is_done(self):
+                return klick._fertig
+
+            async def defer(self, **kw):
+                klick._schritt("defer", kw)
+
+            async def send_message(self, content=None, **kw):
+                klick._schritt("send", content, kw)
+
+            async def edit_message(self, **kw):
+                klick._schritt("edit", kw)
+
+            async def send_modal(self, modal):
+                klick._schritt("modal", modal)
+
+        class Folge:
+            async def send(self, content=None, **kw):
+                if "followup" in klick.kaputt:
+                    raise _http_fehler("followup")
+                klick.protokoll.append(("followup", content, kw))
+
+        self.response = Antwort()
+        self.followup = Folge()
+
+    def _schritt(self, art, *daten):
+        if art in self.kaputt:
+            raise _http_fehler(art)
+        if self._fertig:
+            raise AssertionError(f"Interaktion doppelt beantwortet ({art})")
+        self._fertig = True
+        self.protokoll.append((art,) + daten)
+
+    async def edit_original_response(self, **kw):
+        if "edit_original" in self.kaputt:
+            raise _http_fehler("edit_original")
+        self.protokoll.append(("edit_original", kw))
+        return self.message
+
+    async def original_response(self):
+        return self.message
+
+    def arten(self):
+        """Nur die Art jedes Protokoll-Eintrags - fuer Reihenfolge-Pruefungen."""
+        return [eintrag[0] for eintrag in self.protokoll]
+
+
+def _dynamisch_klicken(klassen, view, custom_id, klick, *, werte=None):
+    """Ein Klick auf einen DynamicItem-Knopf - ueber den ECHTEN Weg von discord.py.
+
+    Genau wie nach einem Neustart: discord.py kennt die View NICHT, nur die
+    angemeldeten Muster (client.add_dynamic_items). Es baut aus den Komponenten
+    der Nachricht eine nackte View, sucht das Muster, das auf die custom_id
+    passt, ruft from_custom_id und dann den Callback. Hier dieselbe Kette mit
+    discord.py's eigenem ViewStore - nur ohne Gateway.
+
+    Rueckgabe: wie viele Muster auf die custom_id gepasst haben (muss 1 sein)."""
+    import discord.ui.view as ui_view
+    from discord.components import _component_factory
+    klick.message.components = [_component_factory(d) for d in view.to_components()]
+    typ = next(c.type.value for c in view.children if c.custom_id == custom_id)
+    klick.data = {"custom_id": custom_id, "component_type": typ,
+                  "values": list(werte or [])}
+    store = ui_view.ViewStore(SimpleNamespace())
+    store.add_dynamic_items(*klassen)
+
+    async def lauf():
+        treffer = 0
+        for muster, fabrik in list(store._dynamic_items.items()):
+            passt = muster.fullmatch(custom_id)
+            if passt is not None:
+                treffer += 1
+                await store.schedule_dynamic_item_call(typ, fabrik, klick,
+                                                       custom_id, passt)
+        return treffer
+    return asyncio.run(lauf())
+
+
 # ---------------------------------------------------------------------------
 # ZUERST den Datenordner umbiegen - VOR jedem Modul-Import, denn store.DATA_DIR
 # wird beim Import festgelegt und jeder JsonStore haengt daran.

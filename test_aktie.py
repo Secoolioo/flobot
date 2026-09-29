@@ -1548,6 +1548,143 @@ def test_floaktie_reset_befehl():
 
 
 
+def _aktie_frisch(coins):
+    """Aktie mit kleinem Kurs und leerem Depot; gibt eine Aufraeum-Funktion."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._chart_msg, fa._panel_msg, fa._chart_days)
+    restore_eco = _with_economy(coins)
+    fa._enabled = True
+    fa._chart_msg = fa._panel_msg = None
+    fa._store = _FakeStore({"price": 1000, "day": fa._today(),
+                            "act_ema": floaktie.ACT_BASELINE, "msg_count": 0,
+                            "last_msg_count": 0, "holdings": {},
+                            "history": [{"day": "d", "price": 1000}]})
+
+    def restore():
+        (fa._store, fa._enabled, fa._chart_msg, fa._panel_msg,
+         fa._chart_days) = alt
+        restore_eco()
+    return fa, restore
+
+
+def test_verkauf_als_erstes_wort_erreicht_die_aktie():
+    """'Flo verkauf 5' kam bei NIEMANDEM an (vom Betreiber gemeldet): die Aktie
+    las kauf/verkauf nur als zweites Wort ('aktie verkauf 5'), und economy
+    verkauft nichts. Die Aktie ist das Einzige, was man bei Flo verkaufen kann -
+    also nimmt sie 'verkauf/verkaufe/sell' jetzt auch vorne.
+
+    'kauf' bleibt beim Titel-Shop ('kaufen 3' = Titel Nr. 3) - ausser die Aktie
+    ist ausdruecklich genannt ('kauf 5 aktien'). Und ein Satz bleibt ein Satz:
+    'Flo verkauf mir das nicht als neu' ist kein Verkaufsauftrag."""
+    import floaktie
+    fa, restore = _aktie_frisch({7: 1_000_000})
+
+    def msg(text):
+        return SimpleNamespace(content=text, guild=SimpleNamespace(id=1),
+                               author=SimpleNamespace(id=7, display_name="T"))
+
+    def frag(text):
+        return asyncio.run(fa.handle(msg(text)))
+    try:
+        assert "Gekauft" in _embed_text(frag("kauf 10 aktien"))
+        assert fa.shares_of(7) == 10
+        assert "Verkauft" in _embed_text(frag("verkauf 3"))
+        assert fa.shares_of(7) == 7
+        assert "Verkauft" in _embed_text(frag("sell 2"))
+        assert fa.shares_of(7) == 5
+        assert "Verkauft" in _embed_text(frag("verkaufe meine aktien alle"))
+        assert fa.shares_of(7) == 0
+        assert "Gekauft" in _embed_text(frag("kaufe aktie"))
+        assert fa.shares_of(7) == 1
+        # Nackt: die Anleitung, nichts wird verkauft.
+        antwort = frag("verkauf")
+        assert "verkauf 5" in str(antwort) and fa.shares_of(7) == 1, antwort
+
+        # Saetze und Shop-Kaeufe gehen NICHT an die Aktie.
+        for satz in ("verkauf mir das nicht als neu", "verkaufe deine seele",
+                     "sell your soul", "verkaufen kann ich nicht", "kauf mir ein eis",
+                     "kauf 3", "kaufen", "buy 2 titles"):
+            assert frag(satz) is None, satz
+        assert fa.shares_of(7) == 1
+
+        # Boerse aus: 'verkauf 3' bekommt dieselbe klare Absage wie 'aktie
+        # verkauf 3' - ein Satz aber weiterhin keine.
+        alt_off = fa.is_off
+        fa.is_off = lambda gid=None: True
+        try:
+            assert "geschlossen" in _embed_text(frag("verkauf 3"))
+            assert "geschlossen" in _embed_text(
+                asyncio.run(fa.handle_aus(msg("verkauf 3"))))
+            assert asyncio.run(fa.handle_aus(msg("verkaufe deine seele"))) is None
+        finally:
+            vars(fa).pop("is_off", None)
+        assert fa.is_off == alt_off
+    finally:
+        restore()
+
+
+
+
+def test_aktien_knoepfe_ueberleben_den_neustart():
+    """Nach JEDEM Neustart waren das Aktien-Panel und die Chart-Knoepfe tot -
+    obwohl das Panel weiter live nachgezogen wird und zum Klicken einlaedt. Und
+    jedes 'Flo aktie' liess eine View fuer immer im Speicher.
+
+    Jetzt: DynamicItems (flo:aktie:kauf:10, flo:aktie:kurs:7 ...). Geprueft wird
+    der ECHTE Weg nach einem Neustart - discord.py baut aus der Nachricht eine
+    nackte View, findet das Muster, ruft from_custom_id und den Callback. Beide
+    Knopfarten bestaetigen ZUERST (Handeln speichert, der Chart rendert)."""
+    import discord
+    import floaktie
+    from testhilfe import _Klick, _dynamisch_klicken
+    fa, restore = _aktie_frisch({1: 1_000_000})
+    try:
+        panel = floaktie.FloAktieView()
+        assert panel.timeout is None
+        assert all(isinstance(k, discord.ui.DynamicItem) for k in panel.children)
+
+        klick = _Klick(uid=1)
+        assert _dynamisch_klicken(floaktie.DYNAMISCHE_KNOEPFE, panel,
+                                  "flo:aktie:kauf:10", klick) == 1
+        assert fa.shares_of(1) == 10
+        assert klick.arten() == ["defer", "followup"], klick.protokoll
+
+        klick = _Klick(uid=1)
+        _dynamisch_klicken(floaktie.DYNAMISCHE_KNOEPFE, panel,
+                           "flo:aktie:verkauf:alles", klick)
+        assert fa.shares_of(1) == 0
+
+        klick = _Klick(uid=1)
+        _dynamisch_klicken(floaktie.DYNAMISCHE_KNOEPFE, panel,
+                           "flo:aktie:info:depot", klick)
+        assert klick.arten() == ["send"] and klick.protokoll[0][2].get("ephemeral")
+
+        # Chart-Knopf: erst bestaetigen, dann rendern; die neue Ansicht hebt den
+        # gewaehlten Zeitraum hervor, und dieser Chart wird der 'live' gehaltene.
+        gerendert = []
+
+        async def chart_attrappe(tage, label):
+            gerendert.append(tage)
+            return discord.File(io.BytesIO(b"x"), filename="kurs.png")
+        fa._chart_file = chart_attrappe
+        chart = floaktie.KursView(1)
+        assert chart.timeout is None
+        klick = _Klick(uid=1)
+        _dynamisch_klicken(floaktie.DYNAMISCHE_KNOEPFE, chart, "flo:aktie:kurs:7", klick)
+        assert gerendert == [7] and klick.arten() == ["defer", "edit_original"]
+        neu = klick.protokoll[1][1]["view"]
+        aktiv = [k.custom_id for k in neu.children
+                 if k.item.style == discord.ButtonStyle.primary]
+        assert aktiv == ["flo:aktie:kurs:7"], aktiv
+        assert fa._chart_msg is klick.message and fa._chart_days == 7
+    finally:
+        vars(fa).pop("_chart_file", None)
+        restore()
+
+
+
+
 def test_floaktie_faellt_auf_jedem_niveau():
     """REGRESSION (aus dem Betrieb: "die Aktie sinkt nie"): Der Boden FAIR_BASE lag
     bei 5.000, waehrend der Kurs nach einem Reset bei 1.000 startet und im Betrieb

@@ -216,6 +216,52 @@ def test_luxus_besitz_und_rahmen():
 
 
 
+def test_luxus_kauf_antwortet_zuerst():
+    """Das Luxus-Menue kaufte zuerst (speichern, beim Imperium sogar Rolle
+    anlegen und vergeben - zwei REST-Aufrufe) und antwortete danach. Hing das
+    laenger als Discords 3 Sekunden: "Interaktion fehlgeschlagen" bei einem
+    Kauf ueber eine MILLIARDE, der laengst gebucht war. Jetzt: erst bestaetigen,
+    dann kaufen - und geht schon das Bestaetigen schief, wird nichts gekauft."""
+    from testhilfe import _Klick, _FakeStore as _Laden
+    restore = _with_economy({1: 1_000_000})
+    lx = luxus.instance
+    alt = (lx._store, lx._enabled)
+    lx._store = _Laden({"users": {}, "throne": {
+        "owner": "", "preis": luxus.THRONE_START, "n": 0}})
+    lx._enabled = True
+    billig = luxus.ITEMS[0]
+    try:
+        klick = _Klick(uid=1, werte=[billig["key"]])
+        alt_flush = lx._flush_all
+
+        async def speichern_merken():
+            klick.protokoll.append(("speichern",))
+            await alt_flush()
+        lx._flush_all = speichern_merken
+        view = luxus._LuxusView(1)
+        auswahl = view.children[0]
+        auswahl._refresh_state(klick, klick.data)
+        asyncio.run(auswahl.callback(klick))
+        assert luxus.owns(1, billig["key"])
+        arten = klick.arten()
+        assert arten[0] == "defer" and "speichern" in arten and "followup" in arten, arten
+        assert arten.index("defer") < arten.index("speichern") < arten.index("followup")
+
+        # Bestaetigen scheitert -> kein Kauf, kein Coin weg.
+        zweites = luxus.ITEMS[1]
+        vorher = economy.get_coins(1)
+        klick = _Klick(uid=1, werte=[zweites["key"]], kaputt={"defer"})
+        auswahl._refresh_state(klick, klick.data)
+        asyncio.run(auswahl.callback(klick))
+        assert not luxus.owns(1, zweites["key"]) and economy.get_coins(1) == vorher
+    finally:
+        vars(lx).pop("_flush_all", None)
+        lx._store, lx._enabled = alt
+        restore()
+
+
+
+
 # --- Coin-Handelsbuch ------------------------------------------------------------
 def test_handel_buchhaltung():
     """record() fuehrt Gesamtsummen, Quellen, Tages-Buckets und Einzelbuchungen;
@@ -431,6 +477,83 @@ def test_merchant_shop_und_trade():
 
 
 
+def test_haendler_panel_ueberlebt_den_neustart():
+    """Der Haendler steht eine Stunde da - aber nach einem Neustart in dieser
+    Stunde war sein Panel tot ("Interaktion fehlgeschlagen"), und jedes
+    'Flo händler' liess eine View fuer immer im Speicher. Jetzt: DynamicItems,
+    der Zustand kommt aus dem Modul und der Interaktion.
+
+    Und: Kauf und Tausch bestaetigen ZUERST. Beide geben Rollen (bis zu drei
+    REST-Aufrufe) und speichern - vorher lief das vor der Antwort, riss die
+    3 Sekunden, und wer nochmal klickte, versuchte es doppelt."""
+    import discord
+    import merchant
+    from testhilfe import _Klick, _dynamisch_klicken
+    restore_eco = _with_economy({1: 10_000, 3: 10_000})
+    m = merchant.instance
+    alt = (m._store, m._enabled)
+    m._enabled = True
+    stock = [{"id": "haendler:schatzsucher", "text": "Schatzsucher",
+              "label": "🧭 Schatzsucher", "rarity": "selten", "price": 5000, "limit": 0}]
+    trades = [{
+        "id": "trade:haendler:sternenjaeger", "need_rarity": "selten",
+        "surcharge": 3000, "reward_id": "haendler:sternenjaeger",
+        "reward_text": "Sternenjäger", "reward_label": "🌠 Sternenjäger",
+        "reward_rarity": "mythisch"}]
+    m._store = _FakeStore({"arrived": True, "departed": False, "depart_at": 9e18,
+                           "stock": stock, "trades": trades, "sold": {}})
+    protokoll = []
+
+    async def rolle_merken(_member):
+        protokoll[-1].protokoll.append(("rolle",))
+    e = economy.instance
+    e._sync_role = rolle_merken
+    try:
+        view = merchant.HaendlerView()
+        assert view.timeout is None
+        assert all(isinstance(k, discord.ui.DynamicItem) for k in view.children)
+
+        # Kauf ueber das Menue - so, wie discord.py ihn nach einem Neustart baut.
+        klick = _Klick(uid=1)
+        protokoll.append(klick)
+        treffer = _dynamisch_klicken(merchant.DYNAMISCHE_KNOEPFE, view,
+                                     "flo:haendler:kauf", klick,
+                                     werte=["haendler:schatzsucher"])
+        assert treffer == 1
+        assert economy.owns_title(1, "Schatzsucher") and economy.get_coins(1) == 5_000
+        arten = klick.arten()
+        assert arten[0] == "defer", arten
+        assert arten.index("rolle") < arten.index("followup") < arten.index("panel_edit")
+
+        # Tausch, Schritt 1: das Menue fragt nach dem Einsatz (schnell, kein defer).
+        economy.grant_title(3, "Glücksbär", "🐻 Glücksbär", "selten")
+        klick = _Klick(uid=3)
+        protokoll.append(klick)
+        _dynamisch_klicken(merchant.DYNAMISCHE_KNOEPFE, view, "flo:haendler:tausch",
+                           klick, werte=["trade:haendler:sternenjaeger"])
+        assert klick.arten() == ["send"], klick.protokoll
+        auswahl_view = klick.protokoll[0][2]["view"]
+        assert isinstance(auswahl_view, merchant._GiveView)
+
+        # Schritt 2: den Einsatz waehlen -> erst bestaetigen, dann tauschen.
+        klick = _Klick(uid=3, werte=["Glücksbär"])
+        protokoll.append(klick)
+        einsatz = auswahl_view.children[0]
+        einsatz._refresh_state(klick, klick.data)
+        asyncio.run(einsatz.callback(klick))
+        assert economy.owns_title(3, "Sternenjäger")
+        assert not economy.owns_title(3, "Glücksbär")
+        arten = klick.arten()
+        assert arten[0] == "defer" and arten.index("rolle") < arten.index("edit_original")
+        assert auswahl_view.is_finished(), "zweite Auswahl koennte nochmal tauschen"
+    finally:
+        vars(e).pop("_sync_role", None)
+        m._store, m._enabled = alt
+        restore_eco()
+
+
+
+
 # --- Titel: die Seltenheits-Leiter -------------------------------------------
 def test_titles_leiter():
     """Acht Stufen, saubere Verteilung, eigene Farbe/Rolle je Stufe - und die
@@ -593,6 +716,113 @@ def test_lotto_flow():
     finally:
         lt._store, lt._enabled, lt._win_chance = alt
         restore_eco()
+
+
+
+
+def test_lotto_knoepfe_ueberleben_den_neustart():
+    """Nach JEDEM Neustart waren alle Lotto-Panels tot (vom Betreiber gemeldet).
+
+    Die View hatte timeout=None, aber keine custom_id: discord.py kennt so eine
+    View nur, solange der Prozess lebt - und weil sie nie ablief, blieb jede
+    einzelne fuer immer im Speicher. Jetzt sind die Knoepfe DynamicItems: die
+    custom_id sagt, wie viele Lose, der Rest kommt aus dem Modul.
+
+    Geprueft wird der ECHTE Weg nach einem Neustart: discord.py baut aus der
+    Nachricht eine nackte View, findet das Muster, ruft from_custom_id und den
+    Callback. Und: der Knopf bestaetigt ZUERST - vorher kaufte er erst und
+    antwortete danach, bei langsamem Speichern kam "Interaktion
+    fehlgeschlagen", und wer nochmal klickte, kaufte doppelt."""
+    import discord
+    import discord.ui.view as ui_view
+    import lotto
+    from testhilfe import _Klick, _dynamisch_klicken
+    restore_eco = _with_economy({1: 25_000, 2: 5_000})
+    lt = lotto.instance
+    alt = (lt._store, lt._enabled)
+    lt._enabled = True
+    lt._store = _FakeStore({"month": lt._month_str(), "jackpot": 20_000_000,
+                            "ticket_price": 10_000, "entries": {}, "house": 0,
+                            "history": []})
+    try:
+        view = lotto.LottoView()
+        assert view.timeout is None
+        assert all(isinstance(k, discord.ui.DynamicItem) for k in view.children)
+        # Eine View nur aus DynamicItems legt discord.py gar nicht erst ab.
+        store = ui_view.ViewStore(SimpleNamespace())
+        store.add_view(view, 4242)
+        assert not store._views and not store._synced_message_views, "View-Leck"
+
+        klick = _Klick(uid=1)
+        treffer = _dynamisch_klicken(lotto.DYNAMISCHE_KNOEPFE, view,
+                                     "flo:lotto:kauf:1", klick)
+        assert treffer == 1
+        assert lt._entries()["1"] == 1 and economy.get_coins(1) == 15_000
+        arten = klick.arten()
+        assert arten[0] == "defer" and "followup" in arten and "panel_edit" in arten, arten
+
+        # 'Max' rechnet mit dem Guthaben DES KLICKERS.
+        klick = _Klick(uid=1)
+        _dynamisch_klicken(lotto.DYNAMISCHE_KNOEPFE, view, "flo:lotto:kauf:max", klick)
+        assert lt._entries()["1"] == 2 and economy.get_coins(1) == 5_000
+
+        # Kein Geld fuer ein Los -> kurze Absage, nichts gebucht.
+        klick = _Klick(uid=2)
+        economy.instance._profile(2)["coins"] = 5_000
+        _dynamisch_klicken(lotto.DYNAMISCHE_KNOEPFE, view, "flo:lotto:kauf:max", klick)
+        assert "2" not in lt._entries() and klick.arten() == ["send"], klick.protokoll
+
+        # Geht schon das Bestaetigen schief, wird NICHT gekauft (sonst: Doppelkauf).
+        klick = _Klick(uid=1, kaputt={"defer"})
+        _dynamisch_klicken(lotto.DYNAMISCHE_KNOEPFE, view, "flo:lotto:kauf:10", klick)
+        assert lt._entries()["1"] == 2
+    finally:
+        lt._store, lt._enabled = alt
+        restore_eco()
+
+
+
+
+def test_knopf_muster_ueberschneiden_sich_nie():
+    """Die Panels von Lotto, Aktie und Haendler leben ueber Neustarts, weil ihre
+    Knoepfe DynamicItems sind (siehe test_lotto_knoepfe_ueberleben_den_neustart).
+
+    Zwei Fallen, die dabei im Betrieb still zuschlagen:
+    - Passt eine custom_id auf ZWEI Muster, feuern beide Klassen; der zweite
+      Callback stirbt an der schon beantworteten Interaktion.
+    - Steckt in einem Panel ein DynamicItem, das in DYNAMISCHE_KNOEPFE fehlt,
+      meldet bot.py es beim Start nicht an - genau dieser Knopf ist nach einem
+      Neustart wieder tot, alle anderen gehen. Das faellt niemandem auf.
+    Ausserdem: Discord nimmt hoechstens 100 Zeichen je custom_id."""
+    import discord
+    import floaktie
+    import lotto
+    import merchant
+    alt = merchant.instance._store
+    merchant.instance._store = _FakeStore({"stock": [], "trades": []})
+    try:
+        panels = {
+            lotto: [lotto.LottoView()],
+            floaktie: [floaktie.FloAktieView(), floaktie.KursView(7)],
+            merchant: [merchant.HaendlerView()],
+        }
+        alle = [k for modul in panels for k in modul.DYNAMISCHE_KNOEPFE]
+        assert len(set(alle)) == len(alle)
+        for modul, views in panels.items():
+            for view in views:
+                assert view.timeout is None, (modul.__name__, type(view).__name__)
+                for knopf in view.children:
+                    assert isinstance(knopf, discord.ui.DynamicItem), knopf
+                    assert type(knopf) in modul.DYNAMISCHE_KNOEPFE, (
+                        f"{modul.__name__}: {type(knopf).__name__} fehlt in "
+                        f"DYNAMISCHE_KNOEPFE - nach einem Neustart waere er tot")
+                    cid = knopf.custom_id
+                    assert len(cid) <= 100, cid
+                    passend = [k.__name__ for k in alle
+                               if k.__discord_ui_compiled_template__.fullmatch(cid)]
+                    assert passend == [type(knopf).__name__], (cid, passend)
+    finally:
+        merchant.instance._store = alt
 
 
 
@@ -890,6 +1120,81 @@ def test_economy_money_leaderboard():
 
 
 
+def test_economy_saetze_sind_keine_befehle():
+    """Ein Befehl feuert nur, wenn er EINDEUTIG einer ist - sonst antwortet die KI.
+
+    Vom Betreiber gemeldet: 'Flo geld her!' zeigte die Reichen-Liste. Dieselbe
+    Falle hatten weitere Alltagswoerter am Satzanfang:
+        'Flo setze dich hin'   -> "Den Titel **dich hin** besitzt du nicht"
+        'Flo zahl mir ein Bier'-> Ueberweisungs-Anleitung
+        'Flo kauf 5 aktien'    -> kaufte Titel Nr. 5 aus dem Shop
+    Nackt bleiben diese Woerter Befehle (Inventar und Abdruck halten das fest);
+    mit Text dahinter nur, wenn der Text wirklich ein Argument ist."""
+    restore = _with_economy({778899001122334455: 50_000})
+    e = economy.instance
+    aufrufe = []
+
+    def merken(name):
+        async def ersatz(*_a, **_k):
+            aufrufe.append(name)
+            return f"<{name}>"
+        return ersatz
+
+    # Nur auf der Instanz ueberdecken - im finally wieder wegnehmen, dann
+    # gelten die Methoden der Klasse wie vorher.
+    e._money_leaderboard = merken("reichenliste")
+    e._equip = merken("anlegen")
+    e._buy_text = merken("shop-kauf")
+    e._pay = merken("pay")
+    e.grant_title(778899001122334455, "Drachenlord", "🐉 Drachenlord", "legendary")
+
+    def frag(text):
+        aufrufe.clear()
+        antwort = asyncio.run(e.handle(_rauch_nachricht(text)))
+        return antwort, list(aufrufe)
+    try:
+        harmlos = (
+            "geld her!", "geld regiert die welt", "reich mir mal das salz",
+            "reich wird hier keiner", "vermögen ist relativ",
+            "reichtum macht nicht glücklich",
+            "setze dich hin", "trage mich nach hause", "tragen muss das wer anders",
+            "anziehen muss ich mich noch", "anlegen will ich mich nicht mit dir",
+            "zahl mir ein bier", "zahle du doch",
+            "kauf mir ein eis", "kauf 5 aktien", "kaufen 3 bier", "buy me a drink",
+        )
+        for satz in harmlos:
+            antwort, gerufen = frag(satz)
+            assert antwort is None and not gerufen, (satz, antwort, gerufen)
+
+        befehle = {
+            "geld": "reichenliste", "reich": "reichenliste",
+            "geld top": "reichenliste", "vermögen rangliste": "reichenliste",
+            "reichste": "reichenliste", "geldtop": "reichenliste",
+            "setze drachenlord": "anlegen", "trage Drachenlord": "anlegen",
+            "trage": "anlegen", "equip irgendwas": "anlegen",
+            "zahl": "pay", "pay": "pay",
+            "kaufen": "shop-kauf", "kaufen 3": "shop-kauf",
+            "kauf 3 bitte": "shop-kauf",
+        }
+        for text, erwartet in befehle.items():
+            antwort, gerufen = frag(text)
+            assert gerufen == [erwartet], (text, antwort, gerufen)
+
+        # 'zahl' MIT getipptem Menschen bleibt eine Ueberweisung.
+        bob = _fake_person(uid=8, name="bob")
+        msg = _rauch_nachricht("zahl <@8> 100")
+        msg.mentions = [bob]
+        aufrufe.clear()
+        asyncio.run(e.handle(msg))
+        assert aufrufe == ["pay"], aufrufe
+    finally:
+        for name in ("_money_leaderboard", "_equip", "_buy_text", "_pay"):
+            vars(e).pop(name, None)
+        restore()
+
+
+
+
 def test_schulden_entstehen_nur_mit_zustimmung():
     """DER Kernumbau: eine Zahlung ist ein GESCHENK, keine Forderung.
 
@@ -982,6 +1287,64 @@ def test_schulden_pay_geht_immer_durch():
         antwort = asyncio.run(economy.instance._pay(msg))
         assert isinstance(antwort, str) and "nicht genug" in antwort.lower()
         assert economy.get_coins(7) == 6500
+    finally:
+        economy.instance._flush = alt_flush
+        restore()
+
+
+
+
+def test_pay_zahlt_an_den_getippten_menschen():
+    """'@Flo pay @Bob 100' kam nie bei Bob an (Bug, vom Betreiber gemeldet).
+
+    _pay nahm die erste Erwaehnung im Text - und das war Flo selbst, weil man
+    ihn per @ angesprochen hatte: "Bots brauchen kein Geld", Bob ging leer aus.
+    Und stand gar kein @ im Text, griff der Rueckfall message.mentions[0] -
+    bei einer Antwort-mit-Ping ist das der Autor der beantworteten Nachricht,
+    der bekam das Geld, ohne dass ihn jemand genannt hatte.
+
+    Jetzt: der erste GETIPPTE Mensch. Sonst wird nachgefragt, nie geraten."""
+    restore, _sch = _schulden_setup({7: 10_000, 8: 0, 42: 0, 99: 0})
+    alt_flush = economy.instance._flush
+
+    async def kein_flush():
+        return None
+    economy.instance._flush = kein_flush
+
+    flo = _fake_person(uid=42, name="flo", bot=True)
+    fremdbot = _fake_person(uid=99, name="mee6", bot=True)
+    bob = _fake_person(uid=8, name="bob")
+    autor = _fake_person(uid=7, name="zahler")
+
+    def nachricht(text, mentions):
+        return SimpleNamespace(content=text, mentions=list(mentions), author=autor,
+                               guild=SimpleNamespace(id=1, get_member=lambda _u: None))
+
+    def stand():
+        return economy.get_coins(7), economy.get_coins(8), economy.get_coins(42)
+    try:
+        # 1. Flo per @ angesprochen, Bob getippt -> Bob bekommt es.
+        asyncio.run(economy.instance._pay(nachricht("<@42> pay <@8> 100", [flo, bob])))
+        assert stand() == (9_900, 100, 0), stand()
+
+        # 2. Antwort-mit-Ping: Bob steht nur in message.mentions, getippt hat
+        #    ihn niemand -> nachfragen, KEIN Coin bewegt sich.
+        vorher = stand()
+        antwort = asyncio.run(economy.instance._pay(nachricht("flo pay 100", [bob])))
+        assert isinstance(antwort, str) and "pay @jemand" in antwort, antwort
+        assert stand() == vorher, "an den beantworteten Autor gezahlt"
+
+        # 3. Nur Flo als Anrede, kein Empfaenger -> Anleitung, nicht die
+        #    Bot-Abfuhr (Flo ist hier der Angesprochene, nicht der Empfaenger).
+        antwort = asyncio.run(economy.instance._pay(nachricht("<@42> pay 100", [flo])))
+        assert "pay @jemand" in antwort and "Bots" not in antwort, antwort
+        assert stand() == vorher
+
+        # 4. Ein anderer Bot als Empfaenger -> die alte Abfuhr bleibt.
+        antwort = asyncio.run(economy.instance._pay(
+            nachricht("flo pay <@99> 100", [fremdbot])))
+        assert "Bots brauchen kein Geld" in antwort, antwort
+        assert stand() == vorher and economy.get_coins(99) == 0
     finally:
         economy.instance._flush = alt_flush
         restore()
@@ -1222,6 +1585,50 @@ def test_voice_coins_haben_einen_tagesdeckel():
             e.VOICE_COINS_DAILY_MAX = merk
     finally:
         e._store, e._enabled, e.XP_PER_VOICE_TICK, e._today = alt
+
+
+
+
+def test_erste_nachricht_nach_dem_hochfahren_bringt_xp():
+    """time.monotonic() zaehlt ab dem Hochfahren des RECHNERS. Der Nachrichten-
+    Cooldown stand fuer "noch nie geschrieben" auf 0.0 - in den ersten 45 s
+    nach einem Server-Neustart war damit JEDER "gerade eben" dran und bekam
+    fuer seine erste Nachricht weder XP noch Coins. Still, ohne Fehlermeldung.
+    "Noch nie" ist jetzt -inf."""
+    e = economy.instance
+    alt_time = economy.time
+    alt = (e._store, e._enabled, e._last_msg_xp)
+    xp = []
+
+    async def xp_merken(_member, menge):
+        xp.append(menge)
+        return None
+
+    class FrischGebooteteUhr:
+        """Nur economy sieht diese Uhr - asyncio laeuft mit der echten weiter."""
+        def __getattr__(self, name):
+            return getattr(alt_time, name)
+
+        @staticmethod
+        def monotonic():
+            return 5.0                            # Rechner laeuft seit 5 s
+    try:
+        e._store = _FakeStore({"users": {}})
+        e._enabled = True
+        e._last_msg_xp = {}
+        e.add_xp = xp_merken
+        economy.time = FrischGebooteteUhr()
+        msg = _rauch_nachricht("hallo zusammen")
+        asyncio.run(e.on_message(msg))
+        assert xp, "erste Nachricht nach dem Hochfahren brachte keine XP"
+        assert e.get_coins(msg.author.id) > 0
+        # Der Cooldown selbst gilt weiter: gleich danach gibt es nichts.
+        asyncio.run(e.on_message(msg))
+        assert len(xp) == 1, xp
+    finally:
+        economy.time = alt_time
+        vars(e).pop("add_xp", None)
+        e._store, e._enabled, e._last_msg_xp = alt
 
 
 
@@ -1741,6 +2148,69 @@ def test_teurer_kauf_fragt_nach():
         assert len(e._kauf_offen) <= 2, len(e._kauf_offen)
     finally:
         e._store, e._enabled, e._kauf_offen, e._sync_role = alt
+
+
+
+
+def test_shop_und_inventar_antworten_vor_dem_rollen_sync():
+    """Discord gibt einem Klick 3 Sekunden. Der Shop-Knopf und die Inventar-
+    Knoepfe zogen aber ZUERST die Seltenheits-Rolle nach (bis zu drei REST-
+    Aufrufe, gern am Rate-Limit) und antworteten erst danach. Ergebnis:
+    "Interaktion fehlgeschlagen" - obwohl der Titel gekauft war -, und wer
+    nochmal klickte, kaufte doppelt. Jetzt: erst antworten, die Rolle kommt
+    im Hintergrund hinterher (und ein Fehler dort landet im Log)."""
+    from testhilfe import _Klick
+    e = economy.instance
+    alt = (e._store, e._enabled)
+    klick = _Klick(uid=1)
+
+    async def rolle_merken(_member):
+        klick.protokoll.append(("rolle",))
+
+    async def rolle_kaputt(_member):
+        raise RuntimeError("Rate-Limit")
+
+    async def klicken(coro):
+        await coro
+        # Den Hintergrund-Task zu Ende laufen lassen, solange der Loop lebt.
+        await asyncio.gather(*list(e._hintergrund))
+    try:
+        e._enabled = True
+        e._store = _FakeStore({"users": {"1": {
+            "coins": 10_000, "xp": 0, "owned": [], "name": "T", "title": "",
+            "title_rarity": "", "voice_secs": 0, "msgs": 0, "streak": 0,
+            "last_daily": ""}}, "shop": {}})
+        e._sync_role = rolle_merken
+        item = {"n": 1, "label": "🦊 Fuchs", "text": "Fuchs", "rarity": "normal",
+                "price": 1_000}
+        shop = economy._ShopView([item])
+        asyncio.run(klicken(shop._buy(klick, 1)))
+        assert e.owns_title(1, "Fuchs") and e.get_coins(1) == 9_000
+        assert klick.arten() == ["send", "rolle"], klick.protokoll
+
+        # Inventar: anlegen und ablegen - ebenfalls erst die Ansicht, dann die Rolle.
+        inv = economy._InventoryView(1, e.list_titles(1))
+        klick2 = _Klick(uid=1)
+        klick = klick2      # rolle_merken schreibt in das aktuelle Protokoll
+        asyncio.run(klicken(inv._equip(klick2, "Fuchs")))
+        assert klick2.arten() == ["edit", "rolle"], klick2.protokoll
+        ablegen = economy._InventoryView._unequip
+        ablegen = getattr(ablegen, "callback", ablegen)
+        klick3 = _Klick(uid=1)
+        klick = klick3
+        asyncio.run(klicken(ablegen(inv, klick3, None)))
+        assert klick3.arten() == ["edit", "rolle"], klick3.protokoll
+        assert e._profile(1)["title"] == ""
+
+        # Ein kaputter Rollen-Sync kippt den Kauf nicht und bleibt nicht stumm.
+        e._sync_role = rolle_kaputt
+        item2 = dict(item, n=2, label="🐺 Wolf", text="Wolf")
+        klick = _Klick(uid=1)
+        asyncio.run(klicken(economy._ShopView([item2])._buy(klick, 2)))
+        assert e.owns_title(1, "Wolf") and klick.arten() == ["send"], klick.protokoll
+    finally:
+        vars(e).pop("_sync_role", None)
+        e._store, e._enabled = alt
 
 
 
@@ -2561,6 +3031,41 @@ def test_los_und_lose_erreichen_das_lotto():
     # Das Rubbellos behaelt seine eindeutigen Woerter.
     for wort in ("rubbellos", "rubbel", "scratch"):
         assert f'"{wort}"' in handle_teil, wort
+
+
+
+
+def test_los_als_normales_wort_oeffnet_kein_lotto():
+    """'Flo los, sag was' oeffnete das Lotto-Panel (vom Betreiber gemeldet).
+
+    'los' und 'lose' sind ganz normale Woerter. Sie sind nur dann das Lotto,
+    wenn sie allein stehen oder ein echtes Lotto-Wort folgt (kauf, kasse,
+    abbuchen, eine Anzahl, max). Alles andere ist ein Satz - die KI antwortet."""
+    import lotto
+    restore_eco = _with_economy({778899001122334455: 100_000})
+    lt = lotto.instance
+    alt = (lt._store, lt._enabled)
+    lt._enabled = True
+    lt._store = _FakeStore({"month": lt._month_str(), "jackpot": 20_000_000,
+                            "ticket_price": 10_000, "entries": {}, "house": 0,
+                            "history": []})
+
+    def frag(text):
+        return asyncio.run(lt.handle(_rauch_nachricht(text)))
+    try:
+        for satz in ("los, sag was", "los gehts", "los jetzt!", "lose schraube",
+                     "lose enden gibts hier nicht", "Los, erzähl mal"):
+            assert frag(satz) is None, satz
+        # Nackt und mit echtem Lotto-Wort bleibt es das Lotto.
+        assert frag("los") is lotto.HANDLED            # Panel
+        assert frag("lose!") is lotto.HANDLED
+        assert frag("los 5") is lotto.HANDLED           # Anzahl -> Panel wie bisher
+        assert "gekauft" in str(frag("lose kauf 2"))
+        assert lt._entries()["778899001122334455"] == 2
+        assert frag("lotto egal was") is lotto.HANDLED  # 'lotto' ist eindeutig
+    finally:
+        lt._store, lt._enabled = alt
+        restore_eco()
 
 
 
