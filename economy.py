@@ -46,6 +46,10 @@ log = logging.getLogger("dcbot.economy")
 HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 
 
+# Woerter, mit denen man den getragenen Titel ablegt ('titel ab', 'trage aus').
+_TITEL_AB = ("ab", "aus", "weg", "kein", "keinen", "none", "off")
+
+
 class Economy(FeatureBasis):
     """Kapselt das komplette Level-/Coin-System: Konfiguration, Datenzugriff,
     XP-Vergabe, Shop, Inventar und die Befehls-Verarbeitung."""
@@ -205,6 +209,8 @@ class Economy(FeatureBasis):
         self._AVATAR_CACHE = {}
         self._AVATAR_FAIL = {}
         self._karten_avatare = {}   # Bild-Adresse -> Bytes (Level-Karte)
+        self._rollen_sperren = {}   # uid -> Lock (Rollen-Sync nacheinander)
+        self._rollen_zuletzt = {}   # uid -> monotonic des letzten Syncs
         # Offene Rueckfragen bei teuren Kaeufen: uid -> (nummer, ablauf_zeit).
         # Bewusst nur im Speicher - eine Rueckfrage soll einen Neustart nicht
         # ueberleben.
@@ -635,12 +641,26 @@ class Economy(FeatureBasis):
 
         Fehler landen im Log statt im Nichts (ein vergessener Task schluckt
         seine Ausnahme sonst still). Rueckgabe: der Task (oder None ohne Loop)."""
+        uid = getattr(member, "id", 0)
+
         async def lauf():
-            try:
-                await self._sync_role(member)
-            except Exception:  # noqa: BLE001 - Deko darf nichts sprengen
-                log.exception("Rollen-Sync im Hintergrund fehlgeschlagen (%s)",
-                              getattr(member, "id", "?"))
+            # Einer nach dem anderen je Person: zwei schnelle Kaeufe liefen
+            # sonst parallel, und der zweite rechnete mit der ALTEN Rollenliste
+            # (ohne die, die der erste gerade vergab) - am Ende hatte man zwei
+            # Titel-Rollen. Lief eben schon einer, frisch von Discord holen.
+            sperre = self._rollen_sperren.setdefault(uid, asyncio.Lock())
+            async with sperre:
+                ziel = member
+                if time.monotonic() - self._rollen_zuletzt.get(uid, float("-inf")) < 60:
+                    try:
+                        ziel = await member.guild.fetch_member(uid)
+                    except Exception:  # noqa: BLE001 - dann eben der alte Stand
+                        ziel = member
+                try:
+                    await self._sync_role(ziel)
+                except Exception:  # noqa: BLE001 - Deko darf nichts sprengen
+                    log.exception("Rollen-Sync im Hintergrund fehlgeschlagen (%s)", uid)
+                self._rollen_zuletzt[uid] = time.monotonic()
         try:
             task = asyncio.get_running_loop().create_task(lauf())
         except RuntimeError:
@@ -1240,7 +1260,9 @@ class Economy(FeatureBasis):
             # nicht". Mit Text dahinter sind diese Woerter nur dann ein Befehl,
             # wenn der Text einen Titel trifft, den man WIRKLICH besitzt. Nackt
             # bleiben sie der Befehl (dann kommt die Anleitung).
+            # 'trage ab' / 'setze aus' legt den Titel ab (siehe _equip).
             if (len(parts) > 1
+                    and " ".join(parts[1:]).strip(".,!?") not in _TITEL_AB
                     and self._eigener_titel(message.author.id,
                                             " ".join(parts[1:])) is None):
                 return None
@@ -2009,7 +2031,7 @@ class Economy(FeatureBasis):
         parts = low.split()
         name = " ".join(parts[1:]).strip()
         prof = self._profile(member.id)
-        if name in ("ab", "aus", "weg", "kein", "keinen", "none", "off"):
+        if name in _TITEL_AB:
             prof["title"] = ""
             prof["title_rarity"] = ""
             await self._sync_role(member)

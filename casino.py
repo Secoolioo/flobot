@@ -2474,6 +2474,38 @@ class DonView(_SerienView):
 # --- Wiederholen / Formulare (Buttons & Modals) --------------------------
 
 
+async def _formular_bestaetigen(interaction, uid, bet):
+    """Formular sofort bestaetigen, nachdem der Einsatz eingezogen ist - wie
+    _bestaetigen bei den Knoepfen. Das Formular spielte und renderte erst und
+    antwortete dann: dauerte das GIF laenger als 3 s, sah der Spieler 'Etwas
+    ist schiefgelaufen', die Runde war aber verbucht - und wer nochmal
+    abschickte, setzte doppelt. Scheitert schon das Bestaetigen: Geld zurueck."""
+    try:
+        await interaction.response.defer(thinking=True)
+        return True
+    except discord.HTTPException:
+        log.exception("Casino-Formular nicht bestaetigbar - %s Coins an %s zurueck.",
+                      bet, uid)
+        if bet > 0:
+            economy.add_coins(uid, bet, reason="casino-rueckgabe")
+            await economy.flush()
+        return False
+
+
+async def _formular_ergebnis(interaction, emb, file, view):
+    """Das Ergebnis nach _formular_bestaetigen zeigen. Rueckgabe: die Nachricht
+    oder None (dann wird das Ergebnis ohne Bild nachgereicht)."""
+    kw = {"embed": emb, "view": view, "wait": True}
+    if file is not None:
+        kw["file"] = file
+    try:
+        return await interaction.followup.send(**kw)
+    except discord.HTTPException:
+        log.exception("Casino-Formular: Ergebnis nicht anzeigbar (ist verbucht)")
+        await _ergebnis_nachreichen(interaction, emb)
+        return None
+
+
 class _BetModal(discord.ui.Modal):
     """Formular fuer Einsatz (+ Spiel-Extra). Startet das jeweilige Spiel."""
 
@@ -2531,10 +2563,12 @@ class _BetModal(discord.ui.Modal):
                     ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file, view, ended = await _bj_deal(ch, uid, bet)
             try:
-                await interaction.response.send_message(embed=emb, file=file, view=view)
-                msg = await interaction.original_response()
+                msg = await interaction.followup.send(embed=emb, file=file, view=view,
+                                                      wait=True)
             except discord.HTTPException:
                 # Anzeige fehlgeschlagen: laufende Runde abbrechen + Einsatz
                 # zurueck (bei ended ist die Runde schon korrekt verbucht).
@@ -2558,11 +2592,13 @@ class _BetModal(discord.ui.Modal):
                 return
             target = min(target, 100.0)
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file = await _play_crash(uid, bet, target)
             again = _AgainView(uid, "crash", {"bet": bet, "target": target})
-            await interaction.response.send_message(embed=emb, file=file, view=again)
-            again.message = await interaction.original_response()
-            _protect(again.message)
+            again.message = await _formular_ergebnis(interaction, emb, file, again)
+            if again.message is not None:
+                _protect(again.message)
             return
 
         if self.kind == "keno":
@@ -2572,11 +2608,13 @@ class _BetModal(discord.ui.Modal):
                     "Tippe 1–8 Zahlen von 1 bis 40 (mit Leerzeichen).", ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file = await _play_keno(uid, bet, picks)
             again = _AgainView(uid, "keno", {"bet": bet, "picks": picks})
-            await interaction.response.send_message(embed=emb, file=file, view=again)
-            again.message = await interaction.original_response()
-            _protect(again.message)
+            again.message = await _formular_ergebnis(interaction, emb, file, again)
+            if again.message is not None:
+                _protect(again.message)
             return
 
         if self.kind == "roulette":
@@ -2588,23 +2626,24 @@ class _BetModal(discord.ui.Modal):
                     ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file = await _play_roulette(uid, bet, target)
             again = _AgainView(uid, "roulette", {"bet": bet, "target": target})
-            await interaction.response.send_message(embed=emb, file=file, view=again)
-            again.message = await interaction.original_response()
-            _protect(again.message)
+            again.message = await _formular_ergebnis(interaction, emb, file, again)
+            if again.message is not None:
+                _protect(again.message)
             return
 
         if self.kind in ("wheel", "scratch"):
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file = await _replay(uid, self.kind, {"bet": bet})
             again = _AgainView(uid, self.kind, {"bet": bet})
-            if file is not None:
-                await interaction.response.send_message(embed=emb, file=file, view=again)
-            else:
-                await interaction.response.send_message(embed=emb, view=again)
-            again.message = await interaction.original_response()
-            _protect(again.message)
+            again.message = await _formular_ergebnis(interaction, emb, file, again)
+            if again.message is not None:
+                _protect(again.message)
             return
 
         if self.kind in ("sieben", "baccarat"):
@@ -2616,11 +2655,13 @@ class _BetModal(discord.ui.Modal):
                      else "Tipp: spieler, bank oder tie."), ephemeral=True)
                 return
             economy.add_coins(uid, -bet)
+            if not await _formular_bestaetigen(interaction, uid, bet):
+                return
             emb, file = await _replay(uid, self.kind, {"bet": bet, "target": tip})
             again = _AgainView(uid, self.kind, {"bet": bet, "target": tip})
-            await interaction.response.send_message(embed=emb, file=file, view=again)
-            again.message = await interaction.original_response()
-            _protect(again.message)
+            again.message = await _formular_ergebnis(interaction, emb, file, again)
+            if again.message is not None:
+                _protect(again.message)
             return
 
         if self.kind == "mines":

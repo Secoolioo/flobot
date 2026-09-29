@@ -2184,7 +2184,9 @@ class FloAktie(FeatureBasis):
             return self.aus_embed()
         if not economy.is_enabled():
             return "💤 Gerade gibt's keine Coins - das Economy-System schläft."
-        if verkaufen and menge is None and not aktie:
+        # Ohne Menge wird nichts verkauft - auch nicht 'meine aktien': das hat
+        # stillschweigend genau EINE verkauft. Lieber nachfragen.
+        if verkaufen and menge is None:
             return (f"Was willst du verkaufen, deine Seele? "
                     f"`{self._bot_name} verkauf 5` oder `{self._bot_name} verkauf alles`.")
         if verkaufen:

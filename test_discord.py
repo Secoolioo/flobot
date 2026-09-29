@@ -7,7 +7,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 """
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
-from testhilfe import _FakeStore, _RauchKanal, _rauch_nachricht  # noqa: F401
+from testhilfe import _FakeStore, _RauchKanal, _rauch_nachricht, _with_economy  # noqa: F401
 
 import datetime
 from unittest import mock
@@ -872,6 +872,115 @@ def test_bild_kodieren_blockiert_den_bot_nicht():
     Image.new("RGB", (4, 4), "red").save(roh, format="JPEG")
     assert media.Media._als_png(roh.getvalue()).startswith(b"\x89PNG")
     assert "basis.antworte" in inspect.getsource(media.Media._cmd_generate)
+
+
+# --- Aus der Pruefung der Wirtschaft -----------------------------------------------
+def test_casino_formular_bestaetigt_vor_dem_spielen():
+    """'Einsatz aendern' spielte und renderte erst und antwortete dann. Dauerte
+    das GIF > 3 s: 'Etwas ist schiefgelaufen', die Runde war aber verbucht,
+    und wer nochmal abschickte, zahlte doppelt."""
+    import casino
+    from unittest import mock
+    ablauf = []
+
+    class Antwort:
+        async def defer(self, **kw):
+            ablauf.append(("defer", kw.get("thinking")))
+
+    async def followup_send(**kw):
+        ablauf.append(("ergebnis", kw.get("wait")))
+        return SimpleNamespace(id=5, channel=SimpleNamespace(id=1))
+
+    async def crash(uid, bet, ziel):
+        ablauf.append(("spielen", bet))
+        return SimpleNamespace(copy=lambda: None), None
+
+    ia = SimpleNamespace(response=Antwort(), followup=SimpleNamespace(send=followup_send),
+                         guild_id=1, channel_id=1)
+    formular = casino._BetModal("crash", 7, title="x")
+    formular.bet._value, formular.extra._value = "100", "2.0"
+    restore = _with_economy({7: 10_000})
+    try:
+        with mock.patch.object(casino, "_play_crash", crash), \
+                mock.patch.object(casino, "_protect", lambda _m: None):
+            asyncio.run(formular.on_submit(ia))
+    finally:
+        restore()
+    assert [a for a, _ in ablauf] == ["defer", "spielen", "ergebnis"], ablauf
+
+    # Scheitert schon das Bestaetigen: keine Runde, Geld zurueck.
+    class Kaputt:
+        async def defer(self, **_kw):
+            raise discord.HTTPException(SimpleNamespace(status=500, reason="x"), "weg")
+
+    ia.response = Kaputt()
+    ablauf.clear()
+    restore = _with_economy({7: 10_000})
+    try:
+        with mock.patch.object(casino, "_play_crash", crash):
+            asyncio.run(formular.on_submit(ia))
+        assert economy.get_coins(7) == 10_000 and not ablauf
+    finally:
+        restore()
+
+
+def test_titel_ablegen_und_aktie_ohne_menge():
+    import economy as eco_mod
+    import floaktie
+    restore = _with_economy({7: 1_000})
+    try:
+        antwort = asyncio.run(eco_mod.handle(_rauch_nachricht("trage ab", uid=7)))
+        assert antwort is not None, "'trage ab' legt den Titel ab"
+        assert asyncio.run(eco_mod.handle(_rauch_nachricht("setze dich hin", uid=7))) is None
+    finally:
+        restore()
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._store = _FakeStore({"price": 1000, "holdings": {"7": 5}, "history": [],
+                            "ticks": [], "day": fa._today()})
+    fa._enabled = True
+    restore = _with_economy({7: 1_000})
+    try:
+        for satz in ("verkaufe meine aktien", "verkauf die aktien"):
+            antwort = asyncio.run(fa.handle(SimpleNamespace(
+                content=satz, guild=SimpleNamespace(id=1),
+                author=SimpleNamespace(id=7, display_name="T"))))
+            assert fa.shares_of(7) == 5, (satz, antwort)
+            assert "verkauf 5" in str(antwort), antwort
+    finally:
+        fa._store, fa._enabled = alt
+        restore()
+
+
+def test_rollen_sync_laeuft_je_person_nacheinander():
+    """Zwei schnelle Titelkaeufe: der zweite Sync rechnete mit der alten
+    Rollenliste - am Ende hatte man zwei Titel-Rollen."""
+    import economy as eco_mod
+    eco = eco_mod.Economy()
+    eco._hintergrund = set()
+    laeuft, ueberlappt, geholt = [], [], []
+
+    async def sync(ziel):
+        if laeuft:
+            ueberlappt.append(1)
+        laeuft.append(1)
+        await asyncio.sleep(0.01)
+        laeuft.pop()
+
+    async def fetch_member(uid):
+        geholt.append(uid)
+        return SimpleNamespace(id=uid)
+
+    eco._sync_role = sync
+    person = SimpleNamespace(id=7, guild=SimpleNamespace(fetch_member=fetch_member))
+
+    async def lauf():
+        a = eco.rolle_spaeter(person)
+        b = eco.rolle_spaeter(person)
+        await asyncio.gather(a, b)
+    asyncio.run(lauf())
+    assert not ueberlappt, "zwei Syncs gleichzeitig"
+    assert geholt == [7], "der zweite Sync muss den frischen Stand holen"
 
 
 # --- Einladungslink ------------------------------------------------------------
