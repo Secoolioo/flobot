@@ -427,10 +427,28 @@ def test_musik_probiert_andere_youtube_clients_durch():
         # Die Kopfzeilen muessen dabei erhalten bleiben (sonst 403 bei ffmpeg).
         assert track.kopfzeilen.get("User-Agent") == "u"
 
-        # 2. Beim naechsten Mal steht der, der ging, vorne.
+        # 2. Beim naechsten Mal steht der, der ging, GANZ vorne - vor yt-dlps
+        #    Standard. Vorher kostete jeder Song erst eine Absage (1-3 s).
         FakeYDL.versuche = []
         asyncio.run(m._extract("ytsearch1:egal"))
-        assert FakeYDL.versuche == [None, "ios"], FakeYDL.versuche
+        assert FakeYDL.versuche == ["ios"], FakeYDL.versuche
+
+        # 2b. Taugt der gemerkte nicht mehr, der Standard aber schon: vergessen,
+        #     sonst waere er ab jetzt bei jedem Song die Bremse.
+        FakeYDL.versuche, FakeYDL.geht_ab = [], None
+
+        class StandardGeht(FakeYDL):
+            def extract_info(self, ziel, download=False):
+                FakeYDL.versuche.append(self.client)
+                if self.client is None:
+                    return {"title": "Song", "url": "http://x/s", "webpage_url": "http://x",
+                            "duration": 10, "http_headers": {}}
+                raise Exception(FakeYDL.fehler)
+        music.yt_dlp = type("M", (), {"YoutubeDL": StandardGeht})
+        asyncio.run(m._extract("ytsearch1:egal"))
+        assert FakeYDL.versuche == ["ios", None], FakeYDL.versuche
+        assert m._guter_client == "", m._guter_client
+        music.yt_dlp = type("M", (), {"YoutubeDL": FakeYDL})
 
         # 3. Geloeschtes Video: sofort aufgeben, nicht acht Mal fragen.
         FakeYDL.versuche, FakeYDL.geht_ab, m._guter_client = [], None, ""
@@ -691,7 +709,10 @@ def test_musik_sagt_WARUM_ein_song_nicht_geht():
         assert art in music.Music._YT_SAETZE, art
 
     # Die Aufrufstelle muss den Grund benutzen UND ihn greppbar loggen.
-    quelle = inspect.getsource(music.Music.handle)
+    # (Das Abspielen eines einzelnen Songs steht seit dem Schnellstart in
+    # _einzeln_spielen - handle() ruft es auf.)
+    quelle = (inspect.getsource(music.Music.handle)
+              + inspect.getsource(music.Music._einzeln_spielen))
     assert "yt_fehler_deuten(exc)" in quelle, "handle() nutzt die Einordnung nicht"
     assert "Musik-Fehler:" in quelle, "der Grund landet nicht greppbar im Log"
 
@@ -1032,6 +1053,183 @@ def test_musik_rauswurf_durch_moderator_gilt():
         aufraeumen()
 
 
+
+
+def test_musik_ytdlp_cache_und_deno():
+    """Ohne Cache rechnete yt-dlp YouTubes Player-Entschluesselung fuer JEDEN
+    Song neu (1-2 s). Und unter systemd steht venv/bin nicht im PATH - dort
+    liegt aber das pip-deno, ohne das YouTube still nicht mehr spielt."""
+    import music
+    from unittest import mock
+    alt = dict(music._YDL_OPTS)
+    try:
+        with mock.patch.object(music.Music, "_deno_pfad", staticmethod(lambda: "/opt/x/deno")):
+            music.instance._ytdlp_umgebung()
+        assert music._YDL_OPTS["cachedir"] == str(store.DATA_DIR / "yt-dlp-cache")
+        assert os.path.isdir(music._YDL_OPTS["cachedir"])
+        assert music._YDL_OPTS["js_runtimes"] == {"deno": {"path": "/opt/x/deno"}}
+
+        # deno nicht im PATH, aber als pip-Paket: gefunden.
+        music._YDL_OPTS.clear()
+        music._YDL_OPTS.update(alt)
+        with mock.patch.object(music.shutil, "which", lambda _n: None), \
+                mock.patch.object(music.os.path, "isfile", lambda _p: False), \
+                mock.patch.dict(sys.modules, {"deno": SimpleNamespace(
+                    find_deno_bin=lambda: "/venv/lib/deno/bin/deno")}):
+            assert music.Music._deno_pfad() == "/venv/lib/deno/bin/deno"
+    finally:
+        music._YDL_OPTS.clear()
+        music._YDL_OPTS.update(alt)
+
+
+def test_musik_laedt_den_naechsten_song_vor():
+    """Vorher: Song zu Ende -> erst DANN YouTube fragen -> 1-5 s Stille. Jetzt
+    ist der naechste Song aufgeloest, waehrend der aktuelle noch laeuft - und
+    der Songwechsel loest ihn nicht ein zweites Mal auf."""
+    import music
+    from unittest import mock
+    player, voice, aufraeumen = _musik_umgebung()
+    aufgeloest = []
+
+    async def aufloesen(track):
+        aufgeloest.append(track.query)
+        await asyncio.sleep(0)
+        return music.Track(title="B (echt)", stream_url="http://stream/b",
+                           query=track.query, geloest_um=time.monotonic(),
+                           kopfzeilen={"User-Agent": "u"})
+
+    music._resolve_track = aufloesen
+    try:
+        with mock.patch.object(music, "MUSIC_VORLADEN", True):
+            async def lauf():
+                naechster = music.Track(title="B", stream_url="", query="ytsearch1:b")
+                player.queue.append(naechster)
+                player.start(_track("A"))
+                await asyncio.sleep(0.01)
+                # Vorgeladen - in DENSELBEN Track geschrieben.
+                assert aufgeloest == ["ytsearch1:b"]
+                assert naechster.stream_url == "http://stream/b"
+                assert naechster.kopfzeilen == {"User-Agent": "u"}
+                assert player.queue[0] is naechster
+                # Songende: kein zweites Aufloesen.
+                voice.spielt = False
+                await player._advance(player._play_gen)
+                assert player.current is naechster
+                assert aufgeloest == ["ytsearch1:b"], aufgeloest
+            asyncio.run(lauf())
+    finally:
+        aufraeumen()
+
+
+def test_musik_vorladen_haelt_sich_an_stop_und_lange_songs():
+    """Nach 'stop' schreibt ein spaet fertiges Vorladen nichts mehr in die
+    (leere) Sitzung. Und bei einem Zwei-Stunden-Mix wird erst gegen Ende
+    vorgeladen - YouTube-Adressen altern (STREAM_MAX_ALTER)."""
+    import music
+    from unittest import mock
+    player, voice, aufraeumen = _musik_umgebung()
+    freigabe = asyncio.Event()
+
+    async def langsam(track):
+        await freigabe.wait()
+        return music.Track(title="B", stream_url="http://stream/b", query=track.query)
+
+    music._resolve_track = langsam
+    try:
+        with mock.patch.object(music, "MUSIC_VORLADEN", True):
+            async def lauf():
+                nonlocal freigabe
+                freigabe = asyncio.Event()
+                naechster = music.Track(title="B", stream_url="", query="ytsearch1:b")
+                player.queue.append(naechster)
+                player.start(_track("A"))
+                await asyncio.sleep(0)
+                await player.disconnect()
+                freigabe.set()
+                await asyncio.sleep(0.01)
+                assert naechster.stream_url == "", "nach stop noch vorgeladen"
+
+                # Langer Song: nur ein Wecker, kein sofortiges Aufloesen.
+                player.voice = voice
+                voice.spielt = False
+                lang = _track("Mix")
+                lang.duration = 7200
+                player.queue.append(music.Track(title="C", stream_url="", query="ytsearch1:c"))
+                player.start(lang)
+                assert player._vorlade_task is None
+                assert player._vorlade_timer is not None
+                player._vorladen_stoppen()
+            asyncio.run(lauf())
+    finally:
+        aufraeumen()
+
+
+def test_musik_verbindet_waehrend_der_suche():
+    """Aufloesen (1-5 s) und Voice-Verbinden (0,5-2 s) liefen nacheinander.
+    Jetzt gleichzeitig - und Flo zeigt sofort ein 🔎. Findet er nichts, geht
+    er wieder raus, statt fuenf Minuten stumm im Kanal zu sitzen."""
+    import music
+    mi = music.instance
+    ablauf = []
+
+    class Player:
+        voice = None
+        queue = []
+        _advancing = False
+        guild_id = 77
+
+        async def connect(self, kanal):
+            ablauf.append("connect-start")
+            await asyncio.sleep(0.05)
+            ablauf.append("connect-ende")
+
+        def nichts_zu_tun(self):
+            return True
+
+        def is_active(self):
+            return False
+
+        async def disconnect(self):
+            ablauf.append("disconnect")
+
+    async def extract(eingabe, *a, **k):
+        ablauf.append("suche-start")
+        await asyncio.sleep(0.05)
+        ablauf.append("suche-ende")
+        raise Exception("Video unavailable")
+
+    reaktionen = []
+
+    async def add_reaction(e):
+        reaktionen.append(("+", e))
+
+    async def remove_reaction(e, _wer):
+        reaktionen.append(("-", e))
+
+    msg = SimpleNamespace(add_reaction=add_reaction, remove_reaction=remove_reaction,
+                          guild=SimpleNamespace(me=SimpleNamespace(id=1)),
+                          author=SimpleNamespace(display_name="A", id=5))
+    alt = mi._extract
+    mi._extract = extract
+    try:
+        async def lauf():
+            player = Player()
+            vorab = mi._vorab_verbinden(player, SimpleNamespace(id=42))
+            zeichen = asyncio.ensure_future(mi._such_zeichen(msg, True))
+            antwort = await mi._einzeln_spielen(player, msg, "search", "gibtsnicht",
+                                                SimpleNamespace(channel=SimpleNamespace(id=42)))
+            await zeichen
+            await mi._such_zeichen(msg, False)
+            await mi._vorab_aufraeumen(player, vorab)
+            return antwort
+        antwort = asyncio.run(lauf())
+    finally:
+        mi._extract = alt
+    # Beides lief gleichzeitig: die Suche begann, bevor das Verbinden fertig war.
+    assert ablauf.index("suche-start") < ablauf.index("connect-ende"), ablauf
+    assert ablauf[-1] == "disconnect", ablauf
+    assert isinstance(antwort, music.discord.Embed)
+    assert reaktionen == [("+", "🔎"), ("-", "🔎")]
 
 
 def test_bot_meldet_flos_trennung_an_die_musik():
@@ -2258,7 +2456,7 @@ def test_musik_spotify_erneuert_sich_ueber_youtube_nicht_ueber_spotify():
     der Best-Match-Hinweis war auch weg - der naechste Versuch haette blind den
     ersten Treffer genommen (Sped-Up-Remix statt Song)."""
     import music
-    quelle = inspect.getsource(music.Music.handle)
+    quelle = inspect.getsource(music.Music._einzeln_spielen)
     stelle = quelle.index("_SPOTIFY_TRACK_RE.search(arg)")
     danach = quelle[stelle:stelle + 2000]
     assert "track.query = f\"ytsearch1:" in danach, (

@@ -29,6 +29,10 @@ from types import SimpleNamespace
 # Tests duerfen nie die echte .env ziehen (bot.py laedt sie sonst VOR den
 # Modulen - auf dem Server stuenden dann dessen Werte in jedem Test).
 os.environ["FLO_TESTLAUF"] = "1"
+# Das Vorladen des naechsten Songs loest im Hintergrund ECHT bei YouTube auf.
+# In Tests mit einer Warteschlange liefe dann yt-dlp gegen das Netz los. Die
+# Vorlade-Tests schalten es ausdruecklich wieder ein.
+os.environ.setdefault("MUSIC_VORLADEN", "0")
 
 import store                                    # noqa: E402
 

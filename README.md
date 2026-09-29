@@ -1246,6 +1246,7 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `FLOAKTIE_ATEM_MAX` | `0.06` | wie stark der Kurs höchstens atmet |
 | `FLOAKTIE_ATEM_RUECK` | `0.15` | Zug zurück zum Niveau je Minute |
 | `AUTODELETE_SWEEP_MAX` | `300` | Nachrichten je Aufräum-Runde |
+| `MUSIC_VORLADEN` | `1` | nächsten Song schon während des aktuellen auflösen (keine Stille dazwischen) |
 | `MUSIC_IDLE_SEKUNDEN` | `300` | so lange bleibt Flo ohne Musik oder allein im Voice (`0` = für immer) |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
 

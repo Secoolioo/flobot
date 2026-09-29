@@ -29,6 +29,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import urllib.parse
 from dataclasses import dataclass, field, replace
@@ -137,6 +138,14 @@ def _env_sekunden(name, vorgabe):
 # current=None, der Watchdog hielt ihn im Kanal, und Soundboard/TTS sagten
 # bis zum Neustart "Gerade läuft was im Voice". 0 (oder weniger) = nie gehen.
 MUSIC_IDLE_SEKUNDEN = _env_sekunden("MUSIC_IDLE_SEKUNDEN", 300)
+# Den naechsten Song schon aufloesen, waehrend der aktuelle laeuft. Vorher kam
+# nach jedem Song eine Stille von 1-5 s: erst am Songende fragte Flo YouTube
+# nach der Adresse des naechsten. MUSIC_VORLADEN=0 schaltet es ab.
+MUSIC_VORLADEN = os.getenv("MUSIC_VORLADEN", "1").strip().lower() not in (
+    "0", "false", "no", "off", "aus")
+# So lange wartet der Songwechsel hoechstens auf ein laufendes Vorladen, bevor
+# er selbst aufloest (sonst haengt ein zaeher Vorlade-Versuch den Wechsel auf).
+VORLADEN_WARTEN = 20.0
 # So lange wartet flo_getrennt, bevor es eine Trennung als Rauswurf wertet.
 # discord.py trennt bei manchen Aussetzern SELBST kurz und verbindet neu -
 # Discord meldet das genauso wie einen Moderator-Kick.
@@ -1010,6 +1019,85 @@ class GuildPlayer:
     # Skips, oder Skip waehrend der after-Callback schon laeuft) haben beide aus
     # derselben Warteschlange gepoppt - dabei ging ein Track spurlos verloren.
     _advance_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Vorladen des naechsten Songs (siehe MUSIC_VORLADEN): der laufende
+    # Vorgang, fuer welchen Track, und der Wecker fuer lange Songs.
+    _vorlade_task: "asyncio.Task | None" = None
+    _vorlade_track: "Track | None" = None
+    _vorlade_timer: "asyncio.TimerHandle | None" = None
+
+    # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
+    def _vorladen_planen(self):
+        """Nach jedem Start: den naechsten Song rechtzeitig aufloesen.
+
+        Rechtzeitig heisst: so spaet, dass die Adresse beim Songwechsel noch
+        frisch ist (YouTube-Adressen altern, siehe STREAM_MAX_ALTER) - bei
+        normalen Songs also sofort, bei einem Zwei-Stunden-Mix erst gegen Ende."""
+        if not MUSIC_VORLADEN:
+            return
+        if self._vorlade_timer is not None:
+            self._vorlade_timer.cancel()
+            self._vorlade_timer = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        dauer = getattr(self.current, "duration", None) or 0
+        verzug = dauer - (STREAM_MAX_ALTER - 120) if dauer else 0
+        if verzug <= 0:
+            self._vorladen_anstossen()
+        else:
+            self._vorlade_timer = loop.call_later(verzug, self._vorladen_anstossen)
+
+    def _vorladen_anstossen(self):
+        self._vorlade_timer = None
+        if not self.queue:
+            return
+        naechster = self.queue[0]
+        if naechster.stream_url or not naechster.query:
+            return
+        if self._vorlade_task is not None and not self._vorlade_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._vorlade_track = naechster
+        self._vorlade_task = loop.create_task(self._vorladen(naechster, self._session_gen))
+
+    async def _vorladen(self, track, sitzung):
+        """Loest den Track auf und schreibt das Ergebnis IN DENSELBEN Track.
+
+        Kein Austausch in der Warteschlange: ein Skip, ein Verschieben oder
+        ein Entfernen dazwischen stoert so nicht - der Track traegt seine
+        Adresse einfach mit, wohin er auch wandert."""
+        try:
+            frisch = await _resolve_track(track)
+        except Exception as exc:  # noqa: BLE001 - dann eben beim Abspielen
+            log.info("Vorladen von '%s' ging nicht (%s) - klappt vielleicht beim "
+                     "Abspielen.", track.title, f"{exc}".replace("\n", " ")[:100])
+            return
+        if self._session_gen != sitzung or track.stream_url:
+            return          # gestoppt, oder jemand war schneller
+        for feld in ("title", "stream_url", "webpage_url", "duration", "thumbnail",
+                     "geloest_um", "kopfzeilen"):
+            setattr(track, feld, getattr(frisch, feld))
+        log.info("Vorgeladen: '%s'", track.title)
+
+    async def _vorladen_abwarten(self, track):
+        """Wird genau dieser Song gerade vorgeladen? Dann darauf warten, statt
+        ihn ein zweites Mal aufzuloesen."""
+        task = self._vorlade_task
+        if task is None or task.done() or self._vorlade_track is not track:
+            return
+        await asyncio.wait({task}, timeout=VORLADEN_WARTEN)
+
+    def _vorladen_stoppen(self):
+        if self._vorlade_timer is not None:
+            self._vorlade_timer.cancel()
+            self._vorlade_timer = None
+        if self._vorlade_task is not None and not self._vorlade_task.done():
+            self._vorlade_task.cancel()
+        self._vorlade_task = self._vorlade_track = None
 
     async def connect(self, channel):
         # Lock: nie gleichzeitig mit einem Watchdog-_reconnect verbinden.
@@ -1145,6 +1233,9 @@ class GuildPlayer:
                 instance.verlauf_notieren(self.guild_id, track)
             except Exception:  # noqa: BLE001 - Mitschreiben darf nie die Musik kippen
                 log.debug("Verlauf konnte nicht notiert werden", exc_info=True)
+            # Und schon mal den naechsten holen (nur bei einem NEUEN Song -
+            # ein Tempo-Neustart aendert an der Warteschlange nichts).
+            self._vorladen_planen()
 
     def position(self):
         """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
@@ -1327,6 +1418,8 @@ class GuildPlayer:
                                  "frische.", track.title)
                         track.stream_url = ""
                     if not track.stream_url and track.query:
+                        await self._vorladen_abwarten(track)
+                    if not track.stream_url and track.query:
                         track = await _resolve_track(track)  # Playlist-Track jetzt aufloesen
                         if gen is not None and gen != self._play_gen:
                             # Waehrend des Aufloesens hat jemand selbst gestartet.
@@ -1395,6 +1488,7 @@ class GuildPlayer:
             self._advancing = False
 
     async def disconnect(self):
+        self._vorladen_stoppen()
         self.queue.clear()
         self.current = None
         self.speed = 1.0           # frische Session startet wieder mit Normaltempo
@@ -2345,6 +2439,7 @@ class Music(FeatureBasis):
         # --- Konfiguration (in setup() aus der .env gelesen) ---------------------
         self._enabled = False
         self._guter_client = ""   # player_client, der zuletzt durchkam
+        self._nebenbei = set()    # kleine Hintergrund-Tasks (siehe _hintergrund)
         self._spotify_id = ""
         self._spotify_secret = ""
         # --- Spotify-Token (Client-Credentials, 1 h gueltig, hier gecached) ------
@@ -2520,12 +2615,53 @@ class Music(FeatureBasis):
             return False
 
         self._enabled = True
+        self._ytdlp_umgebung()
         spotify_ok = bool(self._spotify_id and self._spotify_secret)
         log.info(
             "Musik-Feature aktiv (YouTube: ja, Spotify: %s).",
             "ja" if spotify_ok else "nein - nur YouTube-Links",
         )
         return True
+
+    @staticmethod
+    def _deno_pfad():
+        """Wo liegt deno? Erst im PATH, dann das pip-Paket (venv/bin).
+
+        Unter systemd steht venv/bin NICHT im PATH des Dienstes - yt-dlp fand
+        die JS-Laufzeit dann nicht, und YouTube spielte still nicht mehr ab."""
+        pfad = shutil.which("deno")
+        if pfad:
+            return pfad
+        neben_python = os.path.join(os.path.dirname(sys.executable), "deno")
+        if os.path.isfile(neben_python) and os.access(neben_python, os.X_OK):
+            return neben_python
+        try:
+            import deno
+            return deno.find_deno_bin()
+        except Exception:  # noqa: BLE001 - kein pip-deno: dann eben ohne
+            return ""
+
+    def _ytdlp_umgebung(self):
+        """Einmal beim Start: Cache-Ordner und JS-Laufzeit fuer yt-dlp.
+
+        cachedir: yt-dlp merkt sich dort, wie es YouTubes Player-Skript
+        entschluesselt. Ohne Cache (vorher cachedir=False) rechnete es das fuer
+        JEDEN Song neu aus - eine bis zwei Sekunden, bevor ueberhaupt Ton kam.
+        Der Ordner liegt in data/, damit er Neustarts (und Docker) ueberlebt."""
+        from store import DATA_DIR
+        cache = os.path.join(str(DATA_DIR), "yt-dlp-cache")
+        try:
+            os.makedirs(cache, exist_ok=True)
+            _YDL_OPTS["cachedir"] = cache
+        except OSError as exc:
+            log.warning("Musik: yt-dlp-Cache %s geht nicht (%s) - ohne Cache.", cache, exc)
+        deno = self._deno_pfad()
+        if deno:
+            _YDL_OPTS["js_runtimes"] = {"deno": {"path": deno}}
+        else:
+            log.warning("Musik: keine JS-Laufzeit (deno) gefunden - YouTube laesst "
+                        "dann viele Songs nicht durch. Abhilfe:  venv/bin/pip install "
+                        "-r requirements.txt")
 
     def is_enabled(self):
         return self._enabled
@@ -2955,6 +3091,32 @@ class Music(FeatureBasis):
             reihe.insert(0, self._guter_client)
         return reihe
 
+    def _versuche(self):
+        """In welcher Reihenfolge die player_clients gefragt werden.
+
+        Hat einer zuletzt funktioniert, kommt ER zuerst - vorher fragte Flo
+        bei JEDEM Song erst yt-dlps Standard, wartete 1-3 s auf dessen Absage
+        und nahm dann erst den, von dem er schon wusste, dass er geht."""
+        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
+        if fest:
+            return [fest]
+        reihe = self.client_reihe()
+        if self._guter_client and reihe and reihe[0] == self._guter_client:
+            return [reihe[0], None, *reihe[1:]]
+        return [None, *reihe]
+
+    def _client_merken(self, client, nr):
+        """Der Client, der gerade durchkam, ist ab jetzt der gute. Kam der
+        Standard (None) erst NACH dem gemerkten durch, taugt der gemerkte nicht
+        mehr - vergessen, sonst waere er bei jedem Song wieder die Bremse."""
+        if client:
+            neu = client != self._guter_client
+            self._guter_client = client
+            return neu
+        if nr > 0:
+            self._guter_client = ""
+        return False
+
     @staticmethod
     def _suchtext(eingabe):
         """Der reine Suchtext aus einer yt-dlp-Eingabe - oder "" bei einer URL.
@@ -3013,8 +3175,7 @@ class Music(FeatureBasis):
         genau dieselbe Behandlung wie das Abspielen: wird die Suche geblockt,
         kommt es nie bis zum Abspielen. Genau das fehlte hier."""
         loop = asyncio.get_running_loop()
-        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
-        versuche = [fest] if fest else [None, *self.client_reihe()]
+        versuche = self._versuche()
         letzter = None
         for nr, client in enumerate(versuche):
             try:
@@ -3028,8 +3189,7 @@ class Music(FeatureBasis):
                             was, art, client or "Standard",
                             versuche[nr + 1] or "Standard")
                 continue
-            if client and client != self._guter_client:
-                self._guter_client = client
+            self._client_merken(client, nr)
             return ergebnis
         raise letzter or RuntimeError("keine Aufloesung moeglich")
 
@@ -3064,10 +3224,9 @@ class Music(FeatureBasis):
                 info = entries[0]
             return info
 
-        fest = os.getenv("YTDLP_PLAYER_CLIENT", "").strip()
-        # Erst so, wie yt-dlp es selbst fuer richtig haelt (ausser es ist
-        # festgenagelt), dann die Ausweichliste.
-        versuche = ([fest] if fest else [None, *self.client_reihe()])
+        # Erst der, der zuletzt ging; dann so, wie yt-dlp es selbst fuer
+        # richtig haelt (ausser es ist festgenagelt); dann die Ausweichliste.
+        versuche = self._versuche()
         letzter = None
         for nr, client in enumerate(versuche):
             try:
@@ -3088,8 +3247,7 @@ class Music(FeatureBasis):
                                     "nehme das Video und ziehe den Ton heraus.",
                                     client or "Standard")
                         letzter = None
-                        if client and client != self._guter_client:
-                            self._guter_client = client
+                        if self._client_merken(client, nr):
                             log.warning("Musik: YouTube ging erst mit "
                                         "player_client=%r. Dauerhaft machen mit  "
                                         "YTDLP_PLAYER_CLIENT=%s  in der .env.",
@@ -3118,8 +3276,7 @@ class Music(FeatureBasis):
                             art, client or "Standard",
                             versuche[nr + 1] or "Standard")
                 continue
-            if client and client != self._guter_client:
-                self._guter_client = client
+            if self._client_merken(client, nr):
                 log.warning("Musik: YouTube ging erst mit player_client=%r. "
                             "Dauerhaft machen mit  YTDLP_PLAYER_CLIENT=%s  in der "
                             ".env.", client, client)
@@ -3265,6 +3422,10 @@ class Music(FeatureBasis):
         Warteschlange auf - vielleicht laesst der sich ja laden."""
         player.queue.append(track)
         player._advance_aufgegeben = False
+        if player.current is not None and len(player.queue) == 1:
+            vorladen = getattr(player, "_vorladen_planen", None)
+            if vorladen is not None:
+                vorladen()
 
     def _lazy_track(self, extract_input, title, requested_by, hint=None):
         """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
@@ -4640,6 +4801,67 @@ class Music(FeatureBasis):
             return self._embed(f"Die Warteschlange ist voll ({deckel}). Warte kurz.",
                                color=_COL_ERR)
 
+        # Aufloesen (1-5 s) und Verbinden (0,5-2 s) brauchen einander nicht -
+        # vorher lief beides nacheinander. Jetzt verbindet Flo schon, waehrend
+        # er sucht, und zeigt sofort ein 🔎, damit man sieht, dass was passiert.
+        vorab = self._vorab_verbinden(player, voice_state.channel)
+        such_zeichen = asyncio.ensure_future(self._such_zeichen(message, True))
+        try:
+            return await self._einzeln_spielen(player, message, action, arg,
+                                               voice_state)
+        finally:
+            such_zeichen.add_done_callback(
+                lambda _t: self._hintergrund(self._such_zeichen(message, False)))
+            if vorab is not None:
+                self._hintergrund(self._vorab_aufraeumen(player, vorab))
+
+    # --- Schneller Start: Suche und Voice gleichzeitig ------------------------
+    def _hintergrund(self, coro):
+        """Kleine Nebenarbeit (Reaktion weg, aufraeumen) - Referenz halten,
+        sonst sammelt der Garbage Collector den Task mittendrin ein."""
+        task = asyncio.ensure_future(coro)
+        self._nebenbei.add(task)
+        task.add_done_callback(self._nebenbei.discard)
+        return task
+
+    @staticmethod
+    def _vorab_verbinden(player, kanal):
+        """Schon mal verbinden, falls Flo noch nicht drin ist. Gibt den Task
+        zurueck (oder None). Der spaetere player.connect wartet am Lock und
+        findet die fertige Verbindung - doppelt verbunden wird nie."""
+        voice = getattr(player, "voice", None)
+        if voice is not None and voice.is_connected():
+            return None
+        return asyncio.ensure_future(player.connect(kanal))
+
+    async def _vorab_aufraeumen(self, player, vorab):
+        """Vorab verbunden, aber es kam kein Song zustande (nichts gefunden,
+        gesperrt, Fehler) -> wieder raus, statt fuenf Minuten stumm im Kanal zu
+        sitzen."""
+        try:
+            await vorab
+        except Exception:  # noqa: BLE001 - der eigentliche connect meldet es
+            return
+        if (player.nichts_zu_tun() and not player.is_active()
+                and not player._advancing):
+            log.info("Musik: vorab verbunden, aber kein Song - gehe wieder raus.")
+            await player.disconnect()
+
+    async def _such_zeichen(self, message, an):
+        """🔎 an die Nachricht, solange Flo sucht (und danach wieder weg)."""
+        try:
+            if an:
+                await message.add_reaction("🔎")
+            else:
+                ich = getattr(getattr(message, "guild", None), "me", None)
+                if ich is not None and hasattr(message, "remove_reaction"):
+                    await message.remove_reaction("🔎", ich)
+        except Exception:  # noqa: BLE001 - reine Deko, darf nie etwas kippen
+            pass
+
+    async def _einzeln_spielen(self, player, message, action, arg, voice_state):
+        """Ein einzelner Song (Link oder Suche): aufloesen, verbinden, spielen
+        oder einreihen."""
         # Track aufloesen (Spotify -> Suchtext, sonst Link/Text direkt)
         try:
             if action == "play" and _SPOTIFY_TRACK_RE.search(arg):
