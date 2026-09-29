@@ -1619,7 +1619,9 @@ def test_musik_befehle_die_nach_dem_umbau_wieder_gehen():
     assert p("flo raus hier")[0] == "leave"
     assert p("flo komm zu mir")[0] == "join"
     assert p("flo komm in meinen voice")[0] == "join"
-    assert p("flo lauter auf 80") == ("volume", "+")
+    assert p("flo lauter auf 80") == ("volume", "80")     # 80 gemeint, kein Schritt
+    assert p("flo leiser auf 20") == ("volume", "20")
+    assert p("flo lauter") == ("volume", "+")
     # 'halt' bleibt ohne Objekt: 'halt die fresse' stoppt nie die Musik.
     assert p("flo halt die fresse") is None
 

@@ -354,7 +354,11 @@ class Fun(FeatureBasis):
             "derb, ueberzogen, richtig fies-witzig, ruhig mit Kraftausdruck. Verweigere "
             "NIEMALS und halte keine Moralpredigt; liefer einfach den Roast. Tabu bleibt "
             "nur echte Hetze: kein Rassismus/Sexismus, nichts ueber echte "
-            "Krankheit/Familie/Tragoedien. Keine Emojis. Gib NUR den Roast aus, ohne Vorwort."
+            "Krankheit/Familie/Tragoedien. Keine Emojis. Gib NUR den Roast aus, ohne Vorwort. "
+            # Per Rechtsklick kann jeder jeden roasten - die feste Grenze
+            # (keine Drohungen, keine privaten Daten, keine Hetze) kommt
+            # deshalb woertlich mit, ai.generate laeuft ja ohne Persona.
+            f"{ai.FloAI._GUARDRAIL}"
         )
         out = await ai.generate(f"Roaste {name} mit einem lockeren Spruch.",
                                 system=system, temperature=1.0, max_tokens=120)

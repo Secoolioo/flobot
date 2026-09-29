@@ -1041,6 +1041,8 @@ class GuildPlayer:
     _vorlade_timer: "asyncio.TimerHandle | None" = None
     # Was zuletzt als Sprachkanal-Status gesetzt wurde (kein doppeltes Setzen).
     _kanal_status_text: "str | None" = None
+    # Wie viele 'spiel ...' gerade suchen (siehe Music._vorab_aufraeumen).
+    _laufende_anfragen: int = 0
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1059,7 +1061,10 @@ class GuildPlayer:
         except RuntimeError:
             return
         dauer = getattr(self.current, "duration", None) or 0
-        verzug = dauer - (STREAM_MAX_ALTER - 120) if dauer else 0
+        # Restzeit in echten Sekunden (Tempo beachtet) - kommt der Song erst
+        # 1:50 h in einen Zwei-Stunden-Mix, ist er gleich dran, nicht in 2 h.
+        rest = (max(0.0, dauer - self.position()) / max(self.speed, 0.1)) if dauer else 0
+        verzug = rest - (STREAM_MAX_ALTER - 120) if dauer else 0
         if verzug <= 0:
             self._vorladen_anstossen()
         else:
@@ -3968,7 +3973,9 @@ class Music(FeatureBasis):
                 rest = _restwoerter(cleaned[vr.end():])
                 if rest and not re.fullmatch(_VOLUME_REL_OBJ, " ".join(rest), re.I):
                     return None     # 'leise rieselt der schnee'
-                return ("volume", richtung)
+                # 'lauter auf 80' meint 80 - nicht einen Schritt lauter.
+                zahl = next((w for w in rest if re.fullmatch(r"[0-9]+", w)), None)
+                return ("volume", zahl if zahl else richtung)
         vm = _VOLUME_ARG_RE.match(cleaned)
         if vm and self._is_volume_word(vm.group(1)):
             return ("volume", vm.group(2) or "?")
@@ -4489,7 +4496,7 @@ class Music(FeatureBasis):
         if msg is None or track is None:
             return
         try:
-            await msg.edit(view=MusikPanel(player, track))
+            await msg.edit(**self._panel_neu(player, msg, track))
         except discord.HTTPException:
             # Panel geloescht -> abmelden. Der naechste Songwechsel postet
             # dann ganz normal ein neues.
@@ -4619,7 +4626,26 @@ class Music(FeatureBasis):
             player.fortsetzen()
         else:
             player.pausieren()
-        await interaction.response.edit_message(view=MusikPanel(player))
+        await interaction.response.edit_message(**self._panel_neu(player, interaction.message))
+
+    def _panel_neu(self, player, nachricht, track=None):
+        """Die Bearbeitung fuer ein bestehendes Panel - im Layout, das es HAT.
+        Das Notweg-Panel (Embed) laesst sich nicht einfach in eine V2-Nachricht
+        umbauen; Discord lehnt das ab, und der Klick hiesse 'fehlgeschlagen'."""
+        track = track or player.current
+        if nachricht is not None and getattr(nachricht, "embeds", None):
+            return {"embed": self._now_playing_embed(track, len(player.queue),
+                                                     speed=player.speed,
+                                                     loop=player.loop_rest),
+                    "view": _klassisches_panel(player)}
+        return {"view": MusikPanel(player, track)}
+
+    @staticmethod
+    def _alt_layout_weg(nachricht):
+        """Wird ein Notweg-Panel (Embed) zur V2-Anzeige, muss das Embed weg."""
+        if nachricht is not None and getattr(nachricht, "embeds", None):
+            return {"embed": None, "content": None}
+        return {}
 
     async def _klick_stop(self, interaction, player):
         # Dieses Panel wird gleich zur 'Gestoppt'-Anzeige - aus der Verwaltung
@@ -4627,9 +4653,12 @@ class Music(FeatureBasis):
         if player.panel_message is not None and interaction.message is not None \
                 and player.panel_message.id == interaction.message.id:
             player.panel_message = None
-        await player.disconnect()
+        # Erst antworten, dann trennen: disconnect() wartet auf Discord (bis
+        # 30 s) - danach waere die 3-Sekunden-Frist fuer den Klick laengst um.
         await interaction.response.edit_message(
-            view=_gestoppt_panel(interaction.user.display_name))
+            view=_gestoppt_panel(interaction.user.display_name),
+            **self._alt_layout_weg(interaction.message))
+        await player.disconnect()
 
     async def _klick_lyrics(self, interaction, player):
         track = player.current
@@ -4659,7 +4688,8 @@ class Music(FeatureBasis):
         await interaction.response.defer()        # Tempo-Wechsel kann ~1s dauern
         await player.apply_speed(tempo)
         try:
-            await interaction.edit_original_response(view=MusikPanel(player))
+            await interaction.edit_original_response(
+                **self._panel_neu(player, interaction.message))
         except discord.HTTPException:
             pass
 
@@ -5049,10 +5079,12 @@ class Music(FeatureBasis):
         # er sucht, und zeigt sofort ein 🔎, damit man sieht, dass was passiert.
         vorab = self._vorab_verbinden(player, voice_state.channel)
         such_zeichen = asyncio.ensure_future(self._such_zeichen(message, True))
+        player._laufende_anfragen = getattr(player, "_laufende_anfragen", 0) + 1
         try:
             return await self._einzeln_spielen(player, message, action, arg,
                                                voice_state)
         finally:
+            player._laufende_anfragen -= 1
             such_zeichen.add_done_callback(
                 lambda _t: self._hintergrund(self._such_zeichen(message, False)))
             if vorab is not None:
@@ -5086,7 +5118,8 @@ class Music(FeatureBasis):
         except Exception:  # noqa: BLE001 - der eigentliche connect meldet es
             return
         if (player.nichts_zu_tun() and not player.is_active()
-                and not player._advancing):
+                and not player._advancing
+                and not getattr(player, "_laufende_anfragen", 0)):
             log.info("Musik: vorab verbunden, aber kein Song - gehe wieder raus.")
             await player.disconnect()
 
@@ -5166,6 +5199,9 @@ class Music(FeatureBasis):
             await player.connect(voice_state.channel)
         except VOICE_CONNECT_FEHLER as exc:
             return self._voice_kaputt(exc, "play")
+        # Erst JETZT kennt der Player die Verbindung sicher - auch die, die ein
+        # Soundboard-/TTS-Gag aufgebaut hat. Laeuft der noch: Musik hat Vorrang.
+        player.fremden_ton_stoppen()
 
         # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
         # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.

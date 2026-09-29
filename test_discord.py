@@ -983,6 +983,244 @@ def test_rollen_sync_laeuft_je_person_nacheinander():
     assert geholt == [7], "der zweite Sync muss den frischen Stand holen"
 
 
+# --- Aus der Gegenpruefung der neuen Teile -----------------------------------------
+def test_gag_trennt_die_musik_nicht_wenn_sie_uebernommen_hat():
+    """'Flo sprich ...' baut eine Verbindung auf, waehrend der Gag laeuft kommt
+    'Flo spiel X' und die Musik uebernimmt sie. Am Gag-Ende trennte voicegags
+    trotzdem - flo_getrennt hielt das fuer einen Rauswurf, die Schlange war weg."""
+    import discord as _d
+    import music
+    import voicegags
+    from unittest import mock
+    gid = 4720
+    getrennt, callbacks = [], []
+
+    class VC:
+        channel = SimpleNamespace(id=42, name="Voice")
+
+        def is_connected(self):
+            return True
+
+        def is_playing(self):
+            return False
+
+        def is_paused(self):
+            return False
+
+        def play(self, _src, after=None):
+            callbacks.append(after)
+
+        async def disconnect(self, force=False):
+            getrennt.append(1)
+
+    vc = VC()
+
+    async def connect(**_kw):
+        return vc
+
+    kanal = SimpleNamespace(id=42, name="Voice", connect=connect)
+    guild = SimpleNamespace(id=gid, voice_client=None)
+    mi = music.instance
+    alt = mi._players.get(gid)
+    try:
+        with mock.patch.object(_d, "FFmpegPCMAudio", lambda *a, **k: SimpleNamespace(cleanup=lambda: None)):
+            async def lauf():
+                gag = asyncio.ensure_future(voicegags.instance._play_path(guild, kanal, "x.mp3"))
+                await asyncio.sleep(0.01)
+                # Die Musik uebernimmt die Verbindung ...
+                player = music.GuildPlayer(loop=None, guild_id=gid)
+                player.voice, player.active_channel_id = vc, 42
+                mi._players[gid] = player
+                # ... dann endet der Gag.
+                callbacks[0](None)
+                return await gag
+            ok, _ = asyncio.run(lauf())
+        assert ok and not getrennt, "der Gag hat die Musik-Verbindung getrennt"
+    finally:
+        if alt is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt
+
+
+def test_musik_stoppt_den_gag_erst_nach_dem_verbinden():
+    """Vor dem Verbinden kennt der Player die Gag-Verbindung noch nicht - der
+    Abbruch muss danach kommen, sonst landet 'spiel X' als #1 in der Schlange."""
+    import inspect
+    import music
+    quelle = inspect.getsource(music.Music._einzeln_spielen)
+    verbinden = quelle.rindex("await player.connect(voice_state.channel)")
+    abbruch = quelle.rindex("player.fremden_ton_stoppen()")
+    assert abbruch > verbinden
+    assert quelle.index("player.is_active()") > abbruch
+
+
+def test_doppelte_sound_namen_sprengen_das_brett_nicht(tmp_path=None):
+    """boom.wav + boom.mp3 = zwei Knoepfe mit derselben custom_id - Discord
+    lehnte das ganze Brett ab, und Flo sagte nichts."""
+    import tempfile
+    from pathlib import Path as _P
+    import voicegags
+    from unittest import mock
+    ordner = _P(tempfile.mkdtemp(prefix="flo-sounds-"))
+    for name in ("boom.wav", "boom.mp3", "Boom.ogg", "furz.mp3", "notiz.txt"):
+        (ordner / name).write_bytes(b"x")
+    with mock.patch.object(voicegags, "SOUNDS_DIR", ordner):
+        namen = voicegags.instance._list_sounds()
+    assert [n.lower() for n in namen] == ["boom", "furz"], namen
+    ids = [k.item.custom_id for k in voicegags.SoundboardView(namen).walk_children()
+           if isinstance(k, voicegags.SoundKnopf)]
+    assert len(ids) == len(set(ids))
+
+
+def test_discord_sound_zieht_stille_musik_nicht_rueber():
+    import voicegags
+    from unittest import mock
+    vg = voicegags.VoiceGags()
+    dort = _SoundKanal(cid=50)
+    guild = _sound_guild(voice=_SoundVoice(dort))
+    hier = _SoundKanal(cid=42)
+    with mock.patch.object(vg, "_voice_beschaeftigt", lambda _g: False), \
+            mock.patch.object(vg, "_musik_hat_sie", lambda _g, _v: True):
+        ok, text = asyncio.run(vg._discord_sound_spielen(guild, hier, _snd(1, "x")))
+    assert not ok and "voice50" in text and guild.voice_client.channel is dort
+
+
+def test_soundmenue_bestaetigt_vor_dem_abruf():
+    import voicegags
+    from unittest import mock
+    vg = voicegags.VoiceGags()
+    ablauf = []
+
+    class Antwort:
+        def __init__(self):
+            self.fertig = False
+
+        def is_done(self):
+            return self.fertig
+
+        async def defer(self, **_kw):
+            ablauf.append("defer")
+            self.fertig = True
+
+        async def send_message(self, *_a, **_k):
+            ablauf.append("antwort")
+            self.fertig = True
+
+    async def finden(_g, _a, _w):
+        ablauf.append("abruf")
+        return _snd(1, "airhorn")
+
+    async def folge(text, **_k):
+        ablauf.append(text)
+
+    async def spielen(*_a):
+        return True, ""
+
+    ia = SimpleNamespace(guild=SimpleNamespace(id=77), response=Antwort(),
+                         followup=SimpleNamespace(send=folge),
+                         user=SimpleNamespace(voice=SimpleNamespace(channel=_SoundKanal())))
+    with mock.patch.object(vg, "_finde_discord_sound", finden), \
+            mock.patch.object(vg, "_discord_sound_spielen", spielen), \
+            mock.patch.object(vg, "soundboard_enabled", lambda _g=None: True), \
+            mock.patch.object(vg, "_spawn", lambda coro: coro.close()):
+        asyncio.run(vg._klick(ia, "discord", "1"))
+    assert ablauf[:2] == ["defer", "abruf"] and "airhorn" in ablauf[-1], ablauf
+
+
+def test_panel_stop_antwortet_vor_dem_trennen_und_notweg_bleibt_notweg():
+    import music
+    mi = music.instance
+    ablauf = []
+
+    class Player:
+        panel_message = SimpleNamespace(id=900)
+        current = SimpleNamespace(title="A")
+        queue = []
+
+        async def disconnect(self):
+            ablauf.append("trennen")
+
+    class Klick:
+        message = SimpleNamespace(id=900, embeds=[SimpleNamespace(title="alt")])
+        user = SimpleNamespace(display_name="Anna")
+
+        class response:
+            @staticmethod
+            async def edit_message(**kw):
+                ablauf.append(("antwort", sorted(kw)))
+
+    asyncio.run(mi._klick_stop(Klick(), Player()))
+    assert ablauf[0][0] == "antwort" and ablauf[1] == "trennen", ablauf
+    # Aus dem Notweg-Panel (Embed) wird die V2-Anzeige nur ohne Embed.
+    assert "embed" in ablauf[0][1] and "content" in ablauf[0][1]
+
+    player = music.GuildPlayer(loop=None)
+    player.current = music.Track(title="A", stream_url="x", duration=10)
+    klassisch = mi._panel_neu(player, SimpleNamespace(embeds=[1]))
+    assert "embed" in klassisch and not isinstance(klassisch["view"], music.MusikPanel)
+    assert isinstance(mi._panel_neu(player, SimpleNamespace(embeds=[]))["view"],
+                      music.MusikPanel)
+
+
+def test_vorladen_rechnet_mit_der_restzeit():
+    """Ein Song, der 1:50 h in einen Zwei-Stunden-Mix kommt, ist gleich dran -
+    vorher plante Flo das Vorladen erst Stunden nach dem Mix."""
+    import music
+    from unittest import mock
+    player = music.GuildPlayer(loop=None)
+    player.current = music.Track(title="Mix", stream_url="x", duration=7200)
+    player._played, player._seg_start = 6600.0, None
+    player.queue.append(music.Track(title="B", stream_url="", query="ytsearch1:b"))
+    angestossen = []
+    with mock.patch.object(music, "MUSIC_VORLADEN", True), \
+            mock.patch.object(player, "_vorladen_anstossen", lambda: angestossen.append(1)):
+        async def lauf():
+            player._vorladen_planen()
+        asyncio.run(lauf())
+    assert angestossen == [1] and player._vorlade_timer is None
+
+
+def test_vorab_verbindung_bleibt_solange_noch_jemand_sucht():
+    import music
+    getrennt = []
+
+    class Player:
+        _advancing = False
+        _laufende_anfragen = 1
+
+        def nichts_zu_tun(self):
+            return True
+
+        def is_active(self):
+            return False
+
+        async def disconnect(self):
+            getrennt.append(1)
+
+    async def fertig():
+        return None
+
+    async def lauf():
+        await music.instance._vorab_aufraeumen(Player(), asyncio.ensure_future(fertig()))
+    asyncio.run(lauf())
+    assert not getrennt, "A hat nichts gefunden - B sucht aber noch"
+
+
+def test_roast_bringt_den_guardrail_mit():
+    """Per Rechtsklick kann jeder jeden roasten - die feste Grenze muss mit."""
+    from unittest import mock
+    gesehen = {}
+
+    async def generate(prompt, *, system=None, **_k):
+        gesehen["system"] = system
+        return "Bob, du Lauch."
+
+    with mock.patch.object(ai, "generate", generate):
+        asyncio.run(fun.roast_text("Bob"))
+    assert ai.FloAI._GUARDRAIL in gesehen["system"]
+
+
 # --- Einladungslink ------------------------------------------------------------
 def test_einladelink_hat_alle_noetigen_rechte():
     """Der alte Link kannte weder Voice noch Reaktionen, Bilder, Rollen,

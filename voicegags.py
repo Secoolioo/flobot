@@ -352,8 +352,13 @@ class VoiceGags(FeatureBasis):
     def _list_sounds(self):
         if not SOUNDS_DIR.exists():
             return []
-        return sorted(p.stem for p in SOUNDS_DIR.iterdir()
-                      if p.is_file() and p.suffix.lower() in _AUDIO_EXTS)
+        # Je Name nur EINMAL: boom.wav + boom.mp3 ergaben zwei Knoepfe mit
+        # derselben custom_id - Discord lehnte das ganze Brett ab.
+        namen = {}
+        for p in SOUNDS_DIR.iterdir():
+            if p.is_file() and p.suffix.lower() in _AUDIO_EXTS:
+                namen.setdefault(p.stem.lower(), p.stem)
+        return sorted(namen.values(), key=str.lower)
 
     # --- Befehle -------------------------------------------------------------
     async def handle(self, message):
@@ -421,7 +426,7 @@ class VoiceGags(FeatureBasis):
         msg = await basis.antworte(message, None, view=view)
         if msg is None:
             log.error("Soundboard konnte nicht gesendet werden")
-            return HANDLED
+            return "Das Soundboard ging gerade nicht raus. Nochmal, bitte."
         # Zehn Minuten vorm Auto-Loeschen geschuetzt, danach darf es weg - die
         # Knoepfe funktionieren aber, solange die Nachricht steht.
         self._protect(msg)
@@ -494,7 +499,7 @@ class VoiceGags(FeatureBasis):
                 vc = await channel.connect(self_deaf=False)
                 neu_da = True
             elif vc.channel.id != channel.id:
-                if self._voice_beschaeftigt(guild):
+                if self._voice_beschaeftigt(guild) or self._musik_hat_sie(guild, vc):
                     return False, (f"Ich häng gerade mit Musik in **{vc.channel.name}** "
                                    f"– komm rüber, dann drück nochmal.")
                 await vc.move_to(channel)
@@ -522,21 +527,27 @@ class VoiceGags(FeatureBasis):
         """Nur fuer den Sound gekommen -> nach ein paar Sekunden wieder weg,
         ausser die Musik hat den Kanal inzwischen uebernommen."""
         await asyncio.sleep(_NACH_SOUND_SEK)
-        if vc.is_connected() and not self._voice_beschaeftigt(guild):
+        if (vc.is_connected() and not self._voice_beschaeftigt(guild)
+                and not self._musik_hat_sie(guild, vc)):
             await self._safe_disconnect(vc)
 
     async def _klick(self, interaction, art, wert):
         """Ein Knopf oder Menue-Eintrag am Brett."""
         guild = interaction.guild
+
+        async def sagen(text):
+            if interaction.response.is_done():
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                await interaction.response.send_message(text, ephemeral=True)
+
         if not self.soundboard_enabled(getattr(guild, "id", 0)):
-            await interaction.response.send_message(
-                "Das Soundboard ist gerade **deaktiviert**. 🔇", ephemeral=True)
+            await sagen("Das Soundboard ist gerade **deaktiviert**. 🔇")
             return
         vs = getattr(interaction.user, "voice", None)
         channel = vs.channel if vs and vs.channel else None
         if channel is None:
-            await interaction.response.send_message(
-                "Geh erst in einen Sprachkanal, dann drück nochmal. 🎧", ephemeral=True)
+            await sagen("Geh erst in einen Sprachkanal, dann drück nochmal. 🎧")
             return
         if art == "datei":
             path = self._find_sound(wert)
@@ -551,15 +562,21 @@ class VoiceGags(FeatureBasis):
                 return
             name, spielen = path.stem, self._play_path(guild, channel, str(path))
         else:
+            # Die Sound-Liste kann einen Abruf bei Discord kosten (nach einem
+            # Neustart oder alle paar Minuten) - erst bestaetigen, sonst reisst
+            # unter Last die 3-Sekunden-Frist.
+            await interaction.response.defer(ephemeral=True, thinking=True)
             sound = await self._finde_discord_sound(guild, art, wert)
             if sound is None:
-                await interaction.response.send_message(
-                    "Den Sound gibt's nicht mehr. 👻", ephemeral=True)
+                await sagen("Den Sound gibt's nicht mehr. 👻")
                 return
             name, spielen = sound.name, self._discord_sound_spielen(guild, channel, sound)
         # Sofort bestaetigen (ein Datei-Sound spielt bis zu 60 s im Hintergrund).
-        await interaction.response.send_message(f"🔊 **{name}**", ephemeral=True,
-                                                delete_after=6)
+        if interaction.response.is_done():
+            await interaction.followup.send(f"🔊 **{name}**", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"🔊 **{name}**", ephemeral=True,
+                                                    delete_after=6)
         self._spawn(self._melden(interaction, spielen))
 
     async def _melden(self, interaction, spielen):
@@ -738,9 +755,21 @@ class VoiceGags(FeatureBasis):
             await asyncio.wait_for(done.wait(), timeout=60)
         except asyncio.TimeoutError:
             pass
-        if created:
+        if created and not self._musik_hat_sie(guild, vc):
             await self._safe_disconnect(vc)
         return (True, "")
+
+    @staticmethod
+    def _musik_hat_sie(guild, vc):
+        """Hat die Musik diese Verbindung uebernommen? ('Flo spiel X', waehrend
+        ein Gag lief.) Dann NICHT trennen - sonst riss der Gag beim Ende die
+        Musik mit, und flo_getrennt meldete einen Rauswurf samt leerer
+        Warteschlange."""
+        try:
+            import music
+            return music.gehoert_der_musik(guild.id, vc)
+        except Exception:  # noqa: BLE001
+            return False
 
     async def _safe_disconnect(self, vc):
         try:
