@@ -278,6 +278,119 @@ def test_antwort_mit_ping_ist_kein_ziel():
 
 
 
+def _mod_nachricht(text, *, rechte=False, mentions=()):
+    """Nachricht an moderation.handle - mit oder ohne Mod-Rechte."""
+    return SimpleNamespace(
+        content=text, mentions=list(mentions), pinned=False,
+        author=SimpleNamespace(
+            id=7, bot=False, display_name="Nutzer", name="Nutzer", roles=[],
+            guild_permissions=SimpleNamespace(
+                manage_messages=rechte, moderate_members=rechte,
+                kick_members=rechte, ban_members=rechte, administrator=False)),
+        guild=SimpleNamespace(id=1, me=SimpleNamespace(id=99), owner_id=1,
+                              get_member=lambda _u: None),
+        channel=SimpleNamespace(id=5, name="c"))
+
+
+def test_mod_woerter_kapern_keine_saetze():
+    """Vom Betreiber gesehen: ganz normale Saetze bekamen eine Rechte-Meldung
+    statt einer Antwort:
+
+        'Flo verzeih mir'       -> 'Dafuer brauchst du das Recht ...'
+        'Flo verzeihung'        -> 'Dafuer brauchst du das Recht ...'
+        'Flo loesch dich'       -> Rechte-Meldung (bzw. 'Wie viele?')
+        'Flo kicken wir heute?' -> 'Dafuer brauchst du das Recht Mitglieder kicken'
+
+    Wer das Recht nicht hat UND kein Ziel nennt (keine getippte Erwaehnung,
+    keine ID, beim Loeschen keine Anzahl und kein 'alle'), schreibt einen Satz
+    - dann antwortet die KI. 'verzeih' ist gar kein Mod-Wort mehr."""
+    import moderation
+    m = moderation.instance
+    alt = (m._enabled, m._store)
+    m._enabled = True
+    m._store = _FakeStore({"warns": {}})
+    bob = SimpleNamespace(id=555555555555555555, bot=False, display_name="Bob")
+    flo = SimpleNamespace(id=99, bot=True, display_name="Flo")
+
+    def frag(text, **kw):
+        return asyncio.run(m.handle(_mod_nachricht(text, **kw)))
+
+    try:
+        assert moderation.classify("verzeih mir") is None
+        assert moderation.classify("verzeihung") is None
+        assert moderation.classify("entwarn") == "unwarn"
+        assert moderation.classify("unwarn") == "unwarn"
+
+        for satz in ("Flo verzeih mir", "Flo verzeihung", "Flo verzeih mir bitte, war nicht so gemeint",
+                     "Flo lösch dich", "Flo lösch mal deinen Verlauf im Kopf",
+                     "Flo kicken wir heute?", "Flo kick mich nicht raus",
+                     "Flo stumm ist er nicht", "Flo sperr mal die Tür auf",
+                     "Flo warnung: das Essen ist heiß", "Flo bann den Gedanken",
+                     "Flo timeout brauch ich mal", "Flo mute dich doch selbst"):
+            assert frag(satz) is None, satz
+
+        # Antwort-mit-Ping ist kein Ziel, Flos eigene Erwaehnung auch nicht.
+        assert frag("Flo kicken wir heute?", mentions=[bob]) is None
+        assert frag("<@99> kicken wir heute?", mentions=[flo]) is None
+
+        # Ein erkennbarer Befehl bekommt weiterhin die Rechte-Meldung.
+        for befehl, kw in (("Flo kick", {}),
+                           ("Flo kick <@555555555555555555> spam", {"mentions": [bob]}),
+                           ("Flo ban 555555555555555555", {}),
+                           ("Flo unwarn <@555555555555555555>", {"mentions": [bob]}),
+                           ("Flo lösch 20", {}), ("Flo lösch alle", {}),
+                           ("Flo timeout", {})):
+            antwort = frag(befehl, **kw)
+            assert "Recht" in str(antwort), (befehl, antwort)
+    finally:
+        m._enabled, m._store = alt
+
+
+
+
+def test_warnliste_zeigt_limit_und_datum_dieses_servers():
+    """Zwei Anzeigefehler in der Warnliste:
+
+    1. Sie zeigte das GLOBALE Warn-Limit aus der .env ('2/3'), waehrend
+       _do_warn laengst das Limit des Servers nimmt - bei Limit 5 stand '3/3'
+       da und der Auto-Timeout kam trotzdem erst bei 5.
+    2. Das Datum kam aus der Systemzeit. Im Docker-Container ist die UTC -
+       eine Verwarnung um 0:30 Uhr deutscher Zeit stand mit dem Datum von
+       GESTERN in der Liste."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from testhilfe import _embed_text
+    import guildcfg
+    import moderation
+    m = moderation.instance
+    # 23:30 UTC am 01.01. ist in Berlin schon der 02.01.
+    ts = datetime(2026, 1, 1, 23, 30, tzinfo=timezone.utc).timestamp()
+    bob = SimpleNamespace(id=555555555555555555, bot=False, display_name="Bob",
+                          mention="<@555555555555555555>")
+    alt = (m._enabled, m._store, m._modlog, guildcfg.get, moderation.TIMEZONE)
+    try:
+        m._enabled = True
+        m._store = _FakeStore({"warns": {"1": {str(bob.id): [
+            {"by": 7, "reason": "Spam", "ts": ts},
+            {"by": 7, "reason": "Flood", "ts": ts}]}}})
+        m._modlog = lambda *a, **k: asyncio.sleep(0)
+        guildcfg.get = lambda gid, key: (5 if key == "warn_limit" else alt[3](gid, key))
+        moderation.TIMEZONE = ZoneInfo("Europe/Berlin")
+
+        liste = _embed_text(asyncio.run(m.handle(_mod_nachricht(
+            f"Flo warns <@{bob.id}>", rechte=True, mentions=[bob]))))
+        assert "2/5" in liste, liste
+        assert "02.01.2026" in liste, f"Datum nicht in der Bot-Zeitzone: {liste}"
+
+        erlass = _embed_text(asyncio.run(m.handle(_mod_nachricht(
+            f"Flo unwarn <@{bob.id}>", rechte=True, mentions=[bob]))))
+        assert "1/5" in erlass, erlass
+    finally:
+        (m._enabled, m._store, m._modlog, guildcfg.get, moderation.TIMEZONE) = alt
+
+
+
+
 def test_purge_zaehlt_keine_erwaehnung_als_anzahl():
     """'Flo lösch @spammer' hat MAX_PURGE Nachrichten geloescht - ohne Rueckfrage.
 

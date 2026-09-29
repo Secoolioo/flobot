@@ -53,15 +53,33 @@ class Bayern(FeatureBasis):
     ]
 
     # 'Flo bayrisch [an|aus]'
+    #
+    # Das Muster ist am ENDE verankert: nach dem Dialekt-Wort darf nur noch
+    # an/aus (und Satzzeichen) kommen. Vorher reichte der Anfang - und
+    # 'Flo bayrisch ist echt komisch' oder 'Flo dialekt nervt' von einem Admin
+    # schaltete den Dialekt fuer den GANZEN Server an. Wer ueber den Dialekt
+    # redet, bekommt jetzt die KI, nicht den Schalter.
+    #
+    # '-modus' darf dranhaengen: 'Bayrisch-Modus' heisst der Schalter im
+    # Web-Panel, also tippt man auch 'Flo bayrisch-modus an'.
     _TOGGLE_RE = re.compile(# "bayerisch" (mit e) ist die STANDARD-Schreibweise - ohne sie schaltete
         # ausgerechnet der naheliegendste Befehl ueberhaupt nichts.
-        r"^(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*(an|ein|on|aus|off|weg)?", re.I)
+        r"^(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)(?:[\s-]?modus)?\b\s*"
+        r"(an|ein|on|aus|off|weg)?(?:\s+bitte)?\s*[.!?]*$", re.I)
     # "red/sprich (mal) bayerisch" ist die natuerlichste Formulierung ueberhaupt -
     # ohne diese Variante landete sie bei voicegags in der Sprachausgabe.
+    # Bewusst NICHT am Ende verankert: 'red/sprich bayrisch ...' ist schon vom
+    # Satzbau her eine Aufforderung. Laesst bayern den Satz fallen, landet er
+    # bei voicegags ('sprich ...' = vorlesen) - das waere der schlechtere Tausch.
     _TOGGLE_LOSE_RE = re.compile(
         r"^(?:red|redn|rede|sprich|schreib|schreibe|antworte?)\s+(?:mal\s+|bitte\s+)?"
         r"(?:auf\s+)?(?:b[oa]?a?[iy]e?risch|boarisch|dialekt)\b\s*"
         r"(an|ein|on|aus|off|weg)?", re.I)
+
+    # So viele Woerter duerfen nach einem Gruss noch kommen, damit es ein
+    # GRUSS bleibt ('servus leute', 'pfiat di, bis morgen'). Alles darueber ist
+    # ein Satz mit einem Gruss davor - und den beantwortet die KI.
+    _GRUSS_REST_MAX = 2
 
     # Systemprompt-Zusatz, den ai bei aktivem Dialekt anhaengt.
     DIALECT_PROMPT = (
@@ -87,6 +105,25 @@ class Bayern(FeatureBasis):
         """True, wenn die KI in diesem Server gerade boarisch antworten soll."""
         return bool(guild_id) and guildcfg.an(guild_id, "bayern")
 
+    def nur_gruss(self, cleaned):
+        """Ist die Nachricht (fast) nur ein Gruss - oder ein Satz mit Gruss davor?
+
+        Nach dem Gruss (ein oder zwei Woerter) duerfen hoechstens
+        _GRUSS_REST_MAX Woerter kommen, und keine Frage. 'servus leute' ist ein
+        Gruss, 'servus, kannst du mir helfen?' eine Frage an die KI."""
+        words = (cleaned or "").lower().split()
+        if not words:
+            return False
+        first = words[0].strip(".,!?")
+        two = (first, words[1].strip(".,!?")) if len(words) >= 2 else None
+        n = 2 if (two is not None and two in self._GREET2) else 1
+        if first not in self._GREET1 and n == 1:
+            return False
+        rest = words[n:]
+        if "?" in " ".join(rest):
+            return False
+        return len(rest) <= self._GRUSS_REST_MAX
+
     async def handle(self, message):
         if not self._enabled or message.guild is None:
             return None
@@ -99,6 +136,13 @@ class Bayern(FeatureBasis):
 
         # Dialekt an/aus?
         tm = self._TOGGLE_RE.match(cleaned) or self._TOGGLE_LOSE_RE.match(cleaned)
+        if tm and not tm.group(1) and cleaned.rstrip().endswith("?"):
+            # 'Flo bayrisch?' ist eine Frage, kein Befehl: nur sagen, wie's
+            # steht - ohne am Server-Schalter zu drehen.
+            if self.is_on(message.guild.id):
+                return "Host as ned gmerkt, du Depp? I red eh scho boarisch. 🥨"
+            return (f"Hochdeitsch, wia a Beamter. `{self._bot_name} bayrisch an`, "
+                    "wennst mi gscheid hean wuist.")
         if tm:
             # Das ist eine SERVER-Einstellung - und sie wurde bisher ohne jede
             # Pruefung umgelegt. Ein beilaeufiges "flo red mal bayerisch" hat
@@ -114,6 +158,12 @@ class Bayern(FeatureBasis):
 
         # Begruessung?
         if first in self._GREET1 or (two is not None and two in self._GREET2):
+            # Nur wenn die Nachricht (fast) NUR der Gruss ist. Bayern ist der
+            # ERSTE Handler in der Kette: 'Flo servus, kannst du mir bei X
+            # helfen?' bekam bisher nur 'Servus! Wia geht's da, oida?' - die
+            # Frage war weg.
+            if not self.nur_gruss(cleaned):
+                return None
             # Abschieds-Gruesse als solche erkennen.
             if first.startswith("pfiat") or first.startswith("pfiad") or first in ("pfiadi", "pfiati") \
                     or (two is not None and two[0].startswith("pfiat")):

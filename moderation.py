@@ -30,6 +30,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -78,6 +79,10 @@ WARN_TIMEOUT_SECONDS = int(os.getenv("WARN_TIMEOUT_SECONDS", "3600") or "3600")
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("MOD_DEFAULT_TIMEOUT", "600") or "600")
 # Discord-Hartlimit fuer Timeouts: 28 Tage.
 DISCORD_TIMEOUT_MAX = 28 * 24 * 3600
+# Dieselbe Zeitzone wie ueberall im Bot. Ohne sie nahm die Warnliste die
+# Systemzeit - im Docker-Container ist das UTC, und eine Verwarnung von kurz
+# nach Mitternacht stand mit dem Datum von GESTERN in der Liste.
+TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 
 # --- Befehls-Erkennung (auf dem um den Botnamen bereinigten Text) --------
 # Loesch-Befehl am Satzanfang. NAME bewusst _CMD_RE (Self-Test referenziert ihn).
@@ -103,8 +108,11 @@ _ALL_START_RE = re.compile(r"^(?:alles?|all|everything|komplett)\b",
 # Verwarnungen (Reihenfolge in handle(): unwarn -> warns -> warn).
 _WARNS_RE = re.compile(
     r"^(?:warns|verwarnungen|warnungen|warnliste)\b", re.IGNORECASE)
+# 'verzeih' steht hier bewusst NICHT mehr: 'Flo verzeih mir' und
+# 'Flo verzeihung' sind Entschuldigungen an Flo, keine Mod-Befehle - sie
+# bekamen 'Dafuer brauchst du das Recht ...' statt einer Antwort.
 _UNWARN_RE = re.compile(
-    r"^(?:un-?warn\w*|entwarn\w*|verzeih\w*)\b", re.IGNORECASE)
+    r"^(?:un-?warn\w*|entwarn\w*)\b", re.IGNORECASE)
 _WARN_RE = re.compile(r"^(?:ver)?warn\w*\b", re.IGNORECASE)
 
 # Timeout (Reihenfolge: untimeout -> timeout).
@@ -218,6 +226,13 @@ class Moderation(FeatureBasis):
         label = self.classify(cmd)
         if label is None:
             return None
+        # Ohne das Recht UND ohne erkennbares Ziel ist das ein ganz normaler
+        # Satz, der zufaellig mit einem Mod-Wort anfaengt - dann antwortet die
+        # KI. Vorher bekam 'Flo loesch dich' die Rechte-Meldung und
+        # 'Flo kicken wir heute?' ebenso; die Frage selbst war weg.
+        if (not self._actor_can(message, self._recht_fuer(label))
+                and not self._klar_ein_befehl(message, label, cmd)):
+            return None
         if label == "purge":
             return await self._do_purge(message, cmd)  # braucht den ganzen Befehl (Zahl/'alle')
         rx = dict(_ROUTES)[label]
@@ -225,6 +240,49 @@ class Moderation(FeatureBasis):
         return await self._HANDLERS[label](message, rest)
 
     # --- gemeinsame Helfer ---------------------------------------------------
+    @staticmethod
+    def _recht_fuer(label):
+        """Welches Recht der AUFRUFER fuer diese Aktion braucht - dasselbe, das
+        der jeweilige _do_*-Handler prueft."""
+        if label == "purge":
+            return "manage_messages"
+        if label == "kick":
+            return "kick_members"
+        if label in ("ban", "unban"):
+            return "ban_members"
+        return "moderate_members"
+
+    def _klar_ein_befehl(self, message, label, cmd):
+        """Ist das UNVERKENNBAR ein Mod-Befehl - oder ein Satz mit einem Mod-Wort vorn?
+
+        Erkennbar ist ein Befehl, wenn
+          - das Befehlswort allein steht ('Flo kick', 'Flo loesch'),
+          - ein ZIEL dasteht: eine getippte Erwaehnung (nicht Flo selbst) oder
+            eine rohe 15-20-stellige ID,
+          - beim Loeschen zusaetzlich: eine Anzahl oder 'alle/alles' vorn.
+        Nur dann bekommt jemand ohne Recht die Rechte-Meldung. Alles andere
+        ('Flo loesch dich', 'Flo kicken wir heute?', 'Flo sperr mal die Tuer')
+        ist Chat.
+
+        Wer das Recht HAT, wird hier nicht gefragt - der bekommt wie bisher den
+        Hinweis, wie der Befehl geht."""
+        rx = _CMD_RE if label == "purge" else dict(_ROUTES)[label]
+        rest = rx.sub("", cmd, count=1).strip(" \t\n.,!?")
+        if not rest:
+            return True
+        me_id = getattr(getattr(message.guild, "me", None), "id", None)
+        if any(getattr(u, "id", None) != me_id for u in echte_erwaehnungen(message)):
+            return True
+        # Discord-Marken raus, bevor nach einer ID gesucht wird: in '<#kanal>'
+        # oder '<:emoji:123...>' stecken genauso 18 Ziffern.
+        ohne_marken = _MARKE_RE.sub(" ", rest).strip()
+        if _ID_RE.search(ohne_marken):
+            return True
+        if label == "purge" and (re.search(r"\d+", ohne_marken)
+                                 or _ALL_START_RE.match(ohne_marken)):
+            return True
+        return False
+
     def _need(self, label):
         return f"Dafür brauchst du das Recht **{label}**. 🔒"
 
@@ -450,14 +508,26 @@ class Moderation(FeatureBasis):
             return f"✅ {who} hat aktuell **keine** Verwarnungen."
         emb = discord.Embed(title="⚠️ Verwarnungen", color=discord.Color.gold(),
                             timestamp=discord.utils.utcnow())
-        emb.description = f"{who} hat **{len(lst)}/{WARN_LIMIT}** Verwarnungen:"
+        # Das Limit DIESES Servers - _do_warn rechnet damit. Vorher stand hier
+        # die globale .env-Zahl: bei Limit 5 zeigte die Liste '3/3', obwohl der
+        # Auto-Timeout erst bei 5 kommt.
+        grenze = _cfg_zahl(guild.id, "warn_limit", WARN_LIMIT)
+        emb.description = f"{who} hat **{len(lst)}/{grenze}** Verwarnungen:"
         for i, w in enumerate(lst[-10:], 1):
-            ts = datetime.fromtimestamp(w.get("ts", 0)).strftime("%d.%m.%Y")
+            ts = self._datum(w.get("ts", 0))
             emb.add_field(name=f"#{i} · {ts}",
                           value=f"{w.get('reason', '—')}\n— von <@{w.get('by')}>",
                           inline=False)
         emb.set_footer(text=f"{self._bot_name} · Moderation")
         return emb
+
+    @staticmethod
+    def _datum(ts):
+        """Tagesdatum einer Verwarnung in der Bot-Zeitzone (nie die Systemzeit)."""
+        try:
+            return datetime.fromtimestamp(float(ts or 0), TIMEZONE).strftime("%d.%m.%Y")
+        except (TypeError, ValueError, OverflowError, OSError):
+            return "?"
 
     async def _do_unwarn(self, message, rest):
         guild = message.guild
@@ -479,9 +549,10 @@ class Moderation(FeatureBasis):
             lst.pop()
             was = "Letzte Verwarnung entfernt"
         await self._store.save()
+        grenze = _cfg_zahl(guild.id, "warn_limit", WARN_LIMIT)
         emb = self._action_embed("✅", "Verwarnung erlassen", discord.Color.green(),
                                  member if member is not None else uid, message.author, was,
-                                 [("Rest", f"**{len(gw.get(key, []))}/{WARN_LIMIT}**")])
+                                 [("Rest", f"**{len(gw.get(key, []))}/{grenze}**")])
         await self._modlog(message, emb)
         return emb
 

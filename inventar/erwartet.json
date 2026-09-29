@@ -7,5 +7,11 @@
     "datum": "2026-08-31"
    }
   }
+ },
+ "befehle": {
+  "verzeih": {
+   "grund": "'Flo verzeih mir' / 'Flo verzeihung' sind Entschuldigungen an Flo, kein Mod-Befehl - sie bekamen 'Dafuer brauchst du das Recht ...' statt einer KI-Antwort. Entwarnen geht weiter mit unwarn/entwarn.",
+   "datum": "2026-09-29"
+  }
  }
 }

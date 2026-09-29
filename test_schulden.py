@@ -320,6 +320,37 @@ def test_leih_liest_den_betrag_und_nicht_die_frist():
 
 
 
+def test_frist_bis_wochentag_rechnet_in_der_bot_zeitzone():
+    """'bis montag' nahm den heutigen Wochentag aus der SYSTEMZEIT
+    (time.localtime). Im Docker-Container ist die UTC: Sonntag 23:30 UTC ist in
+    Deutschland schon Montag 1:30 - Flo hielt 'bis montag' fuer MORGEN und
+    setzte die Frist auf einen Tag statt auf eine Woche."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    import schulden
+
+    class Uhr(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # So 27.09.2026 23:30 UTC = Mo 28.09.2026 01:30 in Berlin
+            jetzt = datetime(2026, 9, 27, 23, 30, tzinfo=timezone.utc)
+            return jetzt.astimezone(tz) if tz else jetzt.replace(tzinfo=None)
+
+    alt = (schulden.datetime, schulden.TIMEZONE)
+    schulden.datetime, schulden.TIMEZONE = Uhr, ZoneInfo("Europe/Berlin")
+    try:
+        tage = (schulden.Schulden._lies_frist("bis montag") - time.time()) / 86400
+        assert 6.9 < tage < 7.1, f"'bis montag' am Montag ergibt {tage:.2f} Tage"
+        tage = (schulden.Schulden._lies_frist("bis dienstag") - time.time()) / 86400
+        assert 0.9 < tage < 1.1, tage
+    finally:
+        schulden.datetime, schulden.TIMEZONE = alt
+    quelle = inspect.getsource(schulden.Schulden._lies_frist)
+    assert "localtime" not in quelle, "die Frist rechnet wieder mit der Systemzeit"
+
+
+
+
 def test_erlassen_streicht_nicht_versehentlich_alles():
     """'schulden erlassen @x 500 fuers ballern' hat ALLES gestrichen.
 
@@ -439,6 +470,47 @@ def test_schulden_insolvenz():
         bis = sch.buch.stats(1)["insolvenz_bis"]
         assert bis > time.time() + 13 * 86400
         assert "erlassen" in text
+    finally:
+        restore()
+
+
+
+
+def test_schulden_woerter_kapern_keine_saetze():
+    """'pleite', 'bankrott', 'schuld', 'kredit', 'schein' sind Alltagswoerter.
+
+    Vom Betreiber gesehen: 'Flo pleite bin ich' bekam 'Du hast gar keine
+    Schulden. Geniess es.' - statt einer Antwort. Genauso zeigte 'Flo schuld
+    bist du' das Schuldbuch und 'Flo kredit ist teuer geworden' fragte
+    'Wem willst du etwas leihen?'. Ein Befehl ist es jetzt nur allein, mit
+    Ziel, mit Betrag oder mit einem klaren Zusatz ('insolvenz anmelden')."""
+    import schulden
+    restore, sch = _schulden_setup({7: 1000})
+    ich = _fake_person(uid=7, name="ich")
+    flo = _fake_person(uid=42, name="flo", bot=True)
+
+    def frag(text):
+        msg = SimpleNamespace(
+            content=f"Flo {text}", mentions=[], author=ich,
+            guild=SimpleNamespace(id=1, me=flo, get_member=lambda _u: None))
+        return asyncio.run(schulden.instance.handle(msg))
+
+    try:
+        for satz in ("pleite bin ich", "pleite ist mein zweiter vorname",
+                     "bankrott ist der laden bald", "insolvenz ist ein hartes wort",
+                     "schuld bist du", "schuld ist das wetter",
+                     "zettel liegt aufm tisch", "kreide brauch ich für die tafel",
+                     "kredit ist teuer geworden", "leihen ist doof",
+                     "schein ist trügerisch", "tilgen musst du gar nix"):
+            assert frag(satz) is None, satz
+
+        # Die Befehle selbst gehen weiter.
+        assert "keine Schulden" in str(frag("pleite"))
+        assert "keine Schulden" in str(frag("insolvenz anmelden"))
+        assert "Dein Schuldbuch" in _embed_text(frag("schuld"))
+        assert frag("kreide hilfe") is not None
+        assert "leihen" in str(frag("kredit 5k"))
+        assert "leihen" in str(frag("leih"))
     finally:
         restore()
 

@@ -24,7 +24,7 @@ import discord
 
 import ai
 import laufzeit
-from basis import FeatureBasis, echte_erwaehnungen
+from basis import FeatureBasis, echte_erwaehnungen, erstes_ziel
 import economy
 import numfmt
 from store import JsonStore
@@ -84,13 +84,33 @@ class Admin(FeatureBasis):
         return self._locked
 
     # --- Parsen ----------------------------------------------------------------
-    def _extract(self, rest):
-        """Zieht (ziel_user_id, betrag) aus dem Resttext: erst @-Mention, sonst
-        rohe 15-20-stellige ID; der Betrag ist die erste verbleibende Zahl."""
+    @staticmethod
+    def _ziel_aus(message):
+        """Das Ziel aus der NACHRICHT: die erste getippte Erwaehnung, die kein
+        Bot ist (Flo selbst steht bei '@Flo gib @wer 100' mit drin).
+
+        Das muss aus der Nachricht kommen und nicht aus dem Resttext: handle()
+        bekommt den Text ueber ai.strip_lead, und das entfernt ALLE
+        Erwaehnungen. _extract und _parse_dm suchten danach im Rest - dort
+        stand keine mehr. 'Flo gib @wer 100' hat deshalb nie funktioniert, nur
+        der Umweg ueber die rohe ID."""
+        if message is None:
+            return None
+        return erstes_ziel(message)
+
+    def _zerlege(self, rest, message=None):
+        """(ziel_id, betrag, uebrig) - uebrig sind die Woerter, die weder Ziel
+        noch Betrag sind. Daran erkennt _give, ob das ein Befehl war."""
         text = rest or ""
         uid = None
+        ziel = self._ziel_aus(message)
         m = self._MENTION_RE.search(text)
-        if m:
+        if ziel is not None:
+            uid = int(ziel.id)
+            # Steht die Erwaehnung (noch) im Text, darf sie nicht als Betrag
+            # oder uebriges Wort zaehlen.
+            text = self._MENTION_RE.sub(" ", text)
+        elif m:
             uid = int(m.group(1))
             text = text.replace(m.group(0), " ", 1)
         else:
@@ -116,6 +136,24 @@ class Admin(FeatureBasis):
             if wert is not None:
                 amount = int(wert)
                 break
+        uebrig = [t for t in text.split()
+                  if t.strip(".,;:!?") and not self._ist_betrag(t)]
+        return uid, amount, uebrig
+
+    def _ist_betrag(self, token):
+        """Ist das Wort ein Betrag ('100', '5k', '-50')?"""
+        try:
+            if economy.is_enabled() and economy.parse_amount(token) is not None:
+                return True
+        except Exception:  # noqa: BLE001 - Parser darf nie den Befehl kippen
+            pass
+        return self._AMOUNT_RE.fullmatch(token.strip(".,;:!?")) is not None
+
+    def _extract(self, rest, message=None):
+        """Zieht (ziel_user_id, betrag) aus dem Resttext: erst die getippte
+        @-Erwaehnung aus der Nachricht, sonst eine @-Erwaehnung im Rest, sonst
+        eine rohe 15-20-stellige ID; der Betrag ist die erste verbleibende Zahl."""
+        uid, amount, _uebrig = self._zerlege(rest, message)
         return uid, amount
 
     async def _user_of(self, message, uid):
@@ -165,7 +203,9 @@ class Admin(FeatureBasis):
         if first in ("ansage", "announce"):
             return await self._announce(message, rest)
         if first in ("dm", "flüster", "fluester"):
-            return await self._dm(message, rest)
+            # Der ROHE Rest: im bereinigten fehlen alle Erwaehnungen - also
+            # genau der Empfaenger und jede @-Nennung im Text selbst.
+            return await self._dm(message, self._roher_rest(message, parts[0]) or rest)
         if first in ("shopneu", "shoprefresh"):
             return await self._shop_refresh()
         if first in ("sendepause", "sendpause", "funkstille", "lockdown"):
@@ -205,10 +245,15 @@ class Admin(FeatureBasis):
 
     async def _give(self, message, rest, *, sign
                     ):
-        uid, amount = self._extract(rest)
+        uid, amount, uebrig = self._zerlege(rest, message)
         if uid is None and amount is None:
             # 'gib mir mal einen Tipp' u. Ae.: kein Admin-Befehl, sondern Chat ->
             # weiterreichen (None), damit die KI antworten kann.
+            return None
+        if (uid is None or amount is None) and uebrig:
+            # Halber Befehl MIT fremden Woertern ('gib mir 5 Tipps fuer Python',
+            # 'nimm @wer mal mit ins Kino') ist ein Satz, kein Befehl. Nur
+            # 'gib 100' oder 'gib @wer' allein bekommen den Hinweis.
             return None
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
@@ -243,7 +288,7 @@ class Admin(FeatureBasis):
     async def _set_coins(self, message, rest):
         if not economy.is_enabled():
             return "Economy (Flo Coins) ist gerade aus."
-        uid, amount = self._extract(rest)
+        uid, amount = self._extract(rest, message)
         if uid is None or amount is None or amount < 0:
             return f"So: `{self._bot_name} setcoins @wer 500` (Betrag ≥ 0)."
         delta = amount - economy.get_coins(uid)
@@ -253,7 +298,7 @@ class Admin(FeatureBasis):
         return self._emb(f"🎯 Kontostand von **{name}** auf **{numfmt.fmt(neu)} {economy.COIN}** gesetzt.")
 
     async def _give_xp(self, message, rest):
-        uid, amount = self._extract(rest)
+        uid, amount = self._extract(rest, message)
         if uid is None and amount is None:
             return None   # Chat, kein Befehl - weiterreichen an die KI
         if not economy.is_enabled():
@@ -306,18 +351,43 @@ class Admin(FeatureBasis):
             return f"Senden fehlgeschlagen: {exc}"
         return f"✅ Gesendet in **#{getattr(channel, 'name', '?')}**."
 
-    def _parse_dm(self, rest):
-        """'@wer hallo du' / '1234... hallo du' -> (user_id, text)."""
-        m = self._MENTION_RE.search(rest or "") or self._ID_RE.search(rest or "")
+    def _parse_dm(self, rest, message=None):
+        """'@wer hallo du' / '1234... hallo du' -> (user_id, text).
+
+        Mit 'message' kommt das Ziel zuerst aus den getippten Erwaehnungen der
+        Nachricht (siehe _ziel_aus) - im Rest steht nach ai.strip_lead keine
+        Erwaehnung mehr."""
+        rest = rest or ""
+        ziel = self._ziel_aus(message)
+        if ziel is not None:
+            # Nur DIESE eine Erwaehnung raus - weitere gehoeren zum Text.
+            text = re.sub(rf"<@!?{int(ziel.id)}>", " ", rest, count=1)
+            return int(ziel.id), text.strip()
+        m = self._MENTION_RE.search(rest) or self._ID_RE.search(rest)
         if not m:
             return None, ""
         text = (rest[:m.start()] + rest[m.end():]).strip()
         return int(m.group(1)), text
 
+    @staticmethod
+    def _roher_rest(message, wort):
+        """Was im ROHEN Nachrichtentext hinter dem Befehlswort steht.
+
+        Fuer 'dm' zaehlt der Text woertlich - inklusive weiterer Erwaehnungen
+        ('Flo dm @Bob sag @Alice hallo'). Der Rest aus ai.strip_lead hat sie
+        alle verloren."""
+        roh = getattr(message, "content", "") or ""
+        m = re.search(r"(?<![\w<@!&#:])" + re.escape(wort) + r"(?!\w)", roh, re.I)
+        return roh[m.end():].strip() if m else ""
+
     async def _dm(self, message, rest):
         """Flo schreibt jemandem privat - als waere er's selbst. Antworten der
         Person leitet bot.py automatisch an den Besitzer zurueck (DM-Relay)."""
-        uid, text = self._parse_dm(rest)
+        uid, text = self._parse_dm(rest, message)
+        if uid is None and rest.strip():
+            # 'Flo fluester mir die Loesung' ist ein Satz an Flo, kein Auftrag
+            # ohne Empfaenger - die KI soll antworten.
+            return None
         if uid is None or not text:
             return (f"So: `{self._bot_name} dm @wer <text>` (oder mit User-ID) - "
                     "ich stelle es privat zu; Antworten landen wieder bei dir.")

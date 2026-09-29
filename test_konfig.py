@@ -800,6 +800,76 @@ def test_bayrisch_versteht_die_standard_schreibweise():
 
 
 
+def test_bayern_kapert_keine_saetze():
+    """Bayern ist der ERSTE Handler in der Kette - was er schluckt, sieht die
+    KI nie. Zwei Fehler vom Betreiber gesehen:
+
+    1. 'Flo servus, kannst du mir bei X helfen?' bekam nur 'Servus! Wia
+       geht's da, oida?' - die Frage war weg. Gegruesst wird jetzt nur, wenn
+       die Nachricht (fast) NUR der Gruss ist.
+    2. Ein Admin, der 'Flo bayrisch ist echt komisch' oder 'Flo dialekt nervt'
+       schrieb, schaltete den Dialekt fuer den GANZEN Server an. Der Schalter
+       greift jetzt nur, wenn nach dem Wort hoechstens an/aus kommt."""
+    import bayern
+    guildcfg, zurueck = _cfg_frisch()
+    alt = bayern.instance._enabled
+    bayern.instance._enabled = True
+    A = 111
+
+    def msg(text):
+        return SimpleNamespace(
+            content=f"Flo {text}", mentions=[],
+            author=SimpleNamespace(
+                id=5, bot=False, display_name="T",
+                guild_permissions=SimpleNamespace(manage_guild=True)),
+            guild=SimpleNamespace(id=A, name="S"))
+
+    def frag(text):
+        return asyncio.run(bayern.handle(msg(text)))
+
+    try:
+        # Saetze ueber den Dialekt: KI ist dran, am Schalter dreht sich nichts.
+        for satz in ("bayrisch ist echt komisch", "dialekt nervt",
+                     "bayerisch versteht doch keiner", "boarisch klingt wie husten",
+                     "dialekt an sich find ich gut"):
+            assert frag(satz) is None, satz
+            assert bayern.is_on(A) is False, f"{satz!r} hat den Dialekt angeschaltet"
+
+        # Saetze mit Gruss davor: die KI soll die Frage beantworten.
+        for satz in ("servus, kannst du mir bei den Hausaufgaben helfen?",
+                     "servus wie gehts dir heute?",
+                     "griaß di, was geht heute abend so ab bei euch",
+                     "pfiat di, und sag mal wann kommst du wieder?",
+                     "zefix nochmal, das geht einfach nicht"):
+            assert frag(satz) is None, satz
+
+        # Der reine Gruss bleibt ein Gruss.
+        assert frag("servus") in bayern.Bayern._HELLO
+        assert frag("servus leute") in bayern.Bayern._HELLO
+        assert frag("griaß di") in bayern.Bayern._HELLO
+        assert frag("pfiat di, bis morgen") in bayern.Bayern._BYE
+
+        # 'Flo bayrisch?' fragt nur nach dem Stand - ohne umzuschalten.
+        antwort = frag("bayrisch?")
+        assert "bayrisch an" in str(antwort) and bayern.is_on(A) is False, antwort
+
+        # Der Schalter selbst geht weiter - auch mit dem Namen aus dem Panel.
+        assert "boarisch" in str(frag("bayrisch an"))
+        assert bayern.is_on(A) is True
+        assert "eh scho boarisch" in str(frag("bayrisch?"))
+        frag("Bayrisch-Modus aus")
+        assert bayern.is_on(A) is False
+        frag("dialekt")                      # allein = anschalten, wie bisher
+        assert bayern.is_on(A) is True
+        frag("bayrisch aus!")
+        assert bayern.is_on(A) is False
+    finally:
+        bayern.instance._enabled = alt
+        zurueck()
+
+
+
+
 def test_flo_pingt_niemals_everyone():
     """Mehrere Befehle geben die Nutzereingabe WOERTLICH zurueck - gemessen:
     economy 'setze', guildcfg 'einstellung', profil 'avatar'. Und zwar als

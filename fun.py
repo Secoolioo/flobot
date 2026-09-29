@@ -43,6 +43,9 @@ DMROAST_GLOBAL_COOLDOWN = float(os.getenv("FUN_DMROAST_GLOBAL_COOLDOWN", "1800")
 GEGENREDE_USER_COOLDOWN = float(os.getenv("FUN_GEGENREDE_USER_COOLDOWN", "120"))    # 2 min pro Person
 GEGENREDE_GLOBAL_COOLDOWN = float(os.getenv("FUN_GEGENREDE_GLOBAL_COOLDOWN", "30"))  # 30 s serverweit
 
+#: "Noch nie" fuer Zeitstempel aus time.monotonic() - siehe Fun.__init__.
+_NIE = float("-inf")
+
 # Erkennt Beleidigungen / "random Scheiss" (deutsch, grob).
 #
 # Die Liste stand frueher in EINEM Regex, und darin standen ganz normale
@@ -250,11 +253,17 @@ class Fun(FeatureBasis):
 
     def __init__(self):
         self._enabled = False
-        self._last_interject = 0.0
-        self._last_botroast = 0.0
-        self._last_dmroast = 0.0       # serverweiter Cooldown fuer den DM-Konter
+        # "Noch nie" ist float('-inf'), NICHT 0.0. time.monotonic() zaehlt ab
+        # dem Hochfahren des Rechners - 0.0 heisst also "beim Booten", und in
+        # den ersten Minuten nach einem Server-Neustart war das "gerade eben":
+        # direkt nach einem VM-Neustart feuerte die Gegenrede nachgemessen NIE,
+        # weil ihr Cooldown angeblich noch lief - obwohl es nie eine gegeben
+        # hatte. Einwurf (10 min) und DM-Konter (30 min) genauso.
+        self._last_interject = _NIE
+        self._last_botroast = _NIE
+        self._last_dmroast = _NIE       # serverweiter Cooldown fuer den DM-Konter
         self._dm_cooldowns = {}        # uid -> letzter DM-Konter (pro Person)
-        self._last_gegenrede = 0.0     # serverweiter Cooldown fuer die Gegenrede
+        self._last_gegenrede = _NIE     # serverweiter Cooldown fuer die Gegenrede
         self._gegenrede_cooldowns = {}  # uid -> letzte Gegenrede (pro Person)
 
     def _looks_like_refusal(self, text, was="Roast"):
@@ -469,7 +478,7 @@ class Fun(FeatureBasis):
         now = time.monotonic()
         if now - self._last_dmroast < DMROAST_GLOBAL_COOLDOWN:
             return
-        if now - self._dm_cooldowns.get(author.id, 0.0) < DMROAST_USER_COOLDOWN:
+        if now - self._dm_cooldowns.get(author.id, _NIE) < DMROAST_USER_COOLDOWN:
             return
         if random.random() >= DMROAST_CHANCE:
             return
@@ -548,7 +557,7 @@ class Fun(FeatureBasis):
         now = time.monotonic()
         if now - self._last_gegenrede < GEGENREDE_GLOBAL_COOLDOWN:
             return False
-        if now - self._gegenrede_cooldowns.get(author.id, 0.0) < GEGENREDE_USER_COOLDOWN:
+        if now - self._gegenrede_cooldowns.get(author.id, _NIE) < GEGENREDE_USER_COOLDOWN:
             return False
         # Cooldowns VOR dem Senden setzen: scheitert das Senden, soll Flo nicht
         # bei jeder weiteren Nachricht desselben Poeblers neu ansetzen.

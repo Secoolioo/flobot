@@ -477,6 +477,135 @@ def test_schnell_event_lohnt_sich_wirklich():
         "ein einzelnes Event fuellt die komplette Tageskappe")
 
 
+
+
+def test_spielwoerter_starten_nur_als_eindeutiger_befehl():
+    """'raten', 'rechnen', 'mathe', 'quiz' sind ganz normale deutsche Woerter.
+
+    Vom Betreiber gesehen: 'Flo raten ist doof' startete eine 90-Sekunden-
+    Raterunde, und die KI bekam den Satz nie. 'Flo rechnen 5 plus 5' buchte
+    sogar 5 Coins als Mathe-Einsatz ab. Ein Spiel startet jetzt nur, wenn nach
+    dem Wort nichts steht ausser einem Einsatz oder 'bitte'/'los' - sonst ist
+    es ein Satz, und den beantwortet die KI (handle gibt None)."""
+    import games
+    g = games.instance
+    alt = (g._enabled, dict(g._guess), dict(g._quiz), dict(g._mathe),
+           dict(g._round_token))
+    g._enabled = True
+    gesendet = []
+
+    def msg(text, cid):
+        m = SimpleNamespace(content=f"Flo {text}", guild=SimpleNamespace(id=1),
+                            channel=_FakeChannel(cid=cid),
+                            author=_fake_person(uid=7), mentions=[])
+
+        async def reply(*_a, **_k):
+            gesendet.append(text)
+            return SimpleNamespace(id=1)
+        m.reply = reply
+        return m
+
+    try:
+        for satz in ("raten ist doof",
+                     "raten wir mal, wer heute gewinnt?",
+                     "errate nie, was ich denke",
+                     "zahlenraten macht keinen spass",
+                     "rechnen kann ich nicht",
+                     "rechnen 5 plus 5",
+                     "mathe ist mein hassfach",
+                     "kopfrechnen war nie meins",
+                     "quiz mich mal über geschichte",
+                     "trivia ist langweilig",
+                     "reaktion auf das video?",
+                     "reflex hab ich keine",
+                     "wortsalat, was du da schreibst"):
+            assert asyncio.run(g.handle(msg(satz, 4711))) is None, satz
+        assert not gesendet, f"Spiel trotzdem gestartet: {gesendet}"
+        assert 4711 not in g._guess and 4711 not in g._quiz and 4711 not in g._mathe
+
+        # Die eindeutigen Befehle starten weiter - auch mit Einsatz oder 'bitte'.
+        for n, befehl in enumerate(("raten", "zahlenraten bitte", "raten los",
+                                    "mathe", "mathe 100", "reaktion 1k",
+                                    "anagramm"), start=1):
+            assert asyncio.run(g.handle(msg(befehl, 5000 + n))) is not None, befehl
+        assert 5001 in g._guess, "'Flo raten' startet keine Runde mehr"
+    finally:
+        (g._enabled, g._guess, g._quiz, g._mathe, g._round_token) = alt
+
+
+
+
+def test_quiz_zaehlt_keine_teilwoerter_als_treffer():
+    """Die Quiz-Antwort wurde als TEILSTRING gesucht: bei der Antwort 'Rom'
+    gewann 'hab grad kein strom' die Coins - irgendeine Chatnachricht im Kanal
+    hat das Quiz abgeraeumt, bevor jemand geantwortet hatte.
+
+    Jetzt: kurze Antworten nur als eigenes Wort, laengere nur mit Wortgrenzen,
+    mehrere Woerter nur als zusammenhaengende Wortfolge."""
+    import games
+    g = games.instance
+
+    def treffer(nachricht, antwort):
+        return g._quiz_treffer(g._norm(nachricht), g._norm(antwort))
+
+    for harmlos in ("hab grad kein strom", "das aroma ist geil", "voll romantisch hier",
+                    "prominent war der nicht", "chrome stürzt ab"):
+        assert not treffer(harmlos, "Rom"), harmlos
+    for richtig in ("Rom", "rom!", "ich glaube rom", "Rom?", "das ist rom oder"):
+        assert treffer(richtig, "Rom"), richtig
+
+    # Laengere Antworten: nur als ganzes Wort, nicht in einem anderen versteckt.
+    assert not treffer("meine jupiterlampe ist kaputt", "Jupiter")
+    assert treffer("das ist der jupiter", "Jupiter")
+    assert not treffer("luigis mansion zock ich grad", "Luigi")
+    assert treffer("luigi natürlich", "Luigi")
+
+    # Mehrere Woerter: als Folge, nicht verstreut.
+    assert treffer("das war grand theft auto oder", "Grand Theft Auto")
+    assert not treffer("grand, auto und theft", "Grand Theft Auto")
+
+    # Ganz kurze Antworten ('8') zaehlen weiterhin nur als ganze Nachricht.
+    assert treffer("8", "8")
+    assert not treffer("ich hab 8 bier getrunken", "8")
+
+    # Und im echten Ablauf: die Chatnachricht beendet die Runde NICHT.
+    cid = 4712
+    alt = dict(g._quiz)
+    g._quiz[cid] = {"answer": "Rom", "frage": "Hauptstadt Italiens?",
+                    "expires": time.monotonic() + 30, "token": 1, "msg": None}
+    try:
+        chat = SimpleNamespace(content="hab grad kein strom", channel=_FakeChannel(cid=cid),
+                               author=_fake_person(uid=8), guild=SimpleNamespace(id=1))
+        assert asyncio.run(g._check_quiz(chat)) is False
+        assert cid in g._quiz, "eine Chatnachricht hat das Quiz beendet"
+    finally:
+        g._quiz = alt
+
+
+
+
+def test_skill_sperre_haelt_frisch_gebootet_niemanden_auf():
+    """time.monotonic() zaehlt ab dem Hochfahren des Rechners. Die Anti-Farm-
+    Sperre nahm 0.0 als 'noch nie gespielt' - in den ersten 45 s nach einem
+    Server-Neustart war das 'gerade eben': Quiz und Raten zahlten still nichts
+    aus, und 'Flo mathe 100' sagte 'Kurze Pause', obwohl niemand gespielt
+    hatte."""
+    from testhilfe import _with_economy
+    import games
+    frisch = games.Games()
+    restore = _with_economy({7: 10_000})
+    alt_time = games.time
+    games.time = SimpleNamespace(monotonic=lambda: 10.0, time=time.time)
+    try:
+        assert frisch._skill_frei(7), "frisch gebootet gilt jeder als gesperrt"
+        assert frisch._skill_rest(7) == 0.0
+        bet, err = frisch._take_bet(7, ["100"])
+        assert err is None and bet == 100, err
+    finally:
+        games.time = alt_time
+        restore()
+
+
 # --- Gegenrede: Flo haelt gegen Hetze dagegen ---------------------------------
 def _hetz_msg(text, uid=7, bot=False):
     """Nachricht mit einem Kanal, der mitschreibt - und einer Reply-Attrappe."""
@@ -502,7 +631,10 @@ def _gegenrede_frisch():
     alt = (fun.instance._enabled, fun.instance._last_gegenrede,
            dict(fun.instance._gegenrede_cooldowns), ai.is_enabled)
     fun.instance._enabled = True
-    fun.instance._last_gegenrede = 0.0
+    # float('-inf') = "noch nie". 0.0 waere "beim Hochfahren des Rechners" und
+    # auf einer frisch gebooteten Maschine damit "gerade eben" - siehe
+    # test_gegenrede_feuert_direkt_nach_dem_hochfahren.
+    fun.instance._last_gegenrede = float("-inf")
     fun.instance._gegenrede_cooldowns = {}
     ai.is_enabled = lambda: False
 
@@ -573,7 +705,7 @@ def test_gegenrede_bremst_gegen_flut_und_ignoriert_bots():
         assert zweite.antworten == []
         # Serverweiter Cooldown weg, Personen-Cooldown bleibt: derselbe
         # Poebler kommt nicht sofort ein zweites Mal dran.
-        fun.instance._last_gegenrede = 0.0
+        fun.instance._last_gegenrede = float("-inf")
         dritte = _hetz_msg("juden gehören vergast", uid=7)
         assert asyncio.run(fun.instance.maybe_gegenrede(dritte)) is False
         # ... ein anderer aber schon.
@@ -581,12 +713,51 @@ def test_gegenrede_bremst_gegen_flut_und_ignoriert_bots():
         assert asyncio.run(fun.instance.maybe_gegenrede(vierte)) is True
 
         # Bots loesen nie etwas aus (sonst schaukeln sich zwei Bots hoch).
-        fun.instance._last_gegenrede = 0.0
+        fun.instance._last_gegenrede = float("-inf")
         fun.instance._gegenrede_cooldowns = {}
         botmsg = _hetz_msg("ausländer raus", uid=9, bot=True)
         assert asyncio.run(fun.instance.maybe_gegenrede(botmsg)) is False
     finally:
         zurueck()
+
+
+
+
+def test_gegenrede_feuert_direkt_nach_dem_hochfahren():
+    """Vom Betreiber nachgestellt: direkt nach einem VM-Neustart feuerte die
+    Gegenrede NIE.
+
+    time.monotonic() zaehlt ab dem Hochfahren des Rechners. Die Cooldowns
+    standen auf 0.0 fuer 'noch nie' - und 10 Sekunden nach dem Booten ist 0.0
+    'vor 10 Sekunden'. Der 30-Sekunden-Cooldown lief also angeblich noch, fuer
+    eine Gegenrede, die es nie gegeben hatte. Einwurf (10 min) und DM-Konter
+    (30 min) hingen genauso."""
+    import ai
+    import fun
+    frisch = fun.Fun()
+    frisch._enabled = True
+    for name in ("_last_interject", "_last_botroast", "_last_dmroast",
+                 "_last_gegenrede"):
+        assert getattr(frisch, name) == float("-inf"), (
+            f"{name} startet nicht bei 'noch nie'")
+    alt = (fun.time, ai.is_enabled)
+    fun.time = SimpleNamespace(monotonic=lambda: 10.0)   # 10 s nach dem Booten
+    ai.is_enabled = lambda: False
+    try:
+        msg = _hetz_msg("ausländer raus aus deutschland")
+        assert asyncio.run(frisch.maybe_gegenrede(msg)) is True, (
+            "frisch gebootet schweigt die Gegenrede")
+        assert len(msg.antworten) == 1
+
+        # Gegenprobe: genau so sah es vorher aus - 0.0 blockiert.
+        alt_frisch = fun.Fun()
+        alt_frisch._enabled = True
+        alt_frisch._last_gegenrede = 0.0
+        assert asyncio.run(alt_frisch.maybe_gegenrede(
+            _hetz_msg("ausländer raus aus deutschland", uid=8))) is False
+    finally:
+        fun.time, ai.is_enabled = alt
+        fun.ai.is_enabled = ai.is_enabled
 
 
 

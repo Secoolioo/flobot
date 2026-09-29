@@ -95,6 +95,22 @@ ANA_MAX_TRIES = int(os.getenv("GAMES_ANA_TRIES", "3") or "3")
 GAMES_DAILY_MAX = int(os.getenv("GAMES_DAILY_MAX", "50000") or "50000")
 
 
+# "Nie" fuer monotone Zeitstempel. 0.0 ist KEIN "nie": time.monotonic() zaehlt
+# ab dem Hochfahren des Rechners, 0.0 ist also "beim Booten" - und in den ersten
+# Minuten nach einem Server-Neustart damit "gerade eben".
+_NIE = float("-inf")
+
+# Woerter, die neben einem Spiel-Befehl stehen duerfen, ohne dass aus dem
+# Befehl ein Satz wird ('Flo raten bitte', 'Flo mathe 100'). Siehe _nur_spielargs.
+_SPIEL_FUELLWOERTER = frozenset((
+    "bitte", "mal", "los", "start", "starten", "spielen", "nochmal", "jetzt",
+    "!", "?", "pls", "plz"))
+# Die Spiel-Starter, die nur als EINDEUTIGER Befehl starten (siehe handle).
+_SPIEL_STARTER = frozenset((
+    "quiz", "trivia", "quizzz", "zahlenraten", "raten", "errate",
+    "mathe", "rechnen", "kopfrechnen", "anagramm", "wortsalat",
+    "reaktion", "reaktionstest", "reflex"))
+
 # --- Schere-Stein-Papier -------------------------------------------------
 _SSP = {
     "schere": "✂️", "stein": "🪨", "papier": "📄",
@@ -707,7 +723,12 @@ class Games(FeatureBasis):
         self._mathe = {}      # channel_id -> laufende Mathe-Runde
         self._ana = {}        # channel_id -> laufende Anagramm-Runde
         self._qduel = {}      # channel_id -> laufendes Quiz-Duell
-        self._skill_cd = {}   # user_id -> letzte Skill-Spiel-Runde (Anti-Farm)
+        # user_id -> letzte Skill-Spiel-Runde (Anti-Farm). "Nie gespielt" ist
+        # float('-inf'), NICHT 0.0: time.monotonic() zaehlt ab dem Hochfahren
+        # des Rechners - in den ersten 45 s nach einem Server-Neustart hielt
+        # die Sperre jeden fuer "gerade eben gespielt", und Quiz/Raten zahlten
+        # still keine Coins aus.
+        self._skill_cd = {}
         # Kanal-Plaetze, auf denen GERADE eine Runde startet (siehe _slot_belegen).
         self._starting = set()
 
@@ -828,11 +849,11 @@ class Games(FeatureBasis):
 
     def _skill_frei(self, uid):
         """Ist die Anti-Farm-Sperre fuer diesen Nutzer gerade offen?"""
-        return (time.monotonic() - self._skill_cd.get(uid, 0.0)) >= SKILL_COOLDOWN
+        return (time.monotonic() - self._skill_cd.get(uid, _NIE)) >= SKILL_COOLDOWN
 
     def _skill_rest(self, uid):
         """Restliche Sperrzeit in Sekunden (0 = frei)."""
-        return max(0.0, SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, 0.0)))
+        return max(0.0, SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, _NIE)))
 
     def _spawn(self, coro):
         task = asyncio.create_task(coro)
@@ -909,6 +930,14 @@ class Games(FeatureBasis):
 
         if first in ("quizduell", "quizduel"):
             return await self._quizduell(message, args)
+        # Die Spiel-Starter sind ganz normale deutsche Woerter. 'Flo raten ist
+        # doof' startete eine 90-Sekunden-Raterunde, 'Flo rechnen 5 plus 5'
+        # buchte 5 Coins als Einsatz ab. Gestartet wird deshalb nur, wenn nach
+        # dem Wort nichts steht ausser einer Zahl (Einsatz) oder 'bitte'/'los' -
+        # alles andere ist ein Satz, und den beantwortet die KI.
+        spielwort = first in _SPIEL_STARTER
+        if spielwort and not self._nur_spielargs(args):
+            return None
         if first in ("quiz", "trivia", "quizzz"):
             return await self._start_quiz(message)
         if first in ("zahlenraten", "raten", "errate"):
@@ -934,6 +963,21 @@ class Games(FeatureBasis):
         if first in ("würfel", "wuerfel", "würfeln", "wuerfeln", "dice", "roll", "w6"):
             return await self._dice(message, args)
         return None
+
+    @staticmethod
+    def _nur_spielargs(args):
+        """Stehen nach dem Spiel-Wort nur Dinge, die zum Spiel gehoeren?
+
+        Leer, ein Betrag ('100', '1k') oder Fuellwoerter ('bitte', 'los').
+        Sonst ist es ein Satz, der zufaellig mit dem Spiel-Wort anfaengt."""
+        for a in args:
+            wort = a.lower().strip(".,;:!?")
+            if not wort or wort in _SPIEL_FUELLWOERTER:
+                continue
+            if economy.parse_amount(wort) is not None:
+                continue
+            return False
+        return True
 
     async def _ssp(self, message, args):
         if not args:
@@ -1202,6 +1246,31 @@ class Games(FeatureBasis):
         except discord.HTTPException:
             pass
 
+    @staticmethod
+    def _quiz_treffer(guess, answer):
+        """Ist die (normalisierte) Nachricht eine richtige Antwort?
+
+        Vorher reichte 'answer in guess' als TEILSTRING: bei der Antwort 'Rom'
+        gewann 'hab grad kein strom' die Coins - jede beliebige Chatnachricht
+        im Kanal konnte das Quiz abraeumen. Jetzt:
+          - kurze Antworten (1-2 Zeichen, z. B. '8') nur als ganze Nachricht,
+          - bis 4 Zeichen nur als eigenes Wort ('rom' in 'ich sag rom'),
+          - laengere nur mit Wortgrenzen davor und dahinter,
+          - mehrere Woerter nur als zusammenhaengende Wortfolge."""
+        if not guess or not answer:
+            return False
+        if guess == answer:
+            return True
+        if len(answer) < 3:
+            return False
+        g_tok, a_tok = guess.split(), answer.split()
+        if len(a_tok) > 1:
+            n = len(a_tok)
+            return any(g_tok[i:i + n] == a_tok for i in range(len(g_tok) - n + 1))
+        if len(answer) <= 4:
+            return answer in g_tok
+        return re.search(r"(?<!\w)" + re.escape(answer) + r"(?!\w)", guess) is not None
+
     async def _check_quiz(self, message):
         cid = message.channel.id
         runde = self._quiz.get(cid)
@@ -1209,10 +1278,7 @@ class Games(FeatureBasis):
             return False
         guess = self._norm(message.content or "")
         answer = self._norm(runde["answer"])
-        if not guess or not answer:
-            return False
-        hit = guess == answer or (len(answer) >= 3 and answer in guess)
-        if not hit:
+        if not self._quiz_treffer(guess, answer):
             return False
         self._quiz.pop(cid, None)
         self._new_token(cid)  # evtl. laufenden Timeout entwerten
@@ -1568,7 +1634,7 @@ class Games(FeatureBasis):
         if bet > SKILL_MAX_BET:
             return 0, (f"Hier ist bei **{numfmt.fmt(SKILL_MAX_BET)}** Flo Coins Schluss – "
                        f"für die großen Einsätze geht's ins Casino (`casino`). 🎰")
-        rest = SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, 0.0))
+        rest = SKILL_COOLDOWN - (time.monotonic() - self._skill_cd.get(uid, _NIE))
         if rest > 0:
             return 0, (f"⏳ Kurze Pause – noch **{int(rest) + 1}s**, dann darfst du "
                        f"wieder um Coins spielen.")

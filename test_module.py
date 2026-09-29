@@ -273,6 +273,66 @@ def test_voicegags_soundboard_ist_nach_der_musik_wieder_frei():
 
 
 
+def test_admin_befehle_treffen_das_erwaehnte_ziel():
+    """'Flo gib @wer 500' hat NIE funktioniert - nur der Umweg ueber die rohe ID.
+
+    admin.handle bekommt den Text ueber ai.strip_lead, und das entfernt ALLE
+    Erwaehnungen. _extract und _parse_dm suchten die Erwaehnung danach im
+    Resttext - dort stand keine mehr. Der Besitzer bekam 'So: Flo gib @wer 100'
+    zurueck, obwohl er genau das getippt hatte. Jetzt kommt das Ziel aus den
+    getippten Erwaehnungen der Nachricht (ohne Bots, also ohne Flo selbst)."""
+    from testhilfe import _embed_text, _with_economy
+    alt_an = admin.instance._enabled
+    admin.instance._enabled = True
+    ZIEL, DRITTE = 222222222222222222, 333333333333333333
+    post = []
+
+    async def senden(text):
+        post.append(text)
+
+    bob = SimpleNamespace(id=ZIEL, bot=False, display_name="Bob", send=senden)
+    alice = SimpleNamespace(id=DRITTE, bot=False, display_name="Alice")
+    flo = SimpleNamespace(id=999999999999999999, bot=True, display_name="Flo")
+
+    def chef(text, *mentions):
+        return SimpleNamespace(
+            author=SimpleNamespace(id=admin.OWNER_ID, bot=False, display_name="Chef"),
+            content=text, mentions=list(mentions), guild=None)
+
+    restore = _with_economy({ZIEL: 1000})
+    try:
+        # Flo per @ angesprochen UND Bob per @ als Ziel - so kommt es aus Discord.
+        antwort = asyncio.run(admin.handle(chef(f"<@{flo.id}> gib <@{ZIEL}> 500", flo, bob)))
+        assert economy.get_coins(ZIEL) == 1500, _embed_text(antwort)
+        asyncio.run(admin.handle(chef(f"Flo nimm <@{ZIEL}> 200", bob)))
+        assert economy.get_coins(ZIEL) == 1300
+        asyncio.run(admin.handle(chef(f"Flo setcoins <@!{ZIEL}> 42", bob)))
+        assert economy.get_coins(ZIEL) == 42
+        # Die rohe ID geht weiter (in der DM gibt es keine Erwaehnungen).
+        asyncio.run(admin.handle(chef(f"gib {ZIEL} 8")))
+        assert economy.get_coins(ZIEL) == 50
+
+        # DM an den Erwaehnten - weitere Erwaehnungen bleiben im Text stehen.
+        antwort = asyncio.run(admin.handle(chef(
+            f"Flo dm <@{ZIEL}> sag <@{DRITTE}> hallo", bob, alice)))
+        assert post == [f"sag <@{DRITTE}> hallo"], (post, antwort)
+
+        # Halbe Befehle mit fremden Woertern sind Chat - die KI ist dran.
+        for satz in ("Flo gib mir 5 Tipps für Python",
+                     "Flo nimm mir 2 Minuten Zeit",
+                     "Flo flüster mir die Lösung",
+                     "Flo dm mir das morgen nochmal"):
+            assert asyncio.run(admin.handle(chef(satz))) is None, satz
+        # Der blanke Befehl bekommt weiter den Hinweis.
+        assert "So:" in str(asyncio.run(admin.handle(chef("Flo gib 100"))))
+        assert "So:" in str(asyncio.run(admin.handle(chef("Flo dm"))))
+    finally:
+        restore()
+        admin.instance._enabled = alt_an
+
+
+
+
 def test_terraria_erkennt_kein_alltagsdeutsch():
     """'hell' und 'boss' sind deutsche Alltagswoerter, 'golem' ist kein
     eindeutiger Terraria-Begriff. Bei einem Treffer schaltet bot.py den ganzen

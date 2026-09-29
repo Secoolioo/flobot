@@ -45,6 +45,8 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -78,6 +80,28 @@ _CMD_SCHEIN = ("schuldschein", "schein", "iou", "anschreiben")
 _CMD_TILG = ("tilg", "tilge", "tilgen", "abzahl", "abzahlen", "zurueckzahlen",
              "zurückzahlen")
 _CMD_INSOLVENZ = ("insolvenz", "privatinsolvenz", "bankrott", "pleite")
+# Was hinter dem Insolvenz-Wort stehen darf, damit es ein BEFEHL bleibt.
+# 'pleite' und 'bankrott' sind Alltagswoerter: 'Flo pleite bin ich' bekam
+# 'Du hast gar keine Schulden' statt einer Antwort. Jetzt zaehlt nur das Wort
+# allein oder mit einem dieser Zusaetze ('Flo insolvenz anmelden').
+_INSOLVENZ_ZUSATZ = frozenset((
+    "anmelden", "beantragen", "melden", "bitte", "jetzt", "sofort",
+    "machen", "durchziehen", "starten"))
+# Diese Befehlswoerter sind auch ganz normale Woerter ('Flo schuld bist du',
+# 'Flo zettel liegt aufm Tisch'). Sie zaehlen nur allein, mit einer
+# Erwaehnung oder mit einem Unterbefehl - siehe Schulden._klar_ein_befehl.
+_CMDS_MEHRDEUTIG = ("schuld", "zettel", "kreide")
+
+# Die Unterbefehle von 'schulden ...' (siehe handle) - fuer _klar_ein_befehl.
+_UNTERBEFEHLE = ("hilfe", "help", "?", "was ", "top", "liste", "ranking", "meiste",
+                 "größte", "groesste", "erlass", "streich", "vergeb", "schenk",
+                 "verzicht")
+
+# Dieselbe Zeitzone wie ueberall im Bot. 'bis freitag' rechnete mit der
+# Systemzeit - im Docker-Container UTC. Zwischen Mitternacht und 1-2 Uhr
+# deutscher Zeit war damit 'heute' noch GESTERN, und die Frist landete einen
+# Tag daneben.
+TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "Europe/Berlin"))
 
 # So viele Bewegungen bleiben je Posten erhalten (fuer die Detail-Ansicht).
 LOG_KEPT = 12
@@ -1040,6 +1064,13 @@ class Schulden(FeatureBasis):
         erstes = teile[0].lower().strip(".,!?")
         rest = " ".join(teile[1:]).strip()
 
+        if erstes in _CMD_LEIH + _CMD_SCHEIN + _CMD_TILG:
+            # 'Flo kredit ist teuer', 'Flo schein ist gut': weder ein Ziel
+            # noch ein Betrag - ein Satz, kein Auftrag. Der Hinweis 'Wem willst
+            # du etwas leihen?' kommt nur, wenn es erkennbar ein Befehl ist.
+            if (rest and _echtes_ziel(message) is None
+                    and self._lies_betrag(message, rest) is None):
+                return None
         if erstes in _CMD_LEIH:
             return await self._cmd_leih(message, rest)
         if erstes in _CMD_SCHEIN:
@@ -1047,8 +1078,12 @@ class Schulden(FeatureBasis):
         if erstes in _CMD_TILG:
             return await self._cmd_tilgen(message, rest)
         if erstes in _CMD_INSOLVENZ:
+            if not self._insolvenz_gemeint(rest):
+                return None
             return await self._cmd_insolvenz(message)
         if erstes not in _CMDS:
+            return None
+        if erstes in _CMDS_MEHRDEUTIG and not self._klar_ein_befehl(message, rest):
             return None
 
         low = rest.lower()
@@ -1064,6 +1099,23 @@ class Schulden(FeatureBasis):
                 return "Bei dir selbst hast du nichts offen. 😄"
             return self._paar_embed(message.author, ziel)
         return self._eigene_embed(message.author, message.guild)
+
+    @staticmethod
+    def _insolvenz_gemeint(rest):
+        """Das Insolvenz-Wort allein - oder mit einem klaren Zusatz?"""
+        woerter = [w.strip(".,!?").lower() for w in (rest or "").split()]
+        return all(not w or w in _INSOLVENZ_ZUSATZ for w in woerter)
+
+    @staticmethod
+    def _klar_ein_befehl(message, rest):
+        """Fuer die mehrdeutigen Woerter ('schuld', 'zettel', 'kreide'):
+        allein, mit einer Erwaehnung oder mit einem Unterbefehl vorn."""
+        low = (rest or "").strip(" .,!?").lower()
+        if not low:
+            return True
+        if _echtes_ziel(message) is not None:
+            return True
+        return low.startswith(_UNTERBEFEHLE)
 
     # --- Befehl: leihen ----------------------------------------------------
     def _lies_betrag(self, message, rest):
@@ -1094,7 +1146,7 @@ class Schulden(FeatureBasis):
         m = _FRIST_TAG_RE.search(text or "")
         if m:
             ziel = _WOCHENTAGE[m.group(1).lower()]
-            heute = time.localtime().tm_wday
+            heute = datetime.now(TIMEZONE).weekday()
             tage = (ziel - heute) % 7 or 7
             return time.time() + tage * TAG
         return 0.0
