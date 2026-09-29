@@ -290,6 +290,12 @@ class FloAktie(FeatureBasis):
     def __init__(self):
         self._enabled = False
         self._store = None
+        # Bremse fuer den Analysten: ki_zeit steht nur nach einem ERFOLG. Ohne
+        # eigenen Versuchs-Stempel hat der Kurs-Takt (alle 20 s) nach jedem
+        # Fehlschlag sofort wieder gefragt - bis zu 4.320 Aufrufe am Tag, alle
+        # auf dem Kontingent, das der Chat braucht.
+        self._ki_naechster_versuch = 0.0     # time.time(), vorher wird nicht gefragt
+        self._ki_fehlschlaege = 0            # am Stueck - verdoppelt die Pause
         # Das ZULETZT gepostete 'flo aktie'-Panel (Message) + fuer wen es gepostet
         # wurde. Es wird live nachgezogen, sobald sich Kurs/Boersenwert aendern.
         self._panel_msg = None
@@ -1251,6 +1257,8 @@ class FloAktie(FeatureBasis):
             letzte = 0.0
         if jetzt - letzte < KI_ALLE_SEK:
             return None
+        if jetzt < self._ki_naechster_versuch:
+            return None
         try:
             import ai
             if not ai.is_enabled():
@@ -1260,15 +1268,27 @@ class FloAktie(FeatureBasis):
         people, streams, video = self._measure_alle(guild)
         msgs = max(0, int(st.get("msg_count", 0)) - int(st.get("last_msg_count", 0)))
         try:
+            # hintergrund=True: eigenes Modell/Kontingent, kein Wiederholen, und
+            # nach einem 429 haelt der Analyst die Klappe - der Chat geht vor.
             antwort = await ai.generate(self._ki_lage(people, streams, video, msgs),
                                         system=self._KI_SYSTEM, temperature=0.9,
-                                        max_tokens=80)
+                                        max_tokens=80, hintergrund=True)
         except Exception:  # noqa: BLE001 - die Boerse laeuft auch ohne Analyst
             log.exception("KI-Einschaetzung fehlgeschlagen")
-            return None
+            antwort = None
         faktor, text = self._ki_parse(antwort)
         if faktor is None:
+            # Den VERSUCH zaehlen, nicht nur den Erfolg: 10 min, dann 20, 40,
+            # hoechstens eine Stunde Pause. Die alte Einschaetzung laeuft nach
+            # KI_MAX_ALTER ohnehin von selbst aus.
+            self._ki_fehlschlaege += 1
+            pause = min(3600.0, KI_ALLE_SEK * (2 ** (self._ki_fehlschlaege - 1)))
+            self._ki_naechster_versuch = jetzt + pause
+            log.info("FloCorp Analyst: keine brauchbare Einschaetzung - naechster "
+                     "Versuch in %.0f s.", pause)
             return None
+        self._ki_fehlschlaege = 0
+        self._ki_naechster_versuch = 0.0
         st["ki_faktor"] = faktor
         st["ki_text"] = text
         st["ki_zeit"] = jetzt

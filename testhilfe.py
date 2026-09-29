@@ -598,19 +598,21 @@ def _karriere_durchspielen(arbeit, A, uid, salat):
 class _KiAntwort:
     """Antwort des Anbieters, so wie das openai-Paket sie liefert."""
 
-    def __init__(self, text="ok"):
+    def __init__(self, text="ok", finish_reason="stop"):
         nachricht = SimpleNamespace(content=text, tool_calls=None)
-        self.choices = [SimpleNamespace(message=nachricht)]
+        self.choices = [SimpleNamespace(message=nachricht, finish_reason=finish_reason)]
+        self.usage = None
 
 
 
 class _KiFehler(Exception):
     """Fehler des Anbieters mit HTTP-Status und Wortlaut - genau die zwei Dinge,
-    an denen ai._einordnen() sich orientiert."""
+    an denen ai._einordnen() sich orientiert. Optional ein Retry-After-Kopf."""
 
-    def __init__(self, status, text=""):
+    def __init__(self, status, text="", retry_after=None):
         self.status_code = status
-        self.response = SimpleNamespace(status_code=status, text=text)
+        kopf = {"retry-after": str(retry_after)} if retry_after is not None else {}
+        self.response = SimpleNamespace(status_code=status, text=text, headers=kopf)
         super().__init__(text or f"HTTP {status}")
 
 
@@ -672,6 +674,7 @@ class _FalscherAnbieter:
         aussen = self
 
         class Griff(http.server.BaseHTTPRequestHandler):
+            timeout = 5          # halb offene Verbindung darf shutdown() nie blockieren
             protocol_version = "HTTP/1.1"
 
             def log_message(self, *a):

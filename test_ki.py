@@ -206,13 +206,20 @@ def test_ki_leere_antwort_bleibt_nicht_spurlos():
     alt_stufe = protokoll.level
     protokoll.setLevel(logging.INFO)
     try:
-        flo, _ = _ki_frisch([_KiAntwort("")])          # Modell sagt nichts
+        # Modell sagt nichts - auch im zweiten Anlauf nicht.
+        flo, anbieter = _ki_frisch([_KiAntwort(""), _KiAntwort("")])
         antwort = asyncio.run(flo.ask_flo("hi"))
     finally:
         protokoll.removeHandler(griff)
         protokoll.setLevel(alt_stufe)
 
-    assert antwort == "Dazu faellt mir gerade nichts ein.", antwort
+    # Kein zahmer Einheitssatz mehr, sondern eine derbe Zeile - und die darf
+    # nie in den Verlauf (sie steht in _FEHLERSAETZE).
+    assert antwort in ai.FloAI._LEER_SPRUECHE, antwort
+    assert antwort in ai.FloAI._FEHLERSAETZE
+    # Genau EIN Nachfassen, und zwar mit mehr Luft fuers Denken.
+    assert len(anbieter.aufrufe) == 2, anbieter.aufrufe
+    assert anbieter.letzte_kwargs["max_tokens"] == ai.FloAI.MAX_TOKENS_NOTFALL
     text = puffer.getvalue()
     assert "leere Antwort" in text, f"die leere Antwort bleibt spurlos: {text!r}"
     # Muss mit 'k l' auffindbar sein - also dieselbe Marke wie alle KI-Fehler.
@@ -608,6 +615,12 @@ def test_ki_gegen_einen_echten_http_anbieter():
                             "message": {"role": "assistant", "content": text}}]})
 
     class Griff(BaseHTTPRequestHandler):
+        # Lese-Timeout: der Fall "Anbieter haengt" (ZEITLIMIT=0.001) bricht
+        # Verbindungen mitten im Senden ab. Ohne Timeout wartet der
+        # EINFAEDIGE Server dann ewig auf den Rest der Anfrage, und
+        # server.shutdown() im finally haengt den ganzen Testlauf auf.
+        timeout = 5
+
         def log_message(self, *a):
             pass
 
@@ -742,6 +755,15 @@ def test_ki_der_arzt_verschluckt_keine_meldung():
     assert len(meldungen) >= 10, f"nur {len(meldungen)} KI-Meldungen gefunden"
     durchgefallen = [m for m in meldungen if not filter_re.search(m)]
     assert not durchgefallen, f"'k' zeigt diese Zeilen nicht an: {durchgefallen}"
+    # Und der ANTWORTWEG in bot.py/basis.py: dort entstand die Stille ("Flo
+    # tippt und sagt nichts"), und genau diese Zeilen fehlten in 'k l'.
+    for datei in ("bot.py", "basis.py"):
+        text = open(os.path.join(hier, datei), encoding="utf-8").read()
+        wichtig = [m for m in re.findall(r'log\.(?:warning|error|exception)\(\s*"([^"]*)', text)
+                   if "Antwort" in m or m.startswith("KI") or "Unbehandelt" in m]
+        assert wichtig, f"{datei}: keine Antwort-Meldungen gefunden"
+        fehlt = [m for m in wichtig if not filter_re.search(m)]
+        assert not fehlt, f"'k l' zeigt diese Zeilen aus {datei} nicht: {fehlt}"
 
     # Und der Vorspann von journalctl muss WIRKLICH weg sein: das sind fuenf
     # Felder ("Aug 19 14:25:20 Ubuntu python3[8422]:"), nicht vier.
@@ -1203,6 +1225,211 @@ def test_gehirn_haengt_nicht_an_einem_kaputten_ki_aufruf_fest():
     finally:
         ai.generate = alt_gen
         restore()
+
+
+
+# --- Flo antwortet immer: die Faelle hinter "die KI antwortet ploetzlich nicht" ---
+def test_ki_fasst_nach_wenn_das_denken_das_budget_frisst():
+    """gpt-oss denkt vor der Antwort und zieht das vom selben Budget ab. Reicht
+    es nicht, kommt content='' mit finish_reason='length' - und Flo sagte
+    "Dazu faellt mir gerade nichts ein". Jetzt: EINMAL mit mehr Luft."""
+    import ai
+    flo, anbieter = _ki_frisch([_KiAntwort("", finish_reason="length"),
+                                _KiAntwort("Jetzt aber, du Lauch.")])
+    assert asyncio.run(flo.ask_flo("erklaer mal")) == "Jetzt aber, du Lauch."
+    assert len(anbieter.aufrufe) == 2
+    assert anbieter.letzte_kwargs["max_tokens"] == ai.FloAI.MAX_TOKENS_NOTFALL
+    # Abgeschnitten mitten im Satz zaehlt genauso.
+    flo, anbieter = _ki_frisch([_KiAntwort("Also das ist so dass", finish_reason="length"),
+                                _KiAntwort("Kurz gesagt: frag Google, du Pfosten.")])
+    assert asyncio.run(flo.ask_flo("erklaer mal")).startswith("Kurz gesagt")
+    # Und nie eine Textwand, auch wenn das Modell eine liefert.
+    wand = ("Das ist ein Satz, du Lauch. " * 40).strip()
+    flo, _ = _ki_frisch([_KiAntwort(wand)])
+    antwort = asyncio.run(flo.ask_flo("laber mal"))
+    assert len(antwort) <= ai.FloAI.ANTWORT_MAX_ZEICHEN, len(antwort)
+    assert antwort.endswith("."), antwort[-20:]
+
+
+
+
+def test_ki_werkzeugfehler_wird_erst_wiederholt_dann_ohne_werkzeug():
+    """Groq weist eine Generierung mit kaputtem Werkzeug-Aufruf mit 400
+    'tool_use_failed' ab. Das ist Zufall - vorher hiess es trotzdem sofort
+    "Damit konnte die KI nichts anfangen"."""
+    fehler = _KiFehler(400, '{"error":{"code":"tool_use_failed","failed_generation":"x"}}')
+    flo, anbieter = _ki_frisch([fehler, _KiAntwort("Na also, du Pfeife.")])
+    assert asyncio.run(flo.ask_flo("wetter?")) == "Na also, du Pfeife."
+    assert len(anbieter.aufrufe) == 2
+    # Zweimal kaputt -> der dritte Versuch geht OHNE Werkzeug raus.
+    flo, anbieter = _ki_frisch([fehler, fehler, _KiAntwort("Ohne geht's auch.")])
+    assert asyncio.run(flo.ask_flo("wetter?")) == "Ohne geht's auch."
+    assert "tools" not in anbieter.letzte_kwargs, anbieter.letzte_kwargs.keys()
+    # Ein gewoehnlicher 400 bleibt EIN Versuch (kein Haemmern).
+    flo, anbieter = _ki_frisch([_KiFehler(400, "kaputt")] * 5)
+    asyncio.run(flo.ask_flo("hi"))
+    assert len(anbieter.aufrufe) == 1
+
+
+
+
+def test_ki_tageslimit_wird_nicht_wiederholt_und_gemerkt():
+    """Ein Tageslimit heilt nicht in Sekunden. Vorher: vier Anfragen je
+    Nachricht, jede ein weiterer 429. Jetzt: eine - und bis zum Reset gar
+    keine mehr."""
+    import ai
+    tag = _KiFehler(429, "Rate limit reached on tokens per day (TPD): Limit 200000",
+                    retry_after=600)
+    flo, anbieter = _ki_frisch([tag] * 5)
+    assert asyncio.run(flo.ask_flo("hi")) == ai.FloAI.MELDUNGEN["limit"]
+    assert len(anbieter.aufrufe) == 1
+    assert asyncio.run(flo.ask_flo("nochmal")) == ai.FloAI.MELDUNGEN["limit"]
+    assert len(anbieter.aufrufe) == 1, "trotz Sperre wieder gefragt"
+    # Ein kurzes Limit mit Retry-After wird dagegen abgewartet - EINMAL.
+    minute = _KiFehler(429, "Rate limit reached on tokens per minute (TPM)", retry_after=0.05)
+    flo, anbieter = _ki_frisch([minute, _KiAntwort("Da bin ich wieder, du Nervensaege.")])
+    assert asyncio.run(flo.ask_flo("hi")).startswith("Da bin ich")
+    assert len(anbieter.aufrufe) == 2
+
+
+
+
+def test_ki_verweigerung_erkannt_aber_nie_die_notlage():
+    """Englische Verweigerungen ("I'm sorry, but I can't help with that.")
+    gingen bisher als Antwort durch und landeten im Verlauf. Die Erkennung ist
+    bewusst ENG: die ehrliche Antwort an jemanden, der am Boden ist, beginnt oft
+    mit "tut mir leid" - die verlangt der Guardrail ausdruecklich."""
+    import ai
+    flo, _ = _ki_frisch([])
+    for weigern in ("I'm sorry, but I can't help with that.",
+                    "I’m sorry, but I can’t comply with that request.",
+                    "I can't help with that.",
+                    "As an AI, I cannot do that.",
+                    "Ich kann dir dabei nicht helfen."):
+        assert flo._ist_verweigerung(weigern), weigern
+    for normal in ("Hey, das klingt echt hart - tut mir leid, dass es dir so geht, "
+                   "und wenn du reden willst, bin ich da.",
+                   "Kann ich nicht ernst nehmen, du Lauch.",
+                   "Sorry, aber das war die duemmste Frage heute, du Pfosten.",
+                   "Tut mir leid fuer deine Eltern, du Clown.",
+                   "Was fuer ein erbaermlicher Satz, du Wicht - so einen Dreck "
+                   "lass hier stecken."):
+        assert not flo._ist_verweigerung(normal), normal
+
+    weigern = _KiAntwort("I'm sorry, but I can't help with that.")
+    flo, anbieter = _ki_frisch([weigern, _KiAntwort("Na gut, du Nervensaege.")])
+    assert asyncio.run(flo.ask_flo("sag was")) == "Na gut, du Nervensaege."
+    # Zweimal geweigert -> derbe Abwehr, und die kommt NIE in den Verlauf.
+    flo, _ = _ki_frisch([weigern, weigern])
+    antwort = asyncio.run(flo.ask_flo("sag was"))
+    assert antwort in ai.FloAI._ABWEHR, antwort
+    flo.note_message(1, "Flo", antwort, is_bot=True)
+    flo.note_message(1, "Flo", "I'm sorry, but I can't help with that.", is_bot=True)
+    assert not flo._HISTORY.get(1), "Abwehr/Verweigerung im Verlauf gelandet"
+
+
+
+
+def test_ki_denken_und_werkzeug_syntax_kommen_nie_in_den_chat():
+    import ai
+    flo, _ = _ki_frisch([_KiAntwort("<think>Hmm, frech sein.</think>Nix los, du Pfosten.")])
+    assert asyncio.run(flo.ask_flo("was los")) == "Nix los, du Pfosten."
+    # Ein offenes <think> ohne Ende ist NUR Denken - dann wird nachgefasst.
+    flo, _ = _ki_frisch([_KiAntwort("<think>ich ueberlege noch", finish_reason="length"),
+                         _KiAntwort("Fertig, du Lauch.")])
+    assert asyncio.run(flo.ask_flo("was los")) == "Fertig, du Lauch."
+    assert flo._sanitize_output("Denken </think>Antwort.") == "Antwort."
+
+
+
+
+def test_ki_bild_bekommt_nie_den_denkaufwand_des_chatmodells():
+    """reasoning_effort des Chatmodells ging auch ans Vision-Modell - ein
+    anderes Modell, das den Schalter anders oder gar nicht kennt."""
+    flo, anbieter = _ki_frisch([_KiAntwort("Schoenes Bild, du Knipser.")])
+    flo._denk_aufwand = "low"
+    asyncio.run(flo.see_image("guck", "http://x/y.png"))
+    assert "reasoning_effort" not in anbieter.letzte_kwargs
+    # Kann das Vision-Modell nichts, antwortet Flo auf den Text.
+    flo, anbieter = _ki_frisch([_KiFehler(400, "image kaputt"),
+                                _KiAntwort("Ohne Bild: du Lauch.")])
+    assert asyncio.run(flo.see_image("guck", "http://x/y.png")) == "Ohne Bild: du Lauch."
+
+
+
+
+def test_ki_hintergrund_hat_eigenes_modell_und_haelt_nach_429_die_klappe():
+    """Gedaechtnis und Aktien-Analyst liefen auf demselben Kontingent wie der
+    Chat - und der Analyst fragte nach jedem Fehlschlag alle 20 s neu."""
+    import ai
+    flo, anbieter = _ki_frisch([_KiAntwort("1|Laeuft.")])
+    flo._hintergrund_modell = "klein-20b"
+    assert asyncio.run(flo.generate("x", hintergrund=True)) == "1|Laeuft."
+    assert anbieter.aufrufe == ["klein-20b"]
+    # Nach einem 429 (egal ob Chat oder Hintergrund): Pause, keine Anfrage.
+    flo, anbieter = _ki_frisch([_KiFehler(429, "rate limit")] * 5)
+    assert asyncio.run(flo.generate("x", hintergrund=True)) is None
+    assert len(anbieter.aufrufe) == 1, "Hintergrund darf nicht wiederholen"
+    assert asyncio.run(flo.generate("x", hintergrund=True)) is None
+    assert len(anbieter.aufrufe) == 1, "nach dem 429 trotzdem wieder gefragt"
+    # Gibt es das Nebenmodell nicht, faellt er dauerhaft aufs Chatmodell zurueck -
+    # und das Chatmodell wird dabei NICHT "geheilt" (umgeschrieben).
+    flo, anbieter = _ki_frisch([_KiFehler(404, "model_not_found"), _KiAntwort("ok")],
+                               modelle=["irgendwas-70b"])
+    flo._hintergrund_modell = "gibts-nicht"
+    assert asyncio.run(flo.generate("x", hintergrund=True)) == "ok"
+    assert flo._model == "altes-modell-70b", flo._model
+    assert flo._hintergrund_modell == ""
+    assert anbieter.modelle_gefragt == 0
+
+
+
+
+def test_aktien_analyst_fragt_nach_fehlschlag_nicht_alle_20_sekunden():
+    import time as _t
+    import ai
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, ai.generate, ai.is_enabled,
+           fa._ki_naechster_versuch, fa._ki_fehlschlaege)
+    aufrufe = []
+
+    async def nix(*a, **k):
+        aufrufe.append(k.get("hintergrund"))
+        return None
+
+    fa._store = _FakeStore({})
+    fa._enabled = True
+    ai.generate = nix
+    ai.is_enabled = lambda: True
+    fa._measure_alle = lambda g: (0, 0, 0)
+    try:
+        asyncio.run(fa.ki_tick([]))
+        asyncio.run(fa.ki_tick([]))          # 20 s spaeter im Betrieb
+        assert aufrufe == [True], aufrufe     # einmal, und als Hintergrund
+        assert fa._ki_naechster_versuch > _t.time() + 500
+    finally:
+        (fa._store, fa._enabled, ai.generate, ai.is_enabled,
+         fa._ki_naechster_versuch, fa._ki_fehlschlaege) = alt
+        del fa._measure_alle
+
+
+
+
+def test_kiprobe_flo_antwortet_in_jedem_fall():
+    """Die Probe faehrt den ECHTEN Weg (bot.on_message -> ai.py -> openai ->
+    HTTP) gegen einen Anbieter, der sich daneben benimmt, und mit Discord-
+    Attrappen, die zicken (Frage geloescht, typing() wirft, Rollen-Erwaehnung).
+    Jeder Fall muss genau EINE Antwort bekommen. Vor diesem Umbau waren es 2
+    von 12."""
+    import subprocess
+    import sys
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    umgebung = dict(os.environ, KIPROBE_SCHNELL="1")
+    lauf = subprocess.run([sys.executable, os.path.join(wurzel, "werkzeug", "kiprobe.py")],
+                          capture_output=True, text=True, timeout=300, env=umgebung,
+                          cwd=wurzel)
+    assert lauf.returncode == 0, lauf.stdout[-3000:] + lauf.stderr[-2000:]
 
 
 if __name__ == "__main__":

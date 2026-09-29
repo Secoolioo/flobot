@@ -7,9 +7,11 @@ Start:
 """
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -633,6 +635,49 @@ def invite_url():
     )
 
 
+def _rolle_erwaehnt(message, content):
+    """Wurde Flos eigene Bot-Rolle erwaehnt statt Flo selbst?
+
+    Tippt man '@Flo', bietet Discord neben dem Bot auch seine gleichnamige
+    Rolle an. Wer die erwischt, schreibt '<@&ROLLE> wie gehts' - kein Name im
+    Text, der Bot nicht in message.mentions. Flo blieb dann komplett stumm.
+    Geprueft wird auch der Text selbst: ist die Rolle fuer den Absender nicht
+    erwaehnbar, fehlt sie in role_mentions, steht aber trotzdem im Text."""
+    rolle = getattr(getattr(message, "guild", None), "self_role", None)
+    if rolle is None:
+        return False
+    if rolle in (getattr(message, "role_mentions", None) or []):
+        return True
+    return f"<@&{rolle.id}>" in (content or "")
+
+
+@contextlib.asynccontextmanager
+async def _tippen(channel):
+    """'Flo tippt ...' - aber so, dass es nie eine Antwort verhindert.
+
+    discord.py schickt beim Betreten von typing() erst eine Anfrage an Discord
+    und wirft, wenn die scheitert (5xx, Netz, fehlendes Recht). Stand das wie
+    bisher VOR dem try, flog die Ausnahme aus on_message heraus, und der Nutzer
+    bekam gar nichts - nur on_error schrieb etwas ins Log. Die Anzeige ist
+    Deko: faellt sie aus, antwortet Flo eben ohne."""
+    cm = None
+    try:
+        cm = channel.typing()
+        await cm.__aenter__()
+    except Exception as exc:  # noqa: BLE001 - Deko darf nie die Antwort kosten
+        log.warning("KI-Fehler: Tipp-Anzeige gescheitert (%s: %s) - antworte trotzdem.",
+                    type(exc).__name__, exc)
+        cm = None
+    try:
+        yield
+    finally:
+        if cm is not None:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+
+
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
 
@@ -705,13 +750,17 @@ class FloBot(discord.Client):
         task.add_done_callback(self._bg_tasks.discard)
 
     async def _reply_chunks(self, message, text):
-        """Schickt eine (ggf. lange) Antwort: erstes Stueck als Reply, Rest normal."""
+        """Schickt eine (ggf. lange) Antwort: erstes Stueck als Antwort, Rest normal.
+
+        Das erste Stueck geht ueber basis.antworte - das kommt auch an, wenn die
+        Frage inzwischen geloescht ist (Aufraeum-Kanal, Nutzer, Mod)."""
         for i, teil in enumerate(_split_message(text)):
+            if i == 0:
+                if await basis.antworte(message, teil) is None:
+                    break
+                continue
             try:
-                if i == 0:
-                    await message.reply(teil, mention_author=False)
-                else:
-                    await message.channel.send(teil)
+                await message.channel.send(teil)
             except discord.HTTPException as exc:
                 log.error("Antwort konnte nicht gesendet werden: %s", exc)
                 break
@@ -722,16 +771,10 @@ class FloBot(discord.Client):
         """Sendet eine Antwort - Bilder (File) als Anhang, Menues (Embed) als Embed,
         normale Antworten als Text."""
         if isinstance(payload, discord.File):
-            try:
-                await message.reply(file=payload, mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Bild-Antwort konnte nicht gesendet werden: %s", exc)
+            await basis.antworte(message, file=payload)
             return
         if isinstance(payload, discord.Embed):
-            try:
-                await message.reply(embed=payload, mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Embed-Antwort konnte nicht gesendet werden: %s", exc)
+            await basis.antworte(message, embed=payload)
             return
         if not isinstance(payload, str):
             # Auffangnetz: hier landet nur, was weder File noch Embed noch Text
@@ -1591,36 +1634,7 @@ class FloBot(discord.Client):
         if not (AI_ENABLED and features.is_on("ki")):
             return
         ai.note_message(message.channel.id, message.author.display_name, content)
-        title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
-        tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
-        if LUXUS_ENABLED:
-            tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
-        image_url = _first_image_url(message)
-        # Terraria-Frage in der DM? -> mit Wiki-Daten (Embed + Bild) antworten.
-        if TERRARIA_ENABLED and features.is_on("terraria") and not image_url and terraria.erkennt_frage(content):
-            try:
-                res = await terraria.beantworte(message, ai.strip_lead(content) or content)
-            except Exception:
-                log.exception("Terraria-Auto-Antwort (DM) fehlgeschlagen")
-                res = None
-            if res is not None:
-                return  # Terraria hat selbst geantwortet
-        async with message.channel.typing():
-            try:
-                if image_url:
-                    antwort = await ai.see_image(
-                        content, image_url, author=message.author.display_name,
-                        title=title, tone=tone, channel_id=message.channel.id)
-                else:
-                    antwort = await ai.ask_flo(
-                        content, author=message.author.display_name, title=title,
-                        tone=tone, channel_id=message.channel.id,
-                        uid=message.author.id)
-            except Exception:
-                log.exception("KI-Antwort (DM) fehlgeschlagen")
-                antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
-        ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)
-        await self._reply_chunks(message, antwort)
+        await self._ki_antwort(message, content, None)
 
     async def on_message(self, message):
         """Zentrale Nachrichten-Verarbeitung: Auto-Loeschen, passive Spass-Hooks
@@ -1732,6 +1746,8 @@ class FloBot(discord.Client):
         angesprochen = bool(ai.trigger_re().search(content))
         if not angesprochen and self.user in message.mentions:
             angesprochen = True
+        if not angesprochen:
+            angesprochen = _rolle_erwaehnt(message, content)
         # Antwort auf eine Flo-Nachricht zaehlt auch als angesprochen (natuerliches
         # Weiterreden, ohne 'Flo' tippen zu muessen).
         if not angesprochen and message.reference is not None:
@@ -1874,50 +1890,86 @@ class FloBot(discord.Client):
         self._note_chat_activity(message)
         if not (AI_ENABLED and _on("ki")):
             return
-        # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je seltener der
-        # getragene Titel, desto entspannter/ehrfuerchtiger redet Flo (tone).
-        title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
-        tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
-        # Luxus-Status (Imperator/Thron) schlaegt sich im Tonfall nieder.
-        if LUXUS_ENABLED:
-            tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
-        # Bild dabei (Anhang oder in der beantworteten Nachricht)? -> Flo schaut es sich
-        # an (Vision), statt nur den Text zu lesen.
-        image_url = _first_image_url(message)
-        # Dialekt-Modus in diesem Server aktiv? -> Flo antwortet boarisch.
-        bavarian = BAYERN_ENABLED and _on("bayern") and bayern.is_on(message.guild.id)
-        log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
-                 " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
-                 content[:150])
-        # Klingt die Frage nach Terraria? -> mit ECHTEN Wiki-Daten antworten (Embed
-        # mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
-        if TERRARIA_ENABLED and _on("terraria") and not image_url and terraria.erkennt_frage(content):
-            async with message.channel.typing():
-                try:
-                    res = await terraria.beantworte(message, ai.strip_lead(content) or content)
-                except Exception:
-                    log.exception("Terraria-Auto-Antwort fehlgeschlagen")
-                    res = None
-            if res is not None:
-                return  # Terraria hat selbst geantwortet (Embed + Buttons)
-        async with message.channel.typing():
+        await self._ki_antwort(message, content, _on)
+
+    async def _ki_antwort(self, message, content, _on):
+        """Flo antwortet frei - und zwar GENAU EINMAL, egal was schiefgeht.
+
+        _on ist der Funktionsschalter des Servers (None = Besitzer-DM, dort gilt
+        der globale Schalter). Vorher standen Vorbereitung und typing() ausserhalb
+        jedes try: warf eins davon, verschwand die Antwort ohne ein Wort. Jetzt
+        gibt es genau einen Ausgang, und der sendet immer etwas."""
+        an = _on if _on is not None else features.is_on
+        in_dm = message.guild is None
+        antwort = None
+        try:
+            # Titel, Ton, Bild, Dialekt - alles Zugabe. Scheitert eins, antwortet
+            # Flo eben ohne, statt gar nicht.
+            title = tone = ""
+            image_url = None
+            bavarian = False
             try:
-                if image_url:
-                    antwort = await ai.see_image(
-                        content, image_url, author=message.author.display_name,
-                        title=title, tone=tone, channel_id=message.channel.id,
-                        bavarian=bavarian,
-                        gid=getattr(message.guild, "id", None), uid=message.author.id,
-                    )
-                else:
-                    antwort = await ai.ask_flo(
-                        content, author=message.author.display_name, title=title, tone=tone,
-                        channel_id=message.channel.id, bavarian=bavarian,
-                        gid=getattr(message.guild, "id", None), uid=message.author.id,
-                    )
-            except Exception:
-                log.exception("KI-Antwort fehlgeschlagen")
-                antwort = "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal."
+                # Gekaufter Shop-Titel -> Flo spricht den Nutzer damit an. Je
+                # seltener der Titel, desto entspannter redet Flo (tone).
+                title = economy.get_title(message.author.id) if ECONOMY_ENABLED else ""
+                tone = economy.get_tone(message.author.id) if ECONOMY_ENABLED else ""
+                # Luxus-Status (Imperator/Thron) schlaegt sich im Tonfall nieder.
+                if LUXUS_ENABLED:
+                    tone = f"{tone} {luxus.get_tone_extra(message.author.id)}".strip()
+                # Bild dabei (Anhang oder in der beantworteten Nachricht)?
+                image_url = _first_image_url(message)
+                # Dialekt-Modus in diesem Server aktiv? -> Flo antwortet boarisch.
+                bavarian = (not in_dm and BAYERN_ENABLED and an("bayern")
+                            and bayern.is_on(message.guild.id))
+            except Exception:  # noqa: BLE001
+                log.exception("KI-Fehler: Vorbereitung der Antwort gescheitert - "
+                              "antworte ohne Titel/Ton/Bild")
+            log.info("KI-Frage von %s%s%s: %s", message.author.display_name,
+                     " [+Bild]" if image_url else "", " [boarisch]" if bavarian else "",
+                     content[:150])
+            # Klingt die Frage nach Terraria? -> mit ECHTEN Wiki-Daten antworten
+            # (Embed mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
+            if (TERRARIA_ENABLED and an("terraria") and not image_url
+                    and terraria.erkennt_frage(content)):
+                async with _tippen(message.channel):
+                    try:
+                        res = await terraria.beantworte(message, ai.strip_lead(content) or content)
+                    except Exception:  # noqa: BLE001
+                        log.exception("Terraria-Auto-Antwort fehlgeschlagen")
+                        res = None
+                if res is not None:
+                    return  # Terraria hat selbst geantwortet (Embed + Buttons)
+            gid = getattr(message.guild, "id", None)
+            if image_url:
+                anfrage = ai.see_image(
+                    content, image_url, author=message.author.display_name,
+                    title=title, tone=tone, channel_id=message.channel.id,
+                    bavarian=bavarian, gid=gid, uid=message.author.id)
+            else:
+                anfrage = ai.ask_flo(
+                    content, author=message.author.display_name, title=title, tone=tone,
+                    channel_id=message.channel.id, bavarian=bavarian,
+                    gid=gid, uid=message.author.id)
+            # Die Anfrage laeuft SCHON, waehrend Discord die Tipp-Anzeige
+            # bestaetigt - vorher stand dieser Roundtrip vor jeder KI-Antwort.
+            aufgabe = asyncio.ensure_future(anfrage)
+            async with _tippen(message.channel):
+                # Netz unter der Frist in ai.py. asyncio.wait statt wait_for: das
+                # wartet beim Abbruch nicht darauf, dass die Anfrage wirklich tot
+                # ist - genau dort hing der alte Weg bis zu drei Minuten.
+                fertig, _ = await asyncio.wait({aufgabe}, timeout=ai.instance.KI_FRIST + 15)
+            if aufgabe in fertig:
+                antwort = aufgabe.result()
+            else:
+                aufgabe.cancel()
+                log.warning("KI-Fehler: Antwort hat die Frist gerissen (%.0f s)",
+                            ai.instance.KI_FRIST + 15)
+                antwort = ai.instance.MELDUNGEN["zeit"]
+        except Exception:  # noqa: BLE001
+            log.exception("KI-Fehler: KI-Antwort fehlgeschlagen")
+            antwort = ai.instance.MELDUNGEN["unbekannt"]
+        if not antwort:
+            antwort = random.choice(ai.FloAI._LEER_SPRUECHE)
         log.info("KI-Antwort an %s (%d Zeichen)", message.author.display_name, len(antwort))
         # Flos eigene Antwort ins Gedaechtnis legen -> der naechste Turn hat den Kontext.
         ai.note_message(message.channel.id, ai.bot_name(), antwort, is_bot=True)

@@ -192,6 +192,22 @@ class Abdrucknahme:
         return {w: d for w, d in stand["befehle"].items()
                 if d.get("_orakel") != "statisch"}
 
+    def _abklingzeiten_leeren(self):
+        """Jede Bremse "je Person" vor dem naechsten Aufruf zuruecksetzen.
+
+        Sonst haengt die Antwort davon ab, wie schnell die Maschine ist: ruft
+        der Durchlauf 'check' und kurz danach 'steckbrief' (beides Profil), sagt
+        der zweite "Immer mit der Ruhe" - aber nur, wenn seit dem ersten noch
+        keine COOLDOWN Sekunden vergangen sind. Genau das stand als "stabile"
+        Antwort im Abdruck und wackelte dann je nach Last."""
+        for modul in self.module.values():
+            ding = getattr(modul, "instance", None)
+            if ding is None:
+                continue
+            for name, wert in list(vars(ding).items()):
+                if "cooldown" in name.lower() and isinstance(wert, dict):
+                    wert.clear()
+
     def durchlauf(self, loop, worte):
         from werkzeug.attrappe import RauchKanal, rauch_nachricht
         raus = {}
@@ -200,6 +216,7 @@ class Abdrucknahme:
             if modul is None:
                 continue
             random.seed(SAAT)                 # vor JEDEM Aufruf, siehe oben
+            self._abklingzeiten_leeren()
             kanal = RauchKanal()
             try:
                 antwort = loop.run_until_complete(

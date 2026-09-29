@@ -75,6 +75,55 @@ def erstes_ziel(message, *, ohne_bots=True, ohne=()):
     return None
 
 
+async def antworte(message, content=None, **kw):
+    """Antwort auf eine Nachricht, die ankommt - auch wenn es die Frage nicht mehr gibt.
+
+    message.reply() verlangt, dass die beantwortete Nachricht noch existiert.
+    Tut sie das nicht mehr - der Aufraeum-Kanal hat sie nach 10-60 s geloescht,
+    jemand hat sie selbst geloescht, ein Mod hat gepurged -, antwortet Discord
+    mit "Unknown message", und bot.py hat bisher nur ins Log geschrieben. Fuer
+    den Nutzer hiess das: Flo "tippt" und sagt dann gar nichts. Genau das war
+    eine der Ursachen fuer "die KI antwortet ploetzlich nicht".
+
+    Deshalb zwei Stufen:
+      1. Antwort MIT Bezug, aber fail_if_not_exists=False - fehlt die Frage,
+         kommt die Nachricht trotzdem, nur ohne den Antwort-Pfeil.
+      2. Scheitert auch das (z. B. fehlt das Recht 'Nachrichtenverlauf lesen',
+         das Discord fuer Antworten verlangt): ohne Bezug, mit dem Namen vorne
+         - aber ohne Ping.
+
+    Rueckgabe: die gesendete Nachricht oder None."""
+    import discord
+    kw.setdefault("mention_author", False)
+    try:
+        bezug = message.to_reference(fail_if_not_exists=False)
+    except Exception:  # noqa: BLE001 - Attrappen/alte Objekte: dann eben reply()
+        bezug = None
+    try:
+        if bezug is not None:
+            return await message.channel.send(content, reference=bezug, **kw)
+        return await message.reply(content, **kw)
+    except discord.HTTPException as exc:
+        log.warning("Antwort mit Bezug gescheitert (%s) - sende ohne.", exc)
+    kw.pop("mention_author", None)
+    kw.setdefault("allowed_mentions", discord.AllowedMentions.none())
+    # Ein Bild wurde beim ersten Versuch schon gelesen - zurueckspulen.
+    for datei in [kw.get("file"), *(kw.get("files") or [])]:
+        if datei is not None and hasattr(datei, "reset"):
+            try:
+                datei.reset()
+            except Exception:  # noqa: BLE001
+                pass
+    wer = getattr(getattr(message, "author", None), "mention", "")
+    if content and wer:
+        content = f"{wer} {content}"
+    try:
+        return await message.channel.send(content, **kw)
+    except discord.HTTPException as exc:
+        log.error("Antwort konnte nicht gesendet werden: %s", exc)
+        return None
+
+
 #: "Ich habe selbst geantwortet" - EIN Objekt fuer den ganzen Bot.
 #:
 #: Jedes Modul, das seine Antwort selbst in den Kanal schickt, gibt statt eines

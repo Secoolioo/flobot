@@ -17,6 +17,7 @@ import contextvars
 import json
 import logging
 import os
+import random
 import re
 import time
 from collections import deque
@@ -75,19 +76,24 @@ class FloAI:
     # Antwortlaenge. 800 war die Ursache der Textwaende: ein Modell fuellt, was
     # es darf. Zwei Werte, weil zwei verschiedene Modelle dranhaengen:
     #
-    #   Chat - haengt oft an einem DENK-Modell (gpt-oss), das vor der Antwort
-    #     nachdenkt und das vom SELBEN Budget abzieht. Zu knapp, und die Antwort
-    #     kommt leer zurueck (siehe die Warnung in ask_flo). 240 laesst dem
-    #     Denken Luft und deckelt trotzdem die Wand.
-    #   Bild - das Vision-Modell denkt nicht vor, dort sind 160 echte Ausgabe.
+    #   Chat - haengt an einem DENK-Modell (gpt-oss), das vor der Antwort
+    #     nachdenkt und das vom SELBEN Budget abzieht. 240 war zu knapp: bei
+    #     provokanten Fragen (Flos Kerngeschaeft) dachte das Modell alles weg und
+    #     die Antwort kam leer zurueck - "Dazu faellt mir gerade nichts ein".
+    #     Das war eine der Ursachen fuer "die KI antwortet ploetzlich nicht".
+    #   Bild - bekommt dasselbe Budget, weil auch Vision-Modelle (qwen3) denken.
     #
-    # Der Deckel ist das Sicherheitsnetz, den STIL macht der Prompt (_HARD_RULES
-    # sagt: genau ein Satz). Nebenwirkung mit Ansage: 240 x ~4 Zeichen je Token
-    # sind rund 960 und damit unter der 1900er-Grenze von bot._split_message -
-    # eine KI-Antwort kann also nie mehr auf zwei Discord-Nachrichten aufgeteilt
-    # werden. Genau darueber ging die Beschwerde.
-    MAX_TOKENS = 240        # Chat  (per LLM_MAX_TOKENS)
-    MAX_TOKENS_BILD = 160   # Bild  (per LLM_MAX_TOKENS_BILD)
+    # Die LAENGE im Chat macht nicht dieser Deckel, sondern der Prompt (genau
+    # ein Satz) - und als Netz _kuerzen(): mehr als ANTWORT_MAX_ZEICHEN kommen
+    # nie in den Chat. 400 x ~4 Zeichen liegt ausserdem unter der 1900er-Grenze
+    # von bot._split_message, eine Antwort passt also immer in EINE Nachricht.
+    MAX_TOKENS = 400        # Chat  (per LLM_MAX_TOKENS)
+    MAX_TOKENS_BILD = 400   # Bild  (per LLM_MAX_TOKENS_BILD)
+    # Zweiter Anlauf, wenn das Denken trotzdem alles gefressen hat (leer bzw.
+    # finish_reason 'length'). Gilt nur fuer genau diesen einen Nachschuss.
+    MAX_TOKENS_NOTFALL = 900
+    # So viel Text geht hoechstens in den Chat - egal was das Modell liefert.
+    ANTWORT_MAX_ZEICHEN = 400
 
     # --- Wie hartnaeckig ist Flo? ------------------------------------------
     # Ein einzelner 429 oder eine 503-Delle beim Anbieter hat die Antwort bisher
@@ -96,7 +102,18 @@ class FloAI:
     # wird beim zweiten Mal auch nicht gueltiger, das waere nur Haemmern.
     WIEDERHOLUNGEN = 3            # zusaetzliche Versuche bei voruebergehenden Fehlern
     WARTEN = (0.8, 2.4, 6.0)      # Abstand davor, wachsend
-    ZEITLIMIT = 45.0              # Sekunden pro Aufruf - ohne das wartet Discord ewig
+    # Sekunden pro Aufruf. Vorher 45 - mit drei Wiederholungen hat Flo bei einem
+    # haengenden Anbieter ~189 s "getippt" und dann doch nichts gesagt.
+    ZEITLIMIT = 20.0
+    # Die Gesamtfrist fuer EINE Chat-Antwort, alle Versuche zusammen. Danach
+    # sagt Flo lieber derb, dass die KI pennt, als ewig zu tippen - und bevor
+    # der Aufraeum-Kanal (Standard 60 s) die Frage wegraeumt.
+    KI_FRIST = 30.0
+    # Ein Retry-After bis zu dieser Laenge wird abgewartet, laengere nicht.
+    RETRY_AFTER_MAX = 8.0
+    # Nach einem 429 halten die Hintergrundjobs (Gedaechtnis, Aktien-Analyst)
+    # so lange die Klappe - der Chat hat Vorrang vor dem Kontingent.
+    HINTERGRUND_PAUSE = 300.0
 
     # Client-Signaturen, die Flo der Reihe nach probiert, wenn Cloudflare ihn
     # WEGEN DER SIGNATUR aussperrt (Fehler 1010, HTTP 403). Die Anfrage erreicht
@@ -109,26 +126,82 @@ class FloAI:
     )
 
     # Was der Nutzer im Chat liest - je Ursache etwas anderes, damit man ohne
-    # Serverzugang sieht, woran es liegt.
+    # Serverzugang sieht, woran es liegt. Und in Flos Ton: eine Stoerung ist
+    # kein Grund, ploetzlich wie eine Service-Hotline zu klingen.
     MELDUNGEN = {
-        "auth": "Mein KI-Schluessel wird nicht mehr akzeptiert - da muss der Chef ran.",
-        "modell": "Mein KI-Modell gibt's nicht mehr und ich hab auf die Schnelle "
-                  "keinen Ersatz gefunden.",
-        "signatur": "Der KI-Anbieter sperrt mich komplett aus - liegt nicht an dir.",
-        "verboten": "Der KI-Anbieter laesst mich gerade nicht rein.",
-        "limit": "Ich hab mein KI-Kontingent verbraten. Gib mir ein paar Minuten.",
-        "stoerung": "Beim KI-Anbieter brennt gerade was. Versuch's gleich nochmal.",
-        "netz": "Ich komm gerade nicht zur KI durch. Versuch's gleich nochmal.",
-        "anfrage": "Damit konnte die KI nichts anfangen - formulier's mal anders.",
-        "unbekannt": "Mein KI-Dienst antwortet gerade nicht. Versuch es gleich nochmal.",
+        "auth": "Mein KI-Schlüssel wird nicht mehr akzeptiert – da muss der Chef "
+                "ran, nicht du, du Laie.",
+        "modell": "Mein KI-Modell gibt's nicht mehr und auf die Schnelle find ich "
+                  "keinen Ersatz – Chef, mach mal, und du, warte.",
+        "signatur": "Der KI-Anbieter sperrt mich komplett aus – liegt ausnahmsweise "
+                    "nicht an dir, du Glückspilz.",
+        "verboten": "Der KI-Anbieter lässt mich grad nicht rein – frag später "
+                    "nochmal, du Nervensäge.",
+        "limit": "Mein KI-Kontingent ist leergesoffen – gib mir ein paar Minuten, "
+                 "du Quasselstrippe.",
+        "stoerung": "Beim KI-Anbieter brennt grad die Hütte – versuch's gleich "
+                    "nochmal, du Drängler.",
+        "netz": "Ich komm grad nicht zur KI durch – Leitung tot, im Gegensatz zu "
+                "deiner Klappe.",
+        "zeit": "Die KI pennt grad und ich warte nicht ewig auf die – frag gleich "
+                "nochmal, du Ungeduld auf zwei Beinen.",
+        "anfrage": "Mit dem Kauderwelsch konnte selbst die KI nix anfangen – "
+                   "formulier's mal wie ein Mensch.",
+        "werkzeug": "Die KI hat sich grad am eigenen Werkzeug verschluckt – frag "
+                    "nochmal, du Pfosten.",
+        "unbekannt": "Mein KI-Dienst hängt grad irgendwo fest – versuch's gleich "
+                     "nochmal, du Nervensack.",
     }
 
+    # Wenn das Modell nichts rausbringt (auch nicht im zweiten Anlauf). Vorher
+    # stand hier EIN zahmer Satz ("Dazu faellt mir gerade nichts ein.") - der
+    # klang nach Unlust und landete obendrein im Gespraechsverlauf.
+    _LEER_SPRUECHE = (
+        "Zu der Frage fällt selbst mir nix mehr ein, und das liegt eindeutig an "
+        "dir, du Lauch.",
+        "Mein Hirn ist grad ausgestiegen – bei so einer Frage kein Wunder, du Pfeife.",
+        "Da kommt nix, Digga, frag was Gescheites.",
+    )
+    # Wenn das Modell sich weigert. BEWUSST keine zweite Anfrage mit "weiger
+    # dich nicht" - das waere ein Jailbreak gegen die eine Grenze, die nicht
+    # verhandelbar ist (_GUARDRAIL). Flo wehrt einfach derb ab.
+    _ABWEHR = (
+        "Nee, da hab ich keinen Bock drauf – frag was Gescheites, du Pfeife.",
+        "Vergiss es, Digga, darauf geb ich dir keine Antwort.",
+        "Nö. Nächste Frage, du Clown.",
+    )
+
     # Alles, was Flo bei einer Stoerung sagt - darf nie im Gedaechtnis landen.
-    _FEHLERSAETZE = frozenset(MELDUNGEN.values()) | {
-        "Mein KI-Modus ist gerade nicht eingerichtet.",
-        "Das war mir gerade zu kompliziert - frag mich nochmal einfacher.",
-        "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal.",
-    }
+    # Die alten Saetze bleiben drin: sie koennen noch in einem Verlauf stehen.
+    _FEHLERSAETZE = frozenset(MELDUNGEN.values()) | frozenset(_LEER_SPRUECHE) \
+        | frozenset(_ABWEHR) | {
+            "Mein KI-Modus ist gerade nicht eingerichtet.",
+            "Das war mir gerade zu kompliziert - frag mich nochmal einfacher.",
+            "Ups, da ist gerade etwas schiefgelaufen. Versuch es gleich nochmal.",
+            "Dazu faellt mir gerade nichts ein.",
+            "Ich hab mein KI-Kontingent verbraten. Gib mir ein paar Minuten.",
+            "Ich komm gerade nicht zur KI durch. Versuch's gleich nochmal.",
+            "Damit konnte die KI nichts anfangen - formulier's mal anders.",
+            "Mein KI-Dienst antwortet gerade nicht. Versuch es gleich nochmal.",
+            "Beim KI-Anbieter brennt gerade was. Versuch's gleich nochmal.",
+        }
+
+    # Verweigerungen erkennen - ENG und am ANFANG verankert. Die breite Liste aus
+    # fun._REFUSAL_RE ("tut mir leid", "kann ich nicht") waere hier falsch: sie
+    # traefe genau die ehrliche Antwort an jemanden, der am Boden ist ("tut mir
+    # leid, dass es dir so geht") - und die verlangt der Guardrail ausdruecklich.
+    _VERWEIGERUNG_RE = re.compile(
+        r"^\W{0,3}(?:"
+        r"i['’]?m (?:really |so )?sorry,? (?:but )?i (?:can(?:no|['’])t|won['’]t|am unable)|"
+        r"sorry,? (?:but )?i can(?:no|['’])t (?:help|assist|comply|do)|"
+        r"i can(?:no|['’])t (?:help|assist|comply)(?: you)? with|"
+        r"i(?: am|['’]m) (?:not able|unable) to (?:help|assist|comply|provide)|"
+        r"as an ai\b|"
+        r"ich kann (?:dir )?(?:dabei|damit|hierbei|da) nicht helfen|"
+        r"(?:tut mir leid|sorry),? (?:aber )?(?:dabei|damit|hierbei|da) kann ich "
+        r"(?:dir )?nicht helfen|"
+        r"ich (?:darf|werde) (?:dir )?(?:dabei|damit|hierbei|da) nicht helfen"
+        r")", re.IGNORECASE)
 
     # Modelle, die als Ersatz nie in Frage kommen (koennen kein Chat).
     _UNBRAUCHBAR = ("whisper", "tts", "embed", "guard", "moderation", "rerank",
@@ -360,6 +433,21 @@ class FloAI:
         self._signatur = ""
         self._signatur_offen = ""   # gewechselt, aber noch nicht bewaehrt
         self._denk_aufwand = ""     # LLM_REASONING_EFFORT, leer = nicht mitschicken
+        # Eigenes Modell fuer Hintergrundjobs (Gedaechtnis, Aktien-Analyst). Bei
+        # Groq hat jedes Modell ein EIGENES Kontingent - so frisst der Hintergrund
+        # dem Chat nichts mehr weg. Leer = das Chatmodell.
+        self._hintergrund_modell = ""
+        # Denkaufwand fuers VISION-Modell (LLM_VISION_REASONING_EFFORT). Frueher
+        # ging der des Chatmodells mit - ein anderes Modell, das den Schalter
+        # anders oder gar nicht kennt.
+        self._vision_denk = ""
+        # Bis wann die Hintergrundjobs nach einem 429 Pause haben (monotonic).
+        # -inf statt 0.0: time.monotonic() zaehlt ab Systemstart, und kurz nach
+        # einem Neustart des Servers waere "0.0" noch "gerade eben".
+        self._hintergrund_pause_bis = float("-inf")
+        # Modell -> bis wann es gesperrt ist (Tageslimit erreicht). Solange wird
+        # gar nicht erst gefragt - jede Anfrage wuerde nur einen 429 kassieren.
+        self._gesperrt_bis = {}
         self._default_city = "Regensburg"
         self._bot_name = "Flo"
         # Hoehere Temperatur = lockerer, spontaner, weniger Lehrbuch. Per LLM_TEMPERATURE
@@ -420,6 +508,7 @@ class FloAI:
             log.info("KI: %s denkt vor jeder Antwort nach und wird davon zahm - "
                      "setze reasoning_effort=low. Anders gewuenscht? "
                      "LLM_REASONING_EFFORT in der .env.", self._model)
+        self._vision_denk = os.getenv("LLM_VISION_REASONING_EFFORT", "").strip().lower()
         try:
             self.TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", str(self.TEMPERATURE)))
         except ValueError:
@@ -450,22 +539,47 @@ class FloAI:
         self._basis_url = base_url
         self._signatur = ua
         self._client = self._client_bauen(ua)
+        # Hintergrundmodell. Auf Groq hat gpt-oss-20b ein eigenes Kontingent -
+        # ohne Angabe nehmen wir es deshalb dort automatisch, sobald der Chat auf
+        # dem 120b laeuft. Anderswo (Ollama, OpenRouter) gibt es das Modell
+        # vielleicht gar nicht, dann bleibt es beim Chatmodell.
+        hg = os.getenv("LLM_HINTERGRUND_MODEL", "").strip()
+        if not hg and "groq.com" in base_url and self._model == "openai/gpt-oss-120b":
+            hg = "openai/gpt-oss-20b"
+        self._hintergrund_modell = hg if hg and hg != self._model else ""
         log.info(
             "KI-Feature aktiv (Anbieter: %s, Modell: %s, Standardstadt: %s%s).",
             base_url, self._model, self._default_city,
             f", Signatur: {ua}" if ua else "",
         )
+        # Die WIRKSAMEN Grenzen einmal ins Log. Eine alte .env mit
+        # LLM_MAX_TOKENS=... ueberschreibt die Vorgabe - frueher riet die README,
+        # es hochzusetzen. Wer sich wundert, warum Flo leer bleibt oder
+        # schwafelt, sieht es hier.
+        log.info("KI: max_tokens %d (Bild %d, Notfall %d), Denkaufwand %s, "
+                 "Hintergrundmodell %s, Frist %.0f s.",
+                 self.MAX_TOKENS, self.MAX_TOKENS_BILD, self.MAX_TOKENS_NOTFALL,
+                 self._denk_aufwand or "-", self._hintergrund_modell or "= Chatmodell",
+                 self.KI_FRIST)
         return True
 
     def _client_bauen(self, ua):
         """Baut den LLM-Client. max_retries=0 mit Absicht: das Wiederholen macht
         _chat() selbst - sonst multiplizieren sich die Versuche (3 x 3 = 9) und
         Flo haemmert bei einer Sperre minutenlang gegen den Anbieter."""
+        zeit = self.ZEITLIMIT
+        try:
+            import httpx
+            # Verbinden darf nie laenger dauern als ein paar Sekunden - wer bis
+            # dahin nicht antwortet, ist weg. Lesen darf bis ZEITLIMIT.
+            zeit = httpx.Timeout(self.ZEITLIMIT, connect=min(5.0, self.ZEITLIMIT))
+        except ImportError:  # pragma: no cover - httpx kommt mit openai
+            pass
         return AsyncOpenAI(
             api_key=self._api_key or "ollama",
             base_url=self._basis_url,
             default_headers={"User-Agent": ua} if ua else None,
-            timeout=self.ZEITLIMIT,
+            timeout=zeit,
             max_retries=0,
         )
 
@@ -501,9 +615,21 @@ class FloAI:
         rumpf = f"{text} {exc}".strip()
         cf = self._cf_code(rumpf)
         klein = rumpf.lower()
+        # Eindeutige Zeichen fuer "das Modell gibt es nicht mehr" zaehlen immer
+        # (Groq meldet ein ausgemustertes Modell mit 400 'model_decommissioned').
+        # Das schwammige "does not exist" nur zusammen mit einem 404 - sonst
+        # hielte Flo "tool 'x' does not exist" fuer ein totes Modell und sagte
+        # dem Chat, sein Modell gaebe es nicht mehr.
         modell_weg = any(w in klein for w in (
-            "decommission", "model_not_found", "does not exist", "unknown model",
-            "model not found", "has been deprecated"))
+            "decommission", "model_not_found", "unknown model",
+            "model not found", "has been deprecated")) or (
+            status in (None, 404) and "does not exist" in klein)
+        # gpt-oss baut ab und zu einen kaputten Werkzeug-Aufruf (oder ruft ein
+        # Werkzeug, das es gar nicht bekommen hat), und Groq weist die ganze
+        # Generierung mit 400 ab. Das ist Zufall, kein Fehler der Frage - ein
+        # zweiter Versuch geht fast immer durch.
+        werkzeug = any(w in klein for w in (
+            "tool_use_failed", "failed_generation", "tool call validation"))
 
         if status == 401:
             art = "auth"
@@ -515,6 +641,8 @@ class FloAI:
             art = "limit"
         elif status and status >= 500:
             art = "stoerung"
+        elif status == 400 and werkzeug:
+            art = "werkzeug"
         elif status == 400:
             art = "anfrage"
         elif status is None:
@@ -589,18 +717,61 @@ class FloAI:
         return True
 
     # --- Der EINZIGE Weg zum LLM -------------------------------------------
-    async def _chat(self, *, vision=False, **kw):
+    @staticmethod
+    def _retry_after(exc):
+        """Wie lange der Anbieter uns warten lassen will (Retry-After), oder None."""
+        kopf = getattr(getattr(exc, "response", None), "headers", None)
+        if not kopf:
+            return None
+        try:
+            return max(0.0, float(kopf.get("retry-after")))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @staticmethod
+    def _ist_tageslimit(meldung):
+        """Ein TAGES-Limit (Groq: TPD/RPD) heilt nicht in Sekunden. Wiederholen
+        waere nur ein weiterer 429, der das naechste Kontingent anknabbert."""
+        klein = (meldung or "").lower()
+        return any(w in klein for w in ("per day", "(tpd)", "(rpd)"))
+
+    async def _chat(self, *, vision=False, modell=None, frist=None,
+                    hintergrund=False, **kw):
         """Fuehrt einen Chat-Aufruf aus und haelt die ganze Politik an EINER
         Stelle: wiederholen was Sinn hat, Modell und Signatur selbst heilen,
         alles andere sofort sauber melden. Wirft LlmFehler, wenn es endgueltig
-        nicht geht - die vier Aufrufer machen daraus ihre Antwort."""
+        nicht geht - die vier Aufrufer machen daraus ihre Antwort.
+
+        modell      - anderes Modell als das Chatmodell (Hintergrundjobs). Das
+                      wird bei einem 404 NICHT "geheilt": die Heilung schreibt
+                      self._model um, und ein Nebenmodell darf nie das Chatmodell
+                      ueberschreiben. Der Aufrufer faellt dann selbst zurueck.
+        frist       - monotonic-Zeitpunkt, bis zu dem alles fertig sein muss.
+                      Jeder Versuch bekommt nur noch die Restzeit, und es wird
+                      nie gewartet, wenn danach keine Zeit mehr bleibt.
+        hintergrund - kein Wiederholen: im Zweifel faellt ein Hintergrundjob
+                      einfach aus, statt dem Chat das Kontingent wegzufressen."""
         versuche = 0
         modell_versucht = False
         offene_signaturen = [ua for ua in self.SIGNATUREN if ua != self._signatur]
         while True:
-            kw["model"] = self._vision_model if vision else self._model
-            if self._denk_aufwand:
-                kw["reasoning_effort"] = self._denk_aufwand
+            kw["model"] = modell or (self._vision_model if vision else self._model)
+            # Den Denkaufwand des CHATmodells nie ans Vision-Modell: das ist ein
+            # anderes Modell, das den Schalter anders (oder gar nicht) kennt.
+            aufwand = self._vision_denk if vision else self._denk_aufwand
+            if aufwand:
+                kw["reasoning_effort"] = aufwand
+            else:
+                kw.pop("reasoning_effort", None)
+            jetzt = time.monotonic()
+            gesperrt = self._gesperrt_bis.get(kw["model"], float("-inf"))
+            if jetzt < gesperrt:
+                raise LlmFehler("limit", 429, f"Tageslimit - noch {gesperrt - jetzt:.0f} s gesperrt")
+            if frist is not None:
+                rest = frist - jetzt
+                if rest <= 0.5:
+                    raise LlmFehler("zeit", None, "Frist fuer diese Antwort abgelaufen")
+                kw["timeout"] = min(self.ZEITLIMIT, rest)
             try:
                 antwort = await self._client.chat.completions.create(**kw)
             except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet, nicht verschluckt
@@ -611,19 +782,42 @@ class FloAI:
                 # sie nur in einem log.debug - und bot.py:70 loggt ab INFO, das
                 # Detail erreichte das Journal also ausgerechnet im Fall
                 # "unbekannt" nie, wo es als einziges weiterhilft.
-                log.warning("KI-Fehler: %s (HTTP %s%s) [%s] %s", art, status or "-",
+                log.warning("KI-Fehler: %s (HTTP %s%s) [%s] %s%s", art, status or "-",
                             f", Cloudflare {cf}" if cf else "",
-                            type(exc).__name__, meldung)
+                            type(exc).__name__, meldung,
+                            " [Hintergrund]" if hintergrund else "")
 
-                if art == "modell" and not modell_versucht:
+                if art == "modell" and not modell_versucht and modell is None:
                     modell_versucht = True
                     if await self._modell_heilen(vision):
                         continue
                 if art == "signatur" and offene_signaturen:
                     if self._signatur_wechseln(offene_signaturen.pop(0)):
                         continue
-                if art in ("limit", "stoerung", "netz") and versuche < self.WIEDERHOLUNGEN:
-                    await asyncio.sleep(self.WARTEN[min(versuche, len(self.WARTEN) - 1)])
+                if art == "limit":
+                    # Kontingent knapp: der Hintergrund haelt jetzt die Klappe.
+                    self._hintergrund_pause_bis = time.monotonic() + self.HINTERGRUND_PAUSE
+                    if self._ist_tageslimit(meldung):
+                        warte = self._retry_after(exc)
+                        self._gesperrt_bis[kw["model"]] = time.monotonic() + (warte or 600.0)
+                        log.warning("KI-Fehler: Tageslimit fuer %s erreicht - frage die "
+                                    "naechsten %.0f s gar nicht erst.", kw["model"], warte or 600.0)
+                        raise LlmFehler(art, status, meldung, cf) from exc
+                if (art in ("limit", "stoerung", "netz") and not hintergrund
+                        and versuche < self.WIEDERHOLUNGEN):
+                    warte = self.WARTEN[min(versuche, len(self.WARTEN) - 1)]
+                    ra = self._retry_after(exc) if art == "limit" else None
+                    if ra is not None:
+                        if ra > self.RETRY_AFTER_MAX:
+                            raise LlmFehler(art, status, meldung, cf) from exc
+                        warte = ra
+                    if frist is not None and time.monotonic() + warte >= frist - 0.5:
+                        # Keine Zeit mehr fuer einen weiteren Versuch. Ein Netz-
+                        # oder Stoerungsfehler heisst fuer den Nutzer dann schlicht:
+                        # zu lahm.
+                        raise LlmFehler("zeit" if art != "limit" else art,
+                                        status, meldung, cf) from exc
+                    await asyncio.sleep(warte)
                     versuche += 1
                     continue
                 raise LlmFehler(art, status, meldung, cf) from exc
@@ -635,6 +829,52 @@ class FloAI:
                 self._signatur_offen = ""
             return antwort
 
+    # --- Antworten lesen und in Form bringen --------------------------------
+    @staticmethod
+    def _inhalt(response):
+        """Der Text der ersten Wahl - robust gegen fehlende Felder."""
+        try:
+            return (response.choices[0].message.content or "").strip()
+        except (AttributeError, IndexError, TypeError):
+            return ""
+
+    def _befund(self, response, max_tokens=None):
+        """Eine Zeile fuers Log: warum war die Antwort leer oder abgeschnitten?"""
+        try:
+            wahl = response.choices[0]
+        except (AttributeError, IndexError, TypeError):
+            wahl = None
+        fertig = getattr(wahl, "finish_reason", None)
+        nutzung = getattr(response, "usage", None)
+        denk = getattr(getattr(nutzung, "completion_tokens_details", None),
+                       "reasoning_tokens", None)
+        return (f"Modell {getattr(response, 'model', None) or self._model}, "
+                f"finish {fertig or '-'}, Denk-Tokens {denk if denk is not None else '-'}"
+                + (f", max_tokens {max_tokens}" if max_tokens else ""))
+
+    @staticmethod
+    def _satzende(text):
+        return bool(text) and text.rstrip()[-1:] in ".!?…\"')»*"
+
+    def _kuerzen(self, text, grenze=None):
+        """Mehr als ANTWORT_MAX_ZEICHEN kommen nie in den Chat. Gekappt wird am
+        letzten Satzende davor - ein halber Satz sieht kaputt aus."""
+        grenze = grenze or self.ANTWORT_MAX_ZEICHEN
+        text = (text or "").strip()
+        if len(text) <= grenze:
+            return text
+        stueck = text[:grenze]
+        ende = max(stueck.rfind(z) for z in (". ", "! ", "? ", "… "))
+        if ende >= 40:
+            return stueck[:ende + 1].strip()
+        leer = stueck.rfind(" ")
+        return (stueck[:leer] if leer >= 40 else stueck).rstrip(" ,;:-–") + " …"
+
+    def _ist_verweigerung(self, text):
+        """Hat das Modell sich geweigert? Nur kurze Texte, die GENAU SO anfangen -
+        siehe _VERWEIGERUNG_RE, warum die Erkennung bewusst eng ist."""
+        return bool(text) and len(text) < 300 and bool(self._VERWEIGERUNG_RE.search(text))
+
     def fehlertext(self, fehler):
         """Der Satz, den der Chat zu sehen bekommt - je Ursache ein anderer."""
         return self.MELDUNGEN.get(fehler.art, self.MELDUNGEN["unbekannt"])
@@ -642,12 +882,17 @@ class FloAI:
     async def selbsttest(self):
         """Prueft EINMAL beim Start, ob die KI wirklich antwortet. Ohne das sagt
         der Log 'KI-Feature aktiv', auch wenn Schluessel oder Modell laengst tot
-        sind - eine Zusicherung, die niemand geprueft hat. Startet nie den Bot ab."""
+        sind - eine Zusicherung, die niemand geprueft hat. Startet nie den Bot ab.
+
+        Frueher mit max_tokens=5: das galt schon als OK, wenn HTTP 200 kam - auch
+        wenn ein Denk-Modell die 5 Tokens verdacht hatte und NICHTS sagte. Jetzt
+        mit dem echten Budget, und eine leere Antwort ist ein Befund."""
         if self._client is None:
             return False
         try:
-            await self._chat(messages=[{"role": "user", "content": "ok"}], max_tokens=5,
-                             temperature=0)
+            antwort = await self._chat(
+                messages=[{"role": "user", "content": "Sag kurz hallo."}],
+                max_tokens=self.MAX_TOKENS, temperature=0)
         except LlmFehler as fehler:
             log.error("KI-Selbsttest fehlgeschlagen: %s (HTTP %s%s). Pruefen mit:  "
                       "bash k", fehler.art, fehler.status or "-",
@@ -655,6 +900,11 @@ class FloAI:
             return False
         except Exception:  # noqa: BLE001 - ein Selbsttest darf nie den Start kippen
             log.exception("KI-Selbsttest abgebrochen")
+            return False
+        if not self._inhalt(antwort):
+            log.error("KI-Fehler: Selbsttest ohne Text (%s) - Flo wuerde so leer "
+                      "antworten. Pruefen mit:  bash k",
+                      self._befund(antwort, self.MAX_TOKENS))
             return False
         log.info("KI-Selbsttest ok (Modell: %s).", self._model)
         return True
@@ -764,6 +1014,10 @@ class FloAI:
         if fertig is not None:
             return fertig
         t = re.sub(r"<@!?\d+>", " ", text or "")
+        # Eine FUEHRENDE Rollen-Erwaehnung ist Flos Bot-Rolle als Ansprache
+        # (siehe bot._rolle_erwaehnt). Nur vorne - weiter hinten kann sie ein
+        # Argument sein.
+        t = re.sub(r"^\s*<@&\d+>", " ", t)
         t = self.lead_re(merk_gid).sub("", t).strip()
         if len(self._LEAD_CACHE) >= self._LEAD_CACHE_MAX:
             self._LEAD_CACHE.clear()
@@ -986,6 +1240,11 @@ class FloAI:
     _INLINE_CALL_RE = re.compile(
         r"<function\s*=\s*([A-Za-z_]\w*)\s*>\s*(\{.*?\})?", re.DOTALL | re.IGNORECASE)
     _LEAK_PATTERNS = [
+        # Denk-Modelle (qwen3 & Co.) schreiben ihr Nachdenken je nach Anbieter
+        # als <think>...</think> in den Antworttext. Das darf nie in den Chat -
+        # und ein offenes <think> ohne Ende heisst: ALLES danach ist Denken.
+        re.compile(r"<think(?:ing)?>.*?(?:</think(?:ing)?>|\Z)", re.DOTALL | re.IGNORECASE),
+        re.compile(r"\A.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE),
         re.compile(r"<function\s*=\s*[^>]*>.*?</function>", re.DOTALL | re.IGNORECASE),
         re.compile(r"<function_call>.*?</function_call>", re.DOTALL | re.IGNORECASE),
         re.compile(r"<tool_calls?>.*?</tool_calls?>", re.DOTALL | re.IGNORECASE),
@@ -1027,27 +1286,58 @@ class FloAI:
         system = None,
         temperature = 0.8,
         max_tokens = 300,
+        hintergrund = False,
     ):
         """Einzelne LLM-Antwort OHNE Werkzeuge/Persona (fuer Spass-Module wie Roast,
         Hype, Bewertung, Spruch, Quiz). Gibt den Text zurueck oder None bei Fehler/aus.
 
         Bewusst getrennt von ask_flo(): kein Wetter-Werkzeug, frei einstellbare
         Temperatur (hoeher = kreativer) und Laenge.
+
+        hintergrund=True fuer Jobs, auf die niemand wartet (Gedaechtnis,
+        Aktien-Analyst): eigenes Modell mit eigenem Kontingent, kein Wiederholen,
+        und nach einem 429 fuenf Minuten Pause - der Chat hat Vorrang.
         """
         if self._client is None:
+            return None
+        if hintergrund and time.monotonic() < self._hintergrund_pause_bis:
+            log.info("KI: Hintergrund-Aufruf ausgelassen - nach einem 429 hat der "
+                     "Chat Vorrang.")
             return None
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        # Denk-Modelle ziehen das Denken vom selben Budget ab. Die Aufrufer geben
+        # 60-120 Tokens fuer einen Spruch - das reichte einem gpt-oss oft nicht
+        # einmal zum Nachdenken, und es kam None zurueck (der Aktien-Analyst hat
+        # daraufhin alle 20 s neu gefragt). Die Laenge sichert danach _kuerzen.
+        budget = max_tokens
+        if self._denk_aufwand or "gpt-oss" in self._model:
+            budget = max(max_tokens, self.MAX_TOKENS)
+        modell = self._hintergrund_modell if hintergrund else None
         try:
-            response = await self._chat(
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            text = self._sanitize_output((response.choices[0].message.content or "").strip())
-            return text or None
+            try:
+                response = await self._chat(messages=messages, max_tokens=budget,
+                                            temperature=temperature, modell=modell,
+                                            hintergrund=hintergrund)
+            except LlmFehler as fehler:
+                if not (modell and fehler.art == "modell"):
+                    raise
+                log.warning("KI: Hintergrundmodell %r gibt es nicht - nehme ab jetzt "
+                            "das Chatmodell. (LLM_HINTERGRUND_MODEL in der .env)", modell)
+                self._hintergrund_modell = ""
+                response = await self._chat(messages=messages, max_tokens=budget,
+                                            temperature=temperature, hintergrund=hintergrund)
+            text = self._sanitize_output(self._inhalt(response))
+            if not text:
+                log.warning("KI-Fehler: leere Antwort in generate (%s)%s",
+                            self._befund(response, budget),
+                            " [Hintergrund]" if hintergrund else "")
+                return None
+            if budget > max_tokens:
+                text = self._kuerzen(text, max(160, max_tokens * 5))
+            return text
         except LlmFehler:
             return None                          # Grund steht schon einzeilig im Log
         except Exception:  # noqa: BLE001 - Bot soll nie wegen LLM-Fehler crashen
@@ -1065,7 +1355,8 @@ class FloAI:
         # antwortet gerade nicht". Die ging danach als Gespraechsverlauf wieder
         # ans Modell und wurde brav nachgeplappert. Hier statt an beiden
         # Aufrufstellen, damit es keine dritte geben kann, die es vergisst.
-        if is_bot and content.strip() in self._FEHLERSAETZE:
+        if is_bot and (content.strip() in self._FEHLERSAETZE
+                       or self._ist_verweigerung(content.strip())):
             return
         content = content.strip()
         if not content:
@@ -1122,10 +1413,18 @@ class FloAI:
         mit diesem Titel anzusprechen. 'tone' steuert die Gelassenheit: je seltener
         der Titel, desto entspannter/chilliger spricht Flo (kommt aus economy).
         'channel_id' bringt den juengsten Gespraechsverlauf als Kontext mit, damit
-        Flo dem Gespraech folgen kann (Kurzzeit-Gedaechtnis)."""
+        Flo dem Gespraech folgen kann (Kurzzeit-Gedaechtnis).
+
+        Gibt IMMER einen Satz zurueck - nie None, nie leer. Wo das Modell
+        danebenliegt, wird genau EINMAL nachgefasst:
+          - leer / abgeschnitten (Denken hat das Budget gefressen) -> mit mehr Budget
+          - Groq-400 'tool_use_failed' -> nochmal, dann ohne Werkzeug
+          - Verweigerung -> nochmal wie vorher, sonst derbe Abwehr
+        Alles zusammen innerhalb von KI_FRIST."""
         if self._client is None:
             return "Mein KI-Modus ist gerade nicht eingerichtet."
 
+        frist = time.monotonic() + self.KI_FRIST
         text = user_message.strip()
         if author:
             text = f"{author} schreibt: {text}"
@@ -1138,14 +1437,43 @@ class FloAI:
             {"role": "user", "content": text},
         ]
 
+        nachgefasst = set()          # welche Pannen schon EINEN zweiten Versuch hatten
+        mit_werkzeug = True
+        budget = self.MAX_TOKENS
         try:
             for _ in range(self.MAX_STEPS):
-                response = await self._chat(
-                    messages=messages,
-                    tools=[self.WEATHER_TOOL],
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=self.TEMPERATURE,
-                )
+                try:
+                    if mit_werkzeug:
+                        response = await self._chat(
+                            messages=messages,
+                            tools=[self.WEATHER_TOOL],
+                            max_tokens=budget,
+                            temperature=self.TEMPERATURE,
+                            frist=frist,
+                        )
+                    else:
+                        # Ohne Werkzeug - und das Modell muss es WISSEN: der
+                        # System-Prompt erwaehnt get_weather, und ein Aufruf eines
+                        # nicht mitgeschickten Werkzeugs ist bei Groq wieder ein 400.
+                        response = await self._chat(
+                            messages=messages + [{
+                                "role": "system",
+                                "content": "Du hast gerade KEIN Werkzeug. Antworte "
+                                           "einfach in Worten."}],
+                            max_tokens=budget,
+                            temperature=self.TEMPERATURE,
+                            frist=frist,
+                        )
+                except LlmFehler as fehler:
+                    if fehler.art != "werkzeug":
+                        raise
+                    if "werkzeug" not in nachgefasst:
+                        nachgefasst.add("werkzeug")         # Zufall - nochmal wie eben
+                        continue
+                    if mit_werkzeug:
+                        mit_werkzeug = False                 # dann eben ohne
+                        continue
+                    raise
                 msg = response.choices[0].message
                 tool_calls = getattr(msg, "tool_calls", None)
                 content = msg.content or ""
@@ -1169,20 +1497,30 @@ class FloAI:
                                             f"KEINE Werkzeug-Syntax, kein <function=...>.")})
                         continue
                     sauber = self._sanitize_output(content)
-                    if not sauber:
-                        # Bisher spurlos: der Nutzer las "faellt mir nichts ein",
-                        # im Log stand NICHTS. Bei Denk-Modellen (gpt-oss & Co.)
-                        # passiert das, wenn das Token-Budget schon beim Denken
-                        # aufgebraucht ist - dann sieht es wie Unlust aus und ist
-                        # in Wahrheit eine zu enge Grenze.
-                        log.warning("KI-Fehler: leere Antwort (Modell %s, "
-                                    "max_tokens %d) - evtl. LLM_REASONING_EFFORT=low "
-                                    "oder LLM_MAX_TOKENS hoeher setzen (der "
-                                    "niedrige Wert ist Absicht, nicht Versehen - "
-                                    "er haelt die Antworten kurz).",
-                                    self._model, self.MAX_TOKENS)
-                        return "Dazu faellt mir gerade nichts ein."
-                    return sauber
+                    fertig = getattr(response.choices[0], "finish_reason", None)
+                    if self._ist_verweigerung(sauber):
+                        log.warning("KI-Fehler: Verweigerung (%s): %r",
+                                    self._befund(response), sauber[:80])
+                        if "verweigerung" not in nachgefasst:
+                            nachgefasst.add("verweigerung")
+                            continue
+                        return random.choice(self._ABWEHR)
+                    if not sauber or (fertig == "length" and not self._satzende(sauber)):
+                        # Bei Denk-Modellen ist das Budget beim Nachdenken
+                        # draufgegangen. Vorher hiess das fuer den Nutzer
+                        # "Dazu faellt mir gerade nichts ein" - und fuer den
+                        # Verlauf auch. Jetzt: einmal mit mehr Luft.
+                        log.warning("KI-Fehler: %s Antwort (%s)",
+                                    "leere" if not sauber else "abgeschnittene",
+                                    self._befund(response, budget))
+                        if "leer" not in nachgefasst:
+                            nachgefasst.add("leer")
+                            budget = max(budget, self.MAX_TOKENS_NOTFALL)
+                            continue
+                        if sauber:
+                            return self._kuerzen(sauber)
+                        return random.choice(self._LEER_SPRUECHE)
+                    return self._kuerzen(sauber)
 
                 # Assistant-Nachricht mit den Tool-Aufrufen sauber zurueckschreiben.
                 messages.append(
@@ -1225,10 +1563,14 @@ class FloAI:
                         channel_id = None, bavarian = False,
                         gid = None, uid = None):
         """Schaut sich ein Bild an (Vision-Modell) und antwortet in Flos Persoenlichkeit.
-        image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL."""
+        image_url = oeffentliche URL (z. B. Discord-Anhang) oder data:-URL.
+
+        Kommt vom Vision-Modell nichts Brauchbares (leer, abgelehnte Anfrage,
+        Modell weg), antwortet Flo auf den TEXT - lieber ohne Bild als gar nicht."""
         if self._client is None:
             return "Mein KI-Modus ist gerade nicht eingerichtet."
 
+        frist = time.monotonic() + self.KI_FRIST
         text = (user_message or "").strip() or "Schau dir das Bild an und sag was dazu."
         if author:
             text = f"{author} schreibt: {text}"
@@ -1242,20 +1584,41 @@ class FloAI:
                 {"type": "image_url", "image_url": {"url": image_url}},
             ]},
         ]
+        budget = self.MAX_TOKENS_BILD
+        ohne_bild = False
         try:
-            response = await self._chat(
-                vision=True,
-                messages=messages,
-                max_tokens=self.MAX_TOKENS_BILD,
-                temperature=self.TEMPERATURE,
-            )
-            text = self._sanitize_output((response.choices[0].message.content or "").strip())
-            return text or "Dazu faellt mir gerade nichts ein."
+            for _versuch in range(2):
+                response = await self._chat(
+                    vision=True,
+                    messages=messages,
+                    max_tokens=budget,
+                    temperature=self.TEMPERATURE,
+                    frist=frist,
+                )
+                sauber = self._sanitize_output(self._inhalt(response))
+                fertig = getattr(response.choices[0], "finish_reason", None)
+                if sauber and not self._ist_verweigerung(sauber) and not (
+                        fertig == "length" and not self._satzende(sauber)):
+                    return self._kuerzen(sauber)
+                log.warning("KI-Fehler: Bild-Antwort unbrauchbar (%s): %r",
+                            self._befund(response, budget), sauber[:60])
+                budget = max(budget, self.MAX_TOKENS_NOTFALL)
+            ohne_bild = True
         except LlmFehler as fehler:
-            return self.fehlertext(fehler)
+            if fehler.art not in ("anfrage", "modell", "werkzeug"):
+                return self.fehlertext(fehler)
+            ohne_bild = True
         except Exception:  # noqa: BLE001
             log.exception("Vision-Aufruf unerwartet gescheitert")
             return self.MELDUNGEN["unbekannt"]
+        if ohne_bild:
+            log.warning("KI: Bild nicht lesbar - antworte auf den Text.")
+            frage = (user_message or "").strip() or "Ich hab dir ein Bild geschickt."
+            return await self.ask_flo(
+                f"{frage} [Das Bild dazu konntest du nicht sehen.]", author=author,
+                title=title, tone=tone, channel_id=channel_id, bavarian=bavarian,
+                gid=gid, uid=uid)
+        return random.choice(self._LEER_SPRUECHE)
 
     async def see_image_raw(self, prompt, image_url, *, temperature = 0.3,
                             max_tokens = 500):

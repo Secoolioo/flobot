@@ -1,104 +1,104 @@
 {
  "_je_modul": {
   "admin": {
-   "streuung": 0.53,
-   "us": 34.1
+   "streuung": 0.26,
+   "us": 36.3
   },
   "arbeit": {
-   "streuung": 0.33,
-   "us": 44.2
+   "streuung": 0.69,
+   "us": 46.9
   },
   "bayern": {
-   "streuung": 0.47,
-   "us": 50.1
+   "streuung": 0.36,
+   "us": 61.2
   },
   "casino": {
-   "streuung": 0.32,
-   "us": 63.9
+   "streuung": 0.26,
+   "us": 71.2
   },
   "economy": {
-   "streuung": 0.16,
-   "us": 52.5
+   "streuung": 0.21,
+   "us": 51.4
   },
   "floaktie": {
-   "streuung": 0.34,
-   "us": 50.6
+   "streuung": 0.22,
+   "us": 37.4
   },
   "food": {
-   "streuung": 0.17,
-   "us": 39.8
+   "streuung": 0.21,
+   "us": 34.4
   },
   "fun": {
-   "streuung": 0.31,
-   "us": 43.6
+   "streuung": 0.52,
+   "us": 45.5
   },
   "games": {
-   "streuung": 0.2,
-   "us": 44.9
+   "streuung": 0.21,
+   "us": 44.1
   },
   "gehirn": {
-   "streuung": 0.19,
-   "us": 34.1
+   "streuung": 0.26,
+   "us": 29.6
   },
   "giveaway": {
-   "streuung": 0.23,
-   "us": 40.8
+   "streuung": 0.28,
+   "us": 46.1
   },
   "guildcfg": {
-   "streuung": 0.34,
-   "us": 42.1
+   "streuung": 0.45,
+   "us": 50.6
   },
   "handel": {
-   "streuung": 0.35,
-   "us": 42.1
+   "streuung": 0.24,
+   "us": 35.0
   },
   "lotto": {
-   "streuung": 0.33,
-   "us": 41.1
+   "streuung": 0.3,
+   "us": 36.8
   },
   "luxus": {
-   "streuung": 0.31,
-   "us": 44.8
+   "streuung": 0.22,
+   "us": 37.5
   },
   "media": {
-   "streuung": 0.43,
-   "us": 41.8
+   "streuung": 0.25,
+   "us": 42.3
   },
   "merchant": {
-   "streuung": 0.38,
-   "us": 42.0
+   "streuung": 0.22,
+   "us": 57.6
   },
   "moderation": {
-   "streuung": 0.41,
-   "us": 54.2
+   "streuung": 0.66,
+   "us": 55.5
   },
   "music": {
-   "streuung": 0.32,
-   "us": 114.5
+   "streuung": 0.18,
+   "us": 110.4
   },
   "profil": {
-   "streuung": 0.21,
-   "us": 45.2
+   "streuung": 0.27,
+   "us": 38.2
   },
   "schulden": {
-   "streuung": 0.3,
-   "us": 46.0
+   "streuung": 0.39,
+   "us": 44.5
   },
   "steal": {
-   "streuung": 0.4,
-   "us": 44.3
+   "streuung": 0.79,
+   "us": 49.0
   },
   "terraria": {
-   "streuung": 0.54,
-   "us": 40.6
+   "streuung": 0.15,
+   "us": 34.6
   },
   "voicegags": {
-   "streuung": 0.33,
-   "us": 42.2
+   "streuung": 0.27,
+   "us": 46.9
   },
   "words": {
-   "streuung": 0.37,
-   "us": 41.0
+   "streuung": 0.47,
+   "us": 41.1
   }
  },
  "_kette": [
@@ -133,28 +133,28 @@
  },
  "werte": {
   "ansprache": {
-   "streuung": 1.75,
-   "us": 2.4
+   "streuung": 0.68,
+   "us": 1.8
   },
   "befehl": {
-   "streuung": 0.17,
-   "us": 144.4
+   "streuung": 0.1,
+   "us": 126.6
   },
   "cmdnorm_kalt": {
-   "streuung": 0.31,
-   "us": 69.6
+   "streuung": 0.48,
+   "us": 63.7
   },
   "cmdnorm_warm": {
-   "streuung": 0.04,
-   "us": 4.5
+   "streuung": 0.38,
+   "us": 3.2
   },
   "kette": {
-   "streuung": 0.11,
-   "us": 1180.3
+   "streuung": 0.18,
+   "us": 1104.6
   },
   "nachricht": {
-   "streuung": 0.11,
-   "us": 1192.2
+   "streuung": 0.27,
+   "us": 1070.6
   }
  }
 }

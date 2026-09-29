@@ -227,9 +227,11 @@ class Gehirn(FeatureBasis):
         for m in gespraech:
             namen.setdefault(m["name"], m["wer"])
             zeilen.append(f"{m['name']}: {m['text']}")
+        # hintergrund=True: auf das Gedaechtnis wartet niemand. Eigenes Modell
+        # (eigenes Kontingent), und nach einem 429 hat der Chat Vorrang.
         antwort = await ai.generate(
             "Chat:\n" + "\n".join(zeilen[-PUFFER_MAX:]),
-            system=_EXTRAKT_SYSTEM, temperature=0.3, max_tokens=400)
+            system=_EXTRAKT_SYSTEM, temperature=0.3, max_tokens=400, hintergrund=True)
         if not antwort:
             return 0
         neue = 0

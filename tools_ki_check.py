@@ -193,6 +193,7 @@ class KiCheck(Arzt):
             "temperature": 0,
         })
         dauer = time.monotonic() - start
+        self._kontingent_zeigen(kopf)
         if status == 200:
             try:
                 antwort = json.loads(body)["choices"][0]["message"]["content"]
@@ -212,6 +213,22 @@ class KiCheck(Arzt):
             return True
         self._status_deuten(status, body, "Chat-Aufruf", kopf)
         return False
+
+    def _kontingent_zeigen(self, kopf):
+        """Was vom Kontingent noch uebrig ist - Groq schickt es in jedem Kopf mit.
+
+        "Kontingent verbraten" kann zwei sehr verschiedene Dinge heissen: eine
+        Minute warten (Token pro Minute) oder bis morgen (Token pro Tag). Ohne
+        diese Zeilen sieht man den Unterschied nicht."""
+        kopf = {str(k).lower(): v for k, v in (kopf or {}).items()}
+        paare = (("Anfragen", "x-ratelimit-remaining-requests", "x-ratelimit-limit-requests",
+                  "x-ratelimit-reset-requests"),
+                 ("Tokens", "x-ratelimit-remaining-tokens", "x-ratelimit-limit-tokens",
+                  "x-ratelimit-reset-tokens"))
+        for name, rest, grenze, reset in paare:
+            if rest in kopf:
+                self.info(f"Kontingent {name}: noch {kopf[rest]} von "
+                          f"{kopf.get(grenze, '?')} (voll wieder in {kopf.get(reset, '?')})")
 
     @staticmethod
     def _cloudflare_code(body):

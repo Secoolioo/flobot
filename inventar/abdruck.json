@@ -4,10 +4,8 @@
  "_wackelig": [
   "Handelsbuch",
   "Schicht",
-  "avatar",
   "daily",
   "errate",
-  "lookup",
   "quiz",
   "woertle"
  ],
@@ -376,6 +374,15 @@
     "titel": "🎰 Slot-Machine"
    }
   ],
+  "avatar": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
+   }
+  ],
   "baccarat": [
    {
     "art": "object"
@@ -469,7 +476,7 @@
   "banner": [
    {
     "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "text": "**Rauchtester** hat kein Profil-Banner. 🎏"
    }
   ],
   "bayerisch": [
@@ -780,6 +787,16 @@
     "titel": ""
    }
   ],
+  "dauerschleife": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
+   }
+  ],
   "debt": [
    {
     "art": "embed",
@@ -963,6 +980,16 @@
     "fuss": true,
     "text": "Jeder Server hat seine eigenen. Ändern mit `Flo einstellung <name> <wert>`, zurücksetzen mit `… standard`.",
     "titel": "⚙️ Einstellungen für Rauchserver"
+   }
+  ],
+  "endlosschleife": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
    }
   ],
   "entbann": [
@@ -1746,6 +1773,16 @@
     "titel": ""
    }
   ],
+  "join_sounds": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Geh erst in einen Sprachkanal, dann komme ich dazu.",
+    "titel": ""
+   }
+  ],
   "kalorien": [
    {
     "art": "text",
@@ -2361,6 +2398,55 @@
     "titel": "🧾 Lohnzettel · Rauchtester"
    }
   ],
+  "lookup": [
+   {
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
+   }
+  ],
+  "loop": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
+   }
+  ],
+  "loope": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
+   }
+  ],
+  "loopen": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
+   }
+  ],
+  "loopt": [
+   {
+    "art": "embed",
+    "bild": false,
+    "felder": [],
+    "fuss": false,
+    "text": "Ich spiele gerade nichts, was ich wiederholen könnte.",
+    "titel": ""
+   }
+  ],
   "los": [
    {
     "art": "object"
@@ -2846,8 +2932,11 @@
   ],
   "nachschlagen": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "naechst": [
@@ -2970,8 +3059,11 @@
   ],
   "pfp": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "playlistverlauf": [
@@ -3021,26 +3113,35 @@
   ],
   "profil": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "profilbanner": [
    {
     "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "text": "**Rauchtester** hat kein Profil-Banner. 🎏"
    }
   ],
   "profilbild": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "profile": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "props": [
@@ -3922,8 +4023,11 @@
   ],
   "steckbrief": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "stop": [
@@ -4359,8 +4463,11 @@
   ],
   "userinfo": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "verbann": [
@@ -4518,6 +4625,18 @@
     "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
    }
   ],
+  "warn_limit": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
+  "warn_timeout": [
+   {
+    "art": "text",
+    "text": "Wen soll ich verwarnen? z. B. `Flo warn @name Spam`."
+   }
+  ],
   "warnings": [
    {
     "art": "text",
@@ -4621,8 +4740,11 @@
   ],
   "whois": [
    {
-    "art": "text",
-    "text": "Immer mit der Ruhe – in **N s** wieder. ⏳"
+    "art": "object"
+   },
+   {
+    "art": "nichts",
+    "knoepfe": []
    }
   ],
   "wiederhol": [
@@ -5106,8 +5228,8 @@
   ]
  },
  "zaehlung": {
-  "befragt": 480,
-  "stabil": 472,
-  "wackelig": 8
+  "befragt": 489,
+  "stabil": 483,
+  "wackelig": 6
  }
 }
