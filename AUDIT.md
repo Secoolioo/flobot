@@ -121,7 +121,6 @@ keiner davon verursacht Datenverlust oder Coin-Verlust:
 |---|---|---|
 | `floaktie.py:1539` | Voice-Dividende umgeht die Tageskappe für Voice-Coins | Wirtschafts-Balance, kein Verlust — braucht eine Entscheidung, ob die Kappe überhaupt gelten soll |
 | `casino.py:3155` | Blackjack-Deal: schlägt der Edit fehl, bleibt die Runde offen | Text-Weg (`flo karte`) spielt sie zu Ende; Geld ist nicht weg |
-| `music.py:691` | `start()` schreibt den Zustand vor `voice.play()` | betrifft nur den Fehlerfall beim Verbindungsaufbau |
 | `admin.py:91/318` | @-Erwähnung als Ziel funktioniert bei keinem Admin-Befehl | nur Besitzer-Befehle, ID-Form funktioniert |
 | `arbeit.py:983` | `Flo top` beansprucht die Bestenliste vor `economy` | Anzeige-Konflikt, keine Datenwirkung |
 | diverse Tests | Attrappen statt echter Pfade, geborgter globaler Zustand | Testqualität, keine Betriebswirkung |

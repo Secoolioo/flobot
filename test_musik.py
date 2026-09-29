@@ -1034,6 +1034,44 @@ def test_musik_rauswurf_durch_moderator_gilt():
 
 
 
+def test_bot_meldet_flos_trennung_an_die_musik():
+    """flo_getrennt nuetzt nur, wenn bot.py es auch ruft - und zwar NUR fuer
+    Flo selbst und nur, wenn er einen Kanal verlassen hat (nicht beim Wechsel,
+    nicht fuer andere Leute)."""
+    import bot
+    from unittest import mock
+    gemeldet = []
+
+    async def flo_getrennt(gid, cid):
+        gemeldet.append((gid, cid))
+
+    alt_user = bot.client._connection.user
+    bot.client._connection.user = SimpleNamespace(id=1)
+    guild = SimpleNamespace(id=77)
+    kanal = SimpleNamespace(id=42)
+    zustand = lambda ch: SimpleNamespace(channel=ch, self_stream=False)  # noqa: E731
+    try:
+        with mock.patch.object(bot, "MUSIC_ENABLED", True), \
+                mock.patch.object(bot, "VOICE_GAGS_ENABLED", False), \
+                mock.patch.object(bot, "FLOAKTIE_ENABLED", False), \
+                mock.patch.object(bot.music, "flo_getrennt", flo_getrennt):
+            async def lauf():
+                flo = SimpleNamespace(id=1, bot=True, guild=guild)
+                anna = SimpleNamespace(id=2, bot=False, guild=guild)
+                await bot.client.on_voice_state_update(flo, zustand(kanal), zustand(None))
+                await bot.client.on_voice_state_update(anna, zustand(kanal), zustand(None))
+                await bot.client.on_voice_state_update(
+                    flo, zustand(kanal), zustand(SimpleNamespace(id=43)))
+                await asyncio.sleep(0)
+            asyncio.run(lauf())
+    finally:
+        bot.client._connection.user = alt_user
+    assert gemeldet == [(77, 42)]
+
+
+
+
+
 def test_musik_belegt_den_voice_nur_wenn_wirklich_was_laeuft():
     """is_voice_busy war True, sobald Flo in einem Kanal sein SOLLTE.
 

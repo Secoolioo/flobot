@@ -313,26 +313,6 @@
     "titel": "🧾 Lohnzettel · Rauchtester"
    }
   ],
-  "aufhoer": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Ich bin gerade in keinem Sprachkanal.",
-    "titel": ""
-   }
-  ],
-  "aufhör": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Ich bin gerade in keinem Sprachkanal.",
-    "titel": ""
-   }
-  ],
   "aufraeum": [
    {
     "art": "text",
@@ -1540,16 +1520,6 @@
    {
     "art": "text",
     "text": "🛒 Der fahrende Händler ist gerade unterwegs und noch nicht am Stand. Halt heute die Augen offen - er taucht **irgendwann** auf. 👀"
-   }
-  ],
-  "halt": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Ich bin gerade in keinem Sprachkanal.",
-    "titel": ""
    }
   ],
   "handel": [
@@ -3326,16 +3296,6 @@
     "text": "🥷 So geht's: `Flo steal @wer` - nenn mir ein Opfer mit @."
    }
   ],
-  "raus": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Ich bin gerade in keinem Sprachkanal.",
-    "titel": ""
-   }
-  ],
   "rausschmeis": [
    {
     "art": "text",
@@ -4689,16 +4649,6 @@
     "text": "Heute ist kein Tag für Weisheiten. Komm später wieder. 🗿"
    }
   ],
-  "weiter": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Da ist nichts pausiert.",
-    "titel": ""
-   }
-  ],
   "weiterspiel": [
    {
     "art": "embed",
@@ -5229,7 +5179,7 @@
  },
  "zaehlung": {
   "befragt": 489,
-  "stabil": 483,
+  "stabil": 478,
   "wackelig": 6
  }
 }

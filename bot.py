@@ -2433,6 +2433,13 @@ class FloBot(discord.Client):
 
     async def on_voice_state_update(self, member, before, after):
         """Join-Sounds - und Sofort-Impulse fuer den Aktienkurs (Livestream/Call)."""
+        # Flo selbst ist aus dem Voice geflogen: music prueft, ob das ein
+        # Rauswurf war (eigenes stop, eigener Neuaufbau und die Selbstheilung
+        # von discord.py erkennt es selbst) und laesst ihn dann draussen. Vorher
+        # holte ihn der Watchdog nach jeder Mod-Trennung sofort zurueck.
+        if (MUSIC_ENABLED and self.user is not None and member.id == self.user.id
+                and before.channel is not None and after.channel is None):
+            self._spawn(music.flo_getrennt(member.guild.id, before.channel.id))
         if VOICE_GAGS_ENABLED:
             self._spawn(voicegags.on_voice_state_update(member, before, after))
         # FloCorp-Aktie: geht ein Livestream AN oder kommt jemand in den Call,
