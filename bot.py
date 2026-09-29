@@ -657,9 +657,29 @@ _HELP_DATA = {
     ]),
     "ki": ("KI", 0x5865F2, [
         ("flo <frage>", "einfach fragen - mit Kontext & Bildern"),
+        ("Rechtsklick → Apps → Flo, sag was dazu", "Flo kommentiert eine Nachricht"),
+        ("Rechtsklick → Apps → Roasten", "Flo roastet eine Person"),
         ("flo bayrisch an / aus", "Dialekt-Modus"),
         ("flo gedaechtnis", "was Flo ueber dich weiss"),
         ("flo vergiss mich", "loescht alles davon"),
+    ]),
+    "arbeit": ("Arbeit", 0x2E86C1, [
+        ("flo work", "Schicht antreten - Können statt Glück"),
+        ("flo work liste", "welche Schichten es gibt"),
+        ("flo work wordle", "gezielt eine bestimmte Schicht"),
+        ("flo lohnzettel", "deine Bilanz: Schichten, Serie, Verdienst"),
+        ("flo arbeit top · werk", "Arbeits-Rangliste"),
+        ("flo wordle", "Wort des Tages - wer zuerst knackt, kassiert"),
+    ]),
+    "profil": ("Profil", 0x95A5A6, [
+        ("flo check @wer", "ganzes Profil mit Namensverlauf"),
+        ("flo avatar @wer", "Profilbild in voller Größe (4096 px)"),
+        ("flo banner @wer", "nur das Banner"),
+    ]),
+    "einstellungen": ("Einstellungen", 0x7F8C8D, [
+        ("flo einstellungen", "alles anzeigen (nur Admins)"),
+        ("flo einstellung <name> <wert>", "für diesen Server setzen"),
+        ("flo einstellung <name> standard", "zurück auf den Standard"),
     ]),
 }
 # Kurz-Hinweise fuer die Uebersichts-Karte.
@@ -671,6 +691,8 @@ _HELP_HINTS = {
     "chaos": "roast · rate · umfrage",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen · gedächtnis",
+    "arbeit": "work · lohnzettel · wordle", "profil": "check · avatar · banner",
+    "einstellungen": "nur Admins",
 }
 
 
@@ -678,59 +700,73 @@ def _rgb(farbe):
     return ((farbe >> 16) & 0xFF, (farbe >> 8) & 0xFF, farbe & 0xFF)
 
 
-class _HelpNavButton(discord.ui.Button):
-    """Ein Navigations-Button im Hilfe-Menue. key=None => Übersicht."""
+_FLO_WORT_RE = re.compile(r"\bflo\b")
 
-    def __init__(self, key, emoji, label, *,
-                 style):
-        super().__init__(label=label, emoji=emoji, style=style)
-        self.key = key
+
+def _hilfe_befehle(key):
+    """Die Befehle einer Kategorie zum KOPIEREN - mit dem Namen, den Flo auf
+    diesem Server hat (auf der Karte steht immer 'flo')."""
+    name = ai.bot_name().lower()
+    _titel, _farbe, eintraege = _HELP_DATA[key]
+    return "\n".join(f"`{_FLO_WORT_RE.sub(name, befehl)}` – {was}"
+                      for befehl, was in eintraege)
+
+
+class HilfeAuswahl(discord.ui.DynamicItem[discord.ui.Select],
+                   template=r"flo:hilfe:auswahl"):
+    """Das Kategorie-Menue der Hilfe.
+
+    Ein DynamicItem, weil Hilfe-Nachrichten stehen bleiben: das alte Menue war
+    nach drei Minuten oder einem Neustart tot ("Interaktion fehlgeschlagen")."""
+
+    def __init__(self, aktiv=None):
+        optionen = [discord.SelectOption(label="Übersicht", value="_uebersicht",
+                                         emoji="🏠", default=aktiv is None)]
+        for key, emoji, label in client._help_categories()[:24]:
+            optionen.append(discord.SelectOption(
+                label=label, value=key, emoji=emoji, default=key == aktiv,
+                description=(_HELP_HINTS.get(key) or None)))
+        super().__init__(discord.ui.Select(
+            custom_id="flo:hilfe:auswahl", options=optionen,
+            placeholder="Kategorie wählen – die Seite siehst nur du"))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
 
     async def callback(self, interaction):
-        view = self.view  # type: ignore[assignment]
-        await view.show(interaction, self.key)
+        await client._hilfe_zeigen(interaction, (self.item.values or [None])[0])
 
 
-class HelpView(discord.ui.View):
-    """Interaktives Hilfe-Menue: Kategorie-Buttons wechseln das Embed in-place."""
+class HelpView(discord.ui.LayoutView):
+    """Das Hilfe-Menue (Components V2): Karte + EIN Kategorie-Menue.
 
-    def __init__(self):
-        super().__init__(timeout=180)
-        self.message = None
-        self.active = None
-        self.add_item(_HelpNavButton(None, "🏠", "Übersicht",
-                                     style=discord.ButtonStyle.primary))
-        for key, emoji, label in client._help_categories():
-            self.add_item(_HelpNavButton(key, emoji, label,
-                                         style=discord.ButtonStyle.secondary))
-        self._sync()
+    Vorher zwoelf Knoepfe, die die OEFFENTLICHE Nachricht fuer alle
+    umblaetterten - klickte einer 'Casino', sah der naechste statt der
+    Uebersicht das Casino. Jetzt bekommt jeder seine Seite privat, und unter
+    der Karte stehen die Befehle noch einmal als Text zum Kopieren.
 
-    def _sync(self):
-        """Hebt den aktiven Bereich hervor (grün + deaktiviert)."""
-        for child in self.children:
-            if isinstance(child, _HelpNavButton):
-                here = (child.key == self.active)
-                child.disabled = here
-                child.style = (discord.ButtonStyle.success if here else
-                               (discord.ButtonStyle.primary if child.key is None
-                                else discord.ButtonStyle.secondary))
+    timeout=None und NIE stop(): stop() nimmt die DynamicItem-Vorlage global
+    aus dem Register (discord.py ViewStore.remove_view)."""
 
-    async def show(self, interaction, key):
-        self.active = key
-        self._sync()
-        emb, file = await client._help_payload(key)
-        await interaction.response.edit_message(
-            embed=emb, view=self, attachments=[file] if file else [])
-
-    async def on_timeout(self):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
+    def __init__(self, key=None, *, bild=None):
+        super().__init__(timeout=None)
+        name = ai.bot_name()
+        if key in _HELP_DATA:
+            titel, farbe, _eintraege = _HELP_DATA[key]
+            kopf = f"## {titel}"
+        else:
+            key, farbe = None, 0x5865F2
+            kopf = (f"## 🤖 {name} – Hilfe\n"
+                    "Kategorie unten wählen – die Seite siehst nur du.")
+        teile = [discord.ui.TextDisplay(kopf)]
+        if bild:
+            teile.append(discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{bild}")))
+        if key is not None:
+            teile.append(discord.ui.TextDisplay(_hilfe_befehle(key)))
+        teile.append(discord.ui.ActionRow(HilfeAuswahl(key)))
+        self.add_item(discord.ui.Container(*teile, accent_colour=farbe))
 
 
 # Was Flo auf einem Server darf - aus den Rechten gebaut statt als Zauberzahl.
@@ -925,6 +961,8 @@ class FloBot(discord.Client):
                 self.add_dynamic_items(*knoepfe)
                 log.info("Dauerhafte Knoepfe angemeldet: %s (%d).",
                          modul.__name__, len(knoepfe))
+        self.add_dynamic_items(HilfeAuswahl)
+        self._spawn(self._hilfe_vorrendern())
         self._rechtsklick_anmelden()
         # SIGTERM (systemctl stop/restart, docker stop) und SIGINT (Strg+C):
         # erst sichern, dann sauber abmelden. Vorher beendete SIGTERM Python
@@ -1071,12 +1109,18 @@ class FloBot(discord.Client):
             ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
             ("mod", "🛡️", "Moderation", MOD_ENABLED),
             ("ki", "💬", "KI", AI_ENABLED),
+            ("arbeit", "🧰", "Arbeit", ARBEIT_ENABLED),
+            ("profil", "🔎", "Profil", PROFIL_ENABLED),
+            ("einstellungen", "⚙️", "Einstellungen", True),
         ]
         return [(k, e, l) for k, e, l, on in cats if on]
 
     async def _help_file(self, key):
-        """Hilfe-Karte als Bild (einmal gerendert, dann aus dem Cache)."""
-        png = self._help_png_cache.get(key)
+        """Hilfe-Karte als Bild (einmal gerendert, dann aus dem Cache).
+
+        Der Cache haengt auch am Namen: die Uebersicht traegt ihn im Titel, und
+        vorher bekam jeder Server die Karte mit dem Namen des ersten."""
+        png = self._help_png_cache.get((key, ai.bot_name()))
         if png is None:
             try:
                 if key == "_overview":
@@ -1090,45 +1134,57 @@ class FloBot(discord.Client):
                     buf = await asyncio.to_thread(render.help_card, titel,
                                                   _rgb(farbe), entries)
                 png = buf.getvalue()
-                self._help_png_cache[key] = png
+                self._help_png_cache[(key, ai.bot_name())] = png
             except Exception:  # noqa: BLE001 - dann eben Text-Fallback
                 log.exception("Hilfe-Karte fehlgeschlagen (%s)", key)
                 return None
         fname = "help_uebersicht.png" if key == "_overview" else f"help_{key}.png"
         return discord.File(io.BytesIO(png), filename=fname)
 
-    async def _help_payload(self, key):
-        """Embed + Karten-Bild fuer eine Kategorie (None = Uebersicht)."""
-        if key is None or key not in _HELP_DATA:
-            emb = self._help_overview_embed()
-            file = await self._help_file("_overview")
-            if file is not None:
-                emb.set_image(url="attachment://help_uebersicht.png")
-            return emb, file
-        titel, farbe, entries = _HELP_DATA[key]
-        emb = discord.Embed(title=titel, color=farbe)
-        file = await self._help_file(key)
-        if file is not None:
-            emb.set_image(url=f"attachment://help_{key}.png")
-        else:
-            emb.description = "\n".join(f"`{c}` – {d}" for c, d in entries)
-        return emb, file
+    async def _hilfe_nachricht(self, key):
+        """(HelpView, Karte) fuer die Uebersicht (key=None) oder eine Kategorie."""
+        key = key if key in _HELP_DATA else None
+        datei = await self._help_file(key or "_overview")
+        return HelpView(key, bild=datei.filename if datei else None), datei
 
-    def _help_overview_embed(self):
-        """Startansicht des Hilfe-Menues - kompakt, die Karte zeigt die Details."""
-        name = ai.bot_name()
-        emb = discord.Embed(
-            title=f"🤖 {name} – Hilfe",
-            description="Kategorie unten antippen. 👇",
-            color=discord.Color.blurple(),
-        )
-        if self.user is not None:
-            try:
-                emb.set_thumbnail(url=self.user.display_avatar.url)
-            except Exception:  # noqa: BLE001 - Avatar ist nur Deko
-                pass
-        emb.set_footer(text=f"{name} <frage> geht immer · Titel im Shop ändern die Anrede")
-        return emb
+    async def _hilfe_senden(self, message, key=None):
+        """Hilfe als Antwort auf eine Nachricht (Server und Besitzer-DM)."""
+        view, datei = await self._hilfe_nachricht(key)
+        kw = {"view": view}
+        if datei is not None:
+            kw["file"] = datei
+        await basis.antworte(message, None, **kw)
+
+    async def _hilfe_zeigen(self, interaction, key):
+        """Auswahl im Hilfe-Menue -> die Seite nur fuer den, der geklickt hat.
+
+        In der oeffentlichen Nachricht kommt eine private Seite dazu; wer in
+        seiner privaten Seite weiterblaettert, blaettert DORT (kein Stapel)."""
+        key = key if key in _HELP_DATA else None   # '_uebersicht' & Unbekanntes
+        with ai.guild_kontext(interaction.guild_id or 0):
+            if (key or "_overview", ai.bot_name()) not in self._help_png_cache:
+                # Erste Karte rendert ein paar hundert ms - Discord gibt drei
+                # Sekunden. Sicher ist sicher.
+                await interaction.response.defer(ephemeral=True, thinking=False)
+            view, datei = await self._hilfe_nachricht(key)
+        dateien = [datei] if datei is not None else []
+        privat = interaction.message is not None and interaction.message.flags.ephemeral
+        if interaction.response.is_done():
+            if privat:
+                await interaction.edit_original_response(view=view, attachments=dateien)
+            else:
+                await interaction.followup.send(view=view, files=dateien, ephemeral=True)
+        elif privat:
+            await interaction.response.edit_message(view=view, attachments=dateien)
+        else:
+            await interaction.response.send_message(view=view, files=dateien, ephemeral=True)
+
+    async def _hilfe_vorrendern(self):
+        """Alle Hilfe-Karten einmal beim Start rendern - sonst wartet der
+        Erste, der eine Kategorie waehlt, auf Pillow."""
+        for key in ["_overview", *(k for k, _e, _l in self._help_categories()
+                                   if k in _HELP_DATA)]:
+            await self._help_file(key)
 
     def icon_guilds(self):
         """Alle Server, die ihr Icon von Flo setzen lassen wollen.
@@ -1826,13 +1882,7 @@ class FloBot(discord.Client):
             await self._send_restart_prompt(message)
             return
         if _is_help(content):
-            view = HelpView()
-            emb, file = await self._help_payload(None)
-            try:
-                view.message = await message.reply(
-                    embed=emb, file=file, view=view, mention_author=False)
-            except (discord.HTTPException, TypeError):
-                log.exception("Hilfe (DM) konnte nicht gesendet werden")
+            await self._hilfe_senden(message)
             return
 
         # Tippfehler-Toleranz wie im Server (nur fuer den Befehls-Durchlauf).
@@ -2012,27 +2062,13 @@ class FloBot(discord.Client):
 
         # 'Flo hilfe' / 'Flo befehle' -> interaktives Menue mit Kategorie-Buttons.
         if _is_help(content):
-            view = HelpView()
-            emb, file = await self._help_payload(None)
-            try:
-                view.message = await message.reply(
-                    embed=emb, file=file, view=view, mention_author=False)
-            except (discord.HTTPException, TypeError):
-                log.exception("Hilfe konnte nicht gesendet werden")
+            await self._hilfe_senden(message)
             return
 
         # 'Flo moderation' / 'Flo musik' -> direkt die passende Hilfe-Kategorie.
         _cat = _help_category_key(content)
         if _cat is not None:
-            view = HelpView()
-            view.active = _cat
-            view._sync()
-            emb, file = await self._help_payload(_cat)
-            try:
-                view.message = await message.reply(
-                    embed=emb, file=file, view=view, mention_author=False)
-            except (discord.HTTPException, TypeError):
-                log.exception("Kategorie-Hilfe konnte nicht gesendet werden")
+            await self._hilfe_senden(message, _cat)
             return
 
         # Befehls-Normalisierung: erstes Wort auf Tippfehler/Dialekt korrigieren, damit

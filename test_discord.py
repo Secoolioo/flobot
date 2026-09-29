@@ -303,6 +303,13 @@ def _rechtsklick_bot():
     return bot
 
 
+def _alles_an(bot):
+    """Schalter und Sendepause festnageln - andere Tests lassen sie gern
+    anders stehen, und dann haengt das Ergebnis an der Reihenfolge."""
+    return (mock.patch.object(bot.features, "is_on_in", lambda _g, _k: True),
+            mock.patch.object(bot.admin, "is_locked", lambda: False))
+
+
 def test_rechtsklick_befehle_sind_richtig_gebaut():
     """Zwei Eintraege im Apps-Menue: einer an Nachrichten, einer an Personen,
     beide nur auf Servern. Angemeldet wird im Hintergrund (_spawn)."""
@@ -358,7 +365,8 @@ def test_rechtsklick_sag_was_dazu_antwortet_oeffentlich():
         reference=None, author=SimpleNamespace(id=2, display_name="Bob"),
         jump_url="https://discord.com/channels/77/4242/9")
     ia = _interaktion()
-    with mock.patch.object(bot, "AI_ENABLED", True), \
+    schalter, pause = _alles_an(bot)
+    with mock.patch.object(bot, "AI_ENABLED", True), schalter, pause, \
             mock.patch.object(bot.ai, "ask_flo", ask_flo):
         asyncio.run(bot.client._rk_sag_was(ia, nachricht))
     assert ia.response.verschoben
@@ -382,6 +390,7 @@ def test_rechtsklick_respektiert_schalter_und_abkuehlzeit():
     assert not ia.followup.gesendet
 
     with mock.patch.object(bot.features, "is_on_in", lambda _g, _k: False), \
+            mock.patch.object(bot.admin, "is_locked", lambda: False), \
             mock.patch.object(bot, "AI_ENABLED", True):
         ia = _interaktion()
         asyncio.run(bot.client._rk_sag_was(ia, nachricht))
@@ -390,7 +399,8 @@ def test_rechtsklick_respektiert_schalter_und_abkuehlzeit():
     async def ask_flo(*_a, **_k):
         return "ok"
 
-    with mock.patch.object(bot, "AI_ENABLED", True), \
+    schalter, pause = _alles_an(bot)
+    with mock.patch.object(bot, "AI_ENABLED", True), schalter, pause, \
             mock.patch.object(bot.ai, "ask_flo", ask_flo), \
             mock.patch.object(bot.time, "monotonic", lambda: 10.0):
         ia = _interaktion(uid=777)
@@ -411,7 +421,8 @@ def test_rechtsklick_roasten():
 
     person = SimpleNamespace(id=2, display_name="Bob", mention="<@2>")
     ia = _interaktion()
-    with mock.patch.object(bot, "FUN_ENABLED", True), \
+    schalter, pause = _alles_an(bot)
+    with mock.patch.object(bot, "FUN_ENABLED", True), schalter, pause, \
             mock.patch.object(bot.fun, "roast_text", roast_text):
         asyncio.run(bot.client._rk_roasten(ia, person))
     (text, kw), = ia.followup.gesendet
@@ -427,6 +438,139 @@ def test_fun_roast_befehl_und_rechtsklick_teilen_den_text():
 
     with mock.patch.object(ai, "generate", generate):
         assert asyncio.run(fun.roast_text("Bob")).startswith("Du bist so nutzlos")
+
+
+# --- Hilfe-Menue ---------------------------------------------------------------
+def _hilfe_teile(view):
+    """Alle Bausteine einer V2-Nachricht, flach (Container, Text, Auswahl ...)."""
+    return list(view.walk_children())
+
+
+def test_hilfe_ist_ein_menue_statt_zwoelf_knoepfen():
+    """Ein Auswahlmenue mit allen Kategorien - die neuen (Arbeit, Profil,
+    Einstellungen) inklusive. Kein Timeout: das Menue ist ein DynamicItem und
+    lebt, solange die Nachricht steht."""
+    import bot
+    view, datei = asyncio.run(bot.client._hilfe_nachricht(None))
+    assert isinstance(view, discord.ui.LayoutView) and view.timeout is None
+    auswahl = [t for t in _hilfe_teile(view) if isinstance(t, bot.HilfeAuswahl)]
+    assert len(auswahl) == 1
+    werte = [o.value for o in auswahl[0].item.options]
+    assert werte[0] == "_uebersicht"
+    assert werte[1:] == [k for k, _e, _l in bot.client._help_categories()]
+    assert {"arbeit", "profil", "einstellungen"} <= set(werte)
+    assert auswahl[0].item.custom_id == "flo:hilfe:auswahl"
+    # Die Karte haengt als Datei dran und steht im Container.
+    assert datei is not None and datei.filename == "help_uebersicht.png"
+    galerie = [t for t in _hilfe_teile(view) if isinstance(t, discord.ui.MediaGallery)]
+    assert galerie and galerie[0].items[0].media.url == "attachment://help_uebersicht.png"
+
+
+def test_hilfe_kategorie_zeigt_befehle_zum_kopieren_mit_servernamen():
+    """Auf der Karte steht immer 'flo' - kopieren soll man aber, was auf DIESEM
+    Server klappt."""
+    import bot
+    with mock.patch.object(bot.ai, "bot_name", lambda *_a: "Bob"):
+        view, _ = asyncio.run(bot.client._hilfe_nachricht("musik"))
+    texte = " ".join(t.content for t in _hilfe_teile(view)
+                     if isinstance(t, discord.ui.TextDisplay))
+    assert "`bob spiel <song/link>`" in texte and "`bob history`" in texte
+    # Die gewaehlte Kategorie ist im Menue vorausgewaehlt (Musik ist im Test
+    # aus - kein ffmpeg -, also am Casino pruefen).
+    view, _ = asyncio.run(bot.client._hilfe_nachricht("casino"))
+    auswahl = next(t for t in _hilfe_teile(view) if isinstance(t, bot.HilfeAuswahl))
+    assert [o.value for o in auswahl.item.options if o.default] == ["casino"]
+
+
+def test_hilfe_passt_in_discords_grenzen():
+    """V2-Nachrichten: hoechstens 4000 Zeichen Text, 40 Bausteine; Menue
+    hoechstens 25 Eintraege mit Beschreibungen bis 100 Zeichen."""
+    import bot
+    for key in [None, *bot._HELP_DATA]:
+        view, _ = asyncio.run(bot.client._hilfe_nachricht(key))
+        teile = _hilfe_teile(view)
+        text = sum(len(t.content) for t in teile if isinstance(t, discord.ui.TextDisplay))
+        assert text <= 4000 and len(teile) <= 40, key
+        auswahl = next(t for t in teile if isinstance(t, bot.HilfeAuswahl))
+        assert len(auswahl.item.options) <= 25
+        for o in auswahl.item.options:
+            assert len(o.label) <= 100 and len(o.description or "") <= 100
+
+
+class _HilfeAntwort:
+    def __init__(self):
+        self.gesendet, self.bearbeitet, self._fertig = [], [], False
+
+    def is_done(self):
+        return self._fertig
+
+    async def send_message(self, **kw):
+        self.gesendet.append(kw)
+        self._fertig = True
+
+    async def edit_message(self, **kw):
+        self.bearbeitet.append(kw)
+        self._fertig = True
+
+    async def defer(self, **_kw):
+        self._fertig = True
+
+
+def _hilfe_klick(privat):
+    return SimpleNamespace(guild_id=77, response=_HilfeAntwort(),
+                           message=SimpleNamespace(flags=SimpleNamespace(ephemeral=privat)))
+
+
+def test_hilfe_auswahl_zeigt_die_seite_nur_dem_klicker():
+    """Vorher blaetterte ein Klick die OEFFENTLICHE Nachricht fuer alle um.
+    Jetzt: aus der oeffentlichen Nachricht -> private Seite; in der privaten
+    Seite -> dort weiterblaettern (kein Stapel privater Nachrichten)."""
+    import bot
+    asyncio.run(bot.client._hilfe_vorrendern())
+    klick = _hilfe_klick(privat=False)
+    asyncio.run(bot.client._hilfe_zeigen(klick, "casino"))
+    (kw,), = [klick.response.gesendet]
+    assert kw["ephemeral"] is True and isinstance(kw["view"], bot.HelpView)
+    assert [f.filename for f in kw["files"]] == ["help_casino.png"]
+
+    klick = _hilfe_klick(privat=True)
+    asyncio.run(bot.client._hilfe_zeigen(klick, "_uebersicht"))
+    assert not klick.response.gesendet and len(klick.response.bearbeitet) == 1
+
+
+def test_hilfe_auswahl_ueberlebt_den_neustart():
+    """Das Menue meldet sich in setup_hook als DynamicItem an; nach einem
+    Neustart baut discord.py es aus der custom_id neu und ruft den Rueckruf."""
+    import inspect
+    import bot
+    assert "add_dynamic_items(HilfeAuswahl)" in inspect.getsource(bot.FloBot.setup_hook)
+    gezeigt = []
+
+    async def zeigen(_ia, key):
+        gezeigt.append(key)
+
+    neu = asyncio.run(bot.HilfeAuswahl.from_custom_id(None, None, None))
+    neu.item._values = ["arbeit"]
+    neu.item._refresh_state = lambda *_a: None
+    with mock.patch.object(bot.client, "_hilfe_zeigen", zeigen):
+        asyncio.run(neu.callback(SimpleNamespace()))
+    assert gezeigt == ["arbeit"]
+
+
+def test_hilfe_im_chat_antwortet_mit_dem_menue():
+    import bot
+    kanal = _RauchKanal()
+    msg = _rauch_nachricht("flo hilfe", kanal=kanal)
+    gesendet = []
+
+    async def antworte(message, content=None, **kw):
+        gesendet.append((content, kw))
+
+    with mock.patch.object(bot.basis, "antworte", antworte):
+        asyncio.run(bot.client._hilfe_senden(msg, "voice"))
+    (inhalt, kw), = gesendet
+    assert inhalt is None and isinstance(kw["view"], bot.HelpView)
+    assert kw["file"].filename == "help_voice.png"
 
 
 # --- Einladungslink ------------------------------------------------------------
