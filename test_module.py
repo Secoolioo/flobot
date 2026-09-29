@@ -214,6 +214,65 @@ def test_admin_dm_parsing():
 
 
 
+# --- Voice-Gags ------------------------------------------------------------------
+def test_voicegags_connect_fehler_bekommt_eine_klare_antwort():
+    """channel.connect() kann haengen (asyncio.TimeoutError) - das liess
+    _play_path durch. Beim Sound-Befehl stand dann "Da ist gerade etwas
+    schiefgelaufen." im Chat, beim Knopf und beim Join-Sound gar nichts.
+    Jetzt kommt fuer jeden Verbindungsfehler derselbe Satz wie bei der Musik."""
+    import discord
+    import music
+    import voicegags
+
+    gid = 4715
+    assert not music.is_voice_busy(gid)
+    guild = SimpleNamespace(id=gid, voice_client=None)
+    for fehler in (asyncio.TimeoutError(), RuntimeError("davey library needed"),
+                   discord.ClientException("Rechte")):
+        async def connect(_f=fehler, **_kw):
+            raise _f
+
+        kanal = SimpleNamespace(id=1, name="Voice", connect=connect)
+        ok, antwort = asyncio.run(voicegags.instance._play_path(guild, kanal, "x.mp3"))
+        assert ok is False and antwort == music.VOICE_KAPUTT, (fehler, antwort)
+
+
+
+
+def test_voicegags_soundboard_ist_nach_der_musik_wieder_frei():
+    """Nach dem letzten Song blieb das Soundboard fuer immer gesperrt.
+
+    voicegags fragt music.is_voice_busy - und das war True, solange Flo in
+    einem Kanal sein SOLLTE, also auch lange nach dem letzten Song. Der Knopf
+    sagte dann bis zum Neustart "Gerade läuft was im Voice"."""
+    import music
+    import voicegags
+
+    mi = music.instance
+    gid = 4716
+    alt = mi._players.get(gid)
+    player = music.GuildPlayer(loop=None, guild_id=gid)
+    player.active_channel_id = 42                    # Flo sitzt noch drin ...
+    player.voice = SimpleNamespace(is_connected=lambda: True,
+                                   is_playing=lambda: False,
+                                   is_paused=lambda: False)
+    mi._players[gid] = player
+    guild = SimpleNamespace(id=gid, voice_client=player.voice)
+    try:
+        # ... aber es laeuft nichts mehr: das Soundboard ist frei.
+        assert voicegags.instance._voice_beschaeftigt(guild) is False
+        # Laeuft ein Song, weicht es weiter aus.
+        player.current = music.Track(title="A", stream_url="http://a")
+        assert voicegags.instance._voice_beschaeftigt(guild) is True
+    finally:
+        if alt is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt
+
+
+
+
 def test_terraria_erkennt_kein_alltagsdeutsch():
     """'hell' und 'boss' sind deutsche Alltagswoerter, 'golem' ist kein
     eindeutiger Terraria-Begriff. Bei einem Treffer schaltet bot.py den ganzen

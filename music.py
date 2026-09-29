@@ -8,9 +8,10 @@ Funktionsweise:
             Ergebnis auf YouTube gesucht und abgespielt. Dafuer braucht es die
             SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET aus der .env.
 
-Voraussetzungen (sonst ist das Feature einfach aus):
+Voraussetzungen (sonst ist das Feature einfach aus, siehe voice_fehlt):
 - pip:    yt-dlp, PyNaCl   (PyNaCl = Voice-Verschluesselung fuer discord.py)
-- System: ffmpeg           (z. B.  apt install ffmpeg)
+          davey            (ab discord.py 2.7 Pflicht: DAVE-Verschluesselung)
+- System: ffmpeg, libopus  (z. B.  apt install ffmpeg libopus0)
 
 Das Modul ist bewusst von der KI entkoppelt. Faellt es aus, laeuft der restliche
 Bot (Icon/Status/KI) normal weiter.
@@ -118,6 +119,39 @@ ABBRUCH_TOLERANZ = 10
 STREAM_MAX_ALTER = float(os.getenv("MUSIC_STREAM_MAX_ALTER", "900") or "900")
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
+
+
+def _env_sekunden(name, vorgabe):
+    """Sekunden aus der .env - ein Tippfehler dort darf den Start nicht kippen."""
+    roh = os.getenv(name, "")
+    try:
+        return float(roh) if roh.strip() else float(vorgabe)
+    except ValueError:
+        log.warning("%s=%r ist keine Zahl - nehme %s.", name, roh, vorgabe)
+        return float(vorgabe)
+
+
+# So lange bleibt Flo im Sprachkanal, wenn es nichts mehr zu tun gibt (Song zu
+# Ende, Warteschlange leer, nicht pausiert) oder nur noch Bots drinhocken.
+# Danach geht er von selbst. Vorher blieb er fuer immer: _advance setzte nur
+# current=None, der Watchdog hielt ihn im Kanal, und Soundboard/TTS sagten
+# bis zum Neustart "Gerade läuft was im Voice". 0 (oder weniger) = nie gehen.
+MUSIC_IDLE_SEKUNDEN = _env_sekunden("MUSIC_IDLE_SEKUNDEN", 300)
+# So lange wartet flo_getrennt, bevor es eine Trennung als Rauswurf wertet.
+# discord.py trennt bei manchen Aussetzern SELBST kurz und verbindet neu -
+# Discord meldet das genauso wie einen Moderator-Kick.
+VOICE_RAUSWURF_FRIST = 4.0
+
+# Der eine Satz, wenn Flo nicht in den Sprachkanal kommt - egal ob Rechte,
+# Zeitueberschreitung oder fehlende Voice-Bibliothek. Vorher kam in drei von
+# fuenf Wegen nur Discords RuntimeError/TimeoutError bei bot.py an, und die
+# Leute lasen "Da ist gerade etwas schiefgelaufen." Der Grund steht im Log.
+VOICE_KAPUTT = ("Ich komm nicht in euren Voice rein – Rechte fehlen oder Discord "
+                "zickt. Sag's dem Admin, nicht mir.")
+# Alles, was channel.connect() werfen kann, wenn es nicht klappt: fehlende
+# Rechte/schon verbunden (ClientException), fehlendes davey/PyNaCl
+# (RuntimeError), Handshake haengt (asyncio.TimeoutError).
+VOICE_CONNECT_FEHLER = (discord.ClientException, RuntimeError, asyncio.TimeoutError)
 
 # Titel des 'Jetzt laeuft'-Panels. bot.py nimmt Bot-Nachrichten mit diesem Titel
 # vom Auto-Loeschen aus, damit die Steuer-Buttons den ganzen Song erreichbar
@@ -270,6 +304,64 @@ def _loop_text(rest):
     return "🔁 endlos" if rest < 0 else f"🔁 noch {rest}×"
 
 
+def _opus_da():
+    """Kann discord.py Ton kodieren? Dafuer braucht es libopus.
+
+    discord.py laedt sie erst beim ersten Abspielen nach - fehlt sie, merkt man
+    das also erst, wenn schon jemand im Kanal auf Musik wartet. Hier wird genau
+    das Laden versucht, das discord.py spaeter selbst versuchen wuerde."""
+    try:
+        return bool(discord.opus.is_loaded() or discord.opus._load_default())
+    except Exception:  # noqa: BLE001 - interne API weg? Dann wenigstens suchen.
+        import ctypes.util
+        try:
+            return ctypes.util.find_library("opus") is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+
+def voice_fehlt():
+    """Warum Voice auf diesem Rechner NICHT geht - als fertiger Log-Satz mit
+    dem Befehl, der es behebt. Leer = alles da.
+
+    Vorher prueften Musik und Voice-Gags nur yt-dlp, ffmpeg und PyNaCl. Im Log
+    stand "Musik-Feature aktiv", und dann scheiterte JEDER Beitritt: seit
+    discord.py 2.7 ist 'davey' Pflicht (DAVE-Verschluesselung, von Discord seit
+    01.03.2026 erzwungen), und ohne libopus kommt kein Ton heraus. Bemerkt hat
+    man das erst im Kanal, als "Da ist gerade etwas schiefgelaufen."."""
+    try:
+        import nacl  # noqa: F401
+    except ImportError:
+        return ("Paket 'PyNaCl' fehlt (Voice-Verschluesselung). Nachinstallieren:  "
+                "venv/bin/pip install PyNaCl")
+    if tuple(discord.version_info[:2]) >= (2, 7):
+        try:
+            import davey  # noqa: F401
+        except ImportError:
+            return ("Paket 'davey' fehlt - ab discord.py 2.7 Pflicht fuer Voice "
+                    "(DAVE, von Discord seit 01.03.2026 erzwungen). "
+                    "Nachinstallieren:  venv/bin/pip install davey")
+    if not _opus_da():
+        return ("libopus fehlt - ohne die kodiert discord.py keinen Ton. "
+                "Nachinstallieren:  sudo apt install libopus0")
+    return ""
+
+
+def _nur_bots_im_kanal(channel):
+    """Sitzen in diesem Sprachkanal nur noch Bots (Flo eingeschlossen)?
+
+    Im Zweifel NEIN: kann die Mitgliederliste nicht gelesen werden oder ist sie
+    ganz leer (dann fehlt Discords Cache, nicht die Leute), bleibt Flo lieber
+    drin, als jemandem mitten im Song den Stecker zu ziehen."""
+    try:
+        leute = list(channel.members)
+    except Exception:  # noqa: BLE001 - unbekannt ist nicht leer
+        return False
+    if not leute:
+        return False
+    return all(getattr(m, "bot", False) for m in leute)
+
+
 def _url_saeubern(url):
     """Haengt Satzzeichen ab, die im Chat an der URL kleben."""
     url = (url or "").strip()
@@ -338,26 +430,122 @@ _AUDIO_DATEI_RE = re.compile(
 _SC_SET_RE = re.compile(
     r"https?://(?:www\.|m\.)?soundcloud\.com/[^/\s]+/sets/\S+", re.IGNORECASE)
 
-# Steuerbefehle: (Aktion, Regex am Satzanfang). Reihenfolge = Prioritaet.
-# Wichtig: JEDES Muster endet auf \b oder \w*\b. Ohne Wortgrenze reicht das
-# blosse PRAEFIX - und dann kaperten die Steuerbefehle ganz normale Saetze:
+# --- Ist das WIRKLICH ein Befehl? -----------------------------------------
+# Ein Steuerwort am Satzanfang reichte bisher. Gemessen hat das ganz normales
+# Deutsch gekapert - und zwar mit Folgen:
+#   'halt die fresse' / 'halt dein maul' / 'halt mal kurz'  -> STOP (Voice weg,
+#                                                   Warteschlange geloescht!)
+#   'hau ab du opfer' / 'raus mit der sprache'      -> Voice verlassen
+#   'komm mal klar' / 'komm schon'                  -> Voice beitreten
+#   'weiter so'  -> fortsetzen    'nächste frage' / 'nächstes mal' -> skip
+# Lief keine Musik, bekam man statt Flos Antwort "Ich bin gerade in keinem
+# Sprachkanal." Jetzt gilt: hinter dem Steuerwort duerfen nur Fuellwoerter und
+# Satzzeichen stehen - oder eines der wenigen ECHTEN Objekte, die zu genau
+# dieser Aktion gehoeren ('skip den song', 'verlass den kanal'). Alles andere ist
+# ein Satz, und den beantwortet die KI.
+_FUELLWOERTER = frozenset(("bitte", "mal", "jetzt", "flo", "sofort", "doch",
+                           "schnell", "endlich", "halt"))
+
+# Die echten Objekte. Mit Artikel oder ohne; 'die musik' ja, 'die fresse' nie.
+_OBJ_MUSIK = (r"(?:(?:die|den|das|dem|der|diese[nmrs]?|the|this)\s+)?"
+              r"(?:musik|music|mucke|mukke|song|songs|lied|track|titel|wiedergabe|"
+              r"playback|gedudel)")
+_OBJ_KANAL = (r"(?:(?:den|dem|der|das|diesen|diesem|the|this)\s+)?"
+              r"(?:kanal|channel|voice|voicechannel|voicechat|sprachkanal|"
+              r"sprachchat|call|vc|talk)")
+
+# Steuerbefehle: (Aktion, Kopf-Regex am Satzanfang, erlaubte Objekte,
+# Merkmale). Reihenfolge = Prioritaet.
+# Wichtig: JEDES Kopf-Muster endet auf \b oder \w*\b. Ohne Wortgrenze reicht
+# das blosse PRAEFIX - und dann kaperten die Steuerbefehle ganz normale Saetze:
 # "verlass dich drauf" wurde zum Voice-Leave, und "rausschmeisen @wer" (die
 # gaengige Ein-s-Schreibweise) liess Flo den Sprachkanal verlassen und die
 # Musik abbrechen, statt die Person zu kicken.
+#
+# Merkmale:
+#   "ohne_mal" - 'mal' ist hier kein Fuellwort: 'nächstes mal' heisst "beim
+#                naechsten Mal", nicht "naechster Song".
+#   "alltag"   - das Wort ist AUCH Alltagsdeutsch ('Flo hau ab', 'Flo halt',
+#                'Flo weiter'). Laeuft gar keine Musik, ist es kein Musik-
+#                befehl, sondern eine Ansage an Flo - handle() gibt dann an
+#                die KI ab (siehe _NUR_MIT_MUSIK).
 _CONTROL = [
-    ("skip",   re.compile(r"^(?:skip|ueberspring\w*|überspring\w*|naechst\w*|nächst\w*|next)\b", re.I)),
-    ("pause",  re.compile(r"^(?:pause|pausier\w*)\b", re.I)),
-    ("resume", re.compile(r"^(?:resume|weiter|fortsetz\w*|weiterspiel\w*)\b", re.I)),
-    ("stop",   re.compile(r"^(?:stop|stopp|halt|aufhoer\w*|aufhör\w*|hoer auf|hör auf)\b", re.I)),
+    # 'skip 2' ging schon immer (und skippt einen) - die Zahl bleibt erlaubt.
+    ("skip",   re.compile(r"^(?:skip|ueberspring\w*|überspring\w*|next)\b", re.I),
+     rf"{_OBJ_MUSIK}|das|den|dies|this|it|[0-9]+(?:\s+(?:songs?|lieder|tracks?))?", ()),
+    ("skip",   re.compile(r"^(?:naechst\w*|nächst\w*)\b", re.I),
+     _OBJ_MUSIK, ("ohne_mal",)),
+    ("pause",  re.compile(r"^(?:pause|pausier\w*)\b", re.I), _OBJ_MUSIK, ()),
+    ("resume", re.compile(r"^(?:resume|fortsetz\w*|weiterspiel\w*)\b", re.I),
+     rf"(?:mit\s+)?{_OBJ_MUSIK}", ()),
+    ("resume", re.compile(r"^weiter\b", re.I),
+     rf"(?:mit\s+)?{_OBJ_MUSIK}|spielen|abspielen", ("alltag",)),
+    ("stop",   re.compile(r"^(?:stop|stopp)\b", re.I),
+     rf"(?:mit\s+)?{_OBJ_MUSIK}|alles", ()),
+    ("stop",   re.compile(r"^(?:aufhoer\w*|aufhör\w*|hoer auf|hör auf)\b", re.I),
+     rf"mit\s+{_OBJ_MUSIK}|zu\s+spielen|mit\s+dem\s+abspielen", ("alltag",)),
+    # 'halt' bekommt KEIN Objekt: 'halt die/dein ...' ist so gut wie nie die
+    # Musik, sondern 'halt die fresse'. Nur 'halt' (+ Fuellwort) stoppt.
+    ("stop",   re.compile(r"^halt\b", re.I), None, ("alltag",)),
     # Negative Vorschau gegen die Redewendung: "verlass dich drauf" /
     # "verlass dich nicht darauf" ist Gerede, kein Befehl zum Rausgehen.
     ("leave",  re.compile(r"^(?:leave|verlasse?(?!\s+(?:dich|euch|sich|mich|uns))|"
-                          r"geh raus|hau ab|raus|disconnect)\b", re.I)),
+                          r"disconnect)\b", re.I),
+     rf"(?:aus\s+)?{_OBJ_KANAL}", ()),
+    ("leave",  re.compile(r"^(?:geh raus|hau ab|raus)\b", re.I),
+     rf"aus\s+{_OBJ_KANAL}", ("alltag",)),
     # 'liste' zaehlt nur, wenn NICHTS dahinter steht: "liste mal auf, was du
     # kannst" ist eine Frage an die KI, keine Warteschlangen-Abfrage.
-    ("queue",  re.compile(r"^(?:queue\b|warteschlange\b|liste\s*$)", re.I)),
-    ("join",   re.compile(r"^(?:join\w*|connect|verbinde\w*|komm)\b", re.I)),
+    ("queue",  re.compile(r"^(?:queue\b|warteschlange\b|liste\s*$)", re.I),
+     r"(?:an)?zeigen|zeig|anzeigen|auflisten", ()),
+    ("join",   re.compile(r"^(?:join\w*|connect|verbinde\w*|komm)\b", re.I),
+     rf"rein|her|rüber|rueber|dazu|dich|(?:in\s+|zu\s+uns\s+in\s+){_OBJ_KANAL}"
+     rf"|{_OBJ_KANAL}", ()),
 ]
+
+# Markierung im Argument eines Steuerbefehls: das Wort ist auch Alltagsdeutsch
+# und gilt nur, wenn hier wirklich Musik laeuft (siehe handle()).
+_NUR_MIT_MUSIK = "nur_mit_musik"
+# Rueckgabe von _steuerbefehl: ein Steuerwort steht vorn, dahinter aber ein Satz.
+_EIN_SATZ = "ein_satz"
+
+
+def _restwoerter(rest, ohne_mal=False):
+    """Die Woerter hinter dem Befehlswort - ohne Satzzeichen, Emojis und
+    Fuellwoerter. Leere Liste = da stand nur Beiwerk ('stop!', 'skip bitte')."""
+    text = (rest or "").lower().replace("'", "").replace("’", "")
+    woerter = re.findall(r"[^\W_]+", text)
+    fuell = _FUELLWOERTER - {"mal"} if ohne_mal else _FUELLWOERTER
+    try:
+        # Flos eigener Name hinten dran ('stop, florian') ist Anrede, kein Inhalt.
+        fuell = fuell | {n.lower() for n in ai.names()}
+    except Exception:  # noqa: BLE001 - ohne Namensliste reicht 'flo'
+        pass
+    return [w for w in woerter if w not in fuell]
+
+
+def _steuerbefehl(cleaned):
+    """Steuerbefehl am Satzanfang?
+
+    Rueckgabe: (aktion, argument) fuer einen EINDEUTIGEN Befehl - das Argument
+    ist leer oder _NUR_MIT_MUSIK (Alltagswort, siehe _CONTROL). _EIN_SATZ, wenn
+    zwar ein Steuerwort vorn steht, dahinter aber ein ganzer Satz. None, wenn
+    gar kein Steuerwort vorn steht."""
+    for action, kopf, objekte, merkmale in _CONTROL:
+        m = kopf.match(cleaned)
+        if not m:
+            continue
+        rest = _restwoerter(cleaned[m.end():], ohne_mal="ohne_mal" in merkmale)
+        if rest and not (objekte and re.fullmatch(objekte, " ".join(rest), re.I)):
+            # KEIN anderes Steuerwort mehr probieren: 'halt die fresse' soll
+            # nicht bei einem spaeteren Muster doch noch durchrutschen.
+            return _EIN_SATZ
+        # Mit echtem Objekt ('raus aus dem voice') ist es eindeutig Musik.
+        alltag = "alltag" in merkmale and not rest
+        return (action, _NUR_MIT_MUSIK if alltag else "")
+    return None
+
+
 # "flo spiel <suchbegriff>" ohne Link -> YouTube-Suche. Nur Imperativ-Formen
 # (spiel/spiele/play), damit Fragen wie "spielst du..." NICHT als Befehl gelten.
 # Fuellwoerter nach dem Verb (mal/mir/uns/doch/bitte) werden weggeschluckt, damit
@@ -378,6 +566,20 @@ _NAT_PLAY_RES = [
     re.compile(r"^spiel(?:e)?(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+vor$", re.I),
     re.compile(r"^kannst\s+du(?:\s+mir|\s+uns)?(?:\s+mal)?\s+(.+?)\s+(?:ab)?spielen$", re.I),
 ]
+# --- Link im Satz: Abspiel-Auftrag oder Gespraech? (siehe _link_ist_befehl) --
+# Steht fuer die Pruefung an der Stelle des Links - ein Wort, das niemand tippt.
+_LINK_PLATZ = "floxlinkxplatz"
+# Neben einem NACKTEN Link darf nur das stehen ('Flo hier https://…').
+_LINK_BEIWERK_NACKT = frozenset(("hier",))
+# Kurze Abspiel-Verben vorn; dahinter nur Beiwerk ('schau mal <link> an',
+# 'pack <link> in die queue', 'leg auf <link>', 'hör dir das an <link>').
+_LINK_VERBEN = frozenset(("queue", "add", "abspielen", "schau", "guck", "hör",
+                          "hoer", "leg", "pack", "hau", "mach", "tu", "lass"))
+_LINK_BEIWERK = frozenset((
+    "hier", "dir", "euch", "uns", "mir", "das", "den", "die", "dieses", "diesen",
+    "diese", "video", "song", "lied", "track", "an", "auf", "rein", "ab", "raus",
+    "in", "queue", "warteschlange", "hinzu", "laufen"))
+
 # "mach die musik aus", "stell die mucke ab", "dreh die musik weg" -> stoppen.
 _NAT_STOP_RE = re.compile(
     r"^(?:mach|stell|dreh|schalt)\s+(?:die\s+|das\s+|den\s+)?"
@@ -402,14 +604,28 @@ _NAT_NOT_A_SONG = {
     "glücksrad", "gluecksrad", "don", "duell", "duel", "zahlenraten", "anagramm",
     "mathe", "reaktion", "soundboard", "spiel", "spiele", "game", "runde", "shop",
     "level", "daily", "quizduell", "sieben", "ssp", "rad", "bombe", "bomben",
+    # Was man einen Chatbot fragt, ist auch kein Song: 'hau mal nen witz raus'
+    # hat sonst YouTube nach "nen witz" durchsucht und das Ergebnis gespielt.
+    "witz", "witze", "spruch", "sprüche", "sprueche", "joke", "jokes", "fakt",
+    "fakten", "fact", "facts", "geschichte", "story", "gedicht", "zitat",
+    "weisheit", "roast", "beleidigung", "licht", "fernseher", "heizung",
 }
 
 # "flo spiel random" / "flo random" / "flo überrasch mich" -> Genre-Auswahl (Dropdown),
 # danach ein zufaelliger Song aus dem Genre. Fuellwoerter (mir/uns/mal/was ...) egal.
+#
+# Bis ans Satzende verankert (Gruppe 'rest', geprueft in parse_command):
+# 'random frage', 'überraschung!', 'zufall oder nicht' klappten sonst das
+# Genre-Menue auf, statt dass Flo antwortet. 'überrasch' braucht deshalb auch
+# eine Wortgrenze - 'überraschung' ist ein Ausruf, kein Befehl.
 _RANDOM_RE = re.compile(
     r"^(?:spiel(?:e|st)?\s+)?"
     r"(?:mir\s+|uns\s+|mal\s+|was\s+|etwas\s+|nen\s+|einen\s+|ne\s+|nal\s+)*"
-    r"(?:random|zufall\w*|überrasch\w*|ueberrasch\w*)\b", re.I)
+    r"(?:random|zufall(?:s?song|s?lied|smusik|s?track)?|"
+    r"(?:überrasch|ueberrasch)(?:e|t)?(?:\s+(?:mich|uns))?)"
+    r"(?P<rest>\W.*)?$", re.I | re.S)
+# Was hinter 'random' noch stehen darf ('random song', 'zufall musik').
+_RANDOM_OBJ = rf"(?:(?:einen|ein|nen|ne)\s+)?(?:{_OBJ_MUSIK}|genre)"
 
 # "flo lyrics [song]" / "songtext" -> Songtext des aktuellen Songs oder eines
 # genannten Titels. Gruppe 1 = optionaler Suchbegriff ("Kuenstler - Titel").
@@ -609,13 +825,20 @@ def verlauf_befehl(text):
 
 # "flo nochmal", "flo spiel nochmal 2", "flo repeat 3", "flo wiederhole" ->
 # den zuletzt (bzw. N-t-letzten) gespielten Song noch einmal spielen.
+#
+# Bis ans Satzende verankert (Gruppe 'rest', geprueft in parse_command). Vorher
+# reichte das Wort am Anfang: 'nochmal bitte' (sag's nochmal), 'noch mal zum
+# thema', 'wiederhol das', 'repeat after me' spielten alle den letzten Song,
+# statt dass Flo antwortet. Ohne 'spiel' davor darf deshalb NUR eine Nummer
+# folgen; mit 'spiel' ist klar, was gemeint ist, dann gehen auch Fuellwoerter.
 _REPLAY_RE = re.compile(
-    r"^(?:spiel(?:e|st)?\s+)?"
+    r"^(?P<spiel>spiel(?:e|st)?\s+)?"
     r"(?:nochmal(?:s)?|noch\s*mal|repeat|replay|wiederhol(?:e|en|st)?)"
     # 'nochmal nummer 3' / 'nochmal nr 3' / 'nochmal #3' - das Fuellwort davor
     # ist ueblich und wurde vorher als Suchtext gedeutet.
-    r"\s*(?:nummer|nr\.?|no\.?|numer|nummber|#)?"
-    r"\s*(\d+)?\b", re.I)
+    # [0-9] statt \d: \d faengt auch fremde Ziffernsysteme (siehe _LOOP_RE).
+    r"(?:\s*(?:nummer|nr\.?|no\.?|numer|nummber|#)?\s*(?P<nr>[0-9]+))?"
+    r"(?P<rest>\W.*)?$", re.I | re.S)
 
 # "flo loop", "flo loop 3", "flo loop aus", "flo dauerschleife 5" -> den
 # LAUFENDEN Song wiederholen.
@@ -638,6 +861,11 @@ _LOOP_RE = re.compile(
 # "flo lautstärke auf 30" sowie gaengige Tippfehler. Ohne Zahl -> aktuelle anzeigen.
 _VOLUME_UP_RE = re.compile(r"^(?:lauter|louder|lautr)\b", re.I)
 _VOLUME_DOWN_RE = re.compile(r"^(?:leiser|quieter|leise)\b", re.I)
+# Was hinter 'lauter'/'leiser' stehen darf. Dieselbe Regel wie bei den
+# Steuerwoertern: 'leise rieselt der schnee' und 'lauter als du' drehten sonst
+# an der Lautstaerke, statt dass Flo antwortet.
+_VOLUME_REL_OBJ = (rf"(?:{_OBJ_MUSIK}\s+)?(?:machen|drehen|stellen)|{_OBJ_MUSIK}"
+                   r"|[0-9]+")
 # Erstes Wort + optionale Zahl ("auf"/"%"/ohne Leerzeichen alles ok).
 # \d+ statt \d{1,3}: bei drei Ziffern wurde aus "ls 1000" ein 100-%-Befehl
 # (die Null fiel einfach weg) statt der erwarteten Klemmung auf 200 %.
@@ -756,8 +984,25 @@ class GuildPlayer:
     # Wie oft der Watchdog den LAUFENDEN Song schon wiederbelebt hat. Wird bei
     # jedem echten Songwechsel zurueckgesetzt (start ohne keep_speed).
     _neustart_versuche: int = 0
-    _last_reconnect: float = 0.0     # monotonic des letzten Reconnect-Versuchs (Loop-Bremse)
+    # monotonic des letzten Reconnect-Versuchs (Loop-Bremse). "Nie" ist -inf
+    # und NICHT 0.0: monotonic() zaehlt ab dem Hochfahren des Rechners. Mit 0.0
+    # hiess "nie" in den ersten 20 s nach einem Server-Neustart "gerade eben",
+    # und der erste Reconnect wurde stillschweigend verschluckt.
+    _last_reconnect: float = float("-inf")
     _reconnect_fails: int = 0        # aufeinanderfolgende fehlgeschlagene Reconnects (Aufgabe-Schwelle)
+    # Seit wann (monotonic) hier nichts mehr zu tun ist - kein Song, keine
+    # Warteschlange, keine Pause - oder nur noch Bots im Kanal hocken. None =
+    # es ist etwas zu tun. Nach MUSIC_IDLE_SEKUNDEN geht Flo raus (siehe heal).
+    _leer_seit: float | None = None
+    # Bis wann (monotonic) eine Trennung von UNS kommt: _fresh_connect und
+    # _reconnect werfen den alten Client selbst raus. Discord meldet das
+    # genauso wie einen Rauswurf durch einen Moderator - flo_getrennt muss den
+    # Unterschied kennen, sonst beendet jeder Reconnect die Musik.
+    _selbst_getrennt_bis: float = float("-inf")
+    # Bis wann flo_getrennt gerade nachsieht, ob das ein Rauswurf war. Solange
+    # haelt sich der Watchdog raus - sonst holt er Flo in genau dieser Luecke
+    # zurueck in den Kanal, aus dem ihn gerade jemand geworfen hat.
+    _rauswurf_bis: float = float("-inf")
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
     # damit nie zwei channel.connect() gleichzeitig laufen.
     _voice_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -789,12 +1034,30 @@ class GuildPlayer:
         NUR aus gehaltenem _voice_lock heraus aufrufen."""
         stale = self.voice or channel.guild.voice_client
         if stale is not None:
+            self._selbst_trennen_ankuendigen()
             try:
                 await asyncio.wait_for(stale.disconnect(force=True), timeout=10)
             except Exception:  # noqa: BLE001
                 pass
         self.voice = None
         self.voice = await channel.connect(self_deaf=True, reconnect=True)
+
+    def _selbst_trennen_ankuendigen(self):
+        """Gleich trennen WIR selbst (Neuaufbau) - flo_getrennt soll das nicht
+        fuer einen Rauswurf halten. 30 s reichen fuer Discords Meldung."""
+        self._selbst_getrennt_bis = time.monotonic() + 30.0
+
+    def sitzung_offen(self):
+        """Laeuft hier eine Musik-Sitzung - oder soll eine laufen?"""
+        return (self.voice is not None or self.active_channel_id is not None
+                or bool(self.queue) or self.current is not None)
+
+    def nichts_zu_tun(self):
+        """Kein Song, keine Pause, nichts in der Warteschlange - oder nur eine,
+        die _advance aufgegeben hat und die seitdem niemand angestossen hat."""
+        return (self.current is None and not self.ist_pausiert()
+                and not self._advancing
+                and (not self.queue or self._advance_aufgegeben))
 
     def is_active(self):
         return self.voice is not None and (self.voice.is_playing() or self.voice.is_paused())
@@ -809,16 +1072,9 @@ class GuildPlayer:
         slowed+reverb)."""
         if self.voice is None or not self.voice.is_connected():
             raise RuntimeError("keine Voice-Verbindung")
-        if not keep_speed:
-            # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
-            # einzeln gewaehlt. Und er startet spielend: eine alte Pause-Absicht
-            # gilt nur fuer den Song, bei dem sie gesetzt wurde.
-            self.speed = 1.0
-            self.pausiert = False
-            # Neuer Song -> die Wiederbelebungs-Versuche gelten wieder frisch.
-            # (Der Watchdog-Neustart laeuft mit keep_speed=True und zaehlt hier
-            # bewusst NICHT zurueck, sonst koennte er sich ewig selbst verlaengern.)
-            self._neustart_versuche = 0
+        # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
+        # einzeln gewaehlt (keep_speed nur beim Neustart DESSELBEN Songs).
+        speed = self.speed if keep_speed else 1.0
         # Reihenfolge der Eingangs-Optionen (alles VOR '-i', sonst ignoriert
         # ffmpeg sie): erst die Client-Kennung, dann der Seek, dann der Rest.
         vorne = [track.ffmpeg_vorspann()]
@@ -829,17 +1085,38 @@ class GuildPlayer:
         vorne.append(_FFMPEG_BEFORE)
         before = " ".join(t for t in vorne if t)
         opts = _FFMPEG_OPTS
-        af = _build_audio_filter(self.speed)
+        af = _build_audio_filter(speed)
         if af is not None:
             # Speed-up: atempo (Tonhoehe bleibt). Slow: slowed + reverb (siehe _build_audio_filter).
             opts = f"{_FFMPEG_OPTS} -filter:a {af}"
         source = discord.FFmpegPCMAudio(
             track.stream_url, before_options=before, options=opts
         )
+        # Der Zustand wird erst UEBERNOMMEN, wenn play() geklappt hat - vorher
+        # stand hier alles VOR voice.play() (AUDIT 'music.py:691'). Warf
+        # play(), hiess der Player trotzdem "spielt: <track>": der Watchdog
+        # hielt das fuer einen Zombie und startete den nie gelaufenen Song
+        # immer wieder, und die hochgezaehlte Generation hatte den
+        # after-Callback eines noch laufenden Songs entwertet. Die Generation
+        # MUSS aber vor play() stehen (der Callback kann sofort feuern) - also
+        # setzen und bei einem Fehler alles zuruecknehmen.
+        vorher = (self.current, self._played, self._seg_start, self._stall_ticks,
+                  self._play_gen, self.speed, self.pausiert, self._neustart_versuche,
+                  self._leer_seit)
         self.current = track
         self._played = seek          # Positions-Uhr auf die Startstelle setzen
         self._seg_start = time.monotonic()
         self._stall_ticks = 0        # frisch gestartet (buffert evtl. kurz) -> kein Zombie-Alarm
+        self._leer_seit = None       # es laeuft wieder was -> Leerlauf-Uhr aus
+        self.speed = speed
+        if not keep_speed:
+            # Und er startet spielend: eine alte Pause-Absicht gilt nur fuer
+            # den Song, bei dem sie gesetzt wurde.
+            self.pausiert = False
+            # Neuer Song -> die Wiederbelebungs-Versuche gelten wieder frisch.
+            # (Der Watchdog-Neustart laeuft mit keep_speed=True und zaehlt hier
+            # bewusst NICHT zurueck, sonst koennte er sich ewig selbst verlaengern.)
+            self._neustart_versuche = 0
         # Jede Wiedergabe bekommt eine eigene Generation. Der after-Callback merkt
         # sie sich fest - so kann ein verspaeteter Callback eines bereits ersetzten
         # Players (z. B. nach einem Tempo-Wechsel) nichts mehr ausloesen.
@@ -854,6 +1131,9 @@ class GuildPlayer:
             # play() wirft (z. B. 'Already playing' / 'Not connected') -> der schon
             # gespawnte ffmpeg-Prozess muss beendet werden, sonst bleibt ein Zombie.
             source.cleanup()
+            (self.current, self._played, self._seg_start, self._stall_ticks,
+             self._play_gen, self.speed, self.pausiert, self._neustart_versuche,
+             self._leer_seit) = vorher
             raise
         if not keep_speed:
             # Jeden NEU gestarteten Song in den Verlauf legen (fuer 'flo nochmal').
@@ -1123,6 +1403,8 @@ class GuildPlayer:
         self._seg_start = None
         self._played = 0.0
         self.active_channel_id = None   # bewusst raus -> Watchdog soll NICHT zurueckholen
+        self._leer_seit = None
+        self._advance_aufgegeben = False
         self._session_gen += 1          # alles, was noch laeuft, gehoert zur ALTEN Sitzung
         self._stall_ticks = 0
         self._frozen_ticks = 0
@@ -1302,9 +1584,13 @@ class GuildPlayer:
         laeuft oder schon eine voice-Op (connect/reconnect/Tempo) aktiv ist."""
         if self.active_channel_id is None or self._advancing or self._voice_lock.locked():
             return
+        if time.monotonic() < self._rauswurf_bis:
+            return      # flo_getrennt sieht gerade nach, ob ihn jemand rausgeworfen hat
         channel = guild.get_channel(self.active_channel_id)
         if not isinstance(channel, discord.VoiceChannel):
             self.active_channel_id = None   # Kanal gibt es nicht mehr -> aufgeben
+            return
+        if await self._leerlauf(channel):
             return
         # Realen Voice-Client bestimmen (unser Objekt KANN abgehaengt sein).
         vc = self.voice if (self.voice and self.voice.is_connected()) else guild.voice_client
@@ -1385,6 +1671,35 @@ class GuildPlayer:
                      len(self.queue))
             await self._advance()
 
+    async def _leerlauf(self, channel):
+        """Leerlauf-Uhr des Watchdogs. True = heal() ist hier fertig.
+
+        Nichts mehr zu tun (kein Song, keine Warteschlange, keine Pause) oder
+        nur noch Bots im Kanal: dann laeuft die Uhr, und nach
+        MUSIC_IDLE_SEKUNDEN geht Flo von selbst. Ohne das blieb er fuer immer
+        drin - und weil der Watchdog ihn "am Leben hielt", holte er ihn sogar
+        zurueck, wenn ihn jemand rausgeworfen hatte."""
+        leer = self.nichts_zu_tun()
+        allein = _nur_bots_im_kanal(channel)
+        if not (leer or allein) or MUSIC_IDLE_SEKUNDEN <= 0:
+            self._leer_seit = None
+            return False
+        jetzt = time.monotonic()
+        if self._leer_seit is None:
+            self._leer_seit = jetzt
+        if jetzt - self._leer_seit >= MUSIC_IDLE_SEKUNDEN:
+            log.info("Musik: seit %.0f s %s in '%s' - verlasse den Sprachkanal.",
+                     jetzt - self._leer_seit,
+                     "nichts zu tun" if leer else "keiner mehr da", channel.name)
+            await self.disconnect()
+            if not leer:
+                # Es lief noch was - dann sagen, warum es jetzt still ist.
+                await self._sag("🔇 Keiner mehr da, der zuhört. Musik aus, ich bin raus.")
+            return True
+        # Nichts zu spielen = nichts zu heilen. Vor allem KEIN Reconnect, nur um
+        # in einem Kanal herumzusitzen, aus dem die Verbindung gerade gefallen ist.
+        return leer
+
     async def _reconnect(self, channel):
         """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
         laufenden Song fort. Loop-gebremst (Mindestabstand) und mit Aufgabe-
@@ -1407,6 +1722,7 @@ class GuildPlayer:
             self._play_gen += 1   # evtl. noch fliegende after-Callbacks entwerten
             # alte/halbtote Verbindung hart wegraeumen
             old = self.voice or channel.guild.voice_client
+            self._selbst_trennen_ankuendigen()
             if old is not None:
                 try:
                     await asyncio.wait_for(old.disconnect(force=True), timeout=10)
@@ -2144,6 +2460,14 @@ class Music(FeatureBasis):
             e.description = desc
         return e
 
+    def _voice_kaputt(self, exc, wo):
+        """Die EINE Antwort, wenn player.connect scheitert - an jeder Stelle
+        gleich. Der echte Grund (Rechte, Zeitueberschreitung, fehlendes davey)
+        gehoert ins Log, nicht in den Chat."""
+        log.error("Voice-Connect (%s) fehlgeschlagen: %s: %s", wo,
+                  type(exc).__name__, exc)
+        return self._embed(VOICE_KAPUTT, color=_COL_ERR)
+
     def _build_audio_filter(self, speed):
         """Baut die -filter:a-Kette fuer die gewuenschte Geschwindigkeit.
 
@@ -2190,10 +2514,9 @@ class Music(FeatureBasis):
         if shutil.which("ffmpeg") is None:
             log.warning("Musik-Feature aus: 'ffmpeg' nicht gefunden (z. B. 'apt install ffmpeg').")
             return False
-        try:  # Voice braucht PyNaCl.
-            import nacl  # noqa: F401
-        except ImportError:
-            log.warning("Musik-Feature aus: Paket 'PyNaCl' ist nicht installiert (Voice).")
+        fehlt = voice_fehlt()
+        if fehlt:
+            log.warning("Musik-Feature aus: %s", fehlt)
             return False
 
         self._enabled = True
@@ -2339,14 +2662,80 @@ class Music(FeatureBasis):
             await player.heal(guild)
 
     def is_voice_busy(self, guild_id):
-        """True, wenn die Musik den Voice-Channel dieses Servers belegt - auch in
-        Songpausen, beim Tempo-Wechsel oder waehrend eines Reconnects. voicegags
-        fragt das, um nicht in den Musik-Voice-Client reinzugraetschen."""
+        """True, wenn die Musik den Voice-Channel dieses Servers WIRKLICH belegt:
+        es laeuft ein Song, er ist pausiert, es wartet etwas in der Schlange oder
+        gerade laeuft ein Songwechsel. Auch beim Tempo-Wechsel und waehrend eines
+        Reconnects - da steht der Song ja noch in 'current'. voicegags fragt das,
+        um nicht in den Musik-Voice-Client reinzugraetschen.
+
+        Vorher reichte es, dass Flo in einem Kanal sein SOLLTE. Nach dem letzten
+        Song blieb das fuer immer so - und Soundboard und TTS sagten bis zum
+        Neustart "Gerade läuft was im Voice", obwohl da nur Stille war."""
         player = self._players.get(guild_id)
         if player is None:
             return False
-        if player.active_channel_id is not None:
-            return True   # Bot soll in einem Kanal sein (Session laeuft) -> belegt
+        if (player.current is not None or player.queue or player.ist_pausiert()
+                or player._advancing):
+            return True
+        vc = player.voice
+        return vc is not None and (vc.is_playing() or vc.is_paused())
+
+    async def flo_getrennt(self, guild_id, channel_id=None):
+        """Flo ist aus dem Sprachkanal geflogen - und zwar nicht durch uns.
+
+        bot.on_voice_state_update ruft das, wenn Flo selbst den Kanal verlassen
+        hat (after.channel is None). Vorher hat der Watchdog ihn einfach wieder
+        reingeholt, samt Musik: ein Moderator trennt Flo, 15 s spaeter sitzt er
+        wieder drin. Jetzt gilt der Rauswurf - Warteschlange und Loop weg,
+        active_channel_id aus, der Watchdog laesst ihn draussen.
+
+        Nicht jede Trennung ist ein Rauswurf, deshalb wird erst geprueft:
+          - 'Flo stop' hat active_channel_id schon vorher auf None gesetzt;
+          - _fresh_connect/_reconnect haben sich angekuendigt;
+          - discord.py trennt bei manchen Aussetzern selbst und verbindet neu -
+            dann haelt der Server den Voice-Client aber weiter fest. Das zeigt
+            sich erst nach einer kurzen Frist (VOICE_RAUSWURF_FRIST).
+        guild_id darf auch das Guild-Objekt selbst sein.
+        Rueckgabe: True = als Rauswurf behandelt."""
+        gid = int(getattr(guild_id, "id", guild_id) or 0)
+        player = self._players.get(gid)
+        if player is None or player.active_channel_id is None:
+            return False          # nichts offen, oder es war unser eigenes 'stop'
+        if time.monotonic() < player._selbst_getrennt_bis:
+            return False          # wir bauen gerade selbst neu auf
+        player._rauswurf_bis = time.monotonic() + VOICE_RAUSWURF_FRIST + 10.0
+        try:
+            await asyncio.sleep(VOICE_RAUSWURF_FRIST)
+            if player.active_channel_id is None:
+                return False      # inzwischen selbst beendet
+            if self._voice_client_lebt(guild_id, gid, player):
+                return False      # discord.py hat ihn noch - nur ein Aussetzer
+            war_musik = player.current is not None or bool(player.queue)
+            log.warning("Flo wurde aus dem Sprachkanal %s geworfen (Server %s) - "
+                        "Musik aus, Warteschlange (%d) geleert, bleibt draussen.",
+                        channel_id or player.active_channel_id, gid, len(player.queue))
+            await player.disconnect()
+            if war_musik:
+                await player._sag("Rausgekickt, echt jetzt? Na gut – Musik aus, "
+                                  "Schlange weg. Viel Spaß mit der Stille.")
+            return True
+        finally:
+            player._rauswurf_bis = float("-inf")
+
+    @staticmethod
+    def _voice_client_lebt(guild_ref, gid, player):
+        """Haelt discord.py fuer diesen Server noch einen Voice-Client?
+
+        Nach einem echten Rauswurf raeumt discord.py ihn weg (guild.voice_client
+        wird None); bei seinem eigenen Neuaufbau bleibt er stehen."""
+        guild = guild_ref if hasattr(guild_ref, "voice_client") else None
+        if guild is None:
+            import laufzeit
+            client = laufzeit.client
+            guild = client.get_guild(gid) if client is not None else None
+        if guild is not None:
+            return guild.voice_client is not None
+        # Kein Server-Objekt zu bekommen (Tests, Werkzeuge): unser eigener Client.
         return player.voice is not None and player.voice.is_connected()
 
     # --- yt-dlp / Spotify Helfer ---------------------------------------------
@@ -3174,6 +3563,86 @@ class Music(FeatureBasis):
         (so gehen Musik-Befehle auch mit dem Alias 'Florian', nicht nur 'Flo')."""
         return ai.strip_lead(text)
 
+    def _link_ist_befehl(self, text):
+        """Ist ein Musik-Link in diesem Text ein ABSPIEL-Auftrag - oder nur
+        Gespraech ueber einen Link?
+
+        Vorher reichte der Link allein: 'Flo was hältst du von dem Video
+        https://youtu.be/…' spielte das Video ab (oder bekam "Geh erst in einen
+        Sprachkanal"), statt dass Flo seine Meinung sagt. Jetzt zaehlt ein Link
+        nur, wenn ausser ihm und dem Botnamen nichts dasteht (nackter Link), wenn
+        ein Abspiel-Verb vorn steht ('spiel <link>') oder er in einer der
+        natuerlichen Abspiel-Formen steckt ('mach mal <link> an', 'schau mal
+        <link> an'). In allen anderen Faellen beantwortet die KI den Satz."""
+        rest = self._clean_lead(_URL_RE.sub(f" {_LINK_PLATZ} ", text or ""))
+        if _PLAY_TEXT_RE.match(rest):
+            return True
+        for pat in _NAT_PLAY_RES:
+            nm = pat.match(rest)
+            if nm and _LINK_PLATZ in nm.group(1).lower():
+                return True
+        woerter = [w for w in _restwoerter(rest) if w != _LINK_PLATZ]
+        if all(w in _LINK_BEIWERK_NACKT for w in woerter):
+            return True
+        return (woerter[0] in _LINK_VERBEN
+                and all(w in _LINK_BEIWERK for w in woerter[1:]))
+
+    @staticmethod
+    def _link_aktion(url):
+        """Welche Aktion gehoert zu diesem (gesaeuberten) Link? None = kein
+        Musik-Link (dann bleibt es beim Text-Befehl bzw. bei der KI)."""
+        low = url.lower()
+        if _SPOTIFY_KURZ_RE.match(url):
+            # Kurzlink der Handy-App - das Ziel kennt erst der Redirect.
+            return "spotify_kurz"
+        m = _SPOTIFY_LIST_RE.search(url)
+        if m:
+            kind = (m.group(1) or m.group(2) or "").lower()
+            return "spotify_album" if kind == "album" else "spotify_playlist"
+        if "youtube.com" in low or "youtu.be" in low:
+            # Benennt der Link ein VIDEO, ist das Video gemeint - auch wenn
+            # eine Playlist danebensteht.
+            #
+            # Vorher lief das andersherum, und das war der Hauptgrund fuer
+            # "YouTube-Links gehen nur halb": wer einen Song AUS einer
+            # Playlist teilt, schickt watch?v=DERSONG&list=PL...&index=17 -
+            # und Flo spielte dann Track 1 der Playlist, also einen ganz
+            # anderen Song. Bei list=WL (Spaeter ansehen) oder list=LL
+            # (Mag ich) kam sogar gar nichts: an diese Listen kommt der Bot
+            # nicht heran, und der Fehler beendete den ganzen Befehl.
+            #
+            # Eine reine Playlist-Adresse (youtube.com/playlist?list=...)
+            # benennt kein Video und wird weiterhin als Liste gespielt.
+            lm = _YT_LIST_RE.search(url)
+            if (lm and not lm.group(1).upper().startswith("RD")
+                    and not _YT_VIDEO_RE.search(url)):
+                return "yt_playlist"
+            return "play"
+        if _SPOTIFY_TRACK_RE.search(url):
+            return "play"
+        if _AUDIO_DATEI_RE.search(url):
+            # Direkter Audio-Link (.mp3/.m4a/...) - den kann FFmpeg selbst
+            # abspielen. Vorher landete auch der in der YouTube-TEXTSUCHE,
+            # also in einer Suche nach der URL-Zeichenkette. Bewusst NUR
+            # bei eindeutigen Audio-Endungen: eine beliebige Webseite im
+            # Satz ("was haeltst du von https://…") darf die Musik nicht
+            # an sich reissen.
+            return "play"
+        if "spotify.com" in low or low.startswith("spotify:"):
+            # Auffangnetz: JEDE Spotify-Adresse, die keiner der Zweige
+            # oben kennt (Podcast-Episode, Show, Kuenstler-Seite, die alte
+            # /user/<name>/playlist/-Form), landete bisher in der
+            # YouTube-TEXTSUCHE - Flo suchte woertlich nach der URL und
+            # spielte irgendein fremdes Video. Lieber ehrlich sagen, dass
+            # es nicht geht.
+            return "spotify_unbekannt"
+        if _SC_RE.match(url):
+            # Set -> Playlist, alles andere ganz normal als Track. Ein
+            # Kurzlink (on.soundcloud.com) KANN auch ein Set sein - das
+            # sieht man erst nach dem Redirect; das faengt _extract ab.
+            return "sc_playlist" if _SC_SET_RE.match(url) else "play"
+        return None
+
     def parse_command(self, text):
         """Erkennt einen Musik-Befehl. Rueckgabe: (aktion, argument) oder None.
 
@@ -3181,59 +3650,16 @@ class Music(FeatureBasis):
                   yt_playlist, sc_playlist,
                   volume, skip, pause, resume, stop, leave, queue.
         """
-        # 1) Link in der Nachricht? (staerkstes Signal)
-        for url in _URL_RE.findall(text):
-            url = _url_saeubern(url)
-            low = url.lower()
-            if _SPOTIFY_KURZ_RE.match(url):
-                # Kurzlink der Handy-App - das Ziel kennt erst der Redirect.
-                return ("spotify_kurz", url)
-            m = _SPOTIFY_LIST_RE.search(url)
-            if m:
-                kind = (m.group(1) or m.group(2) or "").lower()
-                return ("spotify_album" if kind == "album" else "spotify_playlist", url)
-            if "youtube.com" in low or "youtu.be" in low:
-                # Benennt der Link ein VIDEO, ist das Video gemeint - auch wenn
-                # eine Playlist danebensteht.
-                #
-                # Vorher lief das andersherum, und das war der Hauptgrund fuer
-                # "YouTube-Links gehen nur halb": wer einen Song AUS einer
-                # Playlist teilt, schickt watch?v=DERSONG&list=PL...&index=17 -
-                # und Flo spielte dann Track 1 der Playlist, also einen ganz
-                # anderen Song. Bei list=WL (Spaeter ansehen) oder list=LL
-                # (Mag ich) kam sogar gar nichts: an diese Listen kommt der Bot
-                # nicht heran, und der Fehler beendete den ganzen Befehl.
-                #
-                # Eine reine Playlist-Adresse (youtube.com/playlist?list=...)
-                # benennt kein Video und wird weiterhin als Liste gespielt.
-                lm = _YT_LIST_RE.search(url)
-                if (lm and not lm.group(1).upper().startswith("RD")
-                        and not _YT_VIDEO_RE.search(url)):
-                    return ("yt_playlist", url)
-                return ("play", url)
-            if _SPOTIFY_TRACK_RE.search(url):
-                return ("play", url)
-            if _AUDIO_DATEI_RE.search(url):
-                # Direkter Audio-Link (.mp3/.m4a/...) - den kann FFmpeg selbst
-                # abspielen. Vorher landete auch der in der YouTube-TEXTSUCHE,
-                # also in einer Suche nach der URL-Zeichenkette. Bewusst NUR
-                # bei eindeutigen Audio-Endungen: eine beliebige Webseite im
-                # Satz ("was haeltst du von https://…") darf die Musik nicht
-                # an sich reissen.
-                return ("play", url)
-            if "spotify.com" in low or low.startswith("spotify:"):
-                # Auffangnetz: JEDE Spotify-Adresse, die keiner der Zweige
-                # oben kennt (Podcast-Episode, Show, Kuenstler-Seite, die alte
-                # /user/<name>/playlist/-Form), landete bisher in der
-                # YouTube-TEXTSUCHE - Flo suchte woertlich nach der URL und
-                # spielte irgendein fremdes Video. Lieber ehrlich sagen, dass
-                # es nicht geht.
-                return ("spotify_unbekannt", url)
-            if _SC_RE.match(url):
-                # Set -> Playlist, alles andere ganz normal als Track. Ein
-                # Kurzlink (on.soundcloud.com) KANN auch ein Set sein - das
-                # sieht man erst nach dem Redirect; das faengt _extract ab.
-                return ("sc_playlist" if _SC_SET_RE.match(url) else "play", url)
+        # 1) Link in der Nachricht? (staerkstes Signal) - aber nur, wenn er
+        #    auch zum ABSPIELEN dasteht (siehe _link_ist_befehl).
+        for roh in _URL_RE.findall(text):
+            url = _url_saeubern(roh)
+            aktion = self._link_aktion(url)
+            if aktion is None:
+                continue           # fremder Link - vielleicht kommt noch ein Musik-Link
+            if not self._link_ist_befehl(text):
+                return None        # Gespraech UEBER einen Link -> die KI antwortet
+            return (aktion, url)
 
         cleaned = self._clean_lead(text)
         if not cleaned:
@@ -3249,7 +3675,15 @@ class Music(FeatureBasis):
         #     als Suche nach "nochmal" gedeutet.)
         rm = _REPLAY_RE.match(cleaned)
         if rm:
-            return ("replay", rm.group(1) or "1")
+            rest = rm.group("rest") or ""
+            # Ohne 'spiel' davor: hinter 'nochmal' darf GAR NICHTS stehen
+            # ausser der Nummer - 'nochmal bitte' ist "sag's nochmal". Passt es
+            # nicht, geht es unten weiter ('spiel nochmal despacito' ist eine
+            # Suche, 'wiederhol das' landet bei der KI).
+            eindeutig = (not _restwoerter(rest) if rm.group("spiel")
+                         else not re.findall(r"[^\W_]+", rest))
+            if eindeutig:
+                return ("replay", rm.group("nr") or "1")
 
         # 2b) Loop? MUSS nach dem Replay stehen - sonst nichts, die Woerter
         #     ueberschneiden sich nicht.
@@ -3257,24 +3691,33 @@ class Music(FeatureBasis):
         if lo:
             return ("loop", (lo.group(1) or lo.group(2) or "").lower())
 
-        # 2) Steuerbefehl am Satzanfang?
-        for action, pattern in _CONTROL:
-            if pattern.match(cleaned):
-                return (action, "")
+        # 2) Steuerbefehl am Satzanfang - und NUR, wenn dahinter kein Satz steht.
+        steuer = _steuerbefehl(cleaned)
+        if steuer == _EIN_SATZ:
+            return None
+        if steuer is not None:
+            return steuer
 
         # 3) Lautstaerke? Relativ (lauter/leiser) oder absolut ("ls 30", "vol 80",
         #    Tippfehler ...). Ohne Zahl -> aktuelle Lautstaerke anzeigen ("?").
-        if _VOLUME_UP_RE.match(cleaned):
-            return ("volume", "+")
-        if _VOLUME_DOWN_RE.match(cleaned):
-            return ("volume", "-")
+        for muster, richtung in ((_VOLUME_UP_RE, "+"), (_VOLUME_DOWN_RE, "-")):
+            vr = muster.match(cleaned)
+            if vr:
+                rest = _restwoerter(cleaned[vr.end():])
+                if rest and not re.fullmatch(_VOLUME_REL_OBJ, " ".join(rest), re.I):
+                    return None     # 'leise rieselt der schnee'
+                return ("volume", richtung)
         vm = _VOLUME_ARG_RE.match(cleaned)
         if vm and self._is_volume_word(vm.group(1)):
             return ("volume", vm.group(2) or "?")
 
         # 3b) "random" / "zufall" / "überrasch mich" -> Genre-Auswahl per Dropdown.
         #     (vor der Freitext-Suche, sonst wuerde nach "random" gesucht.)
-        if _RANDOM_RE.match(cleaned):
+        zm = _RANDOM_RE.match(cleaned)
+        if zm:
+            rest = _restwoerter(zm.group("rest") or "")
+            if rest and not re.fullmatch(_RANDOM_OBJ, " ".join(rest), re.I):
+                return None         # 'random frage', 'zufall oder nicht'
             return ("random", "")
 
         # 3c) "lyrics [song]" / "songtext [song]" -> Songtext (aktueller Song oder
@@ -3372,11 +3815,8 @@ class Music(FeatureBasis):
         track.requested_by = interaction.user.display_name
         try:
             await player.connect(voice_state.channel)
-        except (discord.ClientException, RuntimeError) as exc:
-            log.error("Verlauf-Connect fehlgeschlagen: %s", exc)
-            await interaction.followup.send(embed=self._embed(
-                "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                color=_COL_ERR))
+        except VOICE_CONNECT_FEHLER as exc:
+            await interaction.followup.send(embed=self._voice_kaputt(exc, "Verlauf"))
             return
         if player.is_active():
             self._einreihen(player, track)
@@ -3430,11 +3870,8 @@ class Music(FeatureBasis):
         track.requested_by = interaction.user.display_name
         try:
             await player.connect(voice_state.channel)
-        except (discord.ClientException, RuntimeError) as exc:
-            log.error("Random-Connect fehlgeschlagen: %s", exc)
-            await interaction.followup.send(embed=self._embed(
-                "Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                color=_COL_ERR))
+        except VOICE_CONNECT_FEHLER as exc:
+            await interaction.followup.send(embed=self._voice_kaputt(exc, "Random"))
             return
 
         # Auswahl-Menue zur Bestaetigung umschreiben (Dropdown weg).
@@ -3591,10 +4028,8 @@ class Music(FeatureBasis):
         """
         try:
             await player.connect(channel)
-        except discord.ClientException as exc:
-            log.error("Voice-Connect fehlgeschlagen: %s", exc)
-            return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                               color=_COL_ERR)
+        except VOICE_CONNECT_FEHLER as exc:
+            return self._voice_kaputt(exc, "Mehrfach")
 
         deckel = max_queue(player.guild_id)
         space = deckel - len(player.queue)
@@ -3859,6 +4294,17 @@ class Music(FeatureBasis):
         if cmd is None:
             return None
         action, arg = cmd
+        if arg == _NUR_MIT_MUSIK:
+            # 'Flo halt', 'Flo hau ab', 'Flo weiter' sind auch Alltagsdeutsch.
+            # Laeuft hier keine Musik, ist das eine Ansage an Flo und keine an
+            # den Player - dann antwortet die KI, statt "Ich bin gerade in
+            # keinem Sprachkanal." Und zwar BEVOR ein Player angelegt wird.
+            arg = ""
+            vorhanden = self._players.get(message.guild.id)
+            if vorhanden is None or not vorhanden.sitzung_offen():
+                return None
+            if action == "resume" and not (vorhanden.ist_pausiert() or vorhanden.queue):
+                return None
         player = self._player_for(message.guild.id)
         player.text_channel = message.channel
 
@@ -4098,14 +4544,8 @@ class Music(FeatureBasis):
                 return self._embed("Geh erst in einen Sprachkanal, dann komme ich dazu.", color=_COL_ERR)
             try:
                 await player.connect(voice_state.channel)
-            except RuntimeError as exc:  # discord.py >= 2.7 ohne davey
-                log.error("Voice nicht moeglich (join): %s", exc)
-                return self._embed("Voice ist hier gerade nicht eingerichtet "
-                                   "(auf dem Server fehlt vermutlich `davey`).", color=_COL_ERR)
-            except discord.ClientException as exc:
-                log.error("Voice-Connect (join) fehlgeschlagen: %s", exc)
-                return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                                   color=_COL_ERR)
+            except VOICE_CONNECT_FEHLER as exc:
+                return self._voice_kaputt(exc, "join")
             return self._embed(f"Bin da in **{voice_state.channel.name}**. "
                                f"Sag z. B. `{self._bot_name} spiel <song>`.",
                                title="👋  Eingeklinkt", color=_COL_PLAY)
@@ -4258,10 +4698,8 @@ class Music(FeatureBasis):
 
         try:
             await player.connect(voice_state.channel)
-        except discord.ClientException as exc:
-            log.error("Voice-Connect fehlgeschlagen: %s", exc)
-            return self._embed("Ich komme gerade nicht in den Sprachkanal (Rechte? Schon verbunden?).",
-                               color=_COL_ERR)
+        except VOICE_CONNECT_FEHLER as exc:
+            return self._voice_kaputt(exc, "play")
 
         # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
         # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
@@ -4308,6 +4746,7 @@ is_enabled = instance.is_enabled
 _player_for = instance._player_for
 heal_voice = instance.heal_voice
 is_voice_busy = instance.is_voice_busy
+flo_getrennt = instance.flo_getrennt
 _extract = instance._extract
 _resolve_input = instance._resolve_input
 _resolve_track = instance._resolve_track

@@ -832,6 +832,286 @@ def test_musik_liegengebliebene_warteschlange_wird_angestossen():
 
 
 
+def _kanal_mit(leute):
+    """Echter discord.VoiceChannel (heal prueft per isinstance), dessen
+    Mitgliederliste der Test bestimmt."""
+    import discord
+
+    class Kanal(discord.VoiceChannel):
+        members = property(lambda self: list(leute))
+
+    ch = object.__new__(Kanal)
+    ch.id = 42
+    ch.name = "Musik"
+    return ch
+
+
+def test_musik_geht_nach_leerlauf_von_selbst():
+    """Flo blieb fuer immer im Sprachkanal.
+
+    Lief die Warteschlange leer, setzte _advance nur current=None - der
+    Watchdog hielt ihn weiter im Kanal, und Soundboard/TTS sagten bis zum
+    Neustart "Gerade läuft was im Voice". Jetzt laeuft eine Leerlauf-Uhr:
+    nichts zu tun ODER nur noch Bots im Kanal -> nach MUSIC_IDLE_SEKUNDEN raus."""
+    import time as _t
+    import music
+    mensch = SimpleNamespace(bot=False)
+    flo = SimpleNamespace(bot=True)
+    anderer_bot = SimpleNamespace(bot=True)
+    guild = SimpleNamespace(id=1, voice_client=None)
+
+    # 1) Nichts mehr zu tun, Leute sind noch da: Uhr laeuft, dann raus.
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        guild.get_channel = lambda _c: _kanal_mit([flo, mensch])
+        player.current = None
+        asyncio.run(player.heal(guild))
+        assert player._leer_seit is not None, "Leerlauf-Uhr laeuft nicht"
+        assert player.active_channel_id == 42, "zu frueh gegangen"
+        player._leer_seit = _t.monotonic() - music.MUSIC_IDLE_SEKUNDEN - 1
+        asyncio.run(player.heal(guild))
+        assert player.active_channel_id is None and player.voice is None, \
+            "nach dem Leerlauf nicht gegangen"
+    finally:
+        aufraeumen()
+
+    # 2) Musik laeuft, aber nur noch Bots hoeren zu: auch raus - mit Ansage.
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+
+    async def sag(text):
+        gesagt.append(text)
+
+    player._sag = sag
+    try:
+        guild.get_channel = lambda _c: _kanal_mit([flo, anderer_bot])
+        player.start(_track("A"))
+        player.queue.append(_track("B"))
+        voice.takt(5)
+        asyncio.run(player.heal(guild))
+        assert player.current is not None, "sofort abgebrochen statt Uhr zu starten"
+        player._leer_seit = _t.monotonic() - music.MUSIC_IDLE_SEKUNDEN - 1
+        asyncio.run(player.heal(guild))
+        assert player.active_channel_id is None and not player.queue
+        assert gesagt and "raus" in gesagt[0], gesagt
+    finally:
+        aufraeumen()
+
+    # 3) Musik laeuft, ein Mensch hoert zu: die Uhr bleibt aus.
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        guild.get_channel = lambda _c: _kanal_mit([flo, mensch])
+        player.start(_track("A"))
+        for _ in range(3):
+            voice.takt(5)
+            asyncio.run(player.heal(guild))
+        assert player._leer_seit is None
+        # Mitgliederliste unlesbar (Cache fehlt) zaehlt NICHT als "allein".
+        guild.get_channel = lambda _c: _VoiceChannelStub()
+        voice.takt(5)
+        asyncio.run(player.heal(guild))
+        assert player._leer_seit is None
+    finally:
+        aufraeumen()
+
+    # 4) Nichts zu tun und die Verbindung ist weg: KEIN Reconnect, nur um im
+    #    leeren Kanal zu sitzen.
+    player, voice, aufraeumen = _musik_umgebung()
+    neu_verbunden = []
+
+    async def reconnect(_ch):
+        neu_verbunden.append(_ch)
+
+    player._reconnect = reconnect
+    try:
+        guild.get_channel = lambda _c: _kanal_mit([mensch])
+        player.current = None
+        player.voice = SimpleNamespace(is_connected=lambda: False,
+                                       is_playing=lambda: False,
+                                       is_paused=lambda: False)
+        asyncio.run(player.heal(guild))
+        assert neu_verbunden == [], "Watchdog verbindet neu, obwohl nichts zu tun ist"
+        # MUSIC_IDLE_SEKUNDEN <= 0 schaltet das Gehen ab.
+        alt = music.MUSIC_IDLE_SEKUNDEN
+        music.MUSIC_IDLE_SEKUNDEN = 0
+        try:
+            player.voice = voice
+            player._leer_seit = _t.monotonic() - 99999
+            asyncio.run(player.heal(guild))
+            assert player.active_channel_id == 42
+        finally:
+            music.MUSIC_IDLE_SEKUNDEN = alt
+    finally:
+        aufraeumen()
+
+
+
+
+def test_musik_rauswurf_durch_moderator_gilt():
+    """Ein Moderator trennt Flo - 15 s spaeter sass er wieder drin.
+
+    Der Watchdog wusste nur "ich soll in Kanal X sein" und holte ihn samt
+    Musik zurueck. Jetzt meldet bot.py die Trennung an flo_getrennt, und ein
+    echter Rauswurf beendet die Sitzung. Nicht jede Trennung ist einer: unser
+    eigenes 'stop', unser eigener Neuaufbau und discord.pys Selbstheilung
+    duerfen die Musik NICHT beenden."""
+    import time as _t
+    import music
+    mi = music.instance
+    gid = 4712
+    alt = (music.VOICE_RAUSWURF_FRIST, mi._players.get(gid))
+    music.VOICE_RAUSWURF_FRIST = 0.0
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+
+    async def sag(text):
+        gesagt.append(text)
+
+    player._sag = sag
+    mi._players[gid] = player
+    try:
+        def zustand():
+            player.active_channel_id = 42
+            player.voice = voice
+            voice.spielt = False
+            player.start(_track("A"))
+            player.queue[:] = [_track("B")]
+
+        # discord.py baut selbst neu auf: der Server haelt den Client noch.
+        zustand()
+        noch_da = SimpleNamespace(id=gid, voice_client=voice)
+        assert asyncio.run(mi.flo_getrennt(noch_da, 42)) is False
+        assert player.active_channel_id == 42 and player.queue
+
+        # Wir selbst bauen gerade neu auf (_fresh_connect/_reconnect).
+        player._selbst_trennen_ankuendigen()
+        weg = SimpleNamespace(id=gid, voice_client=None)
+        assert asyncio.run(mi.flo_getrennt(weg, 42)) is False
+        assert player.active_channel_id == 42 and player.queue
+        player._selbst_getrennt_bis = float("-inf")
+
+        # Der echte Rauswurf: Sitzung vorbei, der Watchdog bleibt draussen.
+        assert asyncio.run(mi.flo_getrennt(weg, 42)) is True
+        assert player.active_channel_id is None
+        assert player.current is None and not player.queue and not player.loop_rest
+        assert gesagt, "kein Wort dazu, warum die Musik weg ist"
+        heal_guild = SimpleNamespace(id=gid, voice_client=None,
+                                     get_channel=lambda _c: _VoiceChannelStub())
+        asyncio.run(player.heal(heal_guild))
+        assert player.voice is None, "Watchdog hat Flo zurueckgeholt"
+
+        # Unser eigenes 'stop' vorher: nichts mehr zu tun.
+        assert asyncio.run(mi.flo_getrennt(weg, 42)) is False
+
+        # Ohne Server-Objekt (nur die ID) entscheidet der eigene Client.
+        zustand()
+        assert asyncio.run(mi.flo_getrennt(gid, 42)) is False     # _StallVoice lebt
+        player.voice = None
+        assert asyncio.run(mi.flo_getrennt(gid, 42)) is True
+
+        # Waehrend flo_getrennt noch nachsieht, haelt sich der Watchdog raus.
+        zustand()
+        player.voice = SimpleNamespace(is_connected=lambda: False,
+                                       is_playing=lambda: False,
+                                       is_paused=lambda: False)
+        player._rauswurf_bis = _t.monotonic() + 60
+        neu_verbunden = []
+
+        async def reconnect(_ch):
+            neu_verbunden.append(_ch)
+
+        player._reconnect = reconnect
+        asyncio.run(player.heal(heal_guild))
+        assert neu_verbunden == [], "Watchdog holt Flo mitten in der Rauswurf-Pruefung zurueck"
+    finally:
+        music.VOICE_RAUSWURF_FRIST = alt[0]
+        if alt[1] is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt[1]
+        aufraeumen()
+
+
+
+
+def test_musik_belegt_den_voice_nur_wenn_wirklich_was_laeuft():
+    """is_voice_busy war True, sobald Flo in einem Kanal sein SOLLTE.
+
+    Nach dem letzten Song blieb das fuer immer so: Soundboard und TTS sagten
+    "Gerade läuft was im Voice", obwohl da nur Stille war. Jetzt zaehlt nur,
+    was wirklich laeuft, pausiert ist oder in der Warteschlange wartet."""
+    import music
+    import voicegags
+    mi = music.instance
+    gid = 4713
+    alt = mi._players.get(gid)
+    player, voice, aufraeumen = _musik_umgebung()
+    mi._players[gid] = player
+    guild = SimpleNamespace(id=gid, voice_client=None)
+    try:
+        # Song zu Ende, Warteschlange leer - Flo sitzt noch im Kanal.
+        player.current = None
+        assert player.active_channel_id == 42
+        assert mi.is_voice_busy(gid) is False
+        assert voicegags.instance._voice_beschaeftigt(guild) is False
+
+        player.start(_track("A"))
+        assert mi.is_voice_busy(gid) is True
+        player.pausieren()
+        assert mi.is_voice_busy(gid) is True
+        player.fortsetzen()
+        voice.stop()
+        player.current = None
+        player.queue.append(_track("B"))
+        assert mi.is_voice_busy(gid) is True, "wartende Songs belegen den Voice"
+        player.queue.clear()
+        assert mi.is_voice_busy(gid) is False
+        assert mi.is_voice_busy(99999) is False      # nie Musik gehabt
+    finally:
+        if alt is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt
+        aufraeumen()
+
+
+
+
+def test_musik_reconnect_gleich_nach_dem_hochfahren():
+    """Die monotonic-Falle: time.monotonic() zaehlt ab dem Hochfahren.
+
+    _last_reconnect startete mit 0.0 als "nie". In den ersten 20 s nach einem
+    Server-Neustart hiess das "gerade eben" - und der erste Reconnect des
+    Watchdogs wurde stillschweigend verschluckt."""
+    import time as _t
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    verbunden = []
+
+    async def connect(**_kw):
+        verbunden.append(True)
+        return voice
+
+    async def weg(**_kw):
+        return None
+
+    kanal = SimpleNamespace(name="Musik", connect=connect,
+                            guild=SimpleNamespace(voice_client=None))
+    alt_zeit = music.time
+    music.time = SimpleNamespace(monotonic=lambda: 5.0, time=_t.time)
+    try:
+        assert player._last_reconnect == float("-inf")
+        player.current = None
+        player.voice = SimpleNamespace(is_connected=lambda: False, disconnect=weg)
+        asyncio.run(player._reconnect(kanal))
+        assert verbunden, "Reconnect 5 s nach dem Hochfahren verschluckt"
+    finally:
+        music.time = alt_zeit
+        aufraeumen()
+
+
+
+
 def test_musik_stop_laesst_keinen_geister_track_zurueck():
     """'Flo stop', waehrend _advance gerade einen Playlist-Track aufloest:
     der fertig aufgeloeste Track landete danach per insert(0) in der SOEBEN
@@ -927,6 +1207,41 @@ def test_musik_pause_ueberlebt_tempo_und_reconnect():
 
 
 
+def test_musik_start_schreibt_nichts_fest_wenn_play_scheitert():
+    """AUDIT 'music.py:691': start() schrieb den Zustand VOR voice.play().
+
+    Warf play() (z. B. 'Already playing audio.'), stand der nie gestartete
+    Song trotzdem in 'current' - der Watchdog hielt das fuer einen Zombie und
+    startete ihn immer wieder. Und die schon hochgezaehlte Generation hatte den
+    after-Callback des Songs entwertet, der WIRKLICH noch lief: an dessen Ende
+    ging es nicht mehr weiter."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        a = _track("A")
+        player.start(a)
+        player.speed = 1.5
+        player._neustart_versuche = 1
+        vorher = (player.current, player._play_gen, player.speed,
+                  player._neustart_versuche, player.pausiert, player._played)
+        try:
+            player.start(_track("B"))          # A laeuft noch -> play() wirft
+        except Exception:  # noqa: BLE001 - genau das soll passieren
+            pass
+        else:
+            raise AssertionError("play() haette werfen muessen")
+        assert (player.current, player._play_gen, player.speed,
+                player._neustart_versuche, player.pausiert, player._played) == vorher
+        assert player.current is a
+        # Der after-Callback von A gilt weiter - am Songende geht es weiter.
+        assert len(voice.play_calls) == 1
+        assert [t.title for t in player.history] == ["A"], "B im Verlauf, obwohl nie gelaufen"
+    finally:
+        aufraeumen()
+
+
+
+
 def test_musik_befehle_kapern_kein_alltagsdeutsch():
     """Steuerbefehle wurden per PRAEFIX erkannt, ohne Wortgrenze. Damit wurde
     'verlass dich drauf' zum Voice-Leave und 'rausschmeisen @wer' (die
@@ -961,6 +1276,134 @@ def test_musik_befehle_kapern_kein_alltagsdeutsch():
     # Lautstaerke ueber 999 wurde auf drei Ziffern geschnitten ('ls 1000' -> 100 %).
     assert mi.parse_command("ls 1000") == ("volume", "1000")
     assert mi.parse_command("lautstärke 250") == ("volume", "250")
+
+
+
+
+def test_musik_steuerwort_ist_nur_allein_ein_befehl():
+    """Ein Steuerwort am Satzanfang reichte - und kaperte Alltagsdeutsch.
+
+    Gemessen: 'halt die fresse' STOPPTE die Musik (Voice weg, Warteschlange
+    geleert), 'hau ab du opfer' warf Flo aus dem Kanal, 'komm mal klar' holte
+    ihn rein, 'nochmal bitte' spielte den letzten Song, 'random frage' klappte
+    das Genre-Menue auf. Lief keine Musik, las man "Ich bin gerade in keinem
+    Sprachkanal." statt Flos Antwort. Jetzt duerfen hinter dem Steuerwort nur
+    Fuellwoerter oder ein ECHTES Objekt stehen ('skip den song')."""
+    import cmdnorm
+    import music
+    mi = music.instance
+
+    harmlos = [
+        # die gemessenen Faelle
+        "halt die fresse", "halt dein maul", "halt mal kurz",
+        "hau ab du opfer", "raus mit der sprache",
+        "komm mal klar", "komm schon",
+        "weiter so",
+        "nächste frage", "nächstes mal",
+        "nochmal bitte", "noch mal zum thema", "wiederhol das", "repeat after me",
+        "random frage", "überraschung!",
+        # dieselbe Falle, nur andere Woerter
+        "halte die fresse", "stop mal mit dem gelaber", "stopp das gelaber",
+        "hör auf zu labern", "hör auf mich zu nerven", "aufhören zu reden",
+        "pause machen wir später", "skip die intro", "komm her du sack",
+        "join mal unserem server", "connect four", "nächster versuch",
+        "next level", "queue ist voll", "warteschlange beim arzt",
+        "zufall oder nicht", "überrasch mich mal mit einem witz", "random fact",
+        "leise rieselt der schnee", "lauter als du", "nächste 5 minuten",
+        "hau mal nen witz raus", "hau mal einen spruch raus",
+        "mach mal das licht an",
+    ]
+    for satz in harmlos:
+        assert mi.parse_command(satz) is None, satz
+        assert mi.parse_command(f"Flo {satz}") is None, satz
+        # bot.py normalisiert das erste Wort vorher (cmdnorm: 'halte' -> 'halt').
+        # Auch DANACH darf es kein Befehl sein.
+        norm = cmdnorm.normalize(satz)
+        if norm:
+            assert mi.parse_command(norm) is None, (satz, norm)
+
+    # Die echten Befehle gehen weiter - mit Fuellwort, Satzzeichen, Objekt.
+    for satz, erwartet in (
+            ("stop", "stop"), ("stopp bitte", "stop"), ("stop die musik", "stop"),
+            ("stop!", "stop"), ("halt", "stop"), ("halt!", "stop"),
+            ("hör auf", "stop"), ("hör auf mit der musik", "stop"),
+            ("leave", "leave"), ("raus", "leave"), ("hau ab", "leave"),
+            ("raus aus dem voice", "leave"), ("verlass den kanal", "leave"),
+            ("disconnect", "leave"),
+            ("skip", "skip"), ("skip den song", "skip"), ("skip bitte", "skip"),
+            ("skip 2", "skip"), ("lauter 20", "volume"),
+            ("nächster", "skip"), ("nächster song", "skip"), ("next", "skip"),
+            ("überspringen", "skip"),
+            ("pause", "pause"), ("pause bitte", "pause"), ("pausier die musik", "pause"),
+            ("weiter", "resume"), ("weiter bitte", "resume"), ("fortsetzen", "resume"),
+            ("queue", "queue"), ("warteschlange anzeigen", "queue"),
+            ("join", "join"), ("komm", "join"), ("komm rein", "join"),
+            ("komm in den voice", "join"),
+            ("nochmal", "replay"), ("noch mal", "replay"), ("repeat", "replay"),
+            ("spiel nochmal bitte", "replay"),
+            ("random", "random"), ("überrasch mich", "random"),
+            ("spiel random", "random"), ("random song", "random"),
+            ("lauter", "volume"), ("leiser bitte", "volume"), ("lauter machen", "volume")):
+        got = mi.parse_command(satz)
+        assert got and got[0] == erwartet, (satz, got)
+    # Nummern hinter 'nochmal' bleiben erlaubt.
+    for satz, nr in (("nochmal 3", "3"), ("nochmal nr 3", "3"), ("nochmal #3", "3"),
+                     ("nochmal nummer 12", "12"), ("repeat 2", "2"),
+                     ("spiel nochmal 2 bitte", "2")):
+        assert mi.parse_command(satz) == ("replay", nr), satz
+    # 'halt die ...' stoppt NIE - auch nicht mit der Musik als Objekt.
+    assert mi.parse_command("halt die musik an") is None
+
+
+
+
+def test_musik_alltagswort_ohne_musik_geht_an_die_ki():
+    """'Flo halt', 'Flo hau ab', 'Flo weiter' sind auch Ansagen an Flo selbst.
+
+    Laeuft gar keine Musik, bekam man darauf "Ich bin gerade in keinem
+    Sprachkanal." bzw. "Da ist nichts pausiert." - statt einer Antwort. Ohne
+    Musik gibt handle() diese Woerter jetzt an die KI ab, und zwar bevor
+    ueberhaupt ein Player angelegt wird. Laeuft Musik, stoppen sie wie immer.
+    Eindeutige Musikwoerter ('stop', 'leave') antworten weiter selbst."""
+    import music
+    mi = music.instance
+
+    class Msg:
+        content = ""
+        guild = SimpleNamespace(id=4711)
+        channel = SimpleNamespace(id=1)
+        author = SimpleNamespace(id=7, display_name="wer", voice=None)
+
+    alt = (mi._enabled, mi._players.get(4711))
+    mi._enabled = True
+    mi._players.pop(4711, None)
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        def sag(text):
+            Msg.content = f"Flo {text}"
+            return player.loop.run_until_complete(mi.handle(Msg()))
+
+        for wort in ("halt", "hau ab", "raus", "hör auf", "weiter", "weiter bitte"):
+            assert sag(wort) is None, wort
+        assert 4711 not in mi._players, "fuer eine KI-Frage wurde ein Player angelegt"
+        # 'stop' ist eindeutig - das darf weiter ehrlich antworten.
+        e = sag("stop")
+        assert e is not None and "keinem Sprachkanal" in e.description
+
+        # Jetzt laeuft Musik: 'halt' stoppt wie eh und je.
+        mi._players[4711] = player
+        player.start(_track("A"))
+        player.queue.append(_track("B"))
+        e = sag("halt")
+        assert e is not None and "Gestoppt" in (e.title or ""), e
+        assert player.current is None and not player.queue
+    finally:
+        mi._enabled = alt[0]
+        if alt[1] is None:
+            mi._players.pop(4711, None)
+        else:
+            mi._players[4711] = alt[1]
+        aufraeumen()
 
 
 
@@ -1032,6 +1475,42 @@ def test_musik_erkennt_soundcloud():
 
     # Kein Link -> weiterhin Suche.
     assert mi.parse_command("spiel Bohemian Rhapsody") == ("search", "Bohemian Rhapsody")
+
+
+
+
+def test_musik_link_im_gespraech_wird_nicht_abgespielt():
+    """Ein Musik-Link im Satz reichte, damit Flo ihn abspielt.
+
+    'Flo was hältst du von dem Video https://youtu.be/…' spielte das Video ab -
+    oder, wer nicht im Voice war, las "Geh erst in einen Sprachkanal" statt
+    Flos Meinung. Jetzt zaehlt ein Link nur als Abspiel-Auftrag, wenn er
+    allein dasteht, hinter einem Abspiel-Verb oder in einer Abspiel-Form."""
+    import music
+    p = music.instance.parse_command
+    yt = "https://youtu.be/dQw4w9WgXcQ"
+    for satz in (f"Flo was hältst du von dem Video {yt}",
+                 f"Flo was hältst du von dem Video {yt}?",
+                 f"flo kennst du das schon {yt}",
+                 f"flo der song {yt} ist mies",
+                 f"flo schau dir das an {yt} lol wie geil",
+                 f"flo mach dir mal gedanken über {yt}",
+                 "flo wie findest du https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT",
+                 "flo lol https://soundcloud.com/forss/flickermood so schlecht",
+                 "flo was ist das für ein lied https://example.com/lied.mp3"):
+        assert p(satz) is None, satz
+
+    # Gewollt abspielen geht weiter: nackt, mit Verb, in Abspiel-Form.
+    for satz in (yt, f"Flo {yt}", f"{yt} flo", f"flo {yt} bitte", f"flo hier {yt}",
+                 f"flo <{yt}>", f"flo spiel {yt}", f"flo play {yt}",
+                 f"flo spiel mal das video {yt}",
+                 f"flo mach mal {yt} an", f"flo leg {yt} auf",
+                 f"flo pack {yt} in die queue", f"flo schau mal {yt} an",
+                 f"flo hör dir das an {yt}",
+                 f"flo kannst du mal {yt} abspielen"):
+        assert p(satz) == ("play", yt), (satz, p(satz))
+    # Zwei Links nackt hintereinander: der erste zaehlt, wie bisher.
+    assert p(f"flo {yt} https://youtu.be/abc12345678") == ("play", yt)
 
 
 
@@ -1611,6 +2090,122 @@ def test_musik_selbsttest_meldet_die_wahrheit():
     # Und der Selbsttest muss die Client-Kennung wirklich mitschicken - sonst
     # prueft er nicht die Strecke, die im Betrieb bricht.
     assert "ffmpeg_vorspann()" in inspect.getsource(music.Music._probe_ton)
+
+
+
+
+def test_voice_voraussetzungen_werden_wirklich_geprueft():
+    """"Musik-Feature aktiv" im Log - und dann scheiterte jeder Beitritt.
+
+    setup() pruefte nur yt-dlp, ffmpeg und PyNaCl. Seit discord.py 2.7 ist
+    aber 'davey' Pflicht (DAVE, von Discord seit 01.03.2026 erzwungen), und
+    ohne libopus kommt kein Ton heraus. Musik UND Voice-Gags pruefen das jetzt
+    und sagen im Log, mit welchem Befehl es sich beheben laesst."""
+    import logging
+    import types
+    import guildcfg
+    import music
+    import voicegags
+
+    puffer = io.StringIO()
+    griff = logging.StreamHandler(puffer)
+    protokolle = [logging.getLogger("dcbot.music"), logging.getLogger("dcbot.voice")]
+    for pr in protokolle:
+        pr.addHandler(griff)
+    alt = (sys.modules.get("davey", "fehlt"), sys.modules.get("nacl", "fehlt"),
+           music._opus_da, music.shutil, voicegags.shutil, guildcfg.horcht_auf)
+    immer_da = SimpleNamespace(which=lambda name: f"/usr/bin/{name}")
+    music.shutil = immer_da
+    voicegags.shutil = immer_da
+    guildcfg.horcht_auf = lambda *_a, **_k: None
+    try:
+        sys.modules["nacl"] = types.ModuleType("nacl")
+        sys.modules["davey"] = types.ModuleType("davey")
+        music._opus_da = lambda: True
+        assert music.voice_fehlt() == ""
+
+        # davey fehlt -> beide Features aus, und der Log nennt den Befehl.
+        sys.modules["davey"] = None                    # import davey -> ImportError
+        grund = music.voice_fehlt()
+        assert "davey" in grund and "pip install davey" in grund, grund
+        assert music.Music().setup() is False
+        assert voicegags.VoiceGags().setup() is False
+        assert puffer.getvalue().count("pip install davey") >= 2, puffer.getvalue()
+
+        # libopus fehlt -> ebenso.
+        sys.modules["davey"] = types.ModuleType("davey")
+        music._opus_da = lambda: False
+        grund = music.voice_fehlt()
+        assert "libopus" in grund and "apt install" in grund, grund
+        assert music.Music().setup() is False
+        assert voicegags.VoiceGags().setup() is False
+
+        # PyNaCl fehlt -> auch das beim Namen.
+        music._opus_da = lambda: True
+        sys.modules["nacl"] = None
+        assert "PyNaCl" in music.voice_fehlt()
+    finally:
+        for name, wert in (("davey", alt[0]), ("nacl", alt[1])):
+            if wert == "fehlt":
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = wert
+        (music._opus_da, music.shutil, voicegags.shutil, guildcfg.horcht_auf) = alt[2:]
+        for pr in protokolle:
+            pr.removeHandler(griff)
+
+
+
+
+def test_voice_connect_fehler_bekommen_ueberall_denselben_satz():
+    """Nur ClientException wurde abgefangen - an drei von fuenf Stellen.
+
+    RuntimeError('davey library needed') und asyncio.TimeoutError aus
+    channel.connect liefen bis bot.py durch, und da stand dann nur "Da ist
+    gerade etwas schiefgelaufen." Jetzt fangen ALLE Wege dasselbe ab und
+    sagen denselben Satz; der Grund steht im Log."""
+    import discord
+    import music
+    mi = music.instance
+    quelle = inspect.getsource(music)
+    # Jede Stelle, die verbindet, faengt die volle Liste ab.
+    assert quelle.count("await player.connect(") == \
+        quelle.count("except VOICE_CONNECT_FEHLER as exc:") >= 5
+    for art in (RuntimeError, asyncio.TimeoutError, discord.ClientException):
+        assert issubclass(art, music.VOICE_CONNECT_FEHLER), art
+
+    gid = 4714
+    alt = (mi._enabled, mi._players.get(gid))
+    player, voice, aufraeumen = _musik_umgebung()
+    mi._enabled = True
+    mi._players[gid] = player
+
+    class Msg:
+        content = "Flo komm"
+        guild = SimpleNamespace(id=gid)
+        channel = SimpleNamespace(id=1)
+        author = SimpleNamespace(id=7, display_name="wer",
+                                 voice=SimpleNamespace(channel=_VoiceChannelStub()))
+
+    try:
+        for fehler in (RuntimeError("davey library needed in order to use voice"),
+                       asyncio.TimeoutError(), discord.ClientException("Rechte")):
+            async def kaputt(_ch, _f=fehler):
+                raise _f
+
+            player.connect = kaputt
+            e = player.loop.run_until_complete(mi.handle(Msg()))
+            assert e is not None and e.description == music.VOICE_KAPUTT, (fehler, e)
+            e = player.loop.run_until_complete(mi._play_many(
+                player, _VoiceChannelStub(), [("x", "X")], "wer", "aus der Liste"))
+            assert e.description == music.VOICE_KAPUTT, (fehler, e)
+    finally:
+        mi._enabled = alt[0]
+        if alt[1] is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt[1]
+        aufraeumen()
 
 
 

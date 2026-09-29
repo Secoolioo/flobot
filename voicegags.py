@@ -8,7 +8,8 @@ Befehle (nach 'Flo'):
 Join-Sounds (optional, JOIN_SOUNDS=1): Betritt jemand einen Sprachkanal und es
 gibt sounds/join/<user_id>.* (oder sounds/join/default.*), spielt Flo den Sound.
 
-Voraussetzungen wie bei der Musik: ffmpeg + PyNaCl (+ davey bei discord.py >= 2.7).
+Voraussetzungen wie bei der Musik: ffmpeg + PyNaCl + libopus (+ davey bei
+discord.py >= 2.7) - geprueft in setup() ueber music.voice_fehlt().
 Laeuft schon ein anderer Sound/Musik im Kanal, weicht das Modul hoeflich aus,
 statt die Musik abzuwuergen. Die Sound-Dateien legt der Nutzer selbst in sounds/ ab.
 """
@@ -131,17 +132,21 @@ class VoiceGags(FeatureBasis):
         self.freigeben(msg)
 
     def setup(self):
-        """Aktiv, wenn Voice moeglich ist (ffmpeg + PyNaCl). TTS-Engine wird erkannt."""
+        """Aktiv, wenn Voice moeglich ist (ffmpeg, PyNaCl, davey, libopus - siehe
+        music.voice_fehlt). TTS-Engine wird erkannt."""
         if os.getenv("VOICE_GAGS_ENABLED", "1").strip().lower() in ("0", "false", "no", "off"):
             log.info("Voice-Gags aus (VOICE_GAGS_ENABLED=0).")
             return False
         if shutil.which("ffmpeg") is None:
             log.info("Voice-Gags aus: ffmpeg fehlt.")
             return False
-        try:
-            import nacl  # noqa: F401
-        except ImportError:
-            log.info("Voice-Gags aus: PyNaCl fehlt.")
+        # Dieselbe Pruefung wie bei der Musik. Vorher stand hier nur PyNaCl:
+        # ohne davey (Pflicht ab discord.py 2.7) oder libopus meldete das Log
+        # "Voice-Gags aktiv", und dann scheiterte jeder Sound im Kanal.
+        from music import voice_fehlt
+        fehlt = voice_fehlt()
+        if fehlt:
+            log.warning("Voice-Gags aus: %s", fehlt)
             return False
 
         SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
@@ -489,15 +494,17 @@ class VoiceGags(FeatureBasis):
                                        "Kurz warten oder `Flo stop`.")
                 if vc.channel.id != channel.id and not (vc.is_playing() or vc.is_paused()):
                     await vc.move_to(channel)
-        except RuntimeError as exc:
-            # discord.py >= 2.7 wirft RuntimeError('davey library needed ...'), wenn die
-            # Voice-Verschluesselung fehlt (haeufig auf dem Server). Klar benennen.
-            log.error("Voice nicht moeglich (Gag): %s", exc)
-            return (False, "Voice ist hier gerade nicht eingerichtet "
-                           "(auf dem Server fehlt vermutlich `davey`).")
-        except (discord.ClientException, discord.HTTPException) as exc:
-            log.error("Voice-Connect (Gag) fehlgeschlagen: %s", exc)
-            return (False, "Ich komme gerade nicht in den Sprachkanal.")
+        except (discord.ClientException, discord.HTTPException, RuntimeError,
+                asyncio.TimeoutError) as exc:
+            # Derselbe Satz wie bei der Musik (music.VOICE_KAPUTT), der Grund
+            # steht im Log: RuntimeError = davey/PyNaCl fehlt (discord.py >= 2.7),
+            # TimeoutError = Handshake haengt. Den TimeoutError liess dieser Weg
+            # vorher durch, und bot.py sagte nur "Da ist gerade etwas
+            # schiefgelaufen." - bzw. beim Knopf/Join-Sound gar nichts.
+            import music
+            log.error("Voice-Connect (Gag) fehlgeschlagen: %s: %s",
+                      type(exc).__name__, exc)
+            return (False, music.VOICE_KAPUTT)
 
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
