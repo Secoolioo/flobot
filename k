@@ -43,7 +43,7 @@ trenner() { printf '\033[2m%s\033[0m\n' "---------------------------------------
 # hat und was dauerhaft in die .env gehoert. Ein Test in test_games_logic.py
 # haelt diese Liste gegen alle log-Meldungen in ai.py, damit hier nichts
 # durchfaellt, wenn dort eine neue Zeile dazukommt.
-KIMUSTER="KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate|Antwort konnte nicht gesendet|Antwort mit Bezug|Unbehandelter Fehler|Terraria-Auto-Antwort|Unbekannte Antwort-Art|KI-Markt"
+KIMUSTER="KI-Fehler|KI:|KI-Selbsttest|KI-Feature|LLM-Aufruf|Vision-Aufruf|LLM generate|Antwort konnte nicht gesendet|Antwort mit Bezug|Unbehandelter Fehler|Terraria-Auto-Antwort|Unbekannte Antwort-Art|KI-Markt|Antwort von AutoMod"
 
 # Das Panel schreibt sein gewuerfeltes Passwort EINMAL beim Start ins Log.
 # Ohne eigenen Weg dorthin waere es praktisch unauffindbar - "k l" sucht

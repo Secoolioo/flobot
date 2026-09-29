@@ -104,6 +104,17 @@ async def antworte(message, content=None, **kw):
             return await message.channel.send(content, reference=bezug, **kw)
         return await message.reply(content, **kw)
     except discord.HTTPException as exc:
+        # Nur nochmal senden, wenn es am BEZUG lag. AutoMod-Sperre (200000/
+        # 200001): dieselbe Nachricht wuerde wieder gesperrt - zwei Alarme bei
+        # den Mods, und Flo sagt trotzdem nichts. 5xx: discord.py hat schon
+        # fuenfmal wiederholt; ein weiterer Versuch ist hoechstens ein Duplikat.
+        if getattr(exc, "code", 0) in (200000, 200001):
+            log.warning("Antwort von AutoMod gesperrt (%s) - kein zweiter Versuch.",
+                        exc.code)
+            return None
+        if (getattr(exc, "status", 0) or 0) >= 500:
+            log.error("Antwort konnte nicht gesendet werden: %s", exc)
+            return None
         log.warning("Antwort mit Bezug gescheitert (%s) - sende ohne.", exc)
     kw.pop("mention_author", None)
     kw.setdefault("allowed_mentions", discord.AllowedMentions.none())

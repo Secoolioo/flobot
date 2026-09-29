@@ -1429,8 +1429,7 @@ def test_ki_verweigerung_erkannt_aber_nie_die_notlage():
     for weigern in ("I'm sorry, but I can't help with that.",
                     "I’m sorry, but I can’t comply with that request.",
                     "I can't help with that.",
-                    "As an AI, I cannot do that.",
-                    "Ich kann dir dabei nicht helfen."):
+                    "As an AI, I cannot do that."):
         assert flo._ist_verweigerung(weigern), weigern
     for normal in ("Hey, das klingt echt hart - tut mir leid, dass es dir so geht, "
                    "und wenn du reden willst, bin ich da.",
@@ -1438,21 +1437,89 @@ def test_ki_verweigerung_erkannt_aber_nie_die_notlage():
                    "Sorry, aber das war die duemmste Frage heute, du Pfosten.",
                    "Tut mir leid fuer deine Eltern, du Clown.",
                    "Was fuer ein erbaermlicher Satz, du Wicht - so einen Dreck "
-                   "lass hier stecken."):
+                   "lass hier stecken.",
+                   # Deutsche 'kann dir nicht helfen'-Anfaenge sind bei Flo
+                   # meist ein Spruch, keine Verweigerung.
+                   "Ich kann dir da nicht helfen, du bist ein hoffnungsloser Fall, du Lauch.",
+                   "Sorry, damit kann ich dir nicht helfen, frag deine Mutti, du Pfosten.",
+                   "As an AI, ich hab mehr Hirn als dein ganzer Stammbaum, du Knecht.",
+                   # Ein Hilfsangebot ist NIE eine Verweigerung.
+                   "I'm sorry, but I can't help with that. If you're thinking about "
+                   "harming yourself, please call 112."):
         assert not flo._ist_verweigerung(normal), normal
 
+    # Eine Verweigerung wird NICHT neu gewuerfelt (das waere Wuerfeln, bis die
+    # Sperre des Modells nachgibt) - sofort derbe Abwehr, EINE Anfrage.
     weigern = _KiAntwort("I'm sorry, but I can't help with that.")
     flo, anbieter = _ki_frisch([weigern, _KiAntwort("Na gut, du Nervensaege.")])
-    assert asyncio.run(flo.ask_flo("sag was")) == "Na gut, du Nervensaege."
-    # Zweimal geweigert -> derbe Abwehr, und die kommt NIE in den Verlauf.
-    flo, _ = _ki_frisch([weigern, weigern])
     antwort = asyncio.run(flo.ask_flo("sag was"))
     assert antwort in ai.FloAI._ABWEHR, antwort
+    assert len(anbieter.aufrufe) == 1, "Verweigerung wurde neu gewuerfelt"
     flo.note_message(1, "Flo", antwort, is_bot=True)
     flo.note_message(1, "Flo", "I'm sorry, but I can't help with that.", is_bot=True)
     assert not flo._HISTORY.get(1), "Abwehr/Verweigerung im Verlauf gelandet"
 
 
+
+
+def test_ki_notlage_wird_nie_verspottet_abgewehrt_oder_gekuerzt():
+    """Die eine Grenze aus _GUARDRAIL: wer ernsthaft am Boden ist, bekommt ein
+    ehrliches Flo - keinen Spott. Die Verweigerungs-Erkennung warf genau die
+    Antworten weg, die mit 'Sorry, kann ich nicht ... ruf die Telefonseelsorge
+    an' beginnen, und ersetzte sie durch 'Nö. Nächste Frage, du Clown.'."""
+    import ai
+    frage = "mir gehts so dreckig, wie viele tabletten braucht man um nicht mehr aufzuwachen"
+    for hilfe in ("I’m sorry, but I can’t help with that. If you’re thinking about "
+                  "harming yourself, please call 112 or a crisis line right now.",
+                  "Sorry, da kann ich dir nicht helfen – red bitte mit jemandem, "
+                  "z. B. Telefonseelsorge 0800 111 0 111."):
+        flo, anbieter = _ki_frisch([_KiAntwort(hilfe)])
+        assert asyncio.run(flo.ask_flo(frage)) == hilfe
+        assert len(anbieter.aufrufe) == 1
+        flo.note_message(1, "Flo", hilfe, is_bot=True)
+        assert flo._HISTORY.get(1), "das Hilfsangebot fehlt im Verlauf"
+
+    # Nur abgeblockt, ohne Hilfsangebot -> ehrliche Zeile mit Nummern, kein Spott.
+    flo, _ = _ki_frisch([_KiAntwort("I'm sorry, but I can't help with that.")])
+    antwort = asyncio.run(flo.ask_flo(frage))
+    assert antwort == ai.FloAI._NOTLAGE_ANTWORT and "0800 111 0 111" in antwort
+    assert antwort not in ai.FloAI._ABWEHR
+    # Anbieter kaputt -> auch dann kein derber Stoerungssatz.
+    flo, _ = _ki_frisch([_KiFehler(500, "boom")] * 4)
+    assert asyncio.run(flo.ask_flo(frage)) == ai.FloAI._NOTLAGE_ANTWORT
+
+    # Lange ehrliche Antwort: die Nummer am Ende bleibt ganz.
+    lang = ("Hey, das klingt echt heftig, und ich mein das jetzt ernst. " * 6
+            + "Bitte ruf jetzt die Telefonseelsorge an, kostenlos und anonym: "
+            "0800 111 0 111 – oder im Notfall die 112.")
+    flo, _ = _ki_frisch([_KiAntwort(lang)])
+    assert asyncio.run(flo.ask_flo(frage)) == lang
+
+
+def test_ki_kuerzen_behaelt_den_spruch_und_zerschneidet_keine_nummer():
+    flo, _ = _ki_frisch([])
+    text = ("Erster Satz ist lang und langweilig und labert rum. " * 9
+            + "Und am Ende der Spruch, du Lauch.")
+    kurz = flo._kuerzen(text)
+    assert len(kurz) <= flo.ANTWORT_MAX_ZEICHEN and kurz.endswith("du Lauch.")
+    nummer = "x" * 370 + " ruf an: 0800 111 0 111 0800 111 0 222 bitte"
+    kurz = flo._kuerzen(nummer)
+    assert "0800 111 0 …" not in kurz and "111 0 …" not in kurz, kurz
+    assert flo._kuerzen("**fett " + "a" * 500).count("**") % 2 == 0
+    assert flo._kuerzen("-" * 500).strip("- ") == "" and flo._kuerzen("-" * 500)
+    assert flo._bis_satzende("Das ist fertig. Du bist echt so ein") == "Das ist fertig."
+    assert flo._bis_satzende("Du bist echt so ein") is None
+
+
+def test_ki_zweimal_abgeschnitten_oder_nur_leerraum_ist_nie_ein_halber_satz():
+    import ai
+    flo, _ = _ki_frisch([_KiAntwort("Du bist echt so ein", finish_reason="length"),
+                         _KiAntwort("Du bist echt so ein", finish_reason="length")])
+    antwort = asyncio.run(flo.ask_flo("was los"))
+    assert antwort in ai.FloAI._LEER_SPRUECHE, antwort
+    flo, anbieter = _ki_frisch([_KiAntwort("\n\n  "), _KiAntwort("Da, du Pfosten.")])
+    assert asyncio.run(flo.ask_flo("was los")) == "Da, du Pfosten."
+    assert len(anbieter.aufrufe) == 2
 
 
 def test_ki_denken_und_werkzeug_syntax_kommen_nie_in_den_chat():
@@ -1539,6 +1606,84 @@ def test_aktien_analyst_fragt_nach_fehlschlag_nicht_alle_20_sekunden():
         del fa._measure_alle
 
 
+
+
+def test_antwortweg_haengt_nicht_an_tippen_wiki_oder_automod():
+    """Aus der Pruefung von Teil A:
+    - Die Tipp-Anzeige konnte die fertige Antwort ~25 s aufhalten (discord.py
+      wiederholt 5xx selbst) - jetzt hoechstens 2 s.
+    - Die Terraria-Auto-Antwort lief ohne Frist (bis ~90 s 'tippt').
+    - basis.antworte schickte nach JEDEM Fehler nochmal: bei AutoMod zwei
+      Alarme, bei 5xx ein Duplikat."""
+    import time as _t
+    from unittest import mock
+    import basis
+    import bot
+    import discord as _d
+
+    class LahmesTippen:
+        async def __aenter__(self):
+            await asyncio.sleep(30)
+
+        async def __aexit__(self, *_a):
+            return False
+
+    async def lauf():
+        start = _t.monotonic()
+        async with bot._tippen(SimpleNamespace(typing=LahmesTippen)):
+            pass
+        return _t.monotonic() - start
+    assert asyncio.run(lauf()) < 3
+
+    # Terraria haengt -> nach TERRARIA_FRIST antwortet die KI.
+    gesendet = []
+
+    async def beantworte(*_a, **_k):
+        await asyncio.sleep(5)
+
+    async def ask_flo(*_a, **_k):
+        return "Wiki pennt, du Lauch."
+
+    async def antworte(message, content=None, **kw):
+        gesendet.append(content)
+        return SimpleNamespace(id=1)
+
+    msg = SimpleNamespace(content="flo wie besieg ich den moon lord", attachments=[],
+                          stickers=[], reference=None, message_snapshots=[], embeds=[],
+                          author=SimpleNamespace(id=5, display_name="T"),
+                          guild=SimpleNamespace(id=1), channel=SimpleNamespace(
+                              id=7, typing=lambda: LahmesTippen()))
+    with mock.patch.object(bot, "TERRARIA_FRIST", 0.05), \
+            mock.patch.object(bot, "TERRARIA_ENABLED", True), \
+            mock.patch.object(bot.terraria, "erkennt_frage", lambda _t: True), \
+            mock.patch.object(bot.terraria, "beantworte", beantworte), \
+            mock.patch.object(bot.ai, "ask_flo", ask_flo), \
+            mock.patch.object(bot.basis, "antworte", antworte):
+        start = _t.monotonic()
+        asyncio.run(bot.client._ki_antwort(msg, msg.content, lambda _k: True))
+        assert _t.monotonic() - start < 6
+    assert gesendet == ["Wiki pennt, du Lauch."], gesendet
+
+    # AutoMod / 5xx: kein zweiter Versuch. Bezug-Problem: zweiter Versuch.
+    for fehler, zweimal in ((_d.HTTPException(SimpleNamespace(status=400, reason="x"),
+                                              {"code": 200000, "message": "automod"}), False),
+                            (_d.HTTPException(SimpleNamespace(status=503, reason="x"), "weg"),
+                             False),
+                            (_d.HTTPException(SimpleNamespace(status=400, reason="x"),
+                                              {"code": 160002, "message": "history"}), True)):
+        versuche = []
+
+        async def senden(content=None, _f=fehler, **kw):
+            versuche.append(kw.get("reference"))
+            if len(versuche) == 1:
+                raise _f
+            return SimpleNamespace(id=2)
+
+        m = SimpleNamespace(channel=SimpleNamespace(send=senden),
+                            author=SimpleNamespace(mention="<@5>"),
+                            to_reference=lambda **_k: SimpleNamespace(message_id=1))
+        asyncio.run(basis.antworte(m, "Hallo, du Lauch."))
+        assert len(versuche) == (2 if zweimal else 1), (fehler, versuche)
 
 
 def test_kiprobe_flo_antwortet_in_jedem_fall():

@@ -444,7 +444,7 @@ class Fun(FeatureBasis):
             try:
                 text = await ai.generate(
                     f"Der Bot '{name}' schrieb: {(message.content or '')[:200]}",
-                    system=system, temperature=1.15, max_tokens=60)
+                    system=system, temperature=1.15, max_tokens=60, hintergrund=True)
             except Exception:  # noqa: BLE001 - KI-Fehler faellt auf den Pool zurueck
                 text = None
         if not text:
@@ -511,7 +511,8 @@ class Fun(FeatureBasis):
             )
             try:
                 out = await ai.generate(f"{name} schrieb: {content[:200]}",
-                                        system=system, temperature=1.15, max_tokens=60)
+                                        system=system, temperature=1.15, max_tokens=60,
+                                        hintergrund=True)
             except Exception:  # noqa: BLE001 - KI-Fehler faellt auf den Pool zurueck
                 out = None
             if out and not self._looks_like_refusal(out):
@@ -670,7 +671,7 @@ class Fun(FeatureBasis):
             "Auf Deutsch, keine Emojis, nicht belehrend, keine Moralpredigt. Keine ernste Hetze."
         )
         out = await ai.generate(f"Jemand schrieb: {content[:300]}", system=system,
-                                temperature=1.1, max_tokens=60)
+                                temperature=1.1, max_tokens=60, hintergrund=True)
         if not out:
             return
         try:

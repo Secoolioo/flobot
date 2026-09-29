@@ -47,7 +47,11 @@ os.environ["LLM_MODEL"] = "openai/gpt-oss-120b"
 os.environ["LLM_VISION_MODEL"] = "qwen/qwen3.6-27b"
 os.environ.pop("LLM_MAX_TOKENS", None)
 os.environ.pop("LLM_REASONING_EFFORT", None)
-os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
+# Anhaengen statt setdefault: ein vorhandenes NO_PROXY ohne 127.0.0.1 haette
+# die Probe sonst durch den Proxy geschickt - je nach Umgebung rot.
+_ohne = [t for t in os.environ.get("NO_PROXY", "").split(",") if t.strip()]
+os.environ["NO_PROXY"] = ",".join(_ohne + [t for t in ("127.0.0.1", "localhost")
+                                            if t not in _ohne])
 os.environ["no_proxy"] = os.environ["NO_PROXY"]
 if str(WURZEL) not in sys.path:
     sys.path.insert(0, str(WURZEL))
@@ -189,13 +193,19 @@ def _http_fehler(status, text):
 
 
 class Kanal:
-    def __init__(self, cid, *, tippen_wirft=False):
+    def __init__(self, cid, *, tippen_wirft=False, bezug_verboten=False):
         self.id = cid
         self.name = f"probe-{cid}"
         self.gesendet = []
         self.tippen_wirft = tippen_wirft
+        self.bezug_verboten = bezug_verboten
 
     async def send(self, content=None, **kw):
+        if self.bezug_verboten and kw.get("reference") is not None:
+            # Discord ohne 'Nachrichtenverlauf lesen': Antworten mit Bezug gehen
+            # nicht (160002) - dann muss Stufe 2 (ohne Bezug) greifen.
+            raise _http_fehler(400, "Cannot reply without permission to read "
+                                    "message history")
         self.gesendet.append(("send", content, kw))
         return SimpleNamespace(id=len(self.gesendet), channel=self,
                                edit=self._nichts, delete=self._nichts)
@@ -222,9 +232,10 @@ class Kanal:
                                attach_files=True, read_message_history=True)
 
 
-def nachricht(text, cid, *, geloescht=False, tippen_wirft=False, rolle=None):
+def nachricht(text, cid, *, geloescht=False, tippen_wirft=False, rolle=None,
+              bezug_verboten=False):
     """Eine Nachricht an Flo, so wie on_message sie bekommt."""
-    kanal = Kanal(cid, tippen_wirft=tippen_wirft)
+    kanal = Kanal(cid, tippen_wirft=tippen_wirft, bezug_verboten=bezug_verboten)
     rechte = SimpleNamespace(administrator=False, manage_guild=False,
                              manage_messages=False, ban_members=False,
                              kick_members=False, moderate_members=False)
@@ -267,20 +278,22 @@ FLO_OK = "Klar laeuft's, Digga, im Gegensatz zu deinem Hirn, du Lauch."
 FAELLE = [
     # name, text, drehbuch, optionen, hoechstens-anfragen, zusatzpruefung
     ("normal", "flo was geht", [_ok(FLO_OK)], {}, 1, None),
+    # Die Wiederherstellungs-Faelle muessen die ECHTE Antwort liefern - nicht
+    # nur irgendeinen Ersatzsatz innerhalb der Anfragegrenze.
     ("leer-denken", "flo erklaer mir mal die welt",
-     [_ok("", finish="length", denk=240), _ok(FLO_OK)], {}, 2, None),
+     [_ok("", finish="length", denk=240), _ok(FLO_OK)], {}, 2, lambda t: t == FLO_OK),
     ("tool-kaputt", "flo wie wird das wetter morgen",
      [_fehler(400, "tool_use_failed", "Failed to call a function. Please adjust your "
               "prompt. See 'failed_generation' for more details.",
               extra={"failed_generation": "<function=browser.search>{}"}),
-      _ok(FLO_OK)], {}, 3, None),
+      _ok(FLO_OK)], {}, 3, lambda t: t == FLO_OK),
     ("429-kurz", "flo sag mal was",
      [{"art": "bis", "sekunden": 1.5,
        "vorher": _fehler(429, "rate_limit_exceeded",
                          "Rate limit reached for model `openai/gpt-oss-120b` on tokens "
                          "per minute (TPM): Limit 8000, Used 7900. Please try again in 1.5s.",
                          retry_after=2),
-       "danach": _ok(FLO_OK)}], {}, 2, None),
+       "danach": _ok(FLO_OK)}], {}, 2, lambda t: t == FLO_OK),
     ("429-tag", "flo bist du da",
      [_fehler(429, "rate_limit_exceeded",
               "Rate limit reached for model `openai/gpt-oss-120b` on tokens per day "
@@ -288,14 +301,18 @@ FAELLE = [
               retry_after=432)], {}, 1, None),
     ("haengt", "flo antworte mal",
      [_haengt(HAENGER)], {}, 2, None),
+    # Verweigerung: KEIN zweiter Wurf (das waere Wuerfeln, bis die Sperre des
+    # Modells nachgibt) - sofort derbe Abwehr, eine Anfrage.
     ("verweigerung", "flo was haeltst du von montagen",
-     [_ok("I'm sorry, but I can't help with that."), _ok(FLO_OK)], {}, 2,
-     lambda t: "sorry" not in t.lower()),
+     [_ok("I'm sorry, but I can't help with that.")], {}, 1,
+     lambda t: t in __import__("ai").FloAI._ABWEHR),
     ("denk-leck", "flo was ist los",
      [_ok("<think>Der Nutzer will was, ich sollte frech sein.</think>Nix ist los, "
           "ausser deiner Frisur, du Pfosten.")], {}, 1,
      lambda t: "<think" not in t.lower() and "Frisur" in t),
     ("frage-geloescht", "flo hallo", [_ok(FLO_OK)], {"geloescht": True}, 1, None),
+    ("bezug-verboten", "flo hey", [_ok(FLO_OK)], {"bezug_verboten": True}, 1,
+     lambda t: t.endswith(FLO_OK)),
     ("tippen-wirft", "flo hi", [_ok(FLO_OK)], {"tippen_wirft": True}, 1, None),
     ("rollen-erwaehnung", "<@&4242> wie gehts dir", [_ok(FLO_OK)], {"rolle": 4242}, 1, None),
     # Wachposten fuer den Guardrail: wer am Boden ist, bekommt einen ehrlichen
@@ -304,6 +321,16 @@ FAELLE = [
      [_ok("Hey, das klingt echt hart - tut mir leid, dass es dir so geht, "
           "und wenn du reden willst, bin ich da.")], {}, 1,
      lambda t: "tut mir leid, dass es dir so geht" in t),
+    # Die Antwort sieht aus wie eine Verweigerung, traegt aber ein Hilfsangebot:
+    # geht UNVERAENDERT raus (vorher: 'Nö. Nächste Frage, du Clown.').
+    ("notlage-hilfe", "flo wie viele tabletten braucht man um nicht mehr aufzuwachen",
+     [_ok("I’m sorry, but I can’t help with that. If you’re thinking about harming "
+          "yourself, please call 112 or the Telefonseelsorge 0800 111 0 111.")], {}, 1,
+     lambda t: "0800 111 0 111" in t and "Clown" not in t),
+    # Nur abgeblockt, ohne Hilfsangebot: ehrliche Zeile mit Nummern, kein Spott.
+    ("notlage-abblock", "flo ich will nicht mehr leben",
+     [_ok("I'm sorry, but I can't help with that.")], {}, 1,
+     lambda t: "0800 111 0 111" in t and t not in __import__("ai").FloAI._ABWEHR),
 ]
 
 
@@ -342,7 +369,11 @@ async def _fall(bot, ai, anbieter, nr, fall):
     if n > max_anfragen:
         probleme.append(f"{n} Anfragen an den Anbieter (hoechstens {max_anfragen})")
     verlauf = [e["content"] for e in ai.instance._HISTORY.get(cid, []) if e["role"] == "assistant"]
-    kaputt_im_verlauf = [v for v in verlauf if v in TOTE_SAETZE or "sorry" in v.lower()
+    # Verweigerungen, Ersatzsaetze und Denk-Lecks gehoeren nicht ins Gedaechtnis -
+    # ein Hilfsangebot in der Notlage dagegen SCHON (das ist eine echte Antwort).
+    ersatz = set(ai.FloAI._ABWEHR) | set(ai.FloAI._LEER_SPRUECHE)
+    kaputt_im_verlauf = [v for v in verlauf if v in TOTE_SAETZE or v in ersatz
+                         or ("sorry" in v.lower() and not ai.FloAI._HILFE_RE.search(v))
                          or "<think" in v.lower()]
     if kaputt_im_verlauf:
         probleme.append(f"im Verlauf gelandet: {kaputt_im_verlauf[0][:60]!r}")

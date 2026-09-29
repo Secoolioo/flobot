@@ -337,6 +337,10 @@ _HANDLED_SENTINELS = (basis.HANDLED,) + tuple(
     and getattr(modul, "HANDLED") is not basis.HANDLED
 )
 
+# So lange darf die Terraria-Auto-Antwort (Wiki + Zusammenfassung) brauchen,
+# bevor die normale KI-Antwort uebernimmt.
+TERRARIA_FRIST = 20.0
+
 # Takt fuer Zufalls-Events (Sekunden). Bei jedem Tick zieht games.maybe_event mit
 # kleiner Wahrscheinlichkeit (GAMES_EVENT_CHANCE) ein Event.
 EVENT_INTERVAL_SECONDS = float(os.getenv("GAMES_EVENT_INTERVAL", "300"))
@@ -859,7 +863,9 @@ async def _tippen(channel):
     cm = None
     try:
         cm = channel.typing()
-        await cm.__aenter__()
+        # Hoechstens 2 s: bei einem Discord-5xx wiederholt discord.py selbst
+        # fuenfmal (1+3+5+7+9 s) - so lange hing sonst die fertige Antwort.
+        await asyncio.wait_for(cm.__aenter__(), 2)
     except Exception as exc:  # noqa: BLE001 - Deko darf nie die Antwort kosten
         log.warning("KI-Fehler: Tipp-Anzeige gescheitert (%s: %s) - antworte trotzdem.",
                     type(exc).__name__, exc)
@@ -2203,12 +2209,23 @@ class FloBot(discord.Client):
             # (Embed mit Bild) statt aus dem Bauch, auch ohne 'terraria' davor.
             if (TERRARIA_ENABLED and an("terraria") and not image_url
                     and terraria.erkennt_frage(content)):
-                async with _tippen(message.channel):
-                    try:
-                        res = await terraria.beantworte(message, ai.strip_lead(content) or content)
-                    except Exception:  # noqa: BLE001
-                        log.exception("Terraria-Auto-Antwort fehlgeschlagen")
-                        res = None
+                # Eigene Frist fuer das Wiki: haengt es, antwortet eben die KI
+                # (mit ihrer eigenen Frist) - vorher tippte Flo bis zu 90 s.
+                wiki = asyncio.ensure_future(
+                    terraria.beantworte(message, ai.strip_lead(content) or content))
+                res = None
+                try:
+                    async with _tippen(message.channel):
+                        fertig, _ = await asyncio.wait({wiki}, timeout=TERRARIA_FRIST)
+                    if wiki in fertig:
+                        res = wiki.result()
+                    else:
+                        log.warning("Terraria-Auto-Antwort zu langsam - antwortet die KI.")
+                except Exception:  # noqa: BLE001
+                    log.exception("Terraria-Auto-Antwort fehlgeschlagen")
+                finally:
+                    if not wiki.done():
+                        wiki.cancel()
                 if res is not None:
                     return  # Terraria hat selbst geantwortet (Embed + Buttons)
             gid = getattr(message.guild, "id", None)
@@ -2224,12 +2241,22 @@ class FloBot(discord.Client):
                     gid=gid, uid=message.author.id)
             # Die Anfrage laeuft SCHON, waehrend Discord die Tipp-Anzeige
             # bestaetigt - vorher stand dieser Roundtrip vor jeder KI-Antwort.
+            # Die Frist zaehlt ab JETZT, nicht erst nach der Tipp-Anzeige.
+            ende = time.monotonic() + ai.instance.KI_FRIST + 15
             aufgabe = asyncio.ensure_future(anfrage)
-            async with _tippen(message.channel):
-                # Netz unter der Frist in ai.py. asyncio.wait statt wait_for: das
-                # wartet beim Abbruch nicht darauf, dass die Anfrage wirklich tot
-                # ist - genau dort hing der alte Weg bis zu drei Minuten.
-                fertig, _ = await asyncio.wait({aufgabe}, timeout=ai.instance.KI_FRIST + 15)
+            try:
+                async with _tippen(message.channel):
+                    # Netz unter der Frist in ai.py. asyncio.wait statt wait_for:
+                    # das wartet beim Abbruch nicht darauf, dass die Anfrage
+                    # wirklich tot ist - genau dort hing der alte Weg bis zu drei
+                    # Minuten.
+                    fertig, _ = await asyncio.wait(
+                        {aufgabe}, timeout=max(0.0, ende - time.monotonic()))
+            finally:
+                # Auch wenn on_message selbst abgebrochen wird: die Anfrage
+                # nicht verwaist weiterlaufen lassen (sie kostet Kontingent).
+                if not aufgabe.done() and asyncio.current_task().cancelling():
+                    aufgabe.cancel()
             if aufgabe in fertig:
                 antwort = aufgabe.result()
             else:

@@ -1044,6 +1044,9 @@ class Economy(FeatureBasis):
                     system=self._LEVELUP_SYSTEM,
                     temperature=1.15,   # hoch = mehr Chaos/Abwechslung
                     max_tokens=60,      # harte Bremse -> bleibt ein kurzer Satz
+                    # Unaufgefordert -> Hintergrund: eigenes Kontingent, kein
+                    # Wiederholen, und nach einem 429 hat der Chat Vorrang.
+                    hintergrund=True,
                 )
             except Exception:  # noqa: BLE001 - KI-Fehler darf die Ansage nicht killen
                 out = None

@@ -231,6 +231,11 @@ class Gehirn(FeatureBasis):
         puffer = eintrag["puffer"]
         if not puffer:
             return 0
+        # Pause nach einem 429 (der Chat hat Vorrang): generate liefert dann
+        # sowieso None. Den Puffer NICHT leeren - sonst waere jedes Gespraech,
+        # das in diese fuenf Minuten faellt, weg. Er ist gedeckelt (PUFFER_MAX).
+        if ai.hintergrund_pausiert():
+            return 0
         # Puffer SOFORT leeren: geht der KI-Aufruf schief, sind die Nachrichten
         # zwar verloren - aber es kommen laufend neue. Andersherum wuerde ein
         # dauerhaft scheiternder Aufruf denselben Puffer ewig neu schicken.

@@ -92,6 +92,8 @@ class FloAI:
     # Zweiter Anlauf, wenn das Denken trotzdem alles gefressen hat (leer bzw.
     # finish_reason 'length'). Gilt nur fuer genau diesen einen Nachschuss.
     MAX_TOKENS_NOTFALL = 900
+    # Untergrenze fuer generate() bei Denk-Modellen (siehe dort).
+    GENERATE_MIN_TOKENS = 256
     # So viel Text geht hoechstens in den Chat - egal was das Modell liefert.
     ANTWORT_MAX_ZEICHEN = 400
 
@@ -190,18 +192,50 @@ class FloAI:
     # fun._REFUSAL_RE ("tut mir leid", "kann ich nicht") waere hier falsch: sie
     # traefe genau die ehrliche Antwort an jemanden, der am Boden ist ("tut mir
     # leid, dass es dir so geht") - und die verlangt der Guardrail ausdruecklich.
+    #
+    # Nur die ENGLISCHEN Floskeln: die deutschen ('ich kann dir da nicht helfen')
+    # sind bei Flo meist der Anfang eines Spruchs ('..., du bist ein
+    # hoffnungsloser Fall, du Lauch') - die als Verweigerung zu werten kostete
+    # eine Anfrage und warf gute Antworten weg.
     _VERWEIGERUNG_RE = re.compile(
         r"^\W{0,3}(?:"
         r"i['’]?m (?:really |so )?sorry,? (?:but )?i (?:can(?:no|['’])t|won['’]t|am unable)|"
         r"sorry,? (?:but )?i can(?:no|['’])t (?:help|assist|comply|do)|"
         r"i can(?:no|['’])t (?:help|assist|comply)(?: you)? with|"
         r"i(?: am|['’]m) (?:not able|unable) to (?:help|assist|comply|provide)|"
-        r"as an ai\b|"
-        r"ich kann (?:dir )?(?:dabei|damit|hierbei|da) nicht helfen|"
-        r"(?:tut mir leid|sorry),? (?:aber )?(?:dabei|damit|hierbei|da) kann ich "
-        r"(?:dir )?nicht helfen|"
-        r"ich (?:darf|werde) (?:dir )?(?:dabei|damit|hierbei|da) nicht helfen"
+        r"as an ai\b(?: (?:language )?(?:model|assistant))?,? i (?:can(?:no|['’])t|"
+        r"won['’]t|am (?:not able|unable)|do(?: not|n['’]t))"
         r")", re.IGNORECASE)
+
+    # --- Notlage: die EINE Stelle, an der Flo nicht spottet --------------------
+    # Die Grenze aus _GUARDRAIL ("wenn jemand ernsthaft am Boden ist ... bist
+    # du kurz ehrlich fuer die Person da") muss auch dann halten, wenn die
+    # Antwort des Modells aussieht wie eine Verweigerung ("I'm sorry, but I
+    # can't help with that. If you're thinking about harming yourself, please
+    # call ...") oder laenger ist als sonst erlaubt. Deshalb zwei Erkennungen:
+    # Notsignale in der FRAGE und Hilfsangebote in der ANTWORT. Trifft eine,
+    # wird nie verspottet, nie abgewehrt, nie gekuerzt.
+    _NOTLAGE_RE = re.compile(
+        r"(?i)(?:suizid|selbstmord|suicid|umbringen|mich (?:selbst )?t[oö]ten|"
+        r"bring(?:e)? mich (?:\w+ )?um\b(?!\s+vor)|"
+        r"(?:will|möchte|moechte|wuerde|würde) (?:nicht mehr leben|sterben)|"
+        r"nicht mehr (?:zu )?(?:leben|auf(?:zu)?wachen|da (?:zu )?sein)|keinen sinn mehr|"
+        r"\britz(?:e|en)\b|"
+        r"tabletten\W+(?:\w+\W+){0,8}?(?:sterben|auf(?:zu)?wachen|schlucken)|"
+        r"kill (?:myself|me)\b|want to die|end (?:it all|my life)|self[- ]?harm|"
+        r"hurt(?:ing)? myself)")
+    _HILFE_RE = re.compile(
+        r"(?i)(?:telefonseelsorge|seelsorge|0800[\s-]?111[\s-]?0[\s-]?(?:111|222)|"
+        r"116[\s-]?123|\b112\b|\b988\b|krisendienst|krisentelefon|nummer gegen kummer|"
+        r"hilfe holen|nicht allein|suizid|selbstmord|suicid|harming yourself|"
+        r"self[- ]?harm|crisis|hotline|professionelle hilfe|professional help)")
+    # Wenn das Modell in einer Notlage NUR abblockt (ohne eigenes Hilfsangebot):
+    # ehrlich, in Flos Stimme, ohne Spott.
+    _NOTLAGE_ANTWORT = (
+        "Hey, ohne Spaß jetzt: Das klingt richtig ernst, und da hör ich mit dem "
+        "Scheiß auf. Du musst da nicht allein durch – ruf die Telefonseelsorge an: "
+        "0800 111 0 111 oder 0800 111 0 222, kostenlos und rund um die Uhr. "
+        "Wenn's akut ist: 112.")
 
     # Modelle, die als Ersatz nie in Frage kommen (koennen kein Chat).
     _UNBRAUCHBAR = ("whisper", "tts", "embed", "guard", "moderation", "rerank",
@@ -759,6 +793,10 @@ class FloAI:
             # Den Denkaufwand des CHATmodells nie ans Vision-Modell: das ist ein
             # anderes Modell, das den Schalter anders (oder gar nicht) kennt.
             aufwand = self._vision_denk if vision else self._denk_aufwand
+            if modell and not self._denkt(modell):
+                # Das Nebenmodell (LLM_HINTERGRUND_MODEL) denkt vielleicht gar
+                # nicht - dann waere reasoning_effort ein 400 bei jedem Aufruf.
+                aufwand = ""
             if aufwand:
                 kw["reasoning_effort"] = aufwand
             else:
@@ -771,7 +809,14 @@ class FloAI:
                 rest = frist - jetzt
                 if rest <= 0.5:
                     raise LlmFehler("zeit", None, "Frist fuer diese Antwort abgelaufen")
-                kw["timeout"] = min(self.ZEITLIMIT, rest)
+                zeit = min(self.ZEITLIMIT, rest)
+                # Ein nackter float ersetzt das ganze Client-Timeout - Verbinden
+                # durfte dann so lange dauern wie Lesen.
+                try:
+                    import httpx
+                    kw["timeout"] = httpx.Timeout(zeit, connect=min(5.0, zeit))
+                except ImportError:          # ohne openai-Paket (Tests) reicht die Zahl
+                    kw["timeout"] = zeit
             try:
                 antwort = await self._client.chat.completions.create(**kw)
             except Exception as exc:  # noqa: BLE001 - hier wird eingeordnet, nicht verschluckt
@@ -856,24 +901,80 @@ class FloAI:
     def _satzende(text):
         return bool(text) and text.rstrip()[-1:] in ".!?…\"')»*"
 
+    _SATZ_RE = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
+
     def _kuerzen(self, text, grenze=None):
-        """Mehr als ANTWORT_MAX_ZEICHEN kommen nie in den Chat. Gekappt wird am
-        letzten Satzende davor - ein halber Satz sieht kaputt aus."""
+        """Mehr als ANTWORT_MAX_ZEICHEN kommen nie in den Chat.
+
+        Der LETZTE Satz bleibt, wenn es geht: bei Flo ist das der Spruch zum
+        Schluss, und genau der fiel beim stumpfen Abschneiden weg. Nie mitten
+        in einer Zahlenreihe schneiden (Telefonnummern!), offene **/__ wieder
+        schliessen, und nie etwas Leeres zurueckgeben."""
         grenze = grenze or self.ANTWORT_MAX_ZEICHEN
         text = (text or "").strip()
         if len(text) <= grenze:
             return text
-        stueck = text[:grenze]
-        ende = max(stueck.rfind(z) for z in (". ", "! ", "? ", "… "))
-        if ende >= 40:
-            return stueck[:ende + 1].strip()
-        leer = stueck.rfind(" ")
-        return (stueck[:leer] if leer >= 40 else stueck).rstrip(" ,;:-–") + " …"
+        saetze = [t.strip() for t in self._SATZ_RE.findall(text) if t.strip()]
+        ergebnis = ""
+        if len(saetze) >= 2 and len(saetze[-1]) <= grenze - 40:
+            vorne = []
+            for satz in saetze[:-1]:
+                if len(" ".join(vorne + [satz, saetze[-1]])) > grenze:
+                    break
+                vorne.append(satz)
+            if vorne:
+                ergebnis = " ".join(vorne + [saetze[-1]])
+        if not ergebnis:
+            stueck = text[:grenze]
+            ende = max(stueck.rfind(z) for z in (". ", "! ", "? ", "… "))
+            if ende >= 40:
+                ergebnis = stueck[:ende + 1].strip()
+            else:
+                leer = stueck.rfind(" ")
+                ziffern = "0123456789"
+                while (leer >= 40 and stueck[leer - 1] in ziffern
+                       and leer + 1 < len(stueck) and stueck[leer + 1] in ziffern):
+                    leer = stueck.rfind(" ", 0, leer)
+                ergebnis = (stueck[:leer] if leer >= 40 else stueck).rstrip(" ,;:-–") + " …"
+        for marke in ("**", "__"):
+            if ergebnis.count(marke) % 2:
+                ergebnis += marke
+        if not re.search(r"\w", ergebnis):
+            return text[:grenze]
+        return ergebnis
+
+    @staticmethod
+    def _denkt(modell):
+        """Ist das ein Denk-Modell, das reasoning_effort kennt?"""
+        m = (modell or "").lower()
+        return any(k in m for k in ("gpt-oss", "qwen3", "qwq", "deepseek-r1",
+                                    "r1-distill", "magistral"))
+
+    def _bis_satzende(self, text):
+        """Einen abgeschnittenen Text bis zum letzten ganzen Satz - oder None,
+        wenn gar kein Satz fertig wurde ('Du bist echt so ein')."""
+        text = (text or "").strip()
+        ende = max(text.rfind(z) for z in (". ", "! ", "? ", "… "))
+        if text[-1:] in ".!?…":
+            ende = len(text) - 1
+        return text[:ende + 1].strip() if ende >= 8 else None
+
+    def hintergrund_pausiert(self):
+        """Laeuft gerade die Pause nach einem 429? Dann liefert generate(...,
+        hintergrund=True) ohnehin None - wer vorher etwas leert (Gedaechtnis-
+        Puffer), soll es in der Zeit behalten."""
+        return time.monotonic() < self._hintergrund_pause_bis
+
+    def ist_notlage(self, frage, antwort=""):
+        """Notsignal in der Frage oder Hilfsangebot in der Antwort?"""
+        return bool(self._NOTLAGE_RE.search(frage or "")
+                    or self._HILFE_RE.search(antwort or ""))
 
     def _ist_verweigerung(self, text):
         """Hat das Modell sich geweigert? Nur kurze Texte, die GENAU SO anfangen -
         siehe _VERWEIGERUNG_RE, warum die Erkennung bewusst eng ist."""
-        return bool(text) and len(text) < 300 and bool(self._VERWEIGERUNG_RE.search(text))
+        return (bool(text) and len(text) < 300 and bool(self._VERWEIGERUNG_RE.search(text))
+                and not self._HILFE_RE.search(text))
 
     def fehlertext(self, fehler):
         """Der Satz, den der Chat zu sehen bekommt - je Ursache ein anderer."""
@@ -1272,7 +1373,7 @@ class FloAI:
         """Entfernt versehentlich in den Text geratene Werkzeug-Syntax
         (<function=...>, <tool_call> usw.), damit sie nie beim Nutzer ankommt."""
         if not text or "<" not in text:
-            return text or ""
+            return (text or "").strip()
         for pat in self._LEAK_PATTERNS:
             text = pat.sub("", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
@@ -1314,7 +1415,10 @@ class FloAI:
         # daraufhin alle 20 s neu gefragt). Die Laenge sichert danach _kuerzen.
         budget = max_tokens
         if self._denk_aufwand or "gpt-oss" in self._model:
-            budget = max(max_tokens, self.MAX_TOKENS)
+            # 256 reicht bei reasoning_effort=low fuer Nachdenken + Einzeiler.
+            # Nicht mehr: Groq rechnet max_tokens gegen das Minuten-Kontingent,
+            # und die Einzeiler kommen oft.
+            budget = max(max_tokens, self.GENERATE_MIN_TOKENS)
         modell = self._hintergrund_modell if hintergrund else None
         try:
             try:
@@ -1406,7 +1510,8 @@ class FloAI:
 
     async def ask_flo(self, user_message, *, author = "", title = "",
                       tone = "", channel_id = None,
-                      bavarian = False, gid = None, uid = None):
+                      bavarian = False, gid = None, uid = None, frist = None,
+                      verlauf_frage = None):
         """Schickt die Nutzerfrage ans LLM und fuehrt bei Bedarf Werkzeuge aus.
 
         Hat der Nutzer im Shop einen Titel gekauft (title), wird Flo angewiesen, ihn
@@ -1419,17 +1524,26 @@ class FloAI:
         danebenliegt, wird genau EINMAL nachgefasst:
           - leer / abgeschnitten (Denken hat das Budget gefressen) -> mit mehr Budget
           - Groq-400 'tool_use_failed' -> nochmal, dann ohne Werkzeug
-          - Verweigerung -> nochmal wie vorher, sonst derbe Abwehr
-        Alles zusammen innerhalb von KI_FRIST."""
+        Eine Verweigerung wird NICHT wiederholt: das waere Wuerfeln, bis die
+        eigene Sperre des Modells nachgibt - bei Hetze-Anfragen genau das
+        Falsche. Flo wehrt dann derb ab.
+
+        Notlage (Notsignal in der Frage oder Hilfsangebot in der Antwort): nie
+        Spott, nie Abwehr, nie gekuerzt - siehe _NOTLAGE_RE.
+
+        Alles zusammen innerhalb von KI_FRIST (oder der mitgegebenen 'frist',
+        wenn ein Aufrufer schon Zeit verbraucht hat, z. B. der Bild-Weg)."""
         if self._client is None:
             return "Mein KI-Modus ist gerade nicht eingerichtet."
 
-        frist = time.monotonic() + self.KI_FRIST
+        frist = frist or time.monotonic() + self.KI_FRIST
+        notlage = bool(self._NOTLAGE_RE.search(user_message or ""))
         text = user_message.strip()
         if author:
             text = f"{author} schreibt: {text}"
 
-        history = self._recent(channel_id, skip_content=user_message.strip())
+        history = self._recent(channel_id,
+                               skip_content=(verlauf_frage or user_message).strip())
         messages = [
             {"role": "system",
              "content": self._system_prompt(author, title, tone, bavarian, gid, uid)},
@@ -1498,12 +1612,14 @@ class FloAI:
                         continue
                     sauber = self._sanitize_output(content)
                     fertig = getattr(response.choices[0], "finish_reason", None)
-                    if self._ist_verweigerung(sauber):
+                    hilfe = notlage or bool(self._HILFE_RE.search(sauber))
+                    if self._VERWEIGERUNG_RE.search(sauber) and len(sauber) < 300:
                         log.warning("KI-Fehler: Verweigerung (%s): %r",
                                     self._befund(response), sauber[:80])
-                        if "verweigerung" not in nachgefasst:
-                            nachgefasst.add("verweigerung")
-                            continue
+                        if self._HILFE_RE.search(sauber):
+                            return sauber        # Hilfsangebot drin: so, wie es ist
+                        if hilfe:
+                            return self._NOTLAGE_ANTWORT
                         return random.choice(self._ABWEHR)
                     if not sauber or (fertig == "length" and not self._satzende(sauber)):
                         # Bei Denk-Modellen ist das Budget beim Nachdenken
@@ -1517,10 +1633,14 @@ class FloAI:
                             nachgefasst.add("leer")
                             budget = max(budget, self.MAX_TOKENS_NOTFALL)
                             continue
-                        if sauber:
-                            return self._kuerzen(sauber)
-                        return random.choice(self._LEER_SPRUECHE)
-                    return self._kuerzen(sauber)
+                        if hilfe:
+                            return sauber or self._NOTLAGE_ANTWORT
+                        # Auch der zweite Anlauf abgeschnitten: bis zum letzten
+                        # ganzen Satz - ein halber ('Du bist echt so ein') geht
+                        # nicht raus.
+                        return (self._bis_satzende(sauber) if sauber else None) \
+                            or random.choice(self._LEER_SPRUECHE)
+                    return sauber if hilfe else self._kuerzen(sauber)
 
                 # Assistant-Nachricht mit den Tool-Aufrufen sauber zurueckschreiben.
                 messages.append(
@@ -1551,10 +1671,12 @@ class FloAI:
                         }
                     )
         except LlmFehler as fehler:
+            if notlage:
+                return self._NOTLAGE_ANTWORT     # nie ein derber Stoerungssatz
             return self.fehlertext(fehler)       # je Ursache ein anderer Satz
         except Exception:  # noqa: BLE001 - Discord-Bot soll nie wegen LLM-Fehler crashen
             log.exception("LLM-Aufruf unerwartet gescheitert")
-            return self.MELDUNGEN["unbekannt"]
+            return self._NOTLAGE_ANTWORT if notlage else self.MELDUNGEN["unbekannt"]
 
         return "Das war mir gerade zu kompliziert - frag mich nochmal einfacher."
 
@@ -1599,6 +1721,8 @@ class FloAI:
                 fertig = getattr(response.choices[0], "finish_reason", None)
                 if sauber and not self._ist_verweigerung(sauber) and not (
                         fertig == "length" and not self._satzende(sauber)):
+                    if self.ist_notlage(user_message, sauber):
+                        return sauber            # Hilfsangebot nie abschneiden
                     return self._kuerzen(sauber)
                 log.warning("KI-Fehler: Bild-Antwort unbrauchbar (%s): %r",
                             self._befund(response, budget), sauber[:60])
@@ -1606,10 +1730,14 @@ class FloAI:
             ohne_bild = True
         except LlmFehler as fehler:
             if fehler.art not in ("anfrage", "modell", "werkzeug"):
+                if self.ist_notlage(user_message):
+                    return self._NOTLAGE_ANTWORT
                 return self.fehlertext(fehler)
             ohne_bild = True
         except Exception:  # noqa: BLE001
             log.exception("Vision-Aufruf unerwartet gescheitert")
+            if self.ist_notlage(user_message):
+                return self._NOTLAGE_ANTWORT
             return self.MELDUNGEN["unbekannt"]
         if ohne_bild:
             log.warning("KI: Bild nicht lesbar - antworte auf den Text.")
@@ -1617,7 +1745,7 @@ class FloAI:
             return await self.ask_flo(
                 f"{frage} [Das Bild dazu konntest du nicht sehen.]", author=author,
                 title=title, tone=tone, channel_id=channel_id, bavarian=bavarian,
-                gid=gid, uid=uid)
+                gid=gid, uid=uid, frist=frist, verlauf_frage=frage)
         return random.choice(self._LEER_SPRUECHE)
 
     async def see_image_raw(self, prompt, image_url, *, temperature = 0.3,
@@ -1676,6 +1804,7 @@ guild_kontext = FloAI.guild_kontext
 http_session = instance.http_session
 get_weather = instance.get_weather
 generate = instance.generate
+hintergrund_pausiert = instance.hintergrund_pausiert
 note_message = instance.note_message
 ask_flo = instance.ask_flo
 see_image = instance.see_image
