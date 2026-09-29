@@ -471,16 +471,6 @@
     "text": "Basd scho! Ab jetzt red i boarisch mit eich, oida. 🥨"
    }
   ],
-  "bestenliste": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
-    "titel": ""
-   }
-  ],
   "bewerte": [
    {
     "art": "text",
@@ -2246,16 +2236,6 @@
     "endung": "png"
    }
   ],
-  "leaderboard": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
-    "titel": ""
-   }
-  ],
   "leave": [
    {
     "art": "embed",
@@ -3256,16 +3236,6 @@
     "endung": "png"
    }
   ],
-  "rangliste": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
-    "titel": ""
-   }
-  ],
   "rank": [
    {
     "art": "datei",
@@ -4230,16 +4200,6 @@
     "titel": "🎒 Inventar von Rauchtester"
    }
   ],
-  "top": [
-   {
-    "art": "embed",
-    "bild": false,
-    "felder": [],
-    "fuss": false,
-    "text": "Hier hat noch niemand gearbeitet. `Flo work` – sei der Erste.",
-    "titel": ""
-   }
-  ],
   "tower": [
    {
     "art": "object"
@@ -5159,7 +5119,7 @@
  },
  "zaehlung": {
   "befragt": 489,
-  "stabil": 476,
+  "stabil": 472,
   "wackelig": 6
  }
 }
