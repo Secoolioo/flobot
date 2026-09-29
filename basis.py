@@ -145,6 +145,34 @@ async def antworte(message, content=None, **kw):
 HANDLED = object()
 
 
+
+def bausteine(message):
+    """Alle Bausteine einer Nachricht, flach und in Lesereihenfolge - auch die
+    verschachtelten der neuen Discord-Nachrichten (Components V2:
+    Container > Abschnitt > Text/Knopf/Vorschaubild)."""
+    def tiefer(teile):
+        for teil in teile or ():
+            yield teil
+            yield from tiefer(getattr(teil, "children", None))
+            zubehoer = getattr(teil, "accessory", None)
+            if zubehoer is not None:
+                yield from tiefer([zubehoer])
+    try:
+        return list(tiefer(getattr(message, "components", None)))
+    except Exception:  # noqa: BLE001 - Attrappen / fremde Objekte
+        return []
+
+
+def v2_text(message):
+    """Der Text einer Components-V2-Nachricht. Die haben kein content - wer
+    'was hat Flo geschrieben' wissen will (BotSicht), muss in die Bausteine."""
+    import discord
+    return "\n".join(
+        str(teil.content) for teil in bausteine(message)
+        if getattr(teil, "type", None) == discord.ComponentType.text_display
+        and getattr(teil, "content", None))
+
+
 class FeatureBasis:
     """Was jedes Feature-Modul koennen muss: seinen eigenen Namen kennen."""
 

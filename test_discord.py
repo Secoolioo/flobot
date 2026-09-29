@@ -573,6 +573,23 @@ def test_hilfe_im_chat_antwortet_mit_dem_menue():
     assert kw["file"].filename == "help_voice.png"
 
 
+def test_botsicht_liest_den_text_neuer_nachrichten():
+    """Components-V2-Nachrichten (Hilfe, Musik-Panel) haben kein content - die
+    BotSicht im Web-Panel zeigte sie als leere Blasen."""
+    from discord.components import _component_factory
+    import basis
+    import bot
+    import webpanel
+    view, _ = asyncio.run(bot.client._hilfe_nachricht("casino"))
+    msg = _rauch_nachricht("")
+    msg.components = [_component_factory(d) for d in view.to_components()]
+    msg.embeds, msg.reactions, msg.pinned = [], [], False
+    text = basis.v2_text(msg)
+    assert "## Casino" in text and "blackjack" in text
+    assert "## Casino" in webpanel.instance._sicht_msg(msg)["text"]
+    assert basis.v2_text(_rauch_nachricht("hallo")) == ""
+
+
 # --- Einladungslink ------------------------------------------------------------
 def test_einladelink_hat_alle_noetigen_rechte():
     """Der alte Link kannte weder Voice noch Reaktionen, Bilder, Rollen,

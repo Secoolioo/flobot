@@ -1668,10 +1668,14 @@ class FloBot(discord.Client):
         Ansagen (Erfolge sollen sichtbar bleiben) und das aktuelle Musik-Panel
         'Jetzt laeuft' (die Steuer-Buttons muessen den ganzen Song erreichbar bleiben).
         Alte Panels raeumt der Musik-Player beim Songwechsel selbst weg."""
-        if self.user is None or m.author.id != self.user.id or not m.embeds:
+        if self.user is None or m.author.id != self.user.id:
             return False
-        title = m.embeds[0].title
-        return title in (economy.LEVELUP_EMBED_TITLE, music.NOWPLAYING_EMBED_TITLE)
+        # Das Musik-Panel ist eine V2-Nachricht ohne Embed - erkannt wird es an
+        # seinen Knoepfen. Nebenbei faellt damit der alte Embed-Titel weg: tote
+        # Panels von vor dem Update raeumt das Auto-Loeschen jetzt mit weg.
+        if music.ist_panel(m):
+            return True
+        return bool(m.embeds) and m.embeds[0].title == economy.LEVELUP_EMBED_TITLE
 
     def _sweepable(self, m):
         """True = diese Nachricht im Auto-Loesch-Channel darf weg. Level-Up-Ansagen,

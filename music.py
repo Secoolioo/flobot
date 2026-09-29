@@ -1031,6 +1031,8 @@ class GuildPlayer:
     _vorlade_task: "asyncio.Task | None" = None
     _vorlade_track: "Track | None" = None
     _vorlade_timer: "asyncio.TimerHandle | None" = None
+    # Was zuletzt als Sprachkanal-Status gesetzt wurde (kein doppeltes Setzen).
+    _kanal_status_text: "str | None" = None
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1514,6 +1516,10 @@ class GuildPlayer:
         self._play_gen += 1             # alte after-Callbacks entwerten
         await _retire_panel(self)
         if self.voice is not None:
+            try:
+                await instance._kanal_status(self, None)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 await self.voice.disconnect(force=True)
             except Exception:  # noqa: BLE001
@@ -2153,57 +2159,43 @@ class QueuePositionView(discord.ui.View):
 _SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 
 
-class _SpeedSelect(discord.ui.Select):
-    """Dropdown im Panel: Songgeschwindigkeit waehlen. Stellt den laufenden Song
-    sofort an der aktuellen Stelle mit dem neuen Tempo um (FFmpeg atempo)."""
+def _tempo_optionen(aktuell=1.0):
+    """Die Eintraege des Tempo-Menues; das laufende Tempo ist vorgewaehlt."""
+    out = []
+    for s in _SPEEDS:
+        if s < 1.0:
+            emoji, label = "🌌", f"{s:g}× · slowed + reverb"
+            desc = "langsamer & tiefer mit Hall"
+        elif s > 1.0:
+            emoji, label, desc = "🚀", f"{s:g}× · speed", "schneller, gleiche Tonhöhe"
+        else:
+            emoji, label, desc = "🎵", "1× · normal", "Originaltempo"
+        out.append(discord.SelectOption(label=label, value=f"{s}", emoji=emoji,
+                                        description=desc,
+                                        default=abs(s - aktuell) < 1e-3))
+    return out
 
-    def __init__(self, player):
-        self.player = player
-        # row=2, weil Reihe 0 mit fuenf Buttons voll ist und der Loop-Knopf
-        # Reihe 1 belegt. Ein Select wiegt eine ganze Reihe - stuende es
-        # weiterhin auf row=1, wirft discord.py "item would not fit at row 1".
-        super().__init__(placeholder="🎚️ Geschwindigkeit wählen …",
-                         min_values=1, max_values=1, options=self._opts(), row=2)
 
-    def _opts(self):
-        cur = self.player.speed
-        out = []
-        for s in _SPEEDS:
-            if s < 1.0:
-                emoji, label = "🌌", f"{s:g}× · slowed + reverb"
-                desc = "langsamer & tiefer mit Hall"
-            elif s > 1.0:
-                emoji, label, desc = "🚀", f"{s:g}× · speed", "schneller, gleiche Tonhöhe"
-            else:
-                emoji, label, desc = "🎵", "1× · normal", "Originaltempo"
-            out.append(discord.SelectOption(label=label, value=f"{s}", emoji=emoji,
-                                            description=desc, default=abs(s - cur) < 1e-3))
-        return out
+class MusikTempo(discord.ui.DynamicItem[discord.ui.Select],
+                 template=r"flo:musik:tempo"):
+    """Das Tempo-Menue im Panel. Stellt den laufenden Song an der aktuellen
+    Stelle um (FFmpeg atempo bzw. slowed + reverb).
 
-    def refresh(self):
-        """Optionen neu aufbauen, damit das aktuelle Tempo als ausgewaehlt erscheint."""
-        self.options = self._opts()
+    Ein DynamicItem wie die Knoepfe: der Zustand kommt beim Klick aus dem
+    Player des Servers, nicht aus der Nachricht - so geht es auch nach einem
+    Neustart."""
+
+    def __init__(self, aktuell=1.0):
+        super().__init__(discord.ui.Select(
+            custom_id="flo:musik:tempo", placeholder="🎚️ Geschwindigkeit wählen …",
+            min_values=1, max_values=1, options=_tempo_optionen(aktuell)))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls()
 
     async def callback(self, interaction):
-        v = self.player.voice
-        if v is None or not (v.is_playing() or v.is_paused()):
-            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
-            return
-        new = float(self.values[0])
-        await interaction.response.defer()        # Tempo-Wechsel kann ~1s dauern
-        await self.player.apply_speed(new)
-        self.refresh()
-        try:
-            cur = self.player.current
-            if cur is not None:
-                emb = _now_playing_embed(cur, len(self.player.queue),
-                                         speed=self.player.speed,
-                                         loop=self.player.loop_rest)
-                await interaction.edit_original_response(embed=emb, view=self.view)
-            else:
-                await interaction.edit_original_response(view=self.view)
-        except discord.HTTPException:
-            pass
+        await instance._panel_tempo(interaction, float(self.item.values[0]))
 
 
 class LyricsView(discord.ui.View):
@@ -2330,112 +2322,172 @@ class _LoopView(discord.ui.View):
         return False
 
 
-class PlaybackControlView(discord.ui.View):
-    """Steuerpanel unter 'Jetzt laeuft': Pause/Weiter, Skip, Stop, Queue, Loop + Tempo.
+class MusikKnopf(discord.ui.DynamicItem[discord.ui.Button],
+                template=r"flo:musik:(?P<aktion>pause|skip|stop|queue|lyrics|loop)"):
+    """Ein Knopf am Musik-Panel. Die feste custom_id (flo:musik:<aktion>) macht
+    ihn neustartfest: vorher war jedes Panel nach einem Neustart von Flo tot
+    ("Diese Interaktion ist fehlgeschlagen"), obwohl die Musik weiterlief."""
 
-    timeout=None: bleibt fuer die ganze (ggf. lange) Songdauer aktiv. Beim Posten
-    eines neuen Panels wird das alte ueber _send_panel sauber entschaerft.
-    """
+    def __init__(self, aktion, *, label=None, emoji=None,
+                 style=discord.ButtonStyle.secondary):
+        self.aktion = aktion
+        super().__init__(discord.ui.Button(label=label, emoji=emoji, style=style,
+                                           custom_id=f"flo:musik:{aktion}"))
 
-    def __init__(self, player):
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["aktion"], label=item.label, emoji=item.emoji, style=item.style)
+
+    async def callback(self, interaction):
+        await instance._panel_klick(interaction, self.aktion)
+
+
+def _knopfreihen(player):
+    """Die Knoepfe des Panels - fuer V2 und fuer den klassischen Notweg gleich."""
+    pausiert = player.ist_pausiert()
+    oben = [
+        MusikKnopf("pause", label="Weiter" if pausiert else "Pause",
+                   emoji="▶️" if pausiert else "⏸️",
+                   style=(discord.ButtonStyle.success if pausiert
+                          else discord.ButtonStyle.secondary)),
+        MusikKnopf("skip", label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary),
+        MusikKnopf("stop", label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger),
+        MusikKnopf("queue", label="Queue", emoji="🎶"),
+        MusikKnopf("lyrics", label="Lyrics", emoji="🎤"),
+    ]
+    unten = [MusikKnopf("loop", label="Loop", emoji="🔁",
+                        style=(discord.ButtonStyle.success if player.loop_rest
+                               else discord.ButtonStyle.secondary))]
+    return oben, unten
+
+
+def _fortschritt(player, track):
+    """Balken + Zeit + 'endet in ...'. Das Ende steht als Discord-Zeitstempel
+    da (<t:...:R>) - den zaehlt Discord SELBST live herunter. Frueher haette das
+    ein Edit alle paar Sekunden gebraucht, und jeder Edit schliesst offene
+    Menues (Tempo) unter den Fingern der Leute weg."""
+    dauer = track.duration or 0
+    pos = min(player.position(), dauer) if dauer else player.position()
+    if not dauer:
+        return f"-# 📻 läuft seit {_fmt_dur(int(pos)) or '0:00'}"
+    felder = 18
+    voll = min(felder, int(round(pos / dauer * felder)))
+    balken = "▰" * voll + "▱" * (felder - voll)
+    text = f"`{balken}`  {_fmt_dur(int(pos)) or '0:00'} / {_fmt_dur(dauer)}"
+    if player.ist_pausiert():
+        return text + "  ·  ⏸️ pausiert"
+    rest = max(0.0, (dauer - pos) / max(player.speed, 0.1))
+    return text + f"  ·  endet <t:{int(time.time() + rest)}:R>"
+
+
+class MusikPanel(discord.ui.LayoutView):
+    """Das 'Jetzt laeuft'-Panel (Components V2).
+
+    Cover und Titel oben, darunter der Fortschritt mit Live-Endzeit, was als
+    Naechstes kommt, dann die Knoepfe und das Tempo-Menue. Alles Interaktive
+    sind DynamicItems -> das Panel ueberlebt Neustarts.
+
+    timeout=None und NIE stop(): stop() nimmt die DynamicItem-Vorlagen global
+    aus dem Register (ViewStore.remove_view) - danach waere JEDES Panel tot.
+    Weil die View nur aus DynamicItems besteht, merkt discord.py sie sich auch
+    nicht je Nachricht - es gibt nichts, was sich ansammeln koennte (das alte
+    Panel leckte je Song einen Eintrag, siehe test_musik_panel_leckt_nicht)."""
+
+    def __init__(self, player, track=None, *, extra=""):
         super().__init__(timeout=None)
-        self.player = player
-        self.message = None
-        self._sync_pause()
-        self._speed_select = _SpeedSelect(player)   # eigene Zeile unter den Buttons
-        self.add_item(self._speed_select)
+        track = track or player.current
+        teile = []
+        if track is not None:
+            teile.extend(self._kopf(player, track))
+            teile.append(discord.ui.TextDisplay(_fortschritt(player, track)))
+        if extra:
+            teile.append(discord.ui.TextDisplay(f"-# {extra}"))
+        naechste = self._als_naechstes(player)
+        if naechste:
+            teile.append(discord.ui.Separator())
+            teile.append(discord.ui.TextDisplay(naechste))
+        oben, unten = _knopfreihen(player)
+        teile.append(discord.ui.ActionRow(*oben))
+        teile.append(discord.ui.ActionRow(*unten))
+        teile.append(discord.ui.ActionRow(MusikTempo(player.speed)))
+        self.add_item(discord.ui.Container(
+            *teile, accent_colour=_COL_CTRL if player.ist_pausiert() else _COL_PLAY))
 
-    def _sync_pause(self):
-        """Pause-Button passend zum aktuellen Zustand beschriften."""
-        v = self.player.voice
-        paused = bool(v and v.is_paused())
-        self._pause.label = "Weiter" if paused else "Pause"
-        self._pause.emoji = "▶️" if paused else "⏸️"
-        self._pause.style = (discord.ButtonStyle.success if paused
-                             else discord.ButtonStyle.secondary)
+    @staticmethod
+    def _kopf(player, track):
+        kopf = "### ⏸️ Pausiert" if player.ist_pausiert() else "### ▶️ Jetzt läuft"
+        meta = []
+        if track.requested_by:
+            meta.append(f"🙋 {track.requested_by}")
+        if player.speed < 1.0 - 1e-3:
+            meta.append(f"🌌 slowed + reverb {player.speed:g}×")
+        elif player.speed > 1.0 + 1e-3:
+            meta.append(f"🚀 {player.speed:g}×")
+        lt = _loop_text(player.loop_rest)
+        if lt:
+            meta.append(lt)
+        text = f"{kopf}\n{instance._title_value(track)}"
+        if meta:
+            text += "\n-# " + "  ·  ".join(meta)
+        if track.thumbnail:
+            return [discord.ui.Section(discord.ui.TextDisplay(text),
+                                       accessory=discord.ui.Thumbnail(track.thumbnail))]
+        return [discord.ui.TextDisplay(text)]
 
-    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.secondary)
-    async def _pause(self, interaction, _b):
-        v = self.player.voice
-        if v is None or not (v.is_playing() or v.is_paused()):
-            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
-            return
-        if self.player.ist_pausiert():
-            self.player.fortsetzen()
-        else:
-            self.player.pausieren()
-        self._sync_pause()
-        await interaction.response.edit_message(view=self)
+    @staticmethod
+    def _als_naechstes(player):
+        if not player.queue:
+            return ""
+        zeilen = ["**Als Nächstes**"]
+        for i, t in enumerate(player.queue[:3], start=1):
+            dur = _fmt_dur(t.duration)
+            zeilen.append(f"`{i}.` {_short(t.title, 60)}" + (f" · `{dur}`" if dur else ""))
+        mehr = len(player.queue) - 3
+        if mehr > 0:
+            zeilen.append(f"-# …und {mehr} weitere")
+        return "\n".join(zeilen)
 
-    @discord.ui.button(label="Skip", emoji="⏭️", style=discord.ButtonStyle.primary)
-    async def _skip(self, interaction, _b):
-        # Genau derselbe Weg wie der Textbefehl. Der Knopf hing noch am alten
-        # voice.stop(), und das ist der unzuverlaessige Weg: haengt ein Song
-        # (Watchdog zaehlt die Generation hoch), verpufft der Callback - der
-        # Knopf tat dann nichts oder startete denselben Song neu.
-        if self.player.current is None and not self.player.queue:
-            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        await self.player.skip()
 
-    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger)
-    async def _stop(self, interaction, _b):
-        # Gleiche Regel wie beim Textbefehl: bei Desync trotzdem aufraeumen,
-        # sonst holt der Watchdog den Bot zurueck.
-        if (self.player.voice is None and self.player.active_channel_id is None
-                and not self.player.queue and self.player.current is None):
-            await interaction.response.send_message("Ich bin in keinem Sprachkanal.", ephemeral=True)
-            return
-        # Diese Nachricht wird gleich zur 'Gestoppt'-Bestaetigung umgebaut -> aus der
-        # Panel-Verwaltung nehmen, damit disconnect()->_retire_panel sie NICHT loescht.
-        # Die View wird unten selbst gestoppt (stop() am Ende), also auch hier abmelden.
-        self.player.panel_message = None
-        self.player.panel_view = None
-        await self.player.disconnect()
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-        await interaction.response.edit_message(
-            embed=_embed("Musik gestoppt und raus aus dem Sprachkanal.",
-                         title="⏹️  Gestoppt", color=_COL_INFO),
-            view=self)
-        self.stop()
+# Der alte Name bleibt (bot.py/Tests/Inventar kennen ihn) - dahinter steht
+# jetzt das neue Panel.
+PlaybackControlView = MusikPanel
 
-    @discord.ui.button(label="Queue", emoji="🎶", style=discord.ButtonStyle.secondary)
-    async def _queue(self, interaction, _b):
-        await interaction.response.send_message(embed=_queue_embed(self.player), ephemeral=True)
 
-    @discord.ui.button(label="Loop", emoji="🔁", style=discord.ButtonStyle.secondary,
-                       row=1)
-    async def _loop(self, interaction, _b):
-        # row=1 ausdruecklich: Reihe 0 ist mit den fuenf Buttons oben voll.
-        # Ohne die Angabe faende discord.py zwar auch Reihe 1 - aber dann waere
-        # sie halb belegt und der Tempo-Select (row=2) muesste wieder umziehen.
-        if self.player.current is None:
-            await interaction.response.send_message(
-                "Gerade läuft nichts, was ich wiederholen könnte.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"Wie oft soll **{instance._short(self.player.current.title, 70)}** "
-            f"wiederholt werden?",
-            view=_LoopView(self.player, interaction.user.id), ephemeral=True)
+def _klassisches_panel(player):
+    """Notweg, falls Discord das V2-Panel ablehnt: das alte Embed-Layout,
+    aber mit denselben neustartfesten Knoepfen."""
+    view = discord.ui.View(timeout=None)
+    oben, unten = _knopfreihen(player)
+    for knopf in oben:
+        view.add_item(knopf)
+    for knopf in unten:
+        knopf.row = 1
+        view.add_item(knopf)
+    tempo = MusikTempo(player.speed)
+    tempo.row = 2
+    view.add_item(tempo)
+    return view
 
-    @discord.ui.button(label="Lyrics", emoji="🎤", style=discord.ButtonStyle.secondary)
-    async def _lyrics(self, interaction, _b):
-        track = self.player.current
-        if track is None:
-            await interaction.response.send_message("Gerade läuft nichts. 🤔", ephemeral=True)
-            return
-        # Nur der Klickende sieht den Text (ephemer) - kein Zuspammen des Channels.
-        # Abruf kann dauern -> defer, sonst reisst die 3s-Frist.
-        await interaction.response.defer(ephemeral=True)
-        emb, view = await instance._build_lyrics(
-            track.title, getattr(track, "thumbnail", "") or None)
-        if view is not None:
-            await interaction.followup.send(embed=emb, view=view, ephemeral=True)
-        else:
-            await interaction.followup.send(embed=emb, ephemeral=True)
+
+def _gestoppt_panel(wer):
+    """Was aus dem Panel wird, wenn jemand Stop drueckt."""
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(
+        discord.ui.TextDisplay(f"### ⏹️ Gestoppt\nMusik aus, ich bin raus.\n"
+                               f"-# gestoppt von {wer}"),
+        accent_colour=_COL_INFO))
+    return view
+
+
+# Werden in bot.setup_hook angemeldet (neustartfeste Knoepfe).
+DYNAMISCHE_KNOEPFE = (MusikKnopf, MusikTempo)
+
+# Wer nicht im Voice sitzt, bekommt eine dieser Abfuhren.
+_ZAUNGAST = (
+    "Du sitzt nicht mal im Voice, also Finger weg vom Panel, du Zaungast.",
+    "Erst in den Sprachkanal, dann mitreden. Vorher drückst du hier gar nix.",
+    "Nicht im Voice, aber am Panel rumfummeln? Setz dich erst dazu, du Lauch.",
+)
 
 
 class Music(FeatureBasis):
@@ -4353,33 +4405,30 @@ class Music(FeatureBasis):
         return e
 
     async def _retire_panel(self, player):
-        """Loescht das zuletzt gepostete Steuer-Panel selbst - der Song dazu ist vorbei
-        bzw. wird gleich durch ein neues ersetzt. Das AKTUELLE Panel ist beim Auto-
-        Loeschen ausgenommen (bot.py, ueber NOWPLAYING_EMBED_TITLE); alte raeumen wir
-        hier sofort weg, damit nichts liegen bleibt."""
+        """Raeumt das zuletzt gepostete Panel weg - der Song dazu ist vorbei bzw.
+        wird gleich durch einen neuen ersetzt.
+
+        Geloescht wird IM HINTERGRUND: vorher wartete der Songwechsel auf
+        Discords Antwort zum Loeschen, bevor das neue Panel kam.
+
+        KEIN view.stop(): das Panel besteht aus DynamicItems, und stop() nimmt
+        deren Vorlagen global aus dem Register - danach waere jedes Panel tot.
+        Merken muss sich discord.py so eine View ohnehin nicht (siehe MusikPanel)."""
         msg = player.panel_message
         player.panel_message = None
-        # Die View AUSDRUECKLICH beenden. Sie laeuft mit timeout=None und wird
-        # von discord.py sonst nie aus dem ViewStore genommen - auch das Loeschen
-        # der Nachricht raeumt dort nichts weg. Ohne das sammelte sich pro
-        # gespieltem Song ein Eintrag an (gemessen: 200 Panels = 200 Eintraege,
-        # die auch nach dem Loeschen aller Referenzen blieben).
-        view = player.panel_view
         player.panel_view = None
-        if view is not None:
-            try:
-                view.stop()
-            except Exception:  # noqa: BLE001 - Aufraeumen darf nie stoeren
-                pass
         if msg is not None:
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
+            self._hintergrund(self._panel_loeschen(msg))
+
+    @staticmethod
+    async def _panel_loeschen(msg):
+        try:
+            await msg.delete()
+        except discord.HTTPException:
+            pass
 
     async def _panel_auffrischen(self, player, track = None):
-        """Nur das Embed des VORHANDENEN Panels neu setzen - Nachricht und
-        Buttons bleiben stehen.
+        """Das VORHANDENE Panel neu zeichnen - Nachricht bleibt stehen.
 
         Fuer den Loop: jeder Durchlauf laeuft ueber _advance und wuerde sonst
         ein komplett neues Panel posten (altes loeschen, neues senden). Bei
@@ -4387,17 +4436,15 @@ class Music(FeatureBasis):
         Rate-Limit.
 
         Sendet AUSDRUECKLICH nie ein neues Panel: 'flo loop 3' beantwortet Flo
-        schon mit einem eigenen Embed - ein zweites, ungefragtes Panel dazu
-        waere Spam. Ist das Panel weg, meldet sich der naechste echte
-        Songwechsel ohnehin mit einem frischen."""
+        schon selbst - ein zweites, ungefragtes Panel dazu waere Spam. Ist das
+        Panel weg, meldet sich der naechste echte Songwechsel ohnehin mit
+        einem frischen."""
         msg = player.panel_message
         track = track or player.current
         if msg is None or track is None:
             return
-        emb = self._now_playing_embed(track, len(player.queue),
-                                      speed=player.speed, loop=player.loop_rest)
         try:
-            await msg.edit(embed=emb)
+            await msg.edit(view=MusikPanel(player, track))
         except discord.HTTPException:
             # Panel geloescht -> abmelden. Der naechste Songwechsel postet
             # dann ganz normal ein neues.
@@ -4405,45 +4452,189 @@ class Music(FeatureBasis):
 
     async def _send_panel(self, player, track, *,
                          reply_to = None, extra = ""):
-        """Postet ein 'Jetzt laeuft'-Panel mit Steuer-Buttons (altes wird geloescht).
-        Das Panel traegt NOWPLAYING_EMBED_TITLE - bot.py haelt solche Bot-Nachrichten
-        vom Auto-Loeschen frei, damit die Buttons den ganzen Song erreichbar bleiben."""
+        """Postet das 'Jetzt laeuft'-Panel (das alte kommt weg).
+
+        Vom Auto-Loeschen ausgenommen ist es ueber ist_panel() in bot.py - an
+        seinen Knoepfen erkennbar, nicht mehr am Embed-Titel (V2-Nachrichten
+        haben keine Embeds)."""
         # Sende-Generation: zwischen dem Absenden und der Antwort von Discord
         # koennen Sekunden liegen. Startet in dieser Luecke schon der naechste
         # Song (Doppel-Skip), speicherte frueher der SPAETER zurueckkehrende,
         # aeltere Aufruf sein Panel - das neuere blieb als Zombie mit
-        # klickbaren Knoepfen im Kanal stehen und seine View (timeout=None)
-        # leckte im ViewStore.
+        # klickbaren Knoepfen im Kanal stehen.
         player._panel_gen += 1
         meine_gen = player._panel_gen
         await self._retire_panel(player)
-        emb = self._now_playing_embed(track, len(player.queue), extra=extra,
-                                      speed=player.speed, loop=player.loop_rest)
-        view = PlaybackControlView(player)
-        try:
-            if reply_to is not None:
-                msg = await reply_to.reply(embed=emb, view=view, mention_author=False)
-            elif player.text_channel is not None:
-                msg = await player.text_channel.send(embed=emb, view=view)
-            else:
-                view.stop()
-                return
-        except discord.HTTPException as exc:
-            log.error("Now-Playing-Panel fehlgeschlagen: %s", exc)
-            view.stop()
+        msg = await self._panel_posten(player, track, reply_to, extra)
+        if msg is None:
             return
-        view.message = msg
         if meine_gen != player._panel_gen:
             # Ueberholt worden: das hier ist das ALTE Panel. Selbst wegraeumen,
             # statt das aktuelle zu ueberschreiben.
-            view.stop()
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
+            self._hintergrund(self._panel_loeschen(msg))
             return
         player.panel_message = msg
-        player.panel_view = view      # zum spaeteren Abmelden (_retire_panel)
+        self._hintergrund(self._kanal_status(player, f"🎵 {_short(track.title, 90)}"))
+
+    async def _panel_posten(self, player, track, reply_to, extra):
+        """Erst als V2-Panel; lehnt Discord das ab, das alte Embed mit
+        denselben (neustartfesten) Knoepfen. Antwort auf den Befehl, und wenn
+        der schon weg ist (Aufraeum-Kanal), eben ohne Bezug."""
+        versuche = (
+            {"view": MusikPanel(player, track, extra=extra)},
+            {"embed": self._now_playing_embed(track, len(player.queue), extra=extra,
+                                              speed=player.speed, loop=player.loop_rest),
+             "view": _klassisches_panel(player)},
+        )
+        for nr, kw in enumerate(versuche):
+            if reply_to is not None:
+                msg = await basis.antworte(reply_to, None, **kw)
+            elif player.text_channel is not None:
+                try:
+                    msg = await player.text_channel.send(**kw)
+                except discord.HTTPException as exc:
+                    log.warning("Musik-Panel ging nicht raus: %s", exc)
+                    msg = None
+            else:
+                return None
+            if msg is not None:
+                return msg
+            if nr == 0:
+                log.warning("Musik-Panel (V2) ging nicht raus - nehme das alte Layout.")
+        log.error("Now-Playing-Panel fehlgeschlagen.")
+        return None
+
+    # --- Panel-Klicks -----------------------------------------------------------
+    @staticmethod
+    def _darf_steuern(interaction, player):
+        """Nur wer mit im Voice sitzt, dreht an Flos Musik - Mods immer.
+
+        Vorher konnte jeder im Textkanal die Musik stoppen oder skippen,
+        waehrend er selbst gar nicht zuhoerte."""
+        wer = interaction.user
+        rechte = getattr(wer, "guild_permissions", None)
+        if rechte is not None and (rechte.administrator or rechte.manage_guild
+                                   or rechte.manage_channels or rechte.move_members):
+            return True
+        kanal = player.active_channel_id or getattr(
+            getattr(player.voice, "channel", None), "id", None)
+        if kanal is None:
+            return True     # Flo ist gar nicht drin - da gibt es nichts zu schuetzen
+        eigener = getattr(getattr(wer, "voice", None), "channel", None)
+        return eigener is not None and eigener.id == kanal
+
+    def ist_panel(self, message):
+        """Ist diese Nachricht ein Musik-Panel? (bot.py nimmt es vom Auto-Loeschen
+        aus.) Erkannt an den Knoepfen - das klappt auch, bevor Discords Antwort
+        zum Senden da ist, und fuer Panels von vor einem Neustart."""
+        return any(str(getattr(teil, "custom_id", "") or "").startswith("flo:musik:")
+                   for teil in basis.bausteine(message))
+
+    async def _panel_klick(self, interaction, aktion):
+        player = self._players.get(interaction.guild_id)
+        laeuft = player is not None and (player.current is not None or player.queue)
+        if not laeuft:
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        if aktion in ("pause", "skip", "stop", "loop") and not self._darf_steuern(
+                interaction, player):
+            await interaction.response.send_message(random.choice(_ZAUNGAST),
+                                                    ephemeral=True)
+            return
+        with ai.guild_kontext(interaction.guild_id or 0):
+            if aktion == "pause":
+                await self._klick_pause(interaction, player)
+            elif aktion == "skip":
+                # Genau derselbe Weg wie der Textbefehl (siehe player.skip).
+                await interaction.response.defer()
+                await player.skip()
+            elif aktion == "stop":
+                await self._klick_stop(interaction, player)
+            elif aktion == "queue":
+                await interaction.response.send_message(
+                    embed=_queue_embed(player), ephemeral=True)
+            elif aktion == "lyrics":
+                await self._klick_lyrics(interaction, player)
+            elif aktion == "loop":
+                if player.current is None:
+                    await interaction.response.send_message(
+                        "Gerade läuft nichts, was ich wiederholen könnte.", ephemeral=True)
+                    return
+                await interaction.response.send_message(
+                    f"Wie oft soll **{self._short(player.current.title, 70)}** "
+                    f"wiederholt werden?",
+                    view=_LoopView(player, interaction.user.id), ephemeral=True)
+
+    async def _klick_pause(self, interaction, player):
+        v = player.voice
+        if v is None or not (v.is_playing() or v.is_paused()):
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        if player.ist_pausiert():
+            player.fortsetzen()
+        else:
+            player.pausieren()
+        await interaction.response.edit_message(view=MusikPanel(player))
+
+    async def _klick_stop(self, interaction, player):
+        # Dieses Panel wird gleich zur 'Gestoppt'-Anzeige - aus der Verwaltung
+        # nehmen, damit disconnect()->_retire_panel es NICHT loescht.
+        if player.panel_message is not None and interaction.message is not None \
+                and player.panel_message.id == interaction.message.id:
+            player.panel_message = None
+        await player.disconnect()
+        await interaction.response.edit_message(
+            view=_gestoppt_panel(interaction.user.display_name))
+
+    async def _klick_lyrics(self, interaction, player):
+        track = player.current
+        if track is None:
+            await interaction.response.send_message("Gerade läuft nichts. 🤔", ephemeral=True)
+            return
+        # Nur der Klickende sieht den Text (ephemer) - kein Zuspammen des Channels.
+        # Abruf kann dauern -> defer, sonst reisst die 3s-Frist.
+        await interaction.response.defer(ephemeral=True)
+        emb, view = await self._build_lyrics(
+            track.title, getattr(track, "thumbnail", "") or None)
+        if view is not None:
+            await interaction.followup.send(embed=emb, view=view, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=emb, ephemeral=True)
+
+    async def _panel_tempo(self, interaction, tempo):
+        player = self._players.get(interaction.guild_id)
+        v = getattr(player, "voice", None)
+        if player is None or v is None or not (v.is_playing() or v.is_paused()):
+            await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
+            return
+        if not self._darf_steuern(interaction, player):
+            await interaction.response.send_message(random.choice(_ZAUNGAST),
+                                                    ephemeral=True)
+            return
+        await interaction.response.defer()        # Tempo-Wechsel kann ~1s dauern
+        await player.apply_speed(tempo)
+        try:
+            await interaction.edit_original_response(view=MusikPanel(player))
+        except discord.HTTPException:
+            pass
+
+    # --- Sprachkanal-Status ("🎵 Titel" unter dem Kanalnamen) -------------------
+    async def _kanal_status(self, player, text):
+        """Setzt (oder loescht, text=None) den Status des Sprachkanals.
+
+        Reine Zugabe: fehlt das Recht 'Sprachkanal-Status festlegen', passiert
+        einfach nichts."""
+        kanal = getattr(player.voice, "channel", None)
+        if kanal is None or getattr(player, "_kanal_status_text", None) == text:
+            return
+        try:
+            ich = kanal.guild.me
+            if not kanal.permissions_for(ich).set_voice_channel_status:
+                return
+            await kanal.edit(status=text)
+            player._kanal_status_text = text
+        except Exception:  # noqa: BLE001 - Deko, darf nie etwas kippen
+            log.debug("Sprachkanal-Status nicht gesetzt", exc_info=True)
 
     # --- Oeffentlicher Einstieg ----------------------------------------------
 
@@ -5007,6 +5198,7 @@ _queue_embed = instance._queue_embed
 _retire_panel = instance._retire_panel
 _send_panel = instance._send_panel
 _panel_auffrischen = instance._panel_auffrischen
+ist_panel = instance.ist_panel
 handle = instance.handle
 verlauf = instance.verlauf
 verlauf_notieren = instance.verlauf_notieren

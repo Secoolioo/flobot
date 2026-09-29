@@ -8,7 +8,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _FakeStore, _botsicht_umgebung, _with_economy)
+    _FakeStore, _botsicht_umgebung, _musik_umgebung, _with_economy)
 
 
 
@@ -426,11 +426,15 @@ def test_webpanel_eingaben_und_robustheit():
 
 
 
-def test_musik_panel_view_wird_abgemeldet():
-    """Jedes Now-Playing-Panel laeuft mit timeout=None und wurde deshalb von
-    discord.py NIE aus dem ViewStore genommen - auch das Loeschen der Nachricht
-    raeumt dort nichts weg. Gemessen: 200 Panels = 200 Eintraege, die auch nach
-    dem Loeschen aller Referenzen blieben. Mit jedem gespielten Song einer mehr."""
+def test_musik_panel_leckt_nicht_und_bleibt_klickbar():
+    """Das alte Panel lief mit timeout=None und blieb je Song als Eintrag im
+    ViewStore haengen (200 Panels = 200 Eintraege). Die Loesung damals:
+    view.stop() beim Abloesen. Beim neuen Panel waere GENAU das der Fehler -
+    es besteht aus DynamicItems, und stop() nimmt deren Vorlagen global aus
+    dem Register: danach waere jedes Panel tot.
+
+    Jetzt: das Panel besteht nur aus DynamicItems, discord.py merkt es sich
+    gar nicht erst je Nachricht - und die Vorlagen bleiben angemeldet."""
     import discord
     import music
 
@@ -442,37 +446,30 @@ def test_musik_panel_view_wird_abgemeldet():
             self._view_store.add_view(view, message_id=message_id)
 
     st = FakeState()
+    player, _voice, aufraeumen = _musik_umgebung()
+    try:
+        player.current = music.Track(title="A", stream_url="http://s", duration=100)
 
-    class P:
-        def __init__(self):
-            self.volume = 1.0
-            self.speed = 1.0
-            self.voice = None
-            self.current = None
-            self.queue = []
-            self.panel_message = None
-            self.panel_view = None
+        async def lauf():
+            for i in range(50):
+                st.store_view(music.MusikPanel(player), message_id=1000 + i)
+                player.panel_message = SimpleNamespace(id=1000 + i, delete=_als_coro_fn(None))
+                await music.instance._retire_panel(player)
+            await asyncio.sleep(0)
 
-        def is_active(self):
-            return False
-
-    p = P()
-
-    async def lauf():
-        for i in range(50):
-            v = music.PlaybackControlView(p)
-            st.store_view(v, message_id=1000 + i)
-            p.panel_view = v
-            p.panel_message = None
-            await music.instance._retire_panel(p)
-
-    asyncio.run(lauf())
+        asyncio.run(lauf())
+    finally:
+        aufraeumen()
     assert len(st._view_store._views) == 0, len(st._view_store._views)
-    assert p.panel_view is None
+    vorlagen = set(st._view_store._dynamic_items.values())
+    assert {music.MusikKnopf, music.MusikTempo} <= vorlagen, vorlagen
+    assert player.panel_message is None
 
 
-
-
+def _als_coro_fn(wert):
+    async def f(*_a, **_k):
+        return wert
+    return f
 def test_arzt_findet_das_panel_passwort():
     """Das Panel wuerfelt ohne WEBPANEL_PASS ein Passwort und schreibt es EINMAL
     beim Start ins Log. Ohne einen Weg dorthin ist es praktisch unauffindbar:

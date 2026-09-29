@@ -3349,38 +3349,248 @@ def test_loop_befehl_wird_erkannt_und_klaut_repeat_nichts():
 
 
 
-def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
-    """Zwei Sachen, die man sonst erst im echten Discord merkt:
+def _panel_texte(view):
+    import discord
+    return "\n".join(t.content for t in view.walk_children()
+                     if isinstance(t, discord.ui.TextDisplay))
 
-    (1) Laeuft ein Loop, muss das im Panel stehen - sonst sieht niemand, warum
-        derselbe Song wiederkommt und die Warteschlange steht.
-    (2) Reihe 0 ist mit fuenf Buttons voll. Der Loop-Knopf braucht row=1 und
-        der Tempo-Select muss auf row=2 ausweichen, sonst wirft discord.py
-        beim Bauen der View 'item would not fit at row 1' - und dann kaeme gar
-        kein Panel mehr."""
+
+def _panel_als_nachricht(view):
+    """Das Panel so, wie discord.py es aus einer echten Nachricht liest."""
+    from discord.components import _component_factory
+    return SimpleNamespace(components=[_component_factory(d) for d in view.to_components()])
+
+
+def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
+    """(1) Laeuft ein Loop, muss das im Panel stehen - sonst sieht niemand,
+        warum derselbe Song wiederkommt und die Warteschlange steht.
+    (2) Fuenf Knoepfe oben, Loop darunter, Tempo-Menue in einer eigenen
+        Reihe - auch im klassischen Notweg-Panel, wo discord.py sonst 'item
+        would not fit at row 1' wirft und gar kein Panel mehr kaeme."""
+    import discord
     import music
     t = _track("A")
     emb = music._now_playing_embed(t, 2, loop=3)
     felder = {f.name: f.value for f in emb.fields}
-    assert "Loop" in felder, felder
-    assert "3" in felder["Loop"]
-    assert "endlos" in music._now_playing_embed(t, 0, loop=-1).fields[-1].value
-    assert "Loop" not in [f.name for f in music._now_playing_embed(t, 0).fields]
+    assert "Loop" in felder and "3" in felder["Loop"], felder
 
     player, _voice, aufraeumen = _musik_umgebung()
     try:
-        view = music.PlaybackControlView(player)
-        reihen = {}
-        for kind in view.children:
-            reihen.setdefault(kind._rendered_row, []).append(
-                getattr(kind, "label", None) or type(kind).__name__)
-        assert "Loop" in reihen.get(1, []), reihen
-        assert len(reihen.get(0, [])) == 5, reihen
-        assert any(n == "_SpeedSelect" for n in reihen.get(2, [])), reihen
+        player.current = t
+        player.loop_rest = 3
+        assert "🔁 noch 3×" in _panel_texte(music.MusikPanel(player))
+        player.loop_rest = -1
+        assert "🔁 endlos" in _panel_texte(music.MusikPanel(player))
+        player.loop_rest = 0
+        assert "🔁" not in _panel_texte(music.MusikPanel(player))
+
+        reihen = [r for r in music.MusikPanel(player).walk_children()
+                  if isinstance(r, discord.ui.ActionRow)]
+        inhalt = [[getattr(k, "aktion", type(k).__name__) for k in r.children]
+                  for r in reihen]
+        assert inhalt == [["pause", "skip", "stop", "queue", "lyrics"], ["loop"],
+                          ["MusikTempo"]], inhalt
+
+        alt = music._klassisches_panel(player)
+        zeilen = {}
+        for k in alt.children:
+            zeilen.setdefault(k._rendered_row if k._rendered_row is not None else k.row,
+                              []).append(type(k).__name__)
+        assert len(zeilen[0]) == 5 and zeilen[1] == ["MusikKnopf"], zeilen
+        assert zeilen[2] == ["MusikTempo"], zeilen
     finally:
         aufraeumen()
 
 
+def test_musik_panel_ist_v2_und_ueberlebt_neustarts():
+    """Vorher war jedes Panel nach einem Neustart tot ("Interaktion
+    fehlgeschlagen"), obwohl die Musik weiterlief. Jetzt: V2-Nachricht, alle
+    Knoepfe DynamicItems mit fester custom_id, angemeldet in setup_hook."""
+    import inspect
+    import discord
+    import bot
+    import music
+    player, _voice, aufraeumen = _musik_umgebung()
+    try:
+        player.current = _track("A")
+        view = music.MusikPanel(player)
+        assert isinstance(view, discord.ui.LayoutView) and view.timeout is None
+        klickbar = [k for k in view.walk_children()
+                    if isinstance(k, (discord.ui.Button, discord.ui.Select,
+                                      discord.ui.DynamicItem))
+                    and not isinstance(getattr(k, "_parent", None), discord.ui.DynamicItem)]
+        assert klickbar and all(isinstance(k, discord.ui.DynamicItem) for k in klickbar)
+        ids = {k.item.custom_id for k in klickbar}
+        assert ids == {f"flo:musik:{a}" for a in
+                       ("pause", "skip", "stop", "queue", "lyrics", "loop", "tempo")}, ids
+        assert set(music.DYNAMISCHE_KNOEPFE) == {music.MusikKnopf, music.MusikTempo}
+        assert "music" in inspect.getsource(bot.FloBot.setup_hook)
+        # Aus der Nachricht zurueck: der Knopf weiss wieder, was er ist.
+        knopf = asyncio.run(music.MusikKnopf.from_custom_id(
+            None, discord.ui.Button(label="Skip", custom_id="flo:musik:skip"),
+            {"aktion": "skip"}))
+        assert knopf.aktion == "skip" and knopf.item.label == "Skip"
+        # Und so erkennt bot.py es (vom Auto-Loeschen ausgenommen).
+        assert music.ist_panel(_panel_als_nachricht(view))
+        assert not music.ist_panel(SimpleNamespace(components=[]))
+        assert music.ist_panel(_panel_als_nachricht(music._klassisches_panel(player)))
+    finally:
+        aufraeumen()
+
+
+def test_musik_panel_zeigt_fortschritt_cover_und_als_naechstes():
+    """Das Ende steht als Discord-Zeitstempel da - den zaehlt Discord selbst
+    live herunter, ohne dass Flo das Panel alle paar Sekunden neu schickt
+    (jeder Edit schloss das offene Tempo-Menue)."""
+    import discord
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    try:
+        t = music.Track(title="Song", stream_url="http://s", duration=200,
+                        requested_by="Anna", thumbnail="http://bild/cover.jpg",
+                        webpage_url="http://yt/1")
+        player.start(t)
+        player._played, player._seg_start = 50.0, None
+        player._seg_start = time.monotonic()
+        text = _panel_texte(music.MusikPanel(player))
+        assert "▶️ Jetzt läuft" in text and "Anna" in text and "[Song](http://yt/1)" in text
+        assert "▰" in text and "/ 3:20" in text and "endet <t:" in text
+        # Cover als Vorschaubild neben dem Titel.
+        view = music.MusikPanel(player)
+        abschnitte = [k for k in view.walk_children() if isinstance(k, discord.ui.Section)]
+        assert abschnitte and isinstance(abschnitte[0].accessory, discord.ui.Thumbnail)
+
+        player.queue.extend(_track(f"N{i}") for i in range(5))
+        text = _panel_texte(music.MusikPanel(player))
+        assert "Als Nächstes" in text and "N0" in text and "N2" in text
+        assert "N3" not in text and "…und 2 weitere" in text
+
+        player.pausieren()
+        text = _panel_texte(music.MusikPanel(player))
+        assert "⏸️ Pausiert" in text and "pausiert" in text and "<t:" not in text
+    finally:
+        aufraeumen()
+
+
+class _PanelKlick:
+    def __init__(self, gid=1, user=None, message_id=900):
+        self.guild_id = gid
+        self.user = user or SimpleNamespace(
+            id=5, display_name="Anna", voice=SimpleNamespace(channel=SimpleNamespace(id=42)),
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=False,
+                                              manage_channels=False, move_members=False))
+        self.message = SimpleNamespace(id=message_id)
+        self.privat, self.bearbeitet, self.verschoben = [], [], False
+        self.response = self
+
+    async def send_message(self, text=None, ephemeral=False, **kw):
+        self.privat.append((text, ephemeral, kw))
+
+    async def edit_message(self, **kw):
+        self.bearbeitet.append(kw)
+
+    async def defer(self, **_kw):
+        self.verschoben = True
+
+
+def test_musik_panel_nur_fuer_leute_im_voice():
+    """Vorher konnte jeder im Textkanal skippen und stoppen, auch wer gar nicht
+    zuhoerte. Jetzt: nur wer im selben Voice sitzt - Mods immer. Queue und
+    Lyrics ansehen darf jeder."""
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    alt = mi._players.get(1)
+    mi._players[1] = player
+    try:
+        player.start(_track("A"))
+        drin = _PanelKlick()
+        draussen = _PanelKlick(user=SimpleNamespace(
+            id=6, display_name="Bob", voice=None,
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=False,
+                                              manage_channels=False, move_members=False)))
+        mod = _PanelKlick(user=SimpleNamespace(
+            id=7, display_name="Mod", voice=None,
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=False,
+                                              manage_channels=False, move_members=True)))
+        assert mi._darf_steuern(drin, player)
+        assert not mi._darf_steuern(draussen, player)
+        assert mi._darf_steuern(mod, player)
+
+        asyncio.run(mi._panel_klick(draussen, "skip"))
+        (text, privat, _kw), = draussen.privat
+        assert privat and text in music._ZAUNGAST
+        assert player.current is not None, "Zaungast hat trotzdem geskippt"
+
+        asyncio.run(mi._panel_klick(draussen, "queue"))
+        assert draussen.privat[-1][2].get("embed") is not None
+    finally:
+        if alt is None:
+            mi._players.pop(1, None)
+        else:
+            mi._players[1] = alt
+        aufraeumen()
+
+
+def test_musik_panel_pause_und_stop():
+    import discord
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    alt = mi._players.get(1)
+    mi._players[1] = player
+    try:
+        async def lauf():
+            player.start(_track("A"))
+            klick = _PanelKlick()
+            await mi._panel_klick(klick, "pause")
+            assert player.ist_pausiert()
+            neu = klick.bearbeitet[-1]["view"]
+            assert isinstance(neu, music.MusikPanel)
+            assert "⏸️ Pausiert" in _panel_texte(neu)
+            await mi._panel_klick(klick, "pause")
+            assert not player.ist_pausiert()
+
+            player.panel_message = SimpleNamespace(id=900)
+            klick = _PanelKlick(message_id=900)
+            await mi._panel_klick(klick, "stop")
+            assert player.current is None and player.voice is None
+            gestoppt = klick.bearbeitet[-1]["view"]
+            assert isinstance(gestoppt, discord.ui.LayoutView)
+            assert "Gestoppt" in _panel_texte(gestoppt) and "Anna" in _panel_texte(gestoppt)
+        asyncio.run(lauf())
+    finally:
+        if alt is None:
+            mi._players.pop(1, None)
+        else:
+            mi._players[1] = alt
+        aufraeumen()
+
+
+def test_bot_haelt_das_musik_panel_vom_autoloeschen_frei():
+    """V2-Nachrichten haben kein Embed - am alten Embed-Titel liess sich das
+    Panel nicht mehr erkennen. Jetzt an den Knoepfen. Tote Panels von vor dem
+    Update (nur der alte Titel, keine neuen Knoepfe) raeumt das Loeschen weg."""
+    import bot
+    import economy
+    import music
+    player, _voice, aufraeumen = _musik_umgebung()
+    alt_user = bot.client._connection.user
+    bot.client._connection.user = SimpleNamespace(id=1)
+    try:
+        player.current = _track("A")
+        panel = _panel_als_nachricht(music.MusikPanel(player))
+        panel.author, panel.embeds = SimpleNamespace(id=1), []
+        assert bot.client._keep_bot_msg(panel)
+        alt_panel = SimpleNamespace(author=SimpleNamespace(id=1), components=[],
+                                    embeds=[SimpleNamespace(title=music.NOWPLAYING_EMBED_TITLE)])
+        assert not bot.client._keep_bot_msg(alt_panel)
+        levelup = SimpleNamespace(author=SimpleNamespace(id=1), components=[],
+                                  embeds=[SimpleNamespace(title=economy.LEVELUP_EMBED_TITLE)])
+        assert bot.client._keep_bot_msg(levelup)
+    finally:
+        bot.client._connection.user = alt_user
+        aufraeumen()
 
 
 def test_loop_befehl_antwortet_und_postet_kein_zweites_panel():

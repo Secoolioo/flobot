@@ -395,6 +395,19 @@ Flo nochmal 3                 Nummer 3 aus dem Verlauf nochmal
 Dazu die normalen Sätze: „mach mal *X* an", „leg *X* auf", „hau *X* raus",
 „mach die Musik aus". Fragen (*„spielst du …"*) sind bewusst **kein** Befehl.
 
+**Das Panel:** Cover, Titel, Fortschritt mit „endet in …" (zählt Discord selbst
+live herunter), die nächsten drei Songs, Knöpfe und Tempo-Menü. Die Knöpfe
+**funktionieren auch nach einem Neustart** von Flo. Pause, Skip, Stop, Loop und
+Tempo darf nur, wer mit im Sprachkanal sitzt (Mods immer); Queue und Lyrics
+jeder. Den Titel schreibt Flo als Status an den Sprachkanal, wenn er das Recht
+„Sprachkanal-Status festlegen" hat. Panels von vor dem Update räumt das
+Auto-Löschen weg.
+
+**Schneller Start:** Flo verbindet sich schon, während er sucht (🔎 an der
+Nachricht), lädt den nächsten Song vor, während der aktuelle läuft, und merkt
+sich, welcher YouTube-Zugang geht. Ohne Musik oder allein im Kanal geht er nach
+`MUSIC_IDLE_SEKUNDEN` (Standard 5 min); wirft ihn ein Mod raus, bleibt er draußen.
+
 ### Verlauf: was lief zuletzt?
 
 ```

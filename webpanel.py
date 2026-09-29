@@ -50,6 +50,7 @@ import discord
 import numfmt
 
 import economy
+import basis
 from basis import FeatureBasis
 
 try:
@@ -1626,7 +1627,11 @@ class WebPanel(FeatureBasis):
             "bearbeitet": int(self._safe(
                 lambda: message.edited_at.timestamp(), 0) or 0) or None,
             "autor": self._sicht_autor(message.author),
-            "text": (self._safe(lambda: str(message.content), "") or "")[:self._SICHT_TEXT_MAX],
+            # Components-V2-Nachrichten (Musik-Panel, Hilfe) haben kein content -
+            # ihr Text steckt in den Bausteinen.
+            "text": (self._safe(lambda: str(message.content), "")
+                     or self._safe(lambda: basis.v2_text(message), "")
+                     or "")[:self._SICHT_TEXT_MAX],
             "anhaenge": anhaenge,
             "embeds": embeds,
             "reaktionen": reaktionen,
