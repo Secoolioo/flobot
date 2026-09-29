@@ -607,6 +607,30 @@ Weitere Bremsen: Anteil-Limit 150 pro Person, gestaffelte Verkaufssteuer (bis
 
 ---
 
+## Umfragen und Rechtsklick
+
+```
+flo umfrage bestes Fast Food                  Flo denkt sich Frage + Antworten aus
+flo umfrage Pizza oder Döner? | Pizza | Döner  genau so, wie du es schreibst
+flo umfrage 48h ...                           Laufzeit vorne dran (6h, 2t, 1w; max. 32 Tage)
+```
+
+Das sind **echte Discord-Umfragen**: Discord zählt, jeder hat eine Stimme, und sie
+laufen auch weiter, wenn Flo neu startet. Ist eine vorbei, sagt Flo, was er vom
+Ergebnis hält. Über Hetze lässt er nicht abstimmen.
+
+**Rechtsklick** (Apps-Menü) an einer Nachricht: *Flo, sag was dazu* — an einer
+Person: *Roasten*. Flo antwortet öffentlich; dieselben Schalter wie im Chat
+(KI bzw. Chaos, Sendepause), 20 s Abkühlzeit je Person. Angemeldet wird beim
+Start, aber nur, wenn sich die Befehle geändert haben (`data/befehle.json`).
+
+**Rechte:** Umfragen brauchen „Umfragen erstellen“, der Rechtsklick den Scope
+`applications.commands`. Den Einladungslink mit allen Rechten schreibt Flo ins
+Log, wenn er auf keinem Server ist (`bot.invite_url()`). Wer Flo früher
+eingeladen hat, lädt ihn einfach noch einmal ein — das ergänzt nur Rechte.
+
+---
+
 ## Profil nachschlagen
 
 ```
@@ -1169,6 +1193,7 @@ Avatar-Wege laufen bereits über REST-Fallbacks.
 | `bot.py` | Handler-Kette, Loops, Lebenszyklus |
 | `guildcfg.py` | Einstellungen je Server |
 | `profil.py` | Profil-Lookup + Namensverlauf |
+| `umfrage.py` | echte Discord-Umfragen + Ergebnis-Kommentar |
 | `cmdnorm.py` | Tippfehler-Korrektur — **jedes neue Befehlswort muss hier rein** |
 | `features.py` | Funktions-Schalter (global + je Server) |
 | `economy.py` | Level, Coins, Shop, Steuer |

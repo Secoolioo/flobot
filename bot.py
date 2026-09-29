@@ -8,7 +8,9 @@ Start:
 
 import asyncio
 import contextlib
+import hashlib
 import io
+import json
 import logging
 import os
 import random
@@ -21,6 +23,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import discord
+from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
@@ -65,6 +68,7 @@ import music
 import numfmt
 import profil
 import titles
+import umfrage
 import render
 import schedule_logic
 import steal
@@ -291,6 +295,9 @@ WEBPANEL_ENABLED = webpanel.setup()
 # Profil-Lookup ('Flo check @wer'): Discord-Profil in voller Aufloesung, plus
 # Flos eigener Namensverlauf (den gibt die Discord-API nicht her).
 PROFIL_ENABLED = profil.setup()
+# Umfragen ('Flo umfrage <Thema>'): echte Discord-Umfragen, die KI denkt sich die
+# Antworten aus; ist eine vorbei, sagt Flo, was er vom Ergebnis haelt.
+UMFRAGE_ENABLED = umfrage.setup()
 # Laufzeit-Schalter: einzelne Funktionen per Panel an/aus (ueberlebt Neustarts).
 features.setup()
 # Einstellungen JE SERVER (Kanaele, Lautstaerke, Bayrisch, ...). Flo laeuft auf
@@ -308,7 +315,7 @@ FEATURE_LOADED = {
     "terraria": TERRARIA_ENABLED, "media": MEDIA_ENABLED, "food": FOOD_ENABLED,
     "gehirn": GEHIRN_ENABLED, "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
     "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
-    "arbeit": ARBEIT_ENABLED,
+    "arbeit": ARBEIT_ENABLED, "umfrage": UMFRAGE_ENABLED,
 }
 
 # Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle.
@@ -325,7 +332,7 @@ _HANDLED_SENTINELS = (basis.HANDLED,) + tuple(
     getattr(modul, "HANDLED") for modul in (
         moderation, music, casino, games, economy, media, food, words, luxus,
         voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
-        steal, bayern, guildcfg, profil, arbeit)
+        steal, bayern, guildcfg, profil, arbeit, umfrage)
     if getattr(modul, "HANDLED", None) is not None
     and getattr(modul, "HANDLED") is not basis.HANDLED
 )
@@ -627,6 +634,8 @@ _HELP_DATA = {
         ("flo roast @wer · hype @wer", "austeilen oder abfeiern"),
         ("flo rate @wer · rizz @wer", "0-100 Bewertung mit Spruch"),
         ("flo spruch · horoskop", "Weisheit & Tages-Horoskop"),
+        ("flo umfrage <thema>", "🗳️ echte Umfrage – Flo denkt sich die Antworten aus"),
+        ("flo umfrage Frage? | A | B", "Umfrage genau so, wie du sie schreibst"),
     ]),
     "bilder": ("Bilder", 0x9B7BE0, [
         ("flo male <was>", "Bild generieren (gratis)"),
@@ -659,7 +668,7 @@ _HELP_HINTS = {
     "economy": "level · daily · shop · händler · lotto", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
     "terraria": "alles aus dem Wiki",
-    "chaos": "roast · rate · horoskop",
+    "chaos": "roast · rate · umfrage",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen · gedächtnis",
 }
@@ -724,19 +733,34 @@ class HelpView(discord.ui.View):
                 pass
 
 
+# Was Flo auf einem Server darf - aus den Rechten gebaut statt als Zauberzahl.
+# Die alte Zahl (1099511704614) kannte weder Voice noch Reaktionen, Bilder,
+# Rollen, Soundboard oder Umfragen: wer Flo damit einlud, bekam einen Bot, bei
+# dem die Haelfte still scheiterte.
+EINLADE_RECHTE = discord.Permissions(
+    view_channel=True, send_messages=True, read_message_history=True,
+    embed_links=True, attach_files=True, add_reactions=True,
+    use_external_emojis=True, send_polls=True,
+    manage_guild=True,        # Server-Icon (Tages-/Jahreszeit)
+    manage_messages=True,     # Auto-Loeschen, Purge
+    manage_roles=True,        # Titel-Rollen aus dem Shop
+    kick_members=True, ban_members=True, moderate_members=True,
+    connect=True, speak=True, use_voice_activation=True,
+    use_soundboard=True, use_external_sounds=True,
+    set_voice_channel_status=True,   # "🎵 Titel" am Sprachkanal
+)
+
+
 def invite_url():
     """OAuth2-Einladungslink mit den noetigen Rechten.
 
-    permissions=1099511704614 = Kanal ansehen (1024) + Nachrichten senden (2048)
-    + 'Server verwalten' (32, fuers Icon) + 'Nachrichten verwalten' (8192, fuers
-    Auto-Loeschen/Purge) + 'Nachrichtenverlauf anzeigen' (65536, fuers Loeschen)
-    + 'Mitglieder kicken' (2) + 'Mitglieder bannen' (4) + 'Mitglieder im Timeout'
-    (1099511627776, fuer Timeout/Mute). Summe = 1099511704614.
-    """
-    return (
-        f"https://discord.com/oauth2/authorize?client_id={APPLICATION_ID}"
-        "&permissions=1099511704614&scope=bot"
-    )
+    Scope applications.commands dazu: ohne ihn gibt es die Rechtsklick-Befehle
+    ("Flo, sag was dazu", "Roasten") auf dem Server nicht. Wer Flo frueher
+    eingeladen hat, laedt ihn mit diesem Link einfach noch einmal ein - das
+    ergaenzt nur Rechte, es wirft nichts raus."""
+    return discord.utils.oauth_url(
+        APPLICATION_ID or "0", permissions=EINLADE_RECHTE,
+        scopes=("bot", "applications.commands"))
 
 
 #: Datei, deren Alter der Docker-HEALTHCHECK prueft. Bewusst NICHT im
@@ -881,6 +905,10 @@ class FloBot(discord.Client):
         # gleichzeitig -> 429). Stattdessen sammeln wir faellige Nachrichten je Channel
         # und loeschen sie gebuendelt (Bulk-Delete: bis 100 Nachrichten = 1 API-Call).
         self._pending_deletes = {}
+        # Rechtsklick-Befehle (Nachricht/Person -> Apps). Der Baum haengt sich
+        # selbst an den Client; angemeldet wird in setup_hook.
+        self.tree = app_commands.CommandTree(self)
+        self._rechtsklick_zuletzt = {}   # uid -> monotonic ('nie' = -inf)
 
     async def setup_hook(self):
         """Laeuft genau EINMAL pro Prozess, nach dem Login und vor der
@@ -897,6 +925,7 @@ class FloBot(discord.Client):
                 self.add_dynamic_items(*knoepfe)
                 log.info("Dauerhafte Knoepfe angemeldet: %s (%d).",
                          modul.__name__, len(knoepfe))
+        self._rechtsklick_anmelden()
         # SIGTERM (systemctl stop/restart, docker stop) und SIGINT (Strg+C):
         # erst sichern, dann sauber abmelden. Vorher beendete SIGTERM Python
         # sofort - bis zu 60 s Wortzaehler, 3 s Schulden/Handel und das
@@ -1865,6 +1894,9 @@ class FloBot(discord.Client):
                 self._queue_delete(message, aufraeum_sek)
 
         if message.author.bot:
+            if message.type is discord.MessageType.poll_result:
+                self._umfrage_vorbei(message)
+                return
             # Flo verachtet fremde Bots: postet ein ANDERER Bot (nicht Flo selbst),
             # laestert Flo mit kleiner Wahrscheinlichkeit (Cooldown steckt in fun).
             if (FUN_ENABLED and message.guild is not None
@@ -2047,6 +2079,7 @@ class FloBot(discord.Client):
             # Aktie AUS: sauberer Hinweis statt Durchfallen an die KI.
             (FLOAKTIE_ENABLED and not _on("floaktie"), floaktie.handle_aus),
             (PROFIL_ENABLED and _on("profil"), profil.handle),
+            (UMFRAGE_ENABLED and _on("umfrage"), umfrage.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
             (GEHIRN_ENABLED and _on("gehirn"), gehirn.handle),
             (WORDS_ENABLED and _on("words"), words.handle),
@@ -2178,6 +2211,176 @@ class FloBot(discord.Client):
         """Darf dieser Server den $FLO-Kurs bewegen? (siehe aktien_guilds)."""
         return bool(gid) and guildcfg.an(gid, "aktie_zaehlt") \
             and features.is_on_in(gid, "floaktie")
+
+    def _umfrage_vorbei(self, message):
+        """Eine Umfrage ist abgelaufen -> Flo kommentiert das Ergebnis.
+
+        Nur Flos EIGENE Umfragen (Discord postet das Ergebnis im Namen dessen,
+        der sie gestartet hat), und nur, wo Umfragen an sind."""
+        if not (UMFRAGE_ENABLED and message.guild is not None
+                and self.user is not None and message.author.id == self.user.id
+                and features.is_on_in(message.guild.id, "umfrage")
+                and not (ADMIN_ENABLED and admin.is_locked())):
+            return
+        self._spawn(umfrage.ergebnis(message))
+
+    # --- Rechtsklick (Apps-Menue an Nachricht/Person) ------------------------
+    RECHTSKLICK_ABKUEHLEN = 20   # Sekunden je Nutzer - ein Rechtsklick kostet KI
+
+    def _rechtsklick_anmelden(self):
+        """'Flo, sag was dazu' (Nachricht) und 'Roasten' (Person) anmelden.
+
+        Nur auf Servern (in DMs gibt es dort nichts zu kommentieren). Bei
+        Discord angemeldet wird im Hintergrund und nur, wenn sich die Befehle
+        geaendert haben - siehe _befehle_abgleichen."""
+        nur_server = app_commands.AppCommandContext(guild=True)
+        for name, rueckruf in (("Flo, sag was dazu", self._rk_sag_was),
+                               ("Roasten", self._rk_roasten)):
+            try:
+                self.tree.add_command(app_commands.ContextMenu(
+                    name=name, callback=rueckruf, allowed_contexts=nur_server))
+            except app_commands.CommandAlreadyRegistered:
+                pass
+        self._spawn(self._befehle_abgleichen())
+
+    async def _befehle_abgleichen(self):
+        """Die Rechtsklick-Befehle bei Discord anmelden - nur wenn noetig.
+
+        Jeder Abgleich ist ein Schreibzugriff auf Discords Befehlsliste (mit
+        Tageslimit), und Flo startet oft neu. Deshalb merkt sich
+        data/befehle.json einen Fingerabdruck; stimmt er, bleibt alles, wie es
+        ist."""
+        try:
+            befehle = [befehl.to_dict(self.tree) for befehl in self.tree.get_commands()]
+            abdruck = hashlib.sha256(json.dumps(
+                [self.application_id, befehle], sort_keys=True, default=str
+            ).encode("utf-8")).hexdigest()
+            ablage = store.JsonStore("befehle.json", default={"abdruck": ""})
+            if ablage.data.get("abdruck") == abdruck:
+                log.info("Rechtsklick-Befehle unveraendert (%d) - kein Abgleich.",
+                         len(befehle))
+                return
+            await self.tree.sync()
+            ablage.data["abdruck"] = abdruck
+            await ablage.save()
+            log.info("Rechtsklick-Befehle bei Discord angemeldet (%d).", len(befehle))
+        except discord.HTTPException as exc:
+            log.warning("Rechtsklick-Befehle: Discord hat den Abgleich abgelehnt (%s). "
+                        "Fehlt der Scope applications.commands? Neu einladen: %s",
+                        exc, invite_url())
+        except Exception:  # noqa: BLE001 - Rechtsklick ist Zugabe, kein Startgrund
+            log.exception("Rechtsklick-Befehle: Abgleich gescheitert")
+
+    async def _rk_darf(self, interaction, schalter, geladen):
+        """Dieselben Schranken wie im Chat: Server, Sendepause, Funktionsschalter,
+        dazu eine kurze Abkuehlzeit (jeder Klick ist ein KI-Aufruf)."""
+        abfuhr = None
+        uid = interaction.user.id
+        if interaction.guild_id is None:
+            abfuhr = "Das geht nur auf einem Server, du Einsiedler."
+        elif ADMIN_ENABLED and admin.is_locked() and uid != OWNER_ID:
+            abfuhr = "Sendepause. Ich red gerade mit keinem - mit dir schon gar nicht."
+        elif not (geladen and features.is_on_in(interaction.guild_id, schalter)):
+            abfuhr = "Ist auf diesem Server abgeschaltet. Pech gehabt."
+        else:
+            rest = (self._rechtsklick_zuletzt.get(uid, float("-inf"))
+                    + self.RECHTSKLICK_ABKUEHLEN - time.monotonic())
+            if rest > 0:
+                abfuhr = f"Chill mal. Noch {int(rest) + 1} s, dann darfst du wieder."
+        if abfuhr is None:
+            self._rechtsklick_zuletzt[uid] = time.monotonic()
+            return True
+        try:
+            await interaction.response.send_message(abfuhr, ephemeral=True)
+        except discord.HTTPException:
+            pass
+        return False
+
+    async def _mit_frist(self, anfrage):
+        """Eine KI-Anfrage mit derselben Gesamtfrist wie im Chat - und immer
+        mit einem Satz am Ende, nie mit None."""
+        aufgabe = asyncio.ensure_future(anfrage)
+        fertig, _ = await asyncio.wait({aufgabe}, timeout=ai.instance.KI_FRIST + 15)
+        if aufgabe not in fertig:
+            aufgabe.cancel()
+            log.warning("KI-Fehler: Rechtsklick-Antwort hat die Frist gerissen")
+            return ai.instance.MELDUNGEN["zeit"]
+        try:
+            return aufgabe.result() or random.choice(ai.FloAI._LEER_SPRUECHE)
+        except Exception:  # noqa: BLE001
+            log.exception("KI-Fehler: Rechtsklick-Antwort fehlgeschlagen")
+            return ai.instance.MELDUNGEN["unbekannt"]
+
+    # discord.py liest den Typ des Rechtsklicks aus der Annotation des zweiten
+    # Parameters - deshalb steht sie hier, gegen die sonstige Gewohnheit.
+    async def _rk_sag_was(self, interaction, nachricht: discord.Message):
+        """Rechtsklick auf eine Nachricht -> Flo sagt oeffentlich was dazu."""
+        if not await self._rk_darf(interaction, "ki", AI_ENABLED):
+            return
+        try:
+            await interaction.response.defer(thinking=True)
+        except discord.HTTPException:
+            return
+        gid = interaction.guild_id
+        wer = interaction.user.display_name
+        von = getattr(nachricht.author, "display_name", "jemand")
+        text = (nachricht.content or "").strip()
+        if not text and nachricht.embeds:
+            text = (nachricht.embeds[0].description or nachricht.embeds[0].title or "").strip()
+        bild = _first_image_url(nachricht)
+        if self.user is not None and nachricht.author.id == self.user.id:
+            von = "dir selbst"
+        if text:
+            frage = (f"{wer} zeigt dir eine Nachricht von {von} und will wissen, "
+                     f"was du dazu sagst: „{text[:1500]}“")
+        else:
+            frage = (f"{wer} zeigt dir {'ein Bild' if bild else 'eine Nachricht ohne Text'} "
+                     f"von {von} und will wissen, was du dazu sagst.")
+        log.info("Rechtsklick 'sag was dazu' von %s auf %s", wer, nachricht.id)
+        with ai.guild_kontext(gid):
+            if bild:
+                anfrage = ai.see_image(frage, bild, author=wer,
+                                       channel_id=interaction.channel_id, gid=gid,
+                                       uid=interaction.user.id)
+            else:
+                anfrage = ai.ask_flo(frage, author=wer, channel_id=interaction.channel_id,
+                                     gid=gid, uid=interaction.user.id)
+            antwort = await self._mit_frist(anfrage)
+            ai.note_message(interaction.channel_id, ai.bot_name(), antwort, is_bot=True)
+        try:
+            await interaction.followup.send(f"-# zu {nachricht.jump_url}\n{antwort}"[:2000])
+        except discord.HTTPException:
+            log.exception("KI-Fehler: Rechtsklick-Antwort konnte nicht gesendet werden")
+
+    async def _rk_roasten(self, interaction, person: discord.Member):
+        """Rechtsklick auf eine Person -> Flo roastet sie oeffentlich."""
+        if not await self._rk_darf(interaction, "chaos", FUN_ENABLED):
+            return
+        try:
+            await interaction.response.defer(thinking=True)
+        except discord.HTTPException:
+            return
+        if self.user is not None and person.id == self.user.id:
+            text = random.choice((
+                "Mich roasten? Ich bin der Einzige hier ohne Fehler, du Wurst.",
+                "Netter Versuch. Roast dich lieber selbst, da gibt's mehr Material.",
+            ))
+        else:
+            with ai.guild_kontext(interaction.guild_id):
+                try:
+                    text = await fun.roast_text(person.display_name)
+                except Exception:  # noqa: BLE001
+                    log.exception("Rechtsklick-Roast fehlgeschlagen")
+                    text = f"{person.display_name}, du bist sogar zu langweilig zum Roasten."
+        log.info("Rechtsklick 'Roasten' von %s auf %s", interaction.user.display_name,
+                 person.display_name)
+        try:
+            await interaction.followup.send(
+                f"{person.mention} {text}"[:2000],
+                allowed_mentions=discord.AllowedMentions(users=[person], everyone=False,
+                                                         roles=False))
+        except discord.HTTPException:
+            log.exception("Rechtsklick-Roast konnte nicht gesendet werden")
 
     def _note_chat_activity(self, message):
         """Zaehlt eine echte Chat-Nachricht fuer den Aktienkurs (keine Befehle,

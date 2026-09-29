@@ -333,7 +333,11 @@ class Fun(FeatureBasis):
         return None
 
     async def _roast(self, message, rest):
-        name = self._target_name(message, rest)
+        return await self.roast_text(self._target_name(message, rest))
+
+    async def roast_text(self, name):
+        """Der Roast fuer einen Namen - der Chat-Befehl und der Rechtsklick
+        'Roasten' teilen ihn, damit beide gleich fies sind."""
         system = (
             f"Du bist {self._bot_name}, ein gnadenlos schlagfertiger Roast-Bot. Das hier ist "
             "ein einvernehmliches Spiel unter Freunden: Sie WOLLEN hart geroastet werden, "
@@ -670,6 +674,7 @@ is_enabled = instance.is_enabled
 handle = instance.handle
 on_message_passive = instance.on_message_passive
 maybe_roast_bot = instance.maybe_roast_bot
+roast_text = instance.roast_text
 maybe_dm_roast = instance.maybe_dm_roast
 looks_offensive = instance.looks_offensive
 ist_hetze = instance.ist_hetze

@@ -2871,6 +2871,7 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
     import schulden
     import steal
     import terraria
+    import umfrage
     import words
 
     # fun/chaos braucht die KI - ohne einen Client bleibt es aus und der
@@ -2880,7 +2881,7 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
         chat=SimpleNamespace(completions=SimpleNamespace(create=None)))
     for modul in (economy, words, schulden, profil, luxus, handel, steal, lotto,
                   floaktie, arbeit, fun, games, casino, moderation, guildcfg,
-                  terraria, merchant, gehirn):
+                  terraria, merchant, gehirn, umfrage):
         try:
             modul.setup()
         except Exception as exc:  # noqa: BLE001
@@ -2908,6 +2909,7 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
         (guildcfg, ("einstellungen", "config", "settings")),
         (terraria, ("terraria", "twiki")),
         (merchant, ("haendler", "merchant", "kraemer")),
+        (umfrage, ("umfrage", "umfrage pizza oder döner", "poll Frage? | a | b")),
     )
 
     stumm, geflogen = [], []

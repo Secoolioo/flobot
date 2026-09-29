@@ -122,6 +122,8 @@ class CmdNorm:
         "roast", "disst", "diss", "rösten", "roesten", "hype", "hyped", "props",
         "rate", "bewerte", "rizz", "sigma", "aura", "chad", "rizzler", "spruch",
         "horoskop", "weisheit", "wisdom", "fortune", "keks",
+        # umfrage (echte Discord-Umfragen)
+        "umfrage", "poll", "abstimmung", "voting",
         # voicegags
         "sounds", "soundboard", "soundliste", "sound", "soundeffekt", "sprich",
         "vorlesen",

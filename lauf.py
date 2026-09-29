@@ -41,7 +41,7 @@ os.environ["FLO_TESTLAUF"] = "1"
 # Liste gegen den Ordner, damit keine vergessen wird.
 TESTDATEIEN = (
     "test_logic",
-    "test_aktie", "test_arbeit", "test_casino", "test_ki", "test_konfig",
+    "test_aktie", "test_arbeit", "test_casino", "test_discord", "test_ki", "test_konfig",
     "test_moderation", "test_module", "test_musik", "test_panel",
     "test_profil", "test_schulden", "test_spiele",
     "test_werkzeug", "test_wirtschaft",
