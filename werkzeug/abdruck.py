@@ -247,15 +247,17 @@ class Abdrucknahme:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         laeufe = []
-        try:
-            with inventar.KeinNetz():
+        with inventar.KeinNetz():
+            try:
                 for i in range(runden):
                     self._sagen(f"  Durchlauf {i + 1}/{runden} ...")
                     laeufe.append(self.durchlauf(loop, worte))
-        finally:
-            # Offene Hintergrund-Tasks der Handler erst abbrechen (siehe dort).
-            inventar.loop_schliessen(loop)
-            asyncio.set_event_loop(None)
+            finally:
+                # Offene Hintergrund-Tasks der Handler erst abbrechen (siehe
+                # dort) - noch HINTER der Netzsperre, wie in inventar: was beim
+                # Abbrechen aufraeumt, darf auch dann nicht nach draussen.
+                inventar.loop_schliessen(loop)
+                asyncio.set_event_loop(None)
 
         stabil, wackelig = {}, []
         for wort in laeufe[0]:

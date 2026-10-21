@@ -289,6 +289,28 @@ def test_werkzeuge_lassen_keine_tasks_haengen():
                    inspect.getsource(abdruck.Abdrucknahme.aufnehmen)):
         assert "loop_schliessen(" in quelle and ".close()" not in quelle
 
+    # Abdruck schloss seinen Loop erst NACH der Netzsperre - das Abbrechen der
+    # Tasks lief also mit offenem Netz. Inventar macht es innerhalb; jetzt beide.
+    import socket
+    echt = inventar.loop_schliessen
+    gesperrt = []
+
+    def schliessen(lp):
+        gesperrt.append(socket.getaddrinfo is inventar.KeinNetz._nein)
+        echt(lp)
+
+    nahme = abdruck.Abdrucknahme(laut=False)
+    nahme.befehle = lambda: {}
+    nahme.ruesten = lambda: {}
+    nahme.durchlauf = lambda lp, worte: {}
+    inventar.loop_schliessen = schliessen
+    try:
+        nahme.aufnehmen(runden=1)
+    finally:
+        inventar.loop_schliessen = echt
+    assert gesperrt == [True], gesperrt
+    assert socket.getaddrinfo is not inventar.KeinNetz._nein
+
 
 
 

@@ -240,10 +240,11 @@ VOL_SPREAD = float(os.getenv("FLOAKTIE_VOL_SPREAD", "0.8") or "0.8")
 MOM_WEIGHT = float(os.getenv("FLOAKTIE_MOM_WEIGHT", "0.25") or "0.25")
 MOM_DECAY = float(os.getenv("FLOAKTIE_MOM_DECAY", "0.7") or "0.7")
 # --- Flo als Analyst ---------------------------------------------------------
-# Die KI schaut sich regelmaessig den Markt an und verstaerkt oder daempft die
-# Bewegung um bis zu KI_MAX. Bewusst gedeckelt: die KI darf Wuerze geben, aber
-# niemals die Balance aushebeln. Faellt sie aus, ist der Faktor 0 und alles laeuft
-# wie vorher.
+# Die KI schaut sich regelmaessig den Markt an und schiebt den Kurs um bis zu
+# KI_MAX in IHRE Richtung: positiv heisst schneller rauf bzw. langsamer runter,
+# negativ langsamer rauf bzw. schneller runter - so, wie es im Panel mit Pfeil
+# steht. Bewusst gedeckelt: die KI darf Wuerze geben, aber niemals die Balance
+# aushebeln. Faellt sie aus, ist der Faktor 0 und alles laeuft wie vorher.
 KI_MAX = float(os.getenv("FLOAKTIE_KI_MAX", "0.4") or "0.4")          # +/- 40 %
 KI_ALLE_SEK = float(os.getenv("FLOAKTIE_KI_INTERVAL", "600") or "600")  # alle 10 min
 KI_MAX_ALTER = float(os.getenv("FLOAKTIE_KI_TTL", "2400") or "2400")   # nach 40 min ungueltig
@@ -259,8 +260,12 @@ BILANZ_SEK = 3600.0
 # ueber den Zielkurs der aktuellen Aktivitaet traegt. Siehe _ki_richtwert().
 KI_SPIELRAUM = max(0, int(os.getenv("FLOAKTIE_KI_SPIELRAUM", "15") or "15"))  # +/- 15 um den Richtwert
 RICHT_ABSTAND = 15.0   # Kurs weit unter/ueber seinem Ziel -> bis +/- 15
-RICHT_LEBEN = 15.0     # Call voller/leerer als an einem normalen Abend -> bis +/- 15
+RICHT_LEBEN = 15.0     # Call voller/leerer als sonst, WENN jemand da ist -> bis +/- 15
 RICHT_WENDE = 10.0     # zu steil gestiegen/gefallen -> bis -/+ 10 (Gegenbewegung)
+# Ueber wie viele BESETZTE Minuten sich "so viel ist hier sonst los" mittelt
+# (siehe _normal_tick): 600 sind zehn Stunden mit jemandem im Call - auf einem
+# Abend-Server zwei, drei Abende, auf einem Dauer-Call ein halber Tag.
+RICHT_NORMAL_MIN = 600.0
 # Sofort-Impulse fuer Ereignisse (unabhaengig vom Niveau, pro Minute gedeckelt).
 PULSE_STREAM = float(os.getenv("FLOAKTIE_PULSE_STREAM", "0.004") or "0.004")   # Livestream geht an: +0,4 %
 PULSE_JOIN = float(os.getenv("FLOAKTIE_PULSE_JOIN", "0.0015") or "0.0015")     # jemand kommt in den Call: +0,15 %
@@ -1131,6 +1136,38 @@ class FloAktie(FeatureBasis):
         alpha = min(1.0, skala / tau)
         st["grund_akt"] = alt + (max(0.0, float(roh_aktiv)) - alt) * alpha
 
+    def akt_normal(self):
+        """So viel ist hier sonst los, WENN jemand im Call ist (0 = noch nie)."""
+        try:
+            wert = float(self._state().get("akt_normal", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return wert if math.isfinite(wert) and wert > 0 else 0.0
+
+    def _normal_tick(self, aktiv, skala):
+        """Fuehrt den Massstab des Analysten fuer "mehr los als sonst" nach.
+
+        NUR bei besetztem Call. Vorher war der Massstab GRUND_FAKTOR x Grundwert-
+        Aktivitaet - ein 24-Stunden-Schnitt mit allen Leerlaufstunden, mal vier,
+        und die Vier stimmt nur fuer einen Server, auf dem abends rund sechs
+        Stunden jemand sitzt. Auf einem Server mit Dauer-Call lag die Aktivitaet
+        deshalb IMMER unter "normal": nachgemessen ein Zuhoerer rund um die Uhr
+        -10/-11 bei jeder Einschaetzung, drei Leute -12 - wieder ein Dauer-Baer.
+
+        Gemittelt wird im LOGARITHMUS: der Analyst vergleicht Verhaeltnisse
+        (doppelt so viel los wie sonst = halb so viel, nur andersrum). Mit einem
+        gewoehnlichen Mittel laege jeder schwankende Abend im Schnitt unter
+        seinem eigenen Mittelwert."""
+        st = self._state()
+        alt = self.akt_normal()
+        neu = max(0.0, float(aktiv))
+        if alt <= 0:
+            st["akt_normal"] = neu             # erster besetzter Takt
+            return
+        alpha = min(1.0, skala / max(1.0, RICHT_NORMAL_MIN))
+        st["akt_normal"] = math.expm1(
+            math.log1p(alt) + (math.log1p(neu) - math.log1p(alt)) * alpha)
+
     def ziel_kurs(self, activity=None):
         """Derselbe Zielwert als ANGEZEIGTER Kurs (inkl. ausgegebener Anteile)."""
         if activity is None:
@@ -1218,7 +1255,8 @@ class FloAktie(FeatureBasis):
 
     # --- Flo als Analyst: die KI bewertet den Markt --------------------------
     def _ki_faktor(self):
-        """Wie stark die KI die aktuelle Bewegung verstaerkt/daempft (-KI_MAX..+KI_MAX).
+        """In welche Richtung die KI schiebt (-KI_MAX..+KI_MAX): positiv rauf,
+        negativ runter - bei besetztem UND bei leerem Call (_activity_tick).
 
         Reine Lesefunktion - die Einschaetzung wird im Hintergrund erneuert
         (ki_tick). Ist sie zu alt oder gar nicht da, ist sie 0 und der Kurs
@@ -1283,11 +1321,19 @@ class FloAktie(FeatureBasis):
 
     def _ki_richtwert(self, people, streams, video, msgs):
         """Der Richtwert (-40..+40) aus denselben Zahlen, die die KI im Bericht
-        sieht. Faellt hier etwas um, ist er 0 - der Analyst haelt die Boerse nie auf."""
+        sieht. Faellt hier etwas um, ist er 0 - der Analyst haelt die Boerse nie auf.
+
+        Ob jemand im Call ist, sagt die Messung von jetzt. WIE VIEL los ist, sagt
+        die geglaettete Aktivitaet, mit der auch der Kurs rechnet: nur sie hat
+        denselben Massstab wie akt_normal() - die Nachrichten hier sind ein
+        Zaehler seit dem letzten Takt, im Takt aber eine Rate pro Minute."""
         try:
-            akt = self.activity_of(people, streams, video, msgs)
-            return self._richtwert_aus(self._ki_ziel_abstand(akt > 0), akt,
-                                       GRUND_FAKTOR * self.grund_akt(),
+            roh = self.activity_of(people, streams, video, msgs)
+            akt = 0.0
+            if roh > 0:
+                akt = float(self._state().get("act_ema", 0.0) or 0.0) or roh
+            return self._richtwert_aus(self._ki_ziel_abstand(roh > 0), akt,
+                                       self.akt_normal() or akt,
                                        self._change_pct(1), self._change_pct(7))
         except Exception:  # noqa: BLE001 - die Boerse laeuft auch ohne Analyst
             log.exception("FloCorp Analyst: Richtwert nicht berechenbar")
@@ -1302,28 +1348,36 @@ class FloAktie(FeatureBasis):
         eingebaute Richtung:
         - Abstand (_ki_ziel_abstand): Luft nach oben -> plus, ueber dem Ziel ->
           minus, am Ziel 0.
-        - Leben: mehr los als an einem normalen Abend (GRUND_FAKTOR x Grundwert-
-          Aktivitaet, wie beim Boden) -> plus, weniger -> minus. NUR bei
-          besetztem Call: der leere Call steckt schon im Abstand (das Ziel ist
-          dann der Grundwert, der Kurs faellt dorthin). Ihn hier ein zweites Mal
-          abzuziehen, machte den Analysten in jeder ruhigen Stunde zum Baeren -
-          und ruhig ist es die meiste Zeit des Tages.
+        - Leben: mehr los als sonst, wenn jemand da ist (akt_normal) -> plus,
+          weniger -> minus. NUR bei besetztem Call: der leere Call steckt schon
+          im Abstand (das Ziel ist dann der Grundwert, der Kurs faellt dorthin).
+          Ihn hier ein zweites Mal abzuziehen, machte den Analysten in jeder
+          ruhigen Stunde zum Baeren - und ruhig ist es die meiste Zeit des Tages.
         - Wende: ueber Tag und Woche steil gestiegen -> eher zurueck, steil
           gefallen -> eher wieder rauf. Tag UND Woche je verdoppelt: rund -8.
 
-        Nachgemessen ueber 6 x 20 simulierte Tage (Tagesplan aus
-        tools_aktien_sim.py, alle 10 Minuten ein Richtwert): Mittel -2, 35 %
-        positiv, 54 % negativ - bei besetztem Call 37 % / 55 %, bei leerem
-        34 % / 54 %. Im Betrieb vorher: zwei Wochen lang nur negativ."""
-        abstand = max(-1.0, min(1.0, float(abstand)))
-        wert = -RICHT_ABSTAND * abstand
-        if akt > 0:
-            wert += RICHT_LEBEN * math.tanh(
-                math.log((1.0 + float(akt)) / (1.0 + max(0.0, float(normal)))))
-        lauf = (float(aenderung_1) + float(aenderung_7)) / 2.0
+        Nachgemessen (alle 10 Minuten ein Richtwert, Tage 5-10): mit dem
+        Tagesplan aus tools_aktien_sim.py und mit Calls von 4, 6, 10 und 16
+        Stunden am Tag liegt das Mittel zwischen -1,4 und +1,3, mit beiden
+        Vorzeichen. Ein Call rund um die Uhr steht am Deckel und bekommt 0. Mit
+        dem alten Massstab (GRUND_FAKTOR x Grundwert-Aktivitaet) war ein
+        Zuhoerer rund um die Uhr bei JEDER Einschaetzung -10/-11, ein Zuhoerer
+        16 Stunden am Tag zu 65 % negativ.
+
+        Kaputte Zahlen (NaN, unendlich) zaehlen als 0 - also als "nichts
+        Besonderes", nicht als Ausschlag in irgendeine Richtung."""
+        def zahl(x):
+            try:
+                x = float(x)
+            except (TypeError, ValueError):
+                return 0.0
+            return x if math.isfinite(x) else 0.0
+        abstand, akt, normal = zahl(abstand), max(0.0, zahl(akt)), max(0.0, zahl(normal))
+        wert = -RICHT_ABSTAND * max(-1.0, min(1.0, abstand))
+        if akt > 0 and normal > 0:             # ohne Massstab kein Urteil
+            wert += RICHT_LEBEN * math.tanh(math.log1p(akt) - math.log1p(normal))
+        lauf = (zahl(aenderung_1) + zahl(aenderung_7)) / 2.0
         wert -= RICHT_WENDE * math.tanh(lauf / 100.0)
-        if wert != wert:                           # NaN
-            return 0
         return max(-40, min(40, int(round(wert))))
 
     def _ki_lage(self, people, streams, video, msgs, richtwert=None, zuletzt=""):
@@ -1364,10 +1418,11 @@ class FloAktie(FeatureBasis):
 
     # Drei Beispiele in drei Richtungen und mit verschiedenem Satzbau. Mit einem
     # einzigen (negativen) Beispiel hat das Modell zwei Wochen lang fast nur
-    # dieses eine abgeschrieben - die Zahl gleich mit.
+    # dieses eine abgeschrieben - die Zahl gleich mit. Die Saetze stehen so im
+    # Panel, also mit echten Umlauten: das Modell schreibt nach, was es sieht.
     _KI_BEISPIELE = (
         "+18|Der Call brummt, da kaufen sogar die Zweifler nach.",
-        "0|Seitwaerts wie ein Kreisverkehr - keiner traut sich, keiner rennt.",
+        "0|Seitwärts wie ein Kreisverkehr – keiner traut sich, keiner rennt.",
         "-14|Leerer Call, volle Depots. Das geht nicht lange gut.",
     )
 
@@ -1376,27 +1431,33 @@ class FloAktie(FeatureBasis):
         "kurzen Marktbericht und gibst deine Einschaetzung ab.\n"
         "Antworte in GENAU EINER Zeile in diesem Format:\n"
         "ZAHL|Kommentar\n"
-        "ZAHL ist eine ganze Zahl von -40 bis +40 (Prozent, um die die Bewegung "
-        "angepasst wird). Positiv = Rally, negativ = Bremse/Korrektur, 0 = seitwaerts.\n"
-        "Im Bericht steht ein RICHTWERT, der aus den Zahlen gerechnet ist. Nimm ihn "
-        f"als Anker und weiche hoechstens {KI_SPIELRAUM} davon ab - mehr wird abgeschnitten. "
-        "Mehr los als sonst oder Luft nach oben -> eher drueber, Kurs ueber dem "
-        "Deckel oder auf dem Weg nach unten -> eher drunter.\n"
-        "Kommentar ist EIN kurzer, frecher Boersen-Satz auf Deutsch, hoechstens "
-        "90 Zeichen, ohne Anfuehrungszeichen. Jedes Mal ein NEUER Satz: nie den "
-        "letzten wiederholen und kein Beispiel abschreiben.\n"
+        "ZAHL ist eine ganze Zahl von -40 bis +40 (Prozent, um die du den Kurs "
+        "schiebst). Positiv = rauf, negativ = runter, 0 = seitwaerts.\n"
+        "Im Bericht steht ein RICHTWERT, der aus den Zahlen gerechnet ist. Er "
+        "enthaelt schon alles aus dem Bericht - Abstand zu Deckel und Grundwert, "
+        "wie viel im Call los ist, Tag und Woche. Rechne das NICHT noch einmal "
+        f"drauf. Nimm ihn als Anker und weiche hoechstens {KI_SPIELRAUM} davon ab, "
+        "nur aus Laune oder wegen etwas, das die Rechnung nicht sieht - mehr wird "
+        "abgeschnitten.\n"
+        "Kommentar ist EIN kurzer, frecher Boersen-Satz auf Deutsch mit echten "
+        "Umlauten (ä, ö, ü, ß), hoechstens 90 Zeichen, ohne Anfuehrungszeichen. "
+        "Jedes Mal ein NEUER Satz: nie den letzten wiederholen und kein Beispiel "
+        "abschreiben.\n"
         "Beispiele (nur fuers Format):\n" + "\n".join(_KI_BEISPIELE)
     )
 
     # Wenn das Modell zwar antwortet, aber ohne brauchbare Zahl - oder nur den
     # letzten Satz bzw. ein Beispiel abschreibt. Bewusst ohne Richtung: die
-    # steckt im Richtwert, und ein "Rally!" ueber einer roten Zahl waere Unsinn.
+    # steckt in der Zahl, und ein "Rally!" ueber einer roten Zahl waere Unsinn.
+    # Und ohne Behauptung, WOHER die Zahl kommt: beim abgeschriebenen Satz ist
+    # sie von der KI, bei der Antwort ohne Zahl der Richtwert. Keine Tageszeit -
+    # der Analyst laeuft auch nachts.
     _KI_ERSATZ = (
-        "Mein Analyst lallt heute. Ich hab's mit dem Taschenrechner gemacht.",
-        "Kein Kommentar. Die Zahlen reden, und zwar lauter als ihr.",
-        "Analyst in der Mittagspause. Rechnet halt selber, ihr Zocker.",
+        "Kein Kommentar. Die Zahl redet, und zwar lauter als ihr.",
         "Ich sag nix. Ihr kauft ja eh, was ihr wollt.",
-        "Der Analyst hat gekuendigt. Die Formel macht weiter, die ist billiger.",
+        "Mein Analyst schmollt. Lest die Zahl und lasst mich in Ruhe.",
+        "Der Analyst hat gekündigt. Die Zahl da oben muss euch reichen.",
+        "Fragt nicht mich, fragt euer Depot. Das heult eh schon.",
     )
 
     @classmethod
@@ -1408,9 +1469,12 @@ class FloAktie(FeatureBasis):
     @classmethod
     def _ki_abgeschrieben(cls, text, zuletzt=""):
         """True, wenn der Kommentar nur der letzte oder ein Beispielsatz ist
-        (Gross-/Kleinschreibung und Satzzeichen zaehlen nicht)."""
+        (Gross-/Kleinschreibung, Satzzeichen und ae/ä zaehlen nicht)."""
         def kern(s):
-            return re.sub(r"[^a-z0-9äöüß]+", "", str(s or "").lower())
+            s = str(s or "").lower()
+            for umlaut, ersatz in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+                s = s.replace(umlaut, ersatz)
+            return re.sub(r"[^a-z0-9]+", "", s)
         eigen = kern(text)
         if not eigen:
             return False
@@ -1590,6 +1654,7 @@ class FloAktie(FeatureBasis):
             ema = alpha * roh_aktiv + (1 - alpha) * alt_ema
             st["act_ema"] = ema
             st["leer_min"] = 0.0
+            self._normal_tick(ema, skala)
             # Alles zuerst PRO MINUTE rechnen, ganz am Ende auf den Takt skalieren.
             basis = self.drift_fuer(ema) * (1.0 + self._ki_faktor())
             # Das Momentum steuert im Mittel MOM_WEIGHT x basis bei. Ohne diese
@@ -1618,7 +1683,11 @@ class FloAktie(FeatureBasis):
             if trend < 0.0:
                 # Beim SINKEN kein Aufhellen durch Zufall - der Verfall soll klar
                 # sichtbar sein. Ein laufender Absturz zieht ueber das Momentum nach.
-                pro_min = trend * (1.0 + self._ki_faktor())
+                # Die KI wirkt hier mit MINUS: der Trend ist negativ, und ein
+                # negativer Analyst soll den Fall beschleunigen, nicht bremsen.
+                # Mit (1 + ki) zeigte das Panel einen Pfeil nach unten und
+                # "-20 %", waehrend der Analyst den Kurs in Wahrheit stuetzte.
+                pro_min = trend * (1.0 - self._ki_faktor())
                 pro_min /= (1.0 + MOM_WEIGHT)
                 pro_min = min(0.0, pro_min + MOM_WEIGHT * min(0.0, mom))
             else:

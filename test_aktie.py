@@ -2040,50 +2040,56 @@ def test_aktie_analyst_glaubt_keinem_stempel_aus_der_zukunft():
         restore()
 
 # --- Flo als Analyst: kein Dauer-Baer mehr --------------------------------------
-def _analyst_frisch(fa, base, act_ema=1.0, grund_akt=0.7):
+def _analyst_frisch(fa, base, act_ema=1.0, grund_akt=0.7, akt_normal=None):
     """Ein Aktien-Stand wie auf einem ruhigen Server: wenig Aktivitaet, ein
-    Grundwert aus ein paar Abenden - genau dort war der Analyst zwei Wochen Baer."""
-    fa._store = _FakeStore({"price": 1000, "base": float(base), "day": "d",
-                            "act_ema": act_ema, "grund_akt": grund_akt,
-                            "msg_count": 0, "last_msg_count": 0, "mom": 0.0,
-                            "holdings": {}, "history": [], "ticks": []})
+    Grundwert aus ein paar Abenden - genau dort war der Analyst zwei Wochen Baer.
+    'akt_normal': so viel ist sonst los, wenn jemand im Call ist (None = unbekannt)."""
+    daten = {"price": 1000, "base": float(base), "day": "d",
+             "act_ema": act_ema, "grund_akt": grund_akt,
+             "msg_count": 0, "last_msg_count": 0, "mom": 0.0,
+             "holdings": {}, "history": [], "ticks": []}
+    if akt_normal is not None:
+        daten["akt_normal"] = akt_normal
+    fa._store = _FakeStore(daten)
     fa._sync_price()
 
 
 def test_aktien_analyst_richtwert_ist_symmetrisch():
     """Im Betrieb lieferte der Analyst 14 Tage lang NUR -12 % bis -30 %. Der
     Richtwert, an den er jetzt gebunden ist, hat keine eingebaute Richtung:
-    ueber ein Raster typischer Lagen liegt er im Mittel bei 0, und beide
-    Vorzeichen kommen kraeftig vor."""
-    import statistics
+    jeder seiner drei Teile ist um seinen Ruhepunkt spiegelbildlich und zieht in
+    die erwartete Richtung. (Ob das auch im ECHTEN Ablauf ausgeglichen ist,
+    prueft test_aktien_analyst_ist_bei_jedem_tagesablauf_kein_dauer_baer - ein
+    Raster wie dieses waere fuer jede ungerade Funktion ausgeglichen.)"""
     import floaktie
     rw = floaktie.FloAktie._richtwert_aus
-    werte = []
-    for abstand in (-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0):
-        for normal in (0.0, 2.8, 8.0):
-            # Aktivitaet symmetrisch um den normalen Abend - und der leere Call.
-            for faktor in (None, 1 / 3, 1 / 1.5, 1.0, 1.5, 3.0):
-                akt = 0.0 if faktor is None else (1.0 + normal) * faktor - 1.0
-                if faktor is not None and akt <= 0:
-                    continue                  # gibt es nicht: besetzt heisst > 0
-                for c1 in (-60.0, -20.0, 0.0, 20.0, 60.0):
-                    for c7 in (-60.0, 0.0, 60.0):
-                        werte.append(rw(abstand, akt, normal, c1, c7))
-    assert all(isinstance(w, int) and -40 <= w <= 40 for w in werte)
-    mittel = statistics.mean(werte)
-    assert abs(mittel) < 1.5, mittel
-    positiv = sum(w > 0 for w in werte) / len(werte)
-    negativ = sum(w < 0 for w in werte) / len(werte)
-    assert positiv > 0.35 and negativ > 0.35, (positiv, negativ)
-    assert max(werte) >= 30 and min(werte) <= -30, (min(werte), max(werte))
-    # Jeder Teil zieht in die erwartete Richtung.
-    assert rw(-1.0, 0, 0, 0, 0) > 0 > rw(1.0, 0, 0, 0, 0)          # Luft / zu hoch
-    assert rw(0.0, 12.0, 2.8, 0, 0) > 0 > rw(0.0, 1.0, 2.8, 0, 0)  # voller / leerer als sonst
-    assert rw(0.0, 0, 0, 150, 150) < 0 < rw(0.0, 0, 0, -60, -60)   # heiss / ausverkauft
+    # Abstand: Luft nach oben -> plus, ueber dem Ziel -> minus, spiegelbildlich.
+    for a in (0.1, 0.25, 0.5, 1.0):
+        assert rw(-a, 0, 0, 0, 0) == -rw(a, 0, 0, 0, 0) > 0, a
+    assert rw(-1.0, 0, 0, 0, 0) > rw(-0.5, 0, 0, 0, 0) > rw(-0.1, 0, 0, 0, 0)
+    assert rw(-5.0, 0, 0, 0, 0) == rw(-1.0, 0, 0, 0, 0)            # gedeckelt
+    # Leben: doppelt so viel los wie sonst = halb so viel, nur andersrum.
+    for normal in (3.0, 8.0):
+        for k in (1.5, 2.0, 3.0):
+            mehr = (1.0 + normal) * k - 1.0
+            weniger = (1.0 + normal) / k - 1.0
+            assert rw(0.0, mehr, normal, 0, 0) == -rw(0.0, weniger, normal, 0, 0) > 0, (
+                normal, k)
+        assert rw(0.0, normal, normal, 0, 0) == 0                 # wie sonst -> 0
+    assert rw(0.0, 0, 5.0, 0, 0) == 0          # leerer Call: steckt im Abstand
+    # Wende: steil rauf -> eher zurueck, steil runter -> eher wieder rauf.
+    for c in (20.0, 60.0, 150.0):
+        assert rw(0.0, 0, 0, c, c) == -rw(0.0, 0, 0, -c, -c) < 0, c
     assert rw(0.0, 0, 0, 0, 0) == 0
-    # Kaputte Zahlen kippen nichts um.
-    assert rw(float("nan"), 0, 0, 0, 0) in range(-40, 41)
-    assert rw(0.0, 0, 0, float("nan"), 0) == 0
+    # Alles zusammen bleibt in -40..+40.
+    assert rw(-1.0, 50.0, 1.0, -99, -99) <= 40 and rw(1.0, 1.0, 50.0, 900, 900) >= -40
+    # Kaputte Zahlen sind "nichts Besonderes" - kein Ausschlag in irgendeine
+    # Richtung. Vorher machte max(-1, min(1, nan)) daraus +1, also -15.
+    nan, inf = float("nan"), float("inf")
+    for kaputt in ((nan, 0, 0, 0, 0), (inf, 0, 0, 0, 0), (-inf, 0, 0, 0, 0),
+                   (0.0, nan, 3.0, 0, 0), (0.0, 3.0, nan, 0, 0), (0.0, inf, 3.0, 0, 0),
+                   (0.0, 0, 0, nan, 0), (0.0, 0, 0, 0, -inf), ("quatsch", None, 0, 0, 0)):
+        assert rw(*kaputt) == 0, kaputt
 
 
 def test_aktien_analyst_ist_auf_ruhigem_server_kein_dauer_baer():
@@ -2101,7 +2107,8 @@ def test_aktien_analyst_ist_auf_ruhigem_server_kein_dauer_baer():
         werte = {}
         for name, mal in (("am boden", 1.0), ("halb", 1.4), ("am deckel", 2.0),
                           ("drueber", 3.0)):
-            _analyst_frisch(fa, boden * mal)
+            # Ein Zuhoerer, so viel wie sonst auch (akt_normal = act_ema).
+            _analyst_frisch(fa, boden * mal, akt_normal=1.0)
             # Die alte Bedingung gilt ueberall: der Kurs steht UEBER dem Zielkurs.
             assert fa.price() > fa.ziel_kurs(), (name, fa.price(), fa.ziel_kurs())
             werte[name] = fa._ki_richtwert(1, 0, 0, 0)
@@ -2112,6 +2119,18 @@ def test_aktien_analyst_ist_auf_ruhigem_server_kein_dauer_baer():
         # dem Deckel -> negativ. Vorher war beides "ueber seinem Wert".
         assert werte["am boden"] > 0 > werte["drueber"], werte
         assert werte["am boden"] > werte["halb"] > werte["am deckel"] > werte["drueber"]
+        # Am Deckel, so viel los wie sonst: DORT steht der Kurs nach ein paar
+        # Stunden mit einem Zuhoerer - und dort ist nichts zu holen und nichts zu
+        # verlieren. Mit dem alten Massstab (4 x Grundwert-Aktivitaet) waren das -8.
+        assert werte["am deckel"] == 0, werte
+        # Ein Zuhoerer RUND UM DIE UHR: der 24-Stunden-Schnitt ist dann 1, der alte
+        # Massstab also 4 - und der Analyst sagte bei jeder Einschaetzung -11.
+        _analyst_frisch(fa, 1.0, grund_akt=1.0)
+        _analyst_frisch(fa, fa.boden_base() * 2.0, grund_akt=1.0, akt_normal=1.0)
+        assert fa._ki_richtwert(1, 0, 0, 0) == 0, fa._ki_richtwert(1, 0, 0, 0)
+        # Noch nie jemand im Call gewesen (kein Massstab): kein Urteil ueber "Leben".
+        _analyst_frisch(fa, fa.boden_base() * 2.0, grund_akt=1.0)
+        assert fa._ki_richtwert(1, 0, 0, 0) == 0
         # Leerer Call, Kurs auf dem Grundwert: nichts mehr zu verlieren - kein Baer.
         _analyst_frisch(fa, boden, act_ema=0.0)
         assert abs(fa._ki_richtwert(0, 0, 0, 0)) <= 2, fa._ki_richtwert(0, 0, 0, 0)
@@ -2119,9 +2138,106 @@ def test_aktien_analyst_ist_auf_ruhigem_server_kein_dauer_baer():
         # Leerer Call, Kurs weit drueber: der faellt jetzt - DAS ist negativ.
         _analyst_frisch(fa, boden * 3.0, act_ema=0.0)
         assert fa._ki_richtwert(0, 0, 0, 0) < -10
-        # Voller Call (12 Leute, 2 Streams) bei Kurs am Grundwert: deutlich positiv.
-        _analyst_frisch(fa, boden)
+        # Voller Call (12 Leute, 2 Streams = 22 Punkte, sonst 3) bei Kurs am
+        # Grundwert: deutlich positiv. Weniger los als sonst: Leben zieht runter.
+        _analyst_frisch(fa, boden, act_ema=22.0, akt_normal=3.0)
         assert fa._ki_richtwert(12, 2, 0, 10) >= 25
+        _analyst_frisch(fa, boden * 2.0, akt_normal=6.0)
+        assert fa._ki_richtwert(1, 0, 0, 0) < -10
+    finally:
+        fa._store, fa._enabled = alt
+
+
+def test_aktien_analyst_ist_bei_jedem_tagesablauf_kein_dauer_baer():
+    """Der Richtwert im echten Ablauf: _activity_tick Minute fuer Minute, alle
+    10 Minuten ein Richtwert - mit dem Tagesplan aus tools_aktien_sim.py und mit
+    Calls von 4, 10, 16 und 24 Stunden am Tag.
+
+    Vorher war "so viel ist sonst los" der 24-Stunden-Schnitt mal GRUND_FAKTOR
+    (4). Das passt nur zu einem Server, auf dem abends rund sechs Stunden jemand
+    sitzt. Nachgemessen mit dem alten Massstab: ein Zuhoerer rund um die Uhr
+    -10/-11 bei JEDER Einschaetzung, drei Leute -12/-13, ein Zuhoerer 16 Stunden
+    am Tag 65 % negativ gegen 12 % positiv - der Dauer-Baer, nur woanders."""
+    import statistics
+    import floaktie
+    import tools_aktien_sim
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled, fa._today, random.getstate())
+    fa._enabled = True
+
+    def flach(stunden, leute, streams=0, msgs=0):
+        if stunden >= 24:
+            return lambda _tag, _rng: [(24, leute, streams, msgs)]
+        return lambda _tag, _rng: [(24 - stunden, 0, 0, 0),
+                                   (stunden, leute, streams, msgs)]
+
+    tagesplan = tools_aktien_sim.Sim()._tagesplan
+    ablaeufe = (("Tagesplan 1", tagesplan, 1), ("Tagesplan 2", tagesplan, 2),
+                ("1 Zuhoerer 24 h", flach(24, 1), 3),
+                ("3 Leute + Stream 24 h", flach(24, 3, 1, 2), 4),
+                ("1 Zuhoerer 16 h", flach(16, 1), 5), ("2 Leute 10 h", flach(10, 2), 6),
+                ("3 Leute + Stream 4 h", flach(4, 3, 1, 3), 7))
+    try:
+        for name, plan, seed in ablaeufe:
+            random.seed(seed)
+            rng = random.Random(seed)
+            fa._store = _FakeStore({
+                "price": floaktie.START_PRICE, "base": float(floaktie.START_PRICE),
+                "day": "", "act_ema": 0.0, "mom": 0.0, "leer_min": 0.0,
+                "msg_count": 0, "last_msg_count": 0, "holdings": {},
+                "history": [], "ticks": [], "open_day": "", "open_base": 0})
+            fa._sync_price()
+            werte = []
+            minute = 0
+            for tag in range(9):
+                fa._today = lambda t=tag: f"2026-01-{t + 1:02d}"
+                fa._tages_anker()
+                for stunden, leute, streams, msgs in plan(tag, rng):
+                    for _ in range(int(stunden * 60)):
+                        # Erst ab Tag 4: vorher baut sich der Grundwert noch auf.
+                        if tag >= 4 and minute % 10 == 0:
+                            werte.append(fa._ki_richtwert(leute, streams, 0, msgs))
+                        minute += 1
+                        fa._activity_tick(leute, msgs, streams, 0)
+            mittel = statistics.mean(werte)
+            positiv = sum(w > 0 for w in werte) / len(werte)
+            negativ = sum(w < 0 for w in werte) / len(werte)
+            lage = (name, round(mittel, 1), round(positiv, 2), round(negativ, 2))
+            assert abs(mittel) <= 3, lage
+            assert positiv <= 0.5 and negativ <= 0.5, lage
+            if "24 h" not in name:
+                # Wer kommt und geht, sieht beide Richtungen.
+                assert positiv > 0.03 and negativ > 0.03, lage
+    finally:
+        fa._store, fa._enabled, fa._today, rest = alt
+        random.setstate(rest)
+
+
+def test_aktien_analyst_schiebt_auch_bei_leerem_call_in_seine_richtung():
+    """Der Kurs-Takt rechnete bei leerem Call trend * (1 + ki) - und der Trend
+    ist dort negativ. Ein Analyst mit -30 % BREMSTE also den Fall (statt 11 %
+    nur noch rund 8 % je halber Stunde), waehrend das Panel einen Pfeil nach
+    unten zeigte. Jetzt heisst negativ ueberall: runter, positiv: rauf."""
+    import time as _t
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    try:
+        kurse = {}
+        for ki in (-0.3, 0.0, 0.3):
+            _analyst_frisch(fa, 1.0, act_ema=0.0)
+            fa._store.data.update({"base": fa.boden_base() * 4.0, "ki_faktor": ki,
+                                   "ki_zeit": _t.time()})
+            start = fa._base()
+            for _ in range(30):
+                fa._activity_tick(0, 0)
+            kurse[ki] = fa._base() / start
+        # Ein negativer Analyst bremst den Fall NIE, ein positiver beschleunigt
+        # ihn nie.
+        assert kurse[-0.3] < kurse[0.0] < kurse[0.3] < 1.0, kurse
+        # Ohne Analyst genau die Vorgabe des Besitzers: 11 % je halbe Stunde.
+        assert abs(kurse[0.0] - (1.0 - floaktie.IDLE_PER_30MIN)) < 0.01, kurse
     finally:
         fa._store, fa._enabled = alt
 
@@ -2152,6 +2268,19 @@ def test_aktien_analyst_bleibt_beim_richtwert_und_schreibt_nicht_ab():
     assert len(fa._KI_BEISPIELE) == 3 and zahlen[0] < 0 == zahlen[1] < zahlen[2]
     assert all(b in system for b in fa._KI_BEISPIELE)
     assert len({p(b)[1] for b in fa._KI_BEISPIELE}) == 3
+    # Der Richtwert enthaelt Abstand, Leben und Wende schon - der Prompt sagt
+    # das, statt dieselben Richtungen ein zweites Mal vorzubeten.
+    assert "NICHT noch einmal" in system and "eher drueber" not in system
+    assert "eher drunter" not in system
+    # Was im Panel steht, hat echte Umlaute (wie der Rest des Embeds); die
+    # Ersatzsaetze behaupten nicht, WOHER die Zahl kommt, und kennen keine
+    # Tageszeit - der Analyst laeuft auch nachts.
+    sichtbar = [b.split("|", 1)[1] for b in fa._KI_BEISPIELE] + list(fa._KI_ERSATZ)
+    assert any(c in s for s in sichtbar for c in "äöüß")
+    for alt_wort in ("Seitwaerts", "gekuendigt", "Taschenrechner", "Formel",
+                     "Mittag", "Abend", "Nacht", "Morgen"):
+        assert not any(alt_wort.lower() in s.lower() for s in sichtbar), alt_wort
+    assert len(set(fa._KI_ERSATZ)) == len(fa._KI_ERSATZ) >= 4
 
     # 3) ki_tick von vorne bis hinten - mit Richtwert im Bericht.
     alt = (fa._store, fa._enabled, ai.generate, ai.is_enabled,
@@ -2169,7 +2298,8 @@ def test_aktien_analyst_bleibt_beim_richtwert_und_schreibt_nicht_ab():
     fa._measure_alle = lambda g: (1, 0, 0)
     try:
         _analyst_frisch(fa, 1.0)
-        _analyst_frisch(fa, fa.boden_base() * 3.0)          # weit ueber dem Deckel
+        # Weit ueber dem Deckel, und sonst ist mehr los.
+        _analyst_frisch(fa, fa.boden_base() * 3.0, akt_normal=6.0)
         rw = fa._ki_richtwert(1, 0, 0, 0)
         assert rw < -raum, rw
 
@@ -2190,6 +2320,10 @@ def test_aktien_analyst_bleibt_beim_richtwert_und_schreibt_nicht_ab():
         _f, text = nochmal("-20|Alles faellt!", letzter="Alles faellt.")
         assert text in fa._KI_ERSATZ, text
         _f, text = nochmal("-14|leerer call, volle depots - das geht nicht lange gut")
+        assert text in fa._KI_ERSATZ, text
+        # Auch mit ae statt ä: das Beispiel steht mit Umlaut im Prompt.
+        _f, text = nochmal("0|Seitwaerts wie ein Kreisverkehr, keiner traut sich, "
+                           "keiner rennt")
         assert text in fa._KI_ERSATZ, text
         assert fa._ki_fehlschlaege == 0
         # Antwort OHNE Zahl: der Richtwert gilt - aber gezaehlt wird es als
