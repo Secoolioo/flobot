@@ -68,8 +68,9 @@ class MusikCheck(Arzt):
             if paket == "yt_dlp":
                 self._ytdlp_alter(str(version))
 
-        if shutil.which("ffmpeg"):
-            self.ok("ffmpeg gefunden")
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            self._ffmpeg_pruefen(ffmpeg)
         else:
             self.fehler("ffmpeg fehlt - ohne das spielt gar nichts.")
             self.merke("ffmpeg fehlt", "apt install ffmpeg")
@@ -104,6 +105,39 @@ class MusikCheck(Arzt):
         except ImportError:
             self.warn("yt-dlp-ejs fehlt - yt-dlp holt die Skripte sonst nicht selbst.")
             self.merke("yt-dlp-ejs fehlt", 'venv/bin/pip install "yt-dlp[default]"')
+
+    def _ffmpeg_pruefen(self, ffmpeg):
+        """Welches ffmpeg - und kennt es '-extension_picky'?
+
+        ffmpeg ab 7.1 verweigert die Stuecke von YouTube-Live-Streams (HLS),
+        weil deren Adressen keine passende Endung haben ("extension aac
+        mismatches allowed extensions"). Flo schaltet die Pruefung dann mit
+        '-extension_picky 0' ab - aber nur, wenn ffmpeg die Option kennt
+        (5.1 im Docker-Image kennt sie nicht und braucht sie auch nicht)."""
+        version = "?"
+        try:
+            fertig = subprocess.run([ffmpeg, "-version"], capture_output=True,
+                                    text=True, timeout=TIMEOUT)
+            zeile = (fertig.stdout or "").strip().splitlines()
+            treffer = re.match(r"ffmpeg version (\S+)", zeile[0]) if zeile else None
+            if treffer:
+                version = treffer.group(1)
+        except Exception:  # noqa: BLE001 - die Version ist nur Beiwerk
+            pass
+        self.ok(f"ffmpeg gefunden ({ffmpeg}, Version {version})")
+        try:
+            fertig = subprocess.run([ffmpeg, "-hide_banner", "-h", "demuxer=hls"],
+                                    capture_output=True, text=True, timeout=TIMEOUT)
+            kennt = "extension_picky" in (fertig.stdout or "") + (fertig.stderr or "")
+        except Exception as exc:  # noqa: BLE001
+            self.warn(f"ffmpeg -h demuxer=hls ging nicht ({exc}) - Live-Streams ungeprueft.")
+            return
+        if kennt:
+            self.ok("ffmpeg kennt -extension_picky - Flo schaltet es fuer "
+                    "Live-Streams (HLS) ab, die laufen also.")
+        else:
+            self.info("ffmpeg kennt -extension_picky nicht - dann prueft es die "
+                      "Endungen auch nicht, Live-Streams laufen ohne.")
 
     def _ytdlp_alter(self, version):
         """yt-dlp veraltet schnell: YouTube aendert staendig etwas, und eine alte

@@ -1238,5 +1238,194 @@ def test_einladelink_hat_alle_noetigen_rechte():
     assert not rechte.administrator
 
 
+# --- Gateway-Aussetzer: Watchdog, Status, Auto-Loeschen ------------------------
+class _Mitschnitt:
+    """Faengt die Log-Eintraege des Bots mit (als Kontext). eintraege = Liste."""
+
+    def __init__(self, name="dcbot"):
+        import logging
+        self.logger = logging.getLogger(name)
+        self.eintraege = []
+        self.griff = logging.Handler(level=logging.DEBUG)
+        self.griff.emit = self.eintraege.append
+
+    def __enter__(self):
+        import logging
+        self.alt_stufe = self.logger.level
+        self.logger.addHandler(self.griff)
+        self.logger.setLevel(logging.DEBUG)
+        return self
+
+    def __exit__(self, *_a):
+        self.logger.removeHandler(self.griff)
+        self.logger.setLevel(self.alt_stufe)
+        return False
+
+    def ab(self, stufe):
+        return [e for e in self.eintraege if e.levelno >= stufe]
+
+
+def _gateway_sichern(client):
+    """Was die Gateway-Tests am Bot verstellen - zum Zuruecklegen."""
+    return (client._gateway_weg_seit, client._gateway_zurueck_um,
+            client._status_gewechselt, client._weisheit_index)
+
+
+def _gateway_zurueck(client, stand):
+    (client._gateway_weg_seit, client._gateway_zurueck_um,
+     client._status_gewechselt, client._weisheit_index) = stand
+
+
+def test_gateway_zustand_kennt_aussetzer_und_gnadenfrist():
+    """20.10.2026, 08:10-08:11: das Gateway war eine gute Minute weg. Musik-
+    Watchdog, Status-Loop und Auto-Loeschen merkten davon nichts und machten
+    weiter, als waere nichts. Jetzt fuehrt der Bot Buch: on_disconnect setzt
+    den Stempel, on_resumed/on_ready nehmen ihn weg - und danach gilt die
+    Verbindung noch GATEWAY_GNADE_SEKUNDEN lang als wackelig."""
+    import discord.client
+    import discord.state
+    import bot
+    import laufzeit
+    c = bot.client
+    stand = _gateway_sichern(c)
+    alt_client = laufzeit.client
+    laufzeit.client = c
+    c._gateway_weg_seit, c._gateway_zurueck_um = None, float("-inf")
+    try:
+        # Der erste Start ist kein Aussetzer: sofort stabil, keine Gnadenfrist.
+        assert c.gateway_stabil() and laufzeit.gateway_stabil()
+
+        asyncio.run(c.on_disconnect())
+        assert not c.gateway_stabil(gnade=0) and not laufzeit.gateway_stabil()
+        erster = c._gateway_weg_seit
+        # Jeder gescheiterte Neuversuch meldet 'disconnect' erneut - gezaehlt
+        # wird ab dem ersten.
+        asyncio.run(c.on_disconnect())
+        assert c._gateway_weg_seit == erster
+
+        c._status_gewechselt = time.monotonic()
+        asyncio.run(c.on_resumed())
+        assert c.gateway_stabil(gnade=0), "nach RESUMED nicht wieder da"
+        assert not c.gateway_stabil(), "keine Gnadenfrist nach dem Aussetzer"
+        assert not laufzeit.gateway_stabil()
+        assert c._status_gewechselt == float("-inf"), "Status kommt nicht gleich wieder"
+        c._gateway_zurueck_um -= bot.GATEWAY_GNADE_SEKUNDEN + 1
+        assert c.gateway_stabil() and laufzeit.gateway_stabil()
+
+        # Verfaellt die Sitzung ("session has been invalidated"), kommt kein
+        # RESUMED, sondern eine Neuanmeldung - die endet in on_ready.
+        assert "self._gateway_zurueck()" in inspect.getsource(bot.FloBot.on_ready)
+        # Und genau so meldet discord.py 2.7.1 die Ereignisse. Aendert sich das,
+        # soll dieser Test es sagen - nicht der naechste Ausfall.
+        assert "self.dispatch('disconnect')" in inspect.getsource(discord.client.Client.connect)
+        assert "self.dispatch('resumed')" in inspect.getsource(
+            discord.state.ConnectionState.parse_resumed)
+    finally:
+        laufzeit.client = alt_client
+        _gateway_zurueck(c, stand)
+
+
+def test_status_loop_schreibt_nicht_in_einen_toten_websocket():
+    """45x 'Status-Update fehlgeschlagen: Cannot write to closing transport' in
+    einer Minute Netz-Wackler: change_presence schrieb in den sterbenden
+    Websocket, jedes Mal als ERROR. Ohne Gateway wird jetzt gar nicht erst
+    versucht, und ein Fehlschlag ist hoechstens eine Debug-Zeile."""
+    import logging
+    from unittest import mock
+    import bot
+    c = bot.client
+    stand = _gateway_sichern(c)
+    versuche = []
+
+    async def presence(**kw):
+        versuche.append(kw)
+        raise ConnectionResetError("Cannot write to closing transport")
+
+    try:
+        with mock.patch.object(c, "change_presence", presence), _Mitschnitt() as log:
+            c._gateway_weg_seit = time.monotonic()
+            c._status_gewechselt = float("-inf")
+            asyncio.run(c.status_loop.coro(c))
+            assert versuche == [], "Status in den toten Websocket geschrieben"
+
+            asyncio.run(c.on_resumed())
+            asyncio.run(c.status_loop.coro(c))
+            assert len(versuche) == 1, "nach dem Aussetzer kein neuer Status"
+            assert log.ab(logging.WARNING) == [], [e.getMessage() for e in log.ab(30)]
+    finally:
+        _gateway_zurueck(c, stand)
+
+
+def test_autodelete_sweep_bleibt_bei_netz_und_404_ruhig():
+    """Auto-Loesch-Sweep im Log: 18x '404 Unknown Message' (Sweep und
+    Einzel-Loeschen wollten dieselbe Nachricht), 2x '503 envoy overloaded' und
+    4x ein voller Netzwerk-Traceback waehrend des Ausfalls.
+
+    Jetzt: vorgemerkte Nachrichten laesst der Sweep dem Einzel-Loeschen, ein
+    404 ist still, Netz und 503 sind EINE Zeile ohne Traceback - und ohne
+    Gateway laeuft der Sweep gar nicht erst."""
+    import logging
+    from unittest import mock
+    import aiohttp
+    import bot
+    c = bot.client
+    stand = _gateway_sichern(c)
+    cid, gid = 99117, 99118
+
+    def nachricht(mid):
+        return SimpleNamespace(id=mid, pinned=False, embeds=[],
+                               author=SimpleNamespace(id=5), channel=SimpleNamespace(id=cid))
+
+    vorgemerkt, frei = nachricht(1), nachricht(2)
+    fehler = [None]
+    purges = []
+
+    async def purge(**kw):
+        purges.append(kw)
+        if fehler[0] is not None:
+            raise fehler[0]
+
+    kanal = SimpleNamespace(
+        id=cid, name="aufraeumen", purge=purge,
+        permissions_for=lambda _m: SimpleNamespace(
+            view_channel=True, manage_messages=True, read_message_history=True))
+    guild = SimpleNamespace(id=gid, me=None, get_channel=lambda _c: kanal)
+    try:
+        c._queue_delete(vorgemerkt, 60)
+        assert c._sweepable(vorgemerkt) is False, "Sweep und Einzel-Loeschen streiten"
+        assert c._sweepable(frei) is True
+
+        with mock.patch.object(type(c), "guilds", new=property(lambda _s: [guild])), \
+                mock.patch.object(c, "autodelete_ids", lambda _g: {cid}), \
+                _Mitschnitt() as log:
+            c._gateway_weg_seit = time.monotonic()
+            asyncio.run(c.autodelete_sweep_loop.coro(c))
+            assert purges == [], "Sweep laeuft ohne Gateway"
+            c._gateway_weg_seit = None
+
+            asyncio.run(c.autodelete_sweep_loop.coro(c))
+            assert len(purges) == 1 and purges[0]["check"] == c._sweepable
+
+            fehler[0] = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"),
+                                         {"code": 10008, "message": "Unknown Message"})
+            asyncio.run(c.autodelete_sweep_loop.coro(c))
+            assert log.ab(logging.WARNING) == [], "404 ist kein Grund zur Warnung"
+
+            for netz in (discord.DiscordServerError(
+                            SimpleNamespace(status=503, reason="Service Unavailable"),
+                            "upstream connect error: envoy overloaded"),
+                         aiohttp.ClientConnectionError("Cannot connect to host"),
+                         OSError("Network is unreachable"), asyncio.TimeoutError()):
+                log.eintraege.clear()
+                fehler[0] = netz
+                asyncio.run(c.autodelete_sweep_loop.coro(c))
+                warnungen = log.ab(logging.WARNING)
+                assert len(warnungen) == 1, (netz, [e.getMessage() for e in warnungen])
+                assert warnungen[0].exc_info is None, f"Traceback fuer {netz!r}"
+    finally:
+        c._pending_deletes.pop(cid, None)
+        _gateway_zurueck(c, stand)
+
+
 if __name__ == "__main__":
     run(globals())

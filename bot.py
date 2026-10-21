@@ -22,6 +22,7 @@ from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -397,6 +398,11 @@ WEISHEITEN = [
 # am Tag fuer ein Detail, das kaum einer liest. status_loop laeuft trotzdem
 # weiter im 10-s-Takt - er schreibt nebenbei den Namensverlauf weg.
 STATUS_WECHSEL_SEKUNDEN = float(os.getenv("STATUS_WECHSEL_SEKUNDEN", "60") or "60")
+# So lange gilt die Discord-Verbindung nach einem Aussetzer noch als wackelig
+# (siehe FloBot.gateway_stabil). Nach einer Neuanmeldung sortiert discord.py
+# erst noch Server und Voice-Zustaende ein - der Musik-Watchdog soll in diese
+# Luecke nicht hineinreparieren.
+GATEWAY_GNADE_SEKUNDEN = 30.0
 
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
@@ -923,6 +929,10 @@ class FloBot(discord.Client):
         self._weisheit_index = 0
         # monotonic des letzten Status-Wechsels (-inf: gleich beim ersten Takt).
         self._status_gewechselt = float("-inf")
+        # Zustand der Gateway-Verbindung (siehe gateway_stabil): seit wann sie
+        # weg ist (None = steht) und wann sie zuletzt zurueckkam.
+        self._gateway_weg_seit = None
+        self._gateway_zurueck_um = float("-inf")
         # Zwischenspeicher der gerenderten Hilfe-Karten (PNG je Kategorie).
         self._help_png_cache = {}
         # Schutz aktiver Spiele vorm Auto-Loeschen (siehe PROTECT_RELEASE_GRACE oben).
@@ -1293,7 +1303,12 @@ class FloBot(discord.Client):
         """Wechselt den Status-Text (Bot bleibt 'idle') - hoechstens alle
         STATUS_WECHSEL_SEKUNDEN - und schreibt den Namensverlauf weg."""
         jetzt = time.monotonic()
-        if jetzt - self._status_gewechselt >= STATUS_WECHSEL_SEKUNDEN:
+        # Ohne Gateway gibt es niemanden, dem man den Status sagen koennte:
+        # change_presence schreibt in den sterbenden Websocket ("Cannot write
+        # to closing transport", 45x in einer Minute Netz-Wackler). Sobald die
+        # Verbindung zurueck ist, setzt _gateway_zurueck den Status gleich neu.
+        if (jetzt - self._status_gewechselt >= STATUS_WECHSEL_SEKUNDEN
+                and self.gateway_stabil(gnade=0)):
             self._status_gewechselt = jetzt
             weisheit = WEISHEITEN[self._weisheit_index % len(WEISHEITEN)]
             self._weisheit_index += 1
@@ -1303,8 +1318,10 @@ class FloBot(discord.Client):
                     activity=discord.CustomActivity(name=weisheit),
                 )
                 log.debug("Status (idle): %s", weisheit)
-            except Exception as exc:
-                log.error("Status-Update fehlgeschlagen: %s", exc)
+            except Exception as exc:  # noqa: BLE001 - ein Spruch ist nie wichtig
+                # Fast immer ein Abriss, den on_disconnect gleich meldet - der
+                # naechste Wechsel kommt sowieso.
+                log.debug("Status-Update fehlgeschlagen: %s", exc)
         _herzschlag(self)
         # Gesammelte Namensaenderungen wegschreiben. BEWUSST hier und nicht im
         # Voice-Takt: der startet nur mit eingeschalteter Wirtschaft, und dann
@@ -1693,6 +1710,12 @@ class FloBot(discord.Client):
             return False    # laeuft noch (oder in der Gnadenfrist) -> nicht wegraeumen
         if self._keep_bot_msg(m):
             return False
+        # Schon fuers Einzel-Loeschen vorgemerkt (_queue_delete)? Dann raeumt
+        # autodelete_batch_loop sie gleich weg. Loeschten beide, kam einer zu
+        # spaet: 18x "404 Unknown Message" in zwei Wochen Log.
+        vorgemerkt = self._pending_deletes.get(getattr(m.channel, "id", None)) or ()
+        if any(gemerkt.id == m.id for _ts, gemerkt in vorgemerkt):
+            return False
         return True
 
     @staticmethod
@@ -1717,6 +1740,10 @@ class FloBot(discord.Client):
         Start oder Nachrichten, die einen Neustart ueberlebt haben. So bleibt der
         Channel wirklich leer, nicht nur 'ab jetzt'. Erste Runde laeuft sofort beim
         Start (raeumt den Backlog ab)."""
+        if not self.gateway_stabil(gnade=0):
+            # Netz weg: jede Runde endete in einem vollen Traceback (4x am
+            # 20.10.2026). Es laeuft nichts weg - die naechste Runde holt es nach.
+            return
         for guild in self.guilds:
             kanaele = self.autodelete_ids(guild.id)
             if not kanaele:
@@ -1737,6 +1764,18 @@ class FloBot(discord.Client):
                 try:
                     await channel.purge(limit=AUTODELETE_SWEEP_MAX,
                                         check=self._sweepable, before=cutoff)
+                except discord.NotFound:
+                    # Schon weg (Einzel-Loeschen oder ein Mensch war schneller) -
+                    # genau das Ziel, kein Grund fuer eine Warnung.
+                    log.debug("Auto-Loesch-Sweep in #%s: Nachricht schon weg.",
+                              getattr(channel, "name", cid))
+                except (discord.DiscordServerError, aiohttp.ClientError, OSError,
+                        asyncio.TimeoutError) as exc:
+                    # Discord ueberlastet (503) oder Netz weg: eine Zeile reicht,
+                    # die naechste Runde versucht es sowieso wieder.
+                    log.warning("Auto-Loesch-Sweep in #%s: Discord/Netz hakt (%s: %s) "
+                                "- naechste Runde.", getattr(channel, "name", cid),
+                                type(exc).__name__, str(exc)[:120])
                 except discord.HTTPException as exc:
                     log.warning("Auto-Loesch-Sweep in #%s fehlgeschlagen: %s",
                                 getattr(channel, "name", cid), exc)
@@ -2558,6 +2597,9 @@ class FloBot(discord.Client):
             log.exception("Musik-Selbsttest abgebrochen")
 
     async def on_ready(self):
+        weg = self._gateway_zurueck()   # Neuanmeldung nach verfallener Sitzung
+        if weg is not None:
+            log.info("Discord-Verbindung neu angemeldet (war %.0f s weg).", weg)
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)
         if MODE in ("check", "once"):
             try:
@@ -2698,15 +2740,61 @@ class FloBot(discord.Client):
             if not self.daily_remind_loop.is_running():
                 self.daily_remind_loop.start()
 
+    # --- Gateway: steht die Verbindung zu Discord? ---------------------------
+    # Wozu: am 20.10.2026 war das Gateway eine gute Minute weg. Waehrenddessen
+    # hat der Musik-Watchdog weiter versucht, in den Voice zurueckzukommen (geht
+    # ohne Gateway nie), hat nach fuenf Fehlschlaegen aufgegeben und die
+    # Warteschlange weggeworfen. Der Status-Loop schrieb 45x "Cannot write to
+    # closing transport" ins Log, das Auto-Loeschen vier volle Tracebacks.
+    #
+    # Gemessen wird an den Events, nicht an is_ready() oder am Websocket:
+    # is_ready() bleibt nach dem ersten Start fuer immer True (discord.py setzt
+    # es nur in close()/clear() zurueck), und ein offener Websocket heisst noch
+    # nicht angemeldet. discord.py 2.7.1 (Client.connect) meldet 'disconnect'
+    # bei JEDEM Abriss und jedem gescheiterten Neuversuch; zurueck ist es mit
+    # 'resumed' (Sitzung fortgesetzt) oder 'ready' (Neuanmeldung, nachdem die
+    # Sitzung verfallen ist - dann erst, wenn der Server-Cache wieder steht).
+    def gateway_stabil(self, gnade=GATEWAY_GNADE_SEKUNDEN):
+        """True, wenn das Gateway steht - und zwar seit mindestens 'gnade'
+        Sekunden. gnade=0 heisst nur: gerade jetzt verbunden."""
+        if self._gateway_weg_seit is not None:
+            return False
+        return time.monotonic() - self._gateway_zurueck_um >= gnade
+
+    def _gateway_weg(self):
+        """on_disconnect: ab jetzt gilt das Gateway als weg. Feuert bei jedem
+        gescheiterten Neuversuch erneut - gezaehlt wird ab dem ERSTEN."""
+        if self._gateway_weg_seit is None:
+            self._gateway_weg_seit = time.monotonic()
+            log.info("Discord-Verbindung weg - Musik-Watchdog, Status und "
+                     "Auto-Loeschen warten, bis sie wieder steht.")
+
+    def _gateway_zurueck(self):
+        """on_resumed/on_ready: das Gateway steht wieder. Gibt zurueck, wie
+        lange es weg war (None = es war gar nicht weg, z. B. der erste Start)."""
+        if self._gateway_weg_seit is None:
+            return None
+        jetzt = time.monotonic()
+        weg = jetzt - self._gateway_weg_seit
+        self._gateway_weg_seit = None
+        self._gateway_zurueck_um = jetzt
+        # Status gleich im naechsten Takt neu setzen: nach einer Neuanmeldung
+        # zeigt Discord sonst bis zum naechsten Wechsel den Spruch vom Start.
+        self._status_gewechselt = float("-inf")
+        return weg
+
     async def on_disconnect(self):
         """Gateway-Verbindung weg (Internet-Hickup o. Ae.). discord.py versucht
-        automatisch, sich wieder zu verbinden - wir loggen es nur leise."""
+        automatisch, sich wieder zu verbinden - wir merken es uns nur."""
         log.debug("Discord-Verbindung getrennt - versuche automatisch erneut.")
+        self._gateway_weg()
 
     async def on_resumed(self):
         """Sitzung nach einem Verbindungsabbruch wieder aufgenommen - Flo ist zurueck,
         ohne dass der Prozess neu starten musste."""
-        log.info("Discord-Sitzung wieder aufgenommen - Flo ist zurueck online.")
+        weg = self._gateway_zurueck()
+        log.info("Discord-Sitzung wieder aufgenommen - Flo ist zurueck online%s.",
+                 f" (war {weg:.0f} s weg)" if weg is not None else "")
 
     async def on_error(self, event_method, *args, **kwargs):
         """Faengt JEDE unbehandelte Ausnahme aus einem Event-Handler ab und loggt sie,

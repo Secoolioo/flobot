@@ -1659,11 +1659,25 @@ def test_musik_leerlauf_und_verbindung_nach_der_pruefung():
         player.loop.run_until_complete(player.heal(guild))
         assert neu_verbunden == [1], "aufgegebene Schlange: kein Reconnect mehr"
 
-        # (3) Nach dem letzten Fehlversuch ist der Server wieder frei.
-        player.current = _track("A")
-        player._reconnect_fails = music.VOICE_RECONNECT_MAX_FAILS - 1
-        player._note_reconnect_fail(SimpleNamespace(name="Musik"))
-        assert player.current is None and not player.queue
+        # (3) Nach dem letzten Fehlversuch ist der Server wieder frei - die
+        #     Warteschlange bleibt dabei GEPARKT statt weggeworfen (siehe
+        #     test_musik_netz_wackler_parkt_die_warteschlange).
+        mi = music.instance
+        alt = mi._players.get(4716)
+        mi._players[4716] = player
+        try:
+            player.current = _track("A")
+            player._reconnect_fails = music.VOICE_RECONNECT_MAX_FAILS - 1
+            player.loop.run_until_complete(
+                player._note_reconnect_fail(SimpleNamespace(name="Musik")))
+            assert player.current is None and player.active_channel_id is None
+            assert [t.title for t in player.queue] == ["A", "B"]
+            assert mi.is_voice_busy(4716) is False, "geparkt, aber Soundboard/TTS gesperrt"
+        finally:
+            if alt is None:
+                mi._players.pop(4716, None)
+            else:
+                mi._players[4716] = alt
     finally:
         aufraeumen()
 
@@ -3778,6 +3792,423 @@ def test_loop_ist_im_hilfetext():
     """Ein Befehl, den niemand findet, hilft niemandem."""
     quelle = open("bot.py", encoding="utf-8").read()
     assert "flo loop" in quelle, "der Loop fehlt in der Hilfe"
+
+
+
+
+# --- Netz-Wackler: Gateway, Parken, halb offene Verbindungen -------------------
+def test_musik_watchdog_wartet_auf_das_gateway():
+    """20.10.2026, 08:10-08:11: das Discord-Gateway war eine gute Minute weg.
+    Der Watchdog meldete derweil 'Voice-Desync' und verband neu - ohne Gateway
+    kommt die Antwort auf einen Beitritt aber nie an. Nach fuenf Fehlschlaegen
+    gab er auf und warf die Warteschlange weg.
+
+    Jetzt fasst er nichts an, solange das Gateway nicht (wieder eine Weile)
+    steht, und ein Fehlschlag in dieser Zeit zaehlt nicht."""
+    import laufzeit
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    alt_client = laufzeit.client
+    stabil = [False]
+    laufzeit.client = SimpleNamespace(gateway_stabil=lambda gnade=None: stabil[0])
+    neu_verbunden = []
+
+    async def reconnect(_kanal):
+        neu_verbunden.append(_kanal)
+
+    try:
+        player.start(_track("A"))
+        player.queue.append(_track("B"))
+        voice.is_connected = lambda: False
+        guild = SimpleNamespace(id=1, voice_client=None,
+                                get_channel=lambda _c: _kanal_mit([SimpleNamespace(bot=False)]))
+        player._reconnect = reconnect
+        for _ in range(10):
+            player.loop.run_until_complete(player.heal(guild))
+        assert neu_verbunden == [], "Watchdog verbindet neu, obwohl Discord weg ist"
+
+        # Ein Fehlschlag, waehrend das Gateway wackelt, ist Warten - kein Versuch.
+        kanal = SimpleNamespace(name="Musik")
+        player.loop.run_until_complete(player._note_reconnect_fail(kanal))
+        assert player._reconnect_fails == 0
+        assert player.current is not None and player.active_channel_id == 42
+
+        # Und eine Trennung in dieser Zeit ist das Netz, kein Moderator: nach
+        # einer Neuanmeldung raeumt discord.py seine Voice-Clients weg, und
+        # flo_getrennt haette das als Rauswurf samt leerer Schlange gewertet.
+        mi = music.instance
+        alt = (music.VOICE_RAUSWURF_FRIST, mi._players.get(4719))
+        music.VOICE_RAUSWURF_FRIST = 0.0
+        mi._players[4719] = player
+        try:
+            weg = SimpleNamespace(id=4719, voice_client=None)
+            assert asyncio.run(mi.flo_getrennt(weg, 42)) is False
+            assert player.active_channel_id == 42 and player.queue, "Wackler als Rauswurf"
+        finally:
+            music.VOICE_RAUSWURF_FRIST = alt[0]
+            if alt[1] is None:
+                mi._players.pop(4719, None)
+            else:
+                mi._players[4719] = alt[1]
+
+        # Steht die Verbindung wieder, repariert er wie gewohnt.
+        stabil[0] = True
+        player.loop.run_until_complete(player.heal(guild))
+        assert len(neu_verbunden) == 1, "nach dem Aussetzer kein Reconnect"
+        player.loop.run_until_complete(player._note_reconnect_fail(kanal))
+        assert player._reconnect_fails == 1
+    finally:
+        laufzeit.client = alt_client
+        aufraeumen()
+
+
+def test_musik_netz_wackler_parkt_die_warteschlange():
+    """Gab der Watchdog nach VOICE_RECONNECT_MAX_FAILS auf, leerte er Song und
+    Warteschlange - eine Minute Netz-Wackler, und alles war weg. Jetzt wird
+    GEPARKT: der laufende Song kommt mit seiner Stelle vorne wieder hinein, der
+    Server ist fuer Soundboard/TTS frei, und 'flo weiter' macht genau dort
+    weiter.
+
+    Dabei mit abgedeckt: der Neuaufbau verbindet mit denselben Flags wie der
+    erste Beitritt, gibt discord.py die Frist selbst (sonst bleibt nach einem
+    Timeout ein halb offener Client in guild.voice_client stehen) und raeumt
+    einen solchen Client nach jedem Fehlschlag weg."""
+    import time as _t
+    import music
+    mi = music.instance
+    gid = 4718
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = gid
+    alt = (mi._enabled, mi._players.get(gid))
+    mi._enabled = True
+    mi._players[gid] = player
+    gesagt = []
+
+    async def sag(text):
+        gesagt.append(text)
+
+    player._sag = sag
+    aufrufe = []
+    halb_getrennt = []
+
+    class HalbOffen:
+        """Was discord.py nach einem von aussen abgebrochenen Beitritt stehen laesst."""
+
+        def is_connected(self):
+            return False
+
+        async def disconnect(self, force=False):
+            halb_getrennt.append(force)
+
+    async def connect_scheitert(**kw):
+        aufrufe.append(kw)
+        raise asyncio.TimeoutError()
+
+    kanal = SimpleNamespace(id=42, name="Musik", connect=connect_scheitert,
+                            guild=SimpleNamespace(voice_client=HalbOffen()))
+    try:
+        lang = music.Track(title="Lang", stream_url="http://stream/lang",
+                           query="ytsearch1:Lang", duration=200)
+        player.start(lang)
+        player.queue.append(_track("B"))
+        player._played, player._seg_start = 42.0, None   # bis hierhin gehoert
+        player.voice = None                                # Verbindung gerissen
+        for _ in range(music.VOICE_RECONNECT_MAX_FAILS):
+            player._last_reconnect = float("-inf")         # Loop-Bremse aus
+            player.loop.run_until_complete(player._reconnect(kanal))
+
+        assert len(aufrufe) == music.VOICE_RECONNECT_MAX_FAILS
+        for kw in aufrufe:
+            assert kw == {**music._VOICE_FLAGS, "timeout": music.VOICE_CONNECT_TIMEOUT}, kw
+        assert halb_getrennt and all(halb_getrennt), "halb offener Client blieb stehen"
+        assert player._selbst_getrennt_bis > _t.monotonic(), (
+            "das Wegraeumen haelt flo_getrennt fuer einen Rauswurf")
+
+        # Geparkt statt weggeworfen.
+        assert player.current is None and player.active_channel_id is None
+        assert [t.title for t in player.queue] == ["Lang", "B"]
+        assert player.queue[0].weiter_ab == 42.0, player.queue[0].weiter_ab
+        assert mi.is_voice_busy(gid) is False, "Soundboard/TTS bleiben gesperrt"
+        assert gesagt and "geparkt" in gesagt[-1], gesagt
+
+        # 'flo weiter' aus dem Sprachkanal: rein und genau dort weiter.
+        beitritt = []
+
+        async def connect_geht(**kw):
+            beitritt.append(kw)
+            return voice
+
+        voice.spielt = False
+        hier = SimpleNamespace(id=42, name="Musik", connect=connect_geht,
+                               guild=SimpleNamespace(voice_client=None))
+        msg = SimpleNamespace(
+            content="flo weiter", guild=SimpleNamespace(id=gid),
+            channel=SimpleNamespace(id=1), mentions=[],
+            author=SimpleNamespace(id=7, display_name="wer",
+                                   voice=SimpleNamespace(channel=hier)))
+        # asyncio.run statt player.loop: der Songstart plant das Verlauf-Speichern
+        # als Task ein, und nur asyncio.run raeumt ihn am Ende wieder ab.
+        antwort = asyncio.run(mi.handle(msg))
+        assert antwort is music.HANDLED, _embed_text(antwort)
+        assert beitritt == [music._VOICE_FLAGS], "erster Beitritt mit anderen Flags"
+        assert player.current is not None and player.current.title == "Lang"
+        assert abs(player.position() - 42.0) < 1.0, player.position()
+        assert [t.title for t in player.queue] == ["B"]
+        assert player.active_channel_id == 42 and not player._geparkt
+        assert mi.is_voice_busy(gid) is True
+    finally:
+        mi._enabled = alt[0]
+        if alt[1] is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt[1]
+        aufraeumen()
+
+
+def test_musik_spiel_setzt_eine_geparkte_schlange_fort():
+    """Wer nach dem Parken einfach 'flo spiel X' sagt, verliert die geparkte
+    Schlange nicht: X stellt sich hinten an, es geht an der alten Stelle weiter."""
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    neu = music.Track(title="X", stream_url="http://stream/x", query="ytsearch1:X")
+
+    async def extract(_eingabe, *a, **k):
+        return neu
+
+    alt_extract = mi._extract
+    mi._extract = extract
+    try:
+        geparkt = music.Track(title="Alt", stream_url="http://stream/alt",
+                              query="ytsearch1:Alt", duration=300, weiter_ab=30.0)
+        player.queue[:] = [geparkt]
+        player._geparkt, player.active_channel_id, player.voice = True, None, None
+        voice.spielt = False
+        hier = SimpleNamespace(id=42, name="Musik", guild=SimpleNamespace(voice_client=voice))
+        msg = SimpleNamespace(guild=SimpleNamespace(id=1, me=None),
+                              author=SimpleNamespace(id=5, display_name="wer"))
+        antwort = asyncio.run(mi._einzeln_spielen(
+            player, msg, "search", "X", SimpleNamespace(channel=hier)))
+        assert player.current is not None and player.current.title == "Alt"
+        assert abs(player.position() - 30.0) < 1.0, player.position()
+        assert player.queue == [neu], player.queue
+        assert isinstance(antwort, music.discord.Embed), antwort
+        assert not player._geparkt
+    finally:
+        mi._extract = alt_extract
+        aufraeumen()
+
+
+def test_musik_hls_bekommt_extension_picky_nur_wenn_ffmpeg_es_kennt():
+    """Musik-Selbsttest bei JEDEM Start: 'ffmpeg bekommt keinen Ton ([hls @ ...]
+    detected format aac extension aac mismatches allowed extensions ...)'.
+    ffmpeg 7.1 prueft im HLS-Demuxer die Endungen, YouTube-Live hat keine.
+    '-extension_picky 0' hilft - aber nur einem ffmpeg, das die Option kennt
+    (5.1 im Docker-Image bricht an einer unbekannten Option ab), und nur bei
+    HLS (eine unverbrauchte Demuxer-Option ist fuer ffmpeg ebenso ein Abbruch)."""
+    from unittest import mock
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    vorspann = []
+
+    def ffmpeg_audio(_url, before_options="", options=""):
+        vorspann.append(before_options)
+        return SimpleNamespace(cleanup=lambda: None)
+
+    music.discord.FFmpegPCMAudio = ffmpeg_audio
+    hilfe = [b""]
+    aufrufe = []
+
+    def run(argv, **_kw):
+        aufrufe.append(argv)
+        return SimpleNamespace(stdout=hilfe[0], stderr=b"", returncode=0)
+
+    def spiele(track):
+        voice.spielt = False
+        player.start(track)
+        return vorspann[-1]
+
+    alt_cache = music._EXTENSION_PICKY
+    hls = music.Track(title="lofi radio", query="ytsearch1:lofi", live=True,
+                      stream_url="https://manifest.googlevideo.com/api/manifest/"
+                                 "hls_playlist/expire/1/index.m3u8",
+                      protokoll="m3u8_native")
+    nur_url = music.Track(title="hls", stream_url="https://cdn/x/master.m3u8")
+    radio = music.Track(title="Radio", stream_url="http://radio.example/live.mp3",
+                        live=True, protokoll="https")
+    song = _track("Song")
+    try:
+        with mock.patch.object(music.shutil, "which", lambda _n: "/usr/bin/ffmpeg"), \
+                mock.patch.object(music.subprocess, "run", run):
+            # ffmpeg 7.1: kennt die Option -> fuer HLS gesetzt, sonst nie.
+            hilfe[0] = (b"Demuxer hls [Apple HTTP Live Streaming]:\n"
+                        b"  -extension_picky   <boolean>    .D......... Be picky "
+                        b"with all extensions matching (default true)\n")
+            music._EXTENSION_PICKY = None
+            assert "-extension_picky 0" in spiele(hls)
+            assert "-extension_picky 0" in spiele(nur_url)
+            assert "-extension_picky" not in spiele(radio), "Live allein ist kein HLS"
+            assert "-extension_picky" not in spiele(song)
+            assert len(aufrufe) == 1, "ffmpeg wird bei jedem Song neu gefragt"
+            assert aufrufe[0][1:] == ["-hide_banner", "-h", "demuxer=hls"], aufrufe
+
+            # ffmpeg 5.1: kennt sie nicht -> nie setzen, sonst startet gar nichts.
+            hilfe[0] = b"Demuxer hls [Apple HTTP Live Streaming]:\n  -live_start_index\n"
+            music._EXTENSION_PICKY = None
+            assert "-extension_picky" not in spiele(hls)
+
+        # Kein ffmpeg oder Absturz beim Nachsehen: im Zweifel ohne.
+        music._EXTENSION_PICKY = None
+        with mock.patch.object(music.shutil, "which", lambda _n: None):
+            assert music._ffmpeg_kennt_extension_picky() is False
+
+        def kaputt(*_a, **_k):
+            raise OSError("kaputt")
+
+        music._EXTENSION_PICKY = None
+        with mock.patch.object(music.shutil, "which", lambda _n: "/usr/bin/ffmpeg"), \
+                mock.patch.object(music.subprocess, "run", kaputt):
+            assert music._ffmpeg_kennt_extension_picky() is False
+    finally:
+        music._EXTENSION_PICKY = alt_cache
+        aufraeumen()
+    # Der Selbsttest prueft dieselbe Strecke wie die Wiedergabe.
+    assert "_hls_optionen(track)" in inspect.getsource(music.Music._probe_ton)
+
+
+def test_musik_live_stream_wird_nie_gespult():
+    """Ein Live-Stream hat keine 'Sekunde 312'. Nach einem Abbruch schaltete
+    Flo bei ihm einfach weiter (ohne Laenge galt jedes Ende als Songende) - und
+    jeder Neustart (Stall, Reconnect, Tempo) haette mit -ss auf eine Stelle
+    gespult, die es im Live-Stream nicht gibt. Jetzt: neu am Live-Rand."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    vorspann = []
+
+    def ffmpeg_audio(_url, before_options="", options=""):
+        vorspann.append(before_options)
+        return SimpleNamespace(cleanup=lambda: None)
+
+    music.discord.FFmpegPCMAudio = ffmpeg_audio
+    try:
+        live = music.Track(title="lofi radio", stream_url="http://stream/live",
+                           query="ytsearch1:lofi radio", live=True)
+        naechster = _track("Naechster")
+        player.start(live, seek=120.0)
+        assert "-ss" not in vorspann[-1] and player.position() < 1.0
+        player.queue.append(naechster)
+
+        def stirbt_nach(sekunden):
+            player._played, player._seg_start = sekunden, None
+            voice.spielt = False
+            asyncio.run(player._advance(player._play_gen))
+
+        stirbt_nach(300.0)
+        assert player.current is live, "Live-Stream nach Abbruch einfach weitergeschaltet"
+        assert player.queue == [naechster]
+        assert "-ss" not in vorspann[-1], vorspann[-1]
+        assert player._neustart_versuche == 1
+
+        # Lief er lange sauber, ist der naechste Abbruch ein neuer Aussetzer.
+        player._neustart_versuche = music.NEUSTART_MAX_VERSUCHE
+        stirbt_nach(music.LIVE_NEUSTART_FRISCH + 60.0)
+        assert player.current is live and player._neustart_versuche == 1
+
+        # Bricht er dagegen immer gleich wieder ab: aufgeben, weiter.
+        player._neustart_versuche = music.NEUSTART_MAX_VERSUCHE
+        stirbt_nach(5.0)
+        assert player.current is naechster, player.current
+    finally:
+        aufraeumen()
+
+
+def test_musik_extract_merkt_sich_live_und_protokoll():
+    """Ob ein Track live ist und als HLS kommt, steht nur in yt-dlps Antwort -
+    ohne es mitzunehmen, wuesste start() es nie."""
+    import music
+
+    class LiveYDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, _ziel, download=False):
+            return {"title": "lofi hip hop radio", "url": "https://x/index.m3u8",
+                    "is_live": True, "protocol": "m3u8_native", "http_headers": {}}
+
+    m = music.instance
+    alt = (music.yt_dlp, m._guter_client)
+    music.yt_dlp = type("M", (), {"YoutubeDL": LiveYDL})
+    try:
+        track = asyncio.run(m._extract("ytsearch1:lofi hip hop radio"))
+        assert track.live is True and track.protokoll == "m3u8_native"
+        assert music._ist_hls(track)
+    finally:
+        music.yt_dlp, m._guter_client = alt
+
+
+def test_musik_selbsttest_probt_keinen_live_stream():
+    """Die Probe war 'ytsearch1:lofi hip hop radio' - und deren erster Treffer
+    ist der 24/7-LIVE-Stream. Der Selbsttest schlug deshalb bei jedem Start
+    Alarm, waehrend normale Songs liefen. Jetzt ist die Probe ein festes kurzes
+    Video, und ein Live-Ergebnis wird gar nicht erst als Probe genommen."""
+    import music
+    probe = music.Music.SELBSTTEST_PROBE.lower()
+    assert not probe.startswith(("ytsearch", "scsearch")), "Probe ist wieder eine Suche"
+    assert "radio" not in probe and "live" not in probe
+
+    m = music.Music()
+    m._enabled = True
+
+    async def extract_live(_eingabe):
+        return music.Track(title="lofi hip hop radio", stream_url="https://x/index.m3u8",
+                           live=True, protokoll="m3u8_native")
+
+    geprobt = []
+
+    async def probe_ton(track):
+        geprobt.append(track)
+        return 576000, ""
+
+    m._extract = extract_live
+    m._probe_ton = probe_ton
+    ok, grund = asyncio.run(m.selbsttest())
+    assert ok is False and "Live" in grund, (ok, grund)
+    assert geprobt == [], "ein Live-Stream wurde als Probe genommen"
+
+
+def test_arzt_nennt_ffmpeg_version_und_extension_picky():
+    """'bash k m' soll sagen, welches ffmpeg laeuft und ob es '-extension_picky'
+    kennt - genau das entscheidet, ob Live-Streams unter ffmpeg 7.1 laufen."""
+    import contextlib
+    from unittest import mock
+    import tools_musik_check
+
+    def mit(version, kennt):
+        def run(argv, **_kw):
+            if "-version" in argv:
+                return SimpleNamespace(stdout=f"ffmpeg version {version} Copyright\n",
+                                       stderr="", returncode=0)
+            zusatz = "  -extension_picky   <boolean>\n" if kennt else ""
+            return SimpleNamespace(stdout="Demuxer hls:\n" + zusatz, stderr="", returncode=0)
+
+        arzt = tools_musik_check.MusikCheck()
+        with mock.patch.object(tools_musik_check.subprocess, "run", run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            arzt._ffmpeg_pruefen("/usr/bin/ffmpeg")
+        return "\n".join(arzt.zeilen), arzt.probleme
+
+    text, probleme = mit("7.1", True)
+    assert "Version 7.1" in text and "kennt -extension_picky" in text, text
+    assert probleme == []
+    text, probleme = mit("5.1.6-0+deb12u1", False)
+    assert "Version 5.1.6-0+deb12u1" in text and "nicht" in text, text
+    assert probleme == [], "ffmpeg 5.1 ist kein Fehler - es braucht die Option nicht"
 
 
 

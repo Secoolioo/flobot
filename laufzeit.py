@@ -81,3 +81,19 @@ def abmelden():
 def laeuft():
     """True, wenn ein Bot sich angemeldet hat."""
     return client is not None
+
+
+def gateway_stabil(gnade=None):
+    """Steht die Verbindung zu Discord - und das schon eine Weile?
+
+    Fragt den Bot (FloBot.gateway_stabil). Ohne Bot (Tests, Werkzeuge) oder
+    wenn der Bot es nicht weiss: ja - dann gibt es auch kein Gateway, auf das
+    jemand warten koennte."""
+    frage = getattr(client, "gateway_stabil", None)
+    if not callable(frage):
+        return True
+    try:
+        return bool(frage() if gnade is None else frage(gnade))
+    except Exception:  # noqa: BLE001 - im Zweifel nicht blockieren
+        log.debug("gateway_stabil ging nicht", exc_info=True)
+        return True

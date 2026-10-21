@@ -43,6 +43,7 @@ import ai
 import basis
 from basis import FeatureBasis
 import guildcfg
+import laufzeit
 from store import JsonStore
 
 try:  # Optional: Bot soll auch ohne yt-dlp starten.
@@ -98,6 +99,9 @@ ADVANCE_MAX_FEHLER = 2
 # aber nichts; 'Flo spiel X' reihte nur ein, weil is_active() die ganze Zeit
 # True blieb. Nur 'Flo stop' kam da raus.
 NEUSTART_MAX_VERSUCHE = 2
+# Lief ein Live-Stream so viele Sekunden am Stueck, zaehlen seine Neustarts
+# wieder frisch (siehe _nach_abbruch_fortsetzen).
+LIVE_NEUSTART_FRISCH = 600
 # Obergrenze fuer 'flo loop <n>'. Wer wirklich ewig will, nimmt 'endlos' -
 # das steht dann auch so im Panel und laesst sich nicht mit einem Vertipper
 # ('loop 99999') aus Versehen bauen.
@@ -120,6 +124,17 @@ ABBRUCH_TOLERANZ = 10
 STREAM_MAX_ALTER = float(os.getenv("MUSIC_STREAM_MAX_ALTER", "900") or "900")
 VOICE_RECONNECT_MIN_GAP = 20.0  # Mindestabstand zwischen Reconnects (Loop-Bremse)
 VOICE_RECONNECT_MAX_FAILS = 5   # nach so vielen Fehlversuchen am Stueck aufgeben
+# So lange darf ein Neuaufbau des Watchdogs dauern. Die Frist bekommt
+# discord.py SELBST (connect(timeout=...)) - nur dann raeumt es einen
+# gescheiterten Versuch auch selbst weg (siehe GuildPlayer._verbinden).
+VOICE_CONNECT_TIMEOUT = 20.0
+# Womit sich die Musik in den Sprachkanal setzt - EINE Stelle fuer den ersten
+# Beitritt (_fresh_connect) und den Neuaufbau (_reconnect), damit die beiden
+# nie auseinanderlaufen. Taub spart Bandbreite (Flo hoert ja nicht zu).
+# Soundboard-Sounds nimmt Discord von einem tauben Flo nicht an - voicegags
+# hebt das direkt vor send_sound per change_voice_state(self_deaf=False) auf,
+# und zwar jedes Mal: nach einem Neuaufbau sitzt Flo wieder taub drin.
+_VOICE_FLAGS = {"self_deaf": True, "reconnect": True}
 
 
 def _env_sekunden(name, vorgabe):
@@ -233,6 +248,64 @@ _FFMPEG_BEFORE = (
     "-reconnect_delay_max 5"
 )
 _FFMPEG_OPTS = "-vn"
+
+# HLS (Live-Streams, Radios): ffmpeg ab 7.1 prueft im HLS-Demuxer, ob die
+# Endung jedes Stuecks zum erkannten Format passt ('extension_picky', Standard
+# an). YouTube-Live liefert seine Stuecke unter Adressen wie
+# .../source/yt_live_broadcast - ohne Endung. ffmpeg verweigert sie dann mit
+# "detected format aac extension aac mismatches allowed extensions", und es
+# kommt kein Ton. Genau daran ist der Selbsttest bei JEDEM Start gescheitert.
+# '-extension_picky 0' schaltet die Pruefung ab - aber nur ffmpeg ab 7.1 kennt
+# die Option. Das ffmpeg 5.1 im Docker-Image bricht bei einer unbekannten
+# Option sofort ab, deshalb wird einmal nachgesehen (_ffmpeg_kennt_extension_picky).
+# Und NUR bei HLS-Quellen: eine Demuxer-Option, die niemand verbraucht, ist fuer
+# ffmpeg ebenfalls ein Abbruchgrund ("Option extension_picky not found").
+_FFMPEG_HLS = "-extension_picky 0"
+_EXTENSION_PICKY: "bool | None" = None   # None = noch nicht nachgesehen
+
+
+def _ffmpeg_kennt_extension_picky():
+    """Kennt das installierte ffmpeg '-extension_picky'? Einmal nachgesehen
+    ('ffmpeg -h demuxer=hls'), danach gemerkt. Im Zweifel nein - ohne die
+    Option scheitern nur manche Live-Streams, mit einer unbekannten Option
+    bricht ffmpeg bei JEDEM HLS-Stream ab."""
+    global _EXTENSION_PICKY
+    if _EXTENSION_PICKY is None:
+        ffmpeg = shutil.which("ffmpeg")
+        kennt = False
+        if ffmpeg:
+            try:
+                fertig = subprocess.run([ffmpeg, "-hide_banner", "-h", "demuxer=hls"],
+                                        capture_output=True, timeout=15)
+                text = (fertig.stdout or b"") + (fertig.stderr or b"")
+                kennt = b"extension_picky" in text
+            except Exception:  # noqa: BLE001 - dann eben ohne die Option
+                log.debug("ffmpeg -h demuxer=hls ging nicht", exc_info=True)
+        _EXTENSION_PICKY = kennt
+        log.info("ffmpeg %s '-extension_picky' - HLS-Streams laufen %s.",
+                 "kennt" if kennt else "kennt kein",
+                 "mit abgeschalteter Endungspruefung" if kennt else "ohne die Option")
+    return _EXTENSION_PICKY
+
+
+def _ist_hls(track):
+    """Kommt der Ton als HLS (Playlist aus vielen kleinen Stuecken)?
+
+    yt-dlp sagt es im Protokoll (m3u8/m3u8_native); die Adresse verraet es
+    ebenfalls. 'Live' allein reicht bewusst NICHT: ein Radio kann auch als
+    ganz normaler HTTP-Strom live sein, und dort brach die HLS-Option ffmpeg
+    ab (siehe _FFMPEG_HLS)."""
+    if str(getattr(track, "protokoll", "") or "").startswith("m3u8"):
+        return True
+    url = (getattr(track, "stream_url", "") or "").lower()
+    return ".m3u8" in url or "/manifest/hls" in url
+
+
+def _hls_optionen(track):
+    """'-extension_picky 0' fuer HLS-Quellen, wenn ffmpeg es kennt - sonst leer."""
+    if _ist_hls(track) and _ffmpeg_kennt_extension_picky():
+        return _FFMPEG_HLS
+    return ""
 
 # --- Geschwindigkeit / "slowed + reverb" ---------------------------------
 # Discord-Audio ist immer 48000 Hz Stereo (discord.py haengt -f s16le -ar 48000
@@ -925,6 +998,15 @@ class Track:
     # jemand anders - und ffmpeg meldet sich von Haus aus als 'Lavf/...' -,
     # antwortet YouTube mit 403 und der Song bricht "nach 0 von 178 s" ab.
     kopfzeilen: dict = field(default_factory=dict)
+    # Live-Stream (yt-dlp 'is_live')? Den kann man nicht spulen - es gibt
+    # keine "Sekunde 312", nur den aktuellen Rand. Siehe GuildPlayer.start.
+    live: bool = False
+    # yt-dlp-Protokoll der Adresse ('https', 'm3u8_native', ...) - daran
+    # haengt die HLS-Option fuer ffmpeg (siehe _ist_hls).
+    protokoll: str = ""
+    # Ab hier weiterspielen, wenn der Song das naechste Mal startet. Nur ein
+    # GEPARKTER Song hat das (GuildPlayer._parken); es gilt fuer genau einen Start.
+    weiter_ab: float = 0.0
 
     # Kopfzeilen, die ffmpeg selbst setzen muss - die durchzureichen bricht die
     # Verbindung (Range/Host gehoeren zur Anfrage, nicht zum Client).
@@ -1043,6 +1125,11 @@ class GuildPlayer:
     _kanal_status_text: "str | None" = None
     # Wie viele 'spiel ...' gerade suchen (siehe Music._vorab_aufraeumen).
     _laufende_anfragen: int = 0
+    # Der Watchdog kam nach einem Netz-Aussetzer nicht mehr in den Voice und
+    # hat die Musik GEPARKT (_parken): die Warteschlange steht, 'weiter' oder
+    # das naechste 'spiel' machen dort weiter. Belegt den Kanal nicht
+    # (is_voice_busy). Weg, sobald wieder etwas spielt oder jemand stoppt.
+    _geparkt: bool = False
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1101,7 +1188,7 @@ class GuildPlayer:
         if self._session_gen != sitzung or track.stream_url:
             return          # gestoppt, oder jemand war schneller
         for feld in ("title", "stream_url", "webpage_url", "duration", "thumbnail",
-                     "geloest_um", "kopfzeilen"):
+                     "geloest_um", "kopfzeilen", "live", "protokoll"):
             setattr(track, feld, getattr(frisch, feld))
         log.info("Vorgeladen: '%s'", track.title)
 
@@ -1154,7 +1241,44 @@ class GuildPlayer:
             except Exception:  # noqa: BLE001
                 pass
         self.voice = None
-        self.voice = await channel.connect(self_deaf=True, reconnect=True)
+        # Ohne eigene Frist von aussen: discord.py wartet selbst (30 s) und
+        # raeumt bei SEINEM Timeout auch selbst auf.
+        self.voice = await self._verbinden(channel)
+
+    @staticmethod
+    async def _verbinden(channel, *, timeout=None):
+        """channel.connect mit den Musik-Flags (_VOICE_FLAGS) - fuer den ersten
+        Beitritt und den Neuaufbau dieselben.
+
+        Mit 'timeout' bekommt discord.py die Frist SELBST. Vorher stand im
+        Neuaufbau asyncio.wait_for(channel.connect(...), 20), und discord.py
+        wartet intern 30 s: die kuerzere Frist von aussen brach den Aufbau per
+        CancelledError ab. Aufgeraeumt wird in discord.py aber nur bei SEINEM
+        TimeoutError (abc.Connectable.connect) - zurueck blieb ein halb offener
+        Voice-Client in guild.voice_client (nachgestellt mit discord.py 2.7.1).
+        Der sperrte danach jedes channel.connect mit 'Already connected', auch
+        das von Soundboard und TTS. Die Frist von aussen bleibt nur als Netz
+        fuer einen Haenger, bevor discord.pys eigene Uhr laeuft."""
+        if timeout is None:
+            return await channel.connect(**_VOICE_FLAGS)
+        return await asyncio.wait_for(
+            channel.connect(timeout=timeout, **_VOICE_FLAGS), timeout=timeout + 10)
+
+    async def _halboffen_wegraeumen(self, guild):
+        """Nach einem gescheiterten Verbindungsversuch: einen halb offenen
+        Voice-Client wegraeumen, falls einer stehengeblieben ist (siehe
+        _verbinden). Erst die Trennung setzt seinen Zustand zurueck - und weckt
+        damit auch discord.pys eigene Warter (Event.wait in _wait_for_state).
+        Bleibt so ein Client liegen und wird spaeter eingesammelt, meldet
+        asyncio "Task was destroyed but it is pending! coro=<Event.wait()>"."""
+        rest = getattr(guild, "voice_client", None)
+        if rest is None or rest.is_connected():
+            return
+        self._selbst_trennen_ankuendigen()   # sonst haelt flo_getrennt es fuer einen Rauswurf
+        try:
+            await asyncio.wait_for(rest.disconnect(force=True), timeout=10)
+        except Exception:  # noqa: BLE001 - aufraeumen darf nie werfen
+            log.debug("Halb offenen Voice-Client nicht wegbekommen", exc_info=True)
 
     def _selbst_trennen_ankuendigen(self):
         """Gleich trennen WIR selbst (Neuaufbau) - flo_getrennt soll das nicht
@@ -1200,6 +1324,11 @@ class GuildPlayer:
         # Jeder NEUE Song startet immer auf Normaltempo - der Effekt wird pro Song
         # einzeln gewaehlt (keep_speed nur beim Neustart DESSELBEN Songs).
         speed = self.speed if keep_speed else 1.0
+        if track.live:
+            # Einen Live-Stream kann man nicht spulen: es gibt keine "Sekunde
+            # 312", nur den aktuellen Rand. Jeder Neustart (Abbruch, Stall,
+            # Reconnect, Tempo) setzt deshalb am Live-Rand wieder ein.
+            seek = 0.0
         # Reihenfolge der Eingangs-Optionen (alles VOR '-i', sonst ignoriert
         # ffmpeg sie): erst die Client-Kennung, dann der Seek, dann der Rest.
         vorne = [track.ffmpeg_vorspann()]
@@ -1207,6 +1336,7 @@ class GuildPlayer:
             # -ss VOR -i = schneller Eingangs-Seek, damit der Song an der Stelle
             # weiterlaeuft statt von vorne (Tempo/Reverb aendern nur den Klang, nicht die Pos.)
             vorne.append(f"-ss {seek:.2f}")
+        vorne.append(_hls_optionen(track))
         vorne.append(_FFMPEG_BEFORE)
         before = " ".join(t for t in vorne if t)
         opts = _FFMPEG_OPTS
@@ -1260,6 +1390,7 @@ class GuildPlayer:
              self._play_gen, self.speed, self.pausiert, self._neustart_versuche,
              self._leer_seit) = vorher
             raise
+        self._geparkt = False            # es spielt wieder -> nichts mehr geparkt
         if not keep_speed:
             # Jeden NEU gestarteten Song in den Verlauf legen (fuer 'flo nochmal').
             # Effekt-/Tempo-Neustarts (keep_speed) zaehlen nicht als neuer Song.
@@ -1447,6 +1578,10 @@ class GuildPlayer:
                 # Nur der ERSTE Pop ist der Loop-Durchlauf. Faellt er durch
                 # (nicht ladbar), holt die Schleife den naechsten echten Song.
                 wiederholung, loop_wieder = loop_wieder, False
+                # Ein geparkter Song (siehe _parken) weiss, wo er stand. Die
+                # Stelle gilt fuer genau EINEN Start - und das Aufloesen unten
+                # macht ein neues Track-Objekt, darum hier herausnehmen.
+                ab, track.weiter_ab = track.weiter_ab, 0.0
                 try:
                     if track.stream_url and track.query and _adresse_alt(track):
                         # Die Adresse lag zu lange herum (siehe STREAM_MAX_ALTER):
@@ -1466,6 +1601,7 @@ class GuildPlayer:
                             # dort wieder hineinfaellt, spielt beim naechsten
                             # Play als Geist an ("ich hab doch gestoppt").
                             if self._session_gen == sitzung:
+                                track.weiter_ab = ab
                                 self.queue.insert(0, track)
                             return
                     # Der vorige Player raeumt noch auf - ohne dieses Warten
@@ -1478,7 +1614,7 @@ class GuildPlayer:
                     # kaputten Song aufgibt, koennte sich so ewig selbst
                     # verlaengern. Nebenbei ueberlebt damit ein eingestelltes
                     # 'slowed + reverb' die Wiederholung.
-                    self.start(track, keep_speed=wiederholung)
+                    self.start(track, seek=ab, keep_speed=wiederholung)
                 except Exception:
                     if wiederholung:
                         # Ein Song, der nicht laeuft, wird nicht ewig
@@ -1493,6 +1629,7 @@ class GuildPlayer:
                     # komplette Playlist als "nicht ladbar" - stumm, ohne ein
                     # Wort im Chat. Jetzt bleibt die Warteschlange stehen.
                     if fehler_serie >= ADVANCE_MAX_FEHLER:
+                        track.weiter_ab = ab
                         self.queue.insert(0, track)
                         self.current = None
                         self._advance_aufgegeben = True
@@ -1536,6 +1673,7 @@ class GuildPlayer:
         self.active_channel_id = None   # bewusst raus -> Watchdog soll NICHT zurueckholen
         self._leer_seit = None
         self._advance_aufgegeben = False
+        self._geparkt = False           # 'stop' wirft auch eine geparkte Schlange weg
         self._session_gen += 1          # alles, was noch laeuft, gehoert zur ALTEN Sitzung
         self._stall_ticks = 0
         self._frozen_ticks = 0
@@ -1645,24 +1783,40 @@ class GuildPlayer:
         naechsten Song; fuer den Zuhoerer bricht die Musik dann staendig
         mittendrin ab und springt weiter.
 
+        Ein Live-Stream hat kein Ende, das er erreichen koennte - endet ffmpeg
+        dort, ist das IMMER ein Abbruch. Fortgesetzt wird er am Live-Rand,
+        nicht an einer Stelle (start() spult bei Live nie).
+
         Rueckgabe True = uebernommen (der Aufrufer darf NICHT weiterschalten)."""
         track = self.current
-        if track is None or not track.duration:
-            return False                 # ohne bekannte Laenge nicht zu beurteilen
+        if track is None:
+            return False
         gehoert = self.position()
-        fehlt = track.duration - gehoert
-        if fehlt <= ABBRUCH_TOLERANZ:
+        if track.live:
+            if gehoert >= LIVE_NEUSTART_FRISCH:
+                # Lief lange sauber (YouTube-Live-Adressen laufen nach einigen
+                # Stunden ab) - ein neuer Aussetzer, kein Dauerfehler. Sonst
+                # waere ein 24/7-Stream nach dem zweiten Ablauf einfach aus.
+                self._neustart_versuche = 0
+        elif not track.duration:
+            return False                 # ohne bekannte Laenge nicht zu beurteilen
+        elif track.duration - gehoert <= ABBRUCH_TOLERANZ:
             return False                 # normal zu Ende gelaufen
         if self._neustart_versuche >= NEUSTART_MAX_VERSUCHE:
-            log.error("'%s' bricht immer wieder ab (%.0f von %d s) - gebe auf.",
-                      track.title, gehoert, track.duration)
+            log.error("'%s' bricht immer wieder ab (%.0f von %s s) - gebe auf.",
+                      track.title, gehoert, track.duration or "live")
             await self._sag(f"⏭️ **{track.title}** bricht immer wieder ab – "
                             f"ich gehe zum nächsten.")
             return False                 # aufgeben -> normal weiterschalten
         self._neustart_versuche += 1
-        log.warning("Song '%s' brach nach %.0f von %d s ab - setze fort "
-                    "(Versuch %d/%d).", track.title, gehoert, track.duration,
-                    self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
+        if track.live:
+            log.warning("Live-Stream '%s' brach nach %.0f s ab - starte ihn am "
+                        "Live-Rand neu (Versuch %d/%d).", track.title, gehoert,
+                        self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
+        else:
+            log.warning("Song '%s' brach nach %.0f von %d s ab - setze fort "
+                        "(Versuch %d/%d).", track.title, gehoert, track.duration,
+                        self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
         # Zwei Sekunden Ueberlappung: bis zum Abbruch war ja Ton da.
         return await self._neustart_an_position(verlust=2.0)
 
@@ -1718,6 +1872,14 @@ class GuildPlayer:
         Tut nichts, wenn der Bot bewusst draussen ist, gerade ein Songwechsel
         laeuft oder schon eine voice-Op (connect/reconnect/Tempo) aktiv ist."""
         if self.active_channel_id is None or self._advancing or self._voice_lock.locked():
+            return
+        if not laufzeit.gateway_stabil():
+            # Discord selbst ist weg (oder gerade erst wieder da). Dann kann
+            # kein Voice-Beitritt klappen - ohne Gateway kommt die Antwort auf
+            # den Beitritt nie an. Am 20.10.2026 hat der Watchdog in genau so
+            # einer Minute Netz-Wackler alle Reconnects verbrannt und danach
+            # die Warteschlange weggeworfen. Jetzt wartet er, bis die
+            # Verbindung wieder eine Weile steht.
             return
         if time.monotonic() < self._rauswurf_bis:
             return      # flo_getrennt sieht gerade nach, ob ihn jemand rausgeworfen hat
@@ -1868,8 +2030,7 @@ class GuildPlayer:
                     pass
             self.voice = None
             try:
-                self.voice = await asyncio.wait_for(
-                    channel.connect(self_deaf=True, reconnect=True), timeout=20)
+                self.voice = await self._verbinden(channel, timeout=VOICE_CONNECT_TIMEOUT)
             except discord.ClientException:
                 # 'Already connected' -> Geist-Client haengt im Guild. Hart weg, 1x retry.
                 ghost = channel.guild.voice_client
@@ -1879,13 +2040,14 @@ class GuildPlayer:
                     except Exception:  # noqa: BLE001
                         pass
                 try:
-                    self.voice = await asyncio.wait_for(
-                        channel.connect(self_deaf=True, reconnect=True), timeout=20)
+                    self.voice = await self._verbinden(channel, timeout=VOICE_CONNECT_TIMEOUT)
                 except Exception:  # noqa: BLE001
-                    self._note_reconnect_fail(channel)
+                    await self._halboffen_wegraeumen(channel.guild)
+                    await self._note_reconnect_fail(channel)
                     return
             except Exception:  # noqa: BLE001
-                self._note_reconnect_fail(channel)
+                await self._halboffen_wegraeumen(channel.guild)
+                await self._note_reconnect_fail(channel)
                 return
             # Erfolg: Wiedergabe fortsetzen (laufenden Song an aktueller Stelle, sonst naechsten).
             self._reconnect_fails = 0
@@ -1902,24 +2064,67 @@ class GuildPlayer:
                 await self._advance()
             log.info("Voice in '%s' wiederhergestellt.", channel.name)
 
-    def _note_reconnect_fail(self, channel):
+    async def _note_reconnect_fail(self, channel):
         """Zaehlt fehlgeschlagene Reconnects; nach zu vielen am Stueck gibt der
-        Watchdog auf (Marker loeschen), damit kein Endlos-Loop entsteht. Ein neues
-        'Flo spiel' startet sauber neu."""
+        Watchdog auf und PARKT die Musik (siehe _parken), damit kein
+        Endlos-Loop entsteht.
+
+        Gezaehlt wird nur, solange die Verbindung zu Discord steht. Ist das
+        Gateway weg (oder gerade erst zurueck), kann kein Beitritt klappen -
+        das ist Warten, kein Fehlversuch."""
+        if not laufzeit.gateway_stabil():
+            log.info("Voice-Reconnect in '%s' ging nicht - die Discord-Verbindung "
+                     "wackelt, das zaehlt nicht als Fehlversuch.", channel.name)
+            return
         self._reconnect_fails += 1
         if self._reconnect_fails >= VOICE_RECONNECT_MAX_FAILS:
-            log.error("Voice-Reconnect in '%s' nach %d Versuchen aufgegeben.",
-                      channel.name, self._reconnect_fails)
-            self.active_channel_id = None
-            self._reconnect_fails = 0
-            # Sonst hiesse der Server fuer is_voice_busy ewig 'belegt' (Song
-            # steht noch in current) - Soundboard und TTS waeren bis 'Flo
-            # stop' gesperrt.
-            self.current = None
-            self.queue.clear()
+            await self._parken(channel)
         else:
             log.warning("Voice-Reconnect fehlgeschlagen (%d/%d).",
                         self._reconnect_fails, VOICE_RECONNECT_MAX_FAILS)
+
+    async def _parken(self, channel):
+        """Der Watchdog gibt auf - aber die Musik wird GEPARKT, nicht weggeworfen.
+
+        Vorher leerte die Aufgabe Warteschlange und Song: am 20.10.2026 reichte
+        eine Minute Netz-Wackler, und die ganze Schlange war weg. Jetzt bleibt
+        sie stehen, der laufende Song kommt vorne wieder hinein - mit seiner
+        Stelle, wenn er sich spulen laesst -, und 'weiter' oder das naechste
+        'spiel' machen genau dort weiter (Music._schlange_fortsetzen).
+
+        active_channel_id geht trotzdem auf None: der Watchdog hoert auf, und
+        is_voice_busy meldet den Server frei. Sonst blieben Soundboard und TTS
+        bis 'Flo stop' gesperrt, obwohl Flo gar nicht im Kanal sitzt."""
+        track = self.current
+        if track is not None:
+            ab = 0.0
+            if track.duration and not track.live:
+                # Die Uhr hat _reconnect beim Abriss angehalten - sie steht auf
+                # der zuletzt GEHOERTEN Stelle.
+                ab = min(self.position(), float(track.duration))
+            self.queue.insert(0, replace(track, weiter_ab=ab if ab >= 1.0 else 0.0))
+        self._vorladen_stoppen()
+        self.current = None
+        self._played = 0.0
+        self._seg_start = None
+        self._play_gen += 1              # alte after-Callbacks entwerten
+        self._stall_ticks = 0
+        self._frozen_ticks = 0
+        self._last_frames = -1
+        self.pausiert = False
+        self.active_channel_id = None
+        self._reconnect_fails = 0
+        self._leer_seit = None
+        self._geparkt = bool(self.queue)
+        log.error("Voice-Reconnect in '%s' nach %d Versuchen aufgegeben - "
+                  "Warteschlange (%d) GEPARKT, 'weiter' oder 'spiel' machen dort weiter.",
+                  channel.name, VOICE_RECONNECT_MAX_FAILS, len(self.queue))
+        await _retire_panel(self)
+        if self.queue:
+            await self._sag(
+                f"📡 Discord lässt mich gerade nicht zurück in den Voice. Eure "
+                f"Warteschlange (**{len(self.queue)}**) hab ich geparkt – "
+                f"`weiter` und es geht genau da weiter.")
 
 
 # --- Interaktiv: Position in der Warteschlange aendern --------------------
@@ -2711,6 +2916,9 @@ class Music(FeatureBasis):
 
         self._enabled = True
         self._ytdlp_umgebung()
+        # Einmal beim Start nachsehen, ob ffmpeg '-extension_picky' kennt -
+        # sonst fragte erst der erste Live-Stream, mitten im Event-Loop.
+        _ffmpeg_kennt_extension_picky()
         spotify_ok = bool(self._spotify_id and self._spotify_secret)
         log.info(
             "Musik-Feature aktiv (YouTube: ja, Spotify: %s).",
@@ -2768,7 +2976,14 @@ class Music(FeatureBasis):
     # ffmpeg bekam vom Ziel aber 403, weil ihm die Client-Kennung fehlte. Im Log
     # stand trotzdem "aktiv". Eine Zusicherung, die niemand nachgesehen hat, ist
     # schlimmer als keine.
-    SELBSTTEST_PROBE = "ytsearch1:lofi hip hop radio"
+    #
+    # Die Probe ist ein KURZES, festes Video ("Me at the zoo", 19 s, seit 2005
+    # online) und keine Suche. Vorher stand hier 'ytsearch1:lofi hip hop radio'
+    # - und der erste Treffer ist der 24/7-LIVE-Stream. Der kommt als HLS, und
+    # ffmpeg ab 7.1 verweigert dessen Stuecke ("extension aac mismatches
+    # allowed extensions"): der Selbsttest schlug bei JEDEM Start Alarm, ohne
+    # dass die normale Musik je ein Problem hatte.
+    SELBSTTEST_PROBE = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
     SELBSTTEST_SEKUNDEN = 0.6
 
     async def selbsttest(self):
@@ -2787,6 +3002,14 @@ class Music(FeatureBasis):
         if not track.stream_url:
             log.error("Musik-Selbsttest: yt-dlp liefert keine Stream-Adresse.")
             return False, "keine Stream-Adresse"
+        if track.live:
+            # Ein Live-Stream prueft eine ANDERE Strecke (HLS) als die normale
+            # Musik - als Probe taugt er nicht, ein Fehler daran waere ein
+            # falscher Alarm. Ehrlich sagen statt raten.
+            log.warning("Musik-Selbsttest: die Probe '%s' ist ein Live-Stream - "
+                        "taugt nicht als Test, SELBSTTEST_PROBE pruefen.",
+                        track.title[:50])
+            return False, "Probe ist ein Live-Stream"
 
         bytes_ton, fehler = await self._probe_ton(track)
         if bytes_ton <= 0:
@@ -2806,7 +3029,8 @@ class Music(FeatureBasis):
         """Zieht kurz echten Ton durch ffmpeg - so wie GuildPlayer.start es tut,
         inklusive Client-Kennung. Gibt (bytes, fehlertext) zurueck."""
         ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
-        vorne = [t for t in (track.ffmpeg_vorspann(), _FFMPEG_BEFORE) if t]
+        vorne = [t for t in (track.ffmpeg_vorspann(), _hls_optionen(track), _FFMPEG_BEFORE)
+                 if t]
         argv = [ffmpeg, "-hide_banner", "-loglevel", "error",
                 *shlex.split(" ".join(vorne)), "-i", track.stream_url,
                 "-t", str(self.SELBSTTEST_SEKUNDEN),
@@ -2912,8 +3136,12 @@ class Music(FeatureBasis):
         player = self._players.get(guild_id)
         if player is None:
             return False
-        if (player.current is not None or player.queue or player.ist_pausiert()
-                or player._advancing):
+        # Eine GEPARKTE Warteschlange (der Watchdog kam nicht mehr in den
+        # Voice, siehe GuildPlayer._parken) wartet auf 'weiter' - den Kanal
+        # belegt sie nicht, Flo sitzt ja gar nicht drin.
+        geparkt = player._geparkt and player.current is None
+        if (player.current is not None or (player.queue and not geparkt)
+                or player.ist_pausiert() or player._advancing):
             return True
         vc = player.voice
         return vc is not None and (vc.is_playing() or vc.is_paused())
@@ -2948,6 +3176,14 @@ class Music(FeatureBasis):
                 return False      # inzwischen selbst beendet
             if self._voice_client_lebt(guild_id, gid, player):
                 return False      # discord.py hat ihn noch - nur ein Aussetzer
+            if not laufzeit.gateway_stabil():
+                # Die Discord-Verbindung wackelt: das war das Netz, kein
+                # Moderator. Nach einer Neuanmeldung raeumt discord.py seine
+                # Voice-Clients sogar ganz weg - als Rauswurf gewertet, waere
+                # die Warteschlange genau bei dem Netz-Wackler weg, vor dem
+                # der Watchdog sie jetzt schuetzt. Er holt Flo zurueck, sobald
+                # die Verbindung wieder steht.
+                return False
             war_musik = player.current is not None or bool(player.queue)
             log.warning("Flo wurde aus dem Sprachkanal %s geworfen (Server %s) - "
                         "Musik aus, Warteschlange (%d) geleert, bleibt draussen.",
@@ -3396,6 +3632,8 @@ class Music(FeatureBasis):
             thumbnail=info.get("thumbnail") or "",
             geloest_um=time.monotonic(),
             kopfzeilen=dict(info.get("http_headers") or {}),
+            live=bool(info.get("is_live") or info.get("live_status") == "is_live"),
+            protokoll=str(info.get("protocol") or ""),
         )
 
     def _norm_match(self, s):
@@ -4310,10 +4548,14 @@ class Music(FeatureBasis):
                                color=_COL_ERR)
         items = items[:space]
 
-        if player.is_active():
+        geparkt = getattr(player, "_geparkt", False)
+        if player.is_active() or geparkt:
             for item in items:
                 inp, title, hint = self._unpack_item(item)
                 self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
+            if geparkt:
+                # Geparkt: erst die alte Schlange weiter, die neuen hinten dran.
+                await player._advance()
             return self._embed(
                 f"**{len(items)}** Songs {label} eingereiht – ab **#{len(player.queue) - len(items) + 1}** "
                 f"in der Warteschlange.",
@@ -4880,9 +5122,9 @@ class Music(FeatureBasis):
                 # pausiert", und die stehengebliebene Warteschlange blieb
                 # stehen: eine Sackgasse, aus der nur 'stop' herausfuehrte.
                 if player.queue and not player.is_active():
-                    await player._advance()          # setzt das Aufgeben zurueck
-                    if player.current is not None:
-                        return HANDLED               # _advance postet das Panel
+                    antwort = await self._schlange_fortsetzen(player, message)
+                    if antwort is not None:
+                        return antwort               # HANDLED: _advance postet das Panel
                     return self._embed(
                         "Ich komme an die Songs gerade nicht ran – probier's "
                         "gleich nochmal oder wirf einen anderen Link rein.",
@@ -4900,10 +5142,11 @@ class Music(FeatureBasis):
             if player.is_active():
                 return self._embed("Läuft doch schon. 🎶", color=_COL_INFO)
             if player.queue:
-                # Es warten Songs, es laeuft aber nichts - anstossen statt fragen.
-                await player._advance()
-                if player.current is not None:
-                    return HANDLED
+                # Es warten Songs (vielleicht geparkt), es laeuft aber nichts -
+                # anstossen statt fragen.
+                antwort = await self._schlange_fortsetzen(player, message)
+                if antwort is not None:
+                    return antwort
             return self._embed(
                 f"Klar – was soll ich spielen? Sag z. B. `{self._bot_name} mach mal "
                 f"Bohemian Rhapsody an` oder `{self._bot_name} spiel <Song/Link>`.",
@@ -5099,6 +5342,31 @@ class Music(FeatureBasis):
         task.add_done_callback(self._nebenbei.discard)
         return task
 
+    async def _schlange_fortsetzen(self, player, message):
+        """Eine stehengebliebene oder GEPARKTE Warteschlange weiterspielen.
+
+        Geparkt heisst: der Watchdog kam nach einem Netz-Aussetzer nicht mehr
+        in den Voice zurueck (GuildPlayer._parken). Dann sitzt Flo gar nicht
+        im Kanal, und _advance allein stand vor einer toten Verbindung - erst
+        rein, in den Kanal der Person, die 'weiter' sagt.
+
+        Rueckgabe: HANDLED (laeuft, _advance hat das Panel gepostet), ein
+        Fehler-Embed, oder None (es lief trotzdem nichts an)."""
+        voice = player.voice
+        if voice is None or not voice.is_connected():
+            stimme = getattr(message.author, "voice", None)
+            kanal = getattr(stimme, "channel", None)
+            if kanal is None:
+                return self._embed("Geh erst in einen Sprachkanal, dann mach ich da weiter.",
+                                   color=_COL_ERR)
+            try:
+                await player.connect(kanal)
+            except VOICE_CONNECT_FEHLER as exc:
+                return self._voice_kaputt(exc, "weiter")
+            player.fremden_ton_stoppen()
+        await player._advance()          # ohne gen -> setzt das Aufgeben zurueck
+        return HANDLED if player.current is not None else None
+
     @staticmethod
     def _vorab_verbinden(player, kanal):
         """Schon mal verbinden, falls Flo noch nicht drin ist. Gibt den Task
@@ -5205,8 +5473,16 @@ class Music(FeatureBasis):
 
         # Es laeuft schon was -> einreihen. Ab >=2 wartenden Songs gibt's Buttons,
         # mit denen die Person ihren frischen Song an eine Wunsch-Position zieht.
-        if player.is_active():
+        geparkt = getattr(player, "_geparkt", False)
+        if player.is_active() or geparkt:
             self._einreihen(player, track)
+            if geparkt:
+                # Geparkte Schlange (der Watchdog kam nach einem Netz-Aussetzer
+                # nicht mehr zurueck): der neue Song stellt sich hinten an, und
+                # es geht dort weiter, wo die Musik stehengeblieben ist.
+                await player._advance()
+                if player.current is track:
+                    return HANDLED          # _advance hat das Panel gepostet
             pos = len(player.queue)
             if pos >= 2:
                 view = QueuePositionView(player, track, message.author.id)
