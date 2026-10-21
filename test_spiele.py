@@ -32,7 +32,7 @@ def test_words_zaehlen():
     # dass irgendein alphabetisch frueherer Test words.setup() gerufen hatte. In
     # gemischter Reihenfolge war er deshalb rot.
     alt = (words.instance._store, words.instance._enabled)
-    words.instance._store = type("S", (), {"data": {"guilds": {}}})()
+    words.instance._store = _FakeStore({"guilds": {}})
     words.instance._enabled = True
     try:
         n = words._count_text("pizza pizza salat", "111", 1)
@@ -245,9 +245,8 @@ def test_backfill_laeuft_fuer_jeden_server():
                    w._buch, words.BACKFILL)
     w._enabled = True
     words.BACKFILL = True
-    w._store = SimpleNamespace(
-        data={"scan": {"before": 1, "done": False, "channels": {}}, "guilds": {}},
-        save=lambda: None)
+    w._store = _FakeStore(
+        {"scan": {"before": 1, "done": False, "channels": {}}, "guilds": {}})
 
     async def save():
         pass

@@ -8,16 +8,29 @@ fuer jackpot()).
 
 Wo was aufgerufen wird:
     handle(message)              Handler-Kette, nach umfrage
+    aktiv(msg)                   bot.on_message, SYNCHRON, fuer JEDE Nachricht
+                                 eines Menschen auf dem Server, VOR den Spielen
+                                 und Assistenten - nie bei Notlagen. Nur "hier
+                                 ist was los" (fuer 'beleidigt': Funkstille)
     nachricht(msg, angesprochen) bot.on_message, SYNCHRON, sobald feststeht,
                                  ob Flo angesprochen ist - nie bei Notlagen
-                                 (bot.py filtert, das Modul prueft trotzdem)
-    tick(client)                 bot.alltag_loop, jede Minute
+                                 (bot.py filtert, das Modul prueft trotzdem).
+                                 Sieht NICHT, was ein Spiel oder Assistent
+                                 vorher geschluckt hat (Zaehlen, Quiz-Antwort,
+                                 eingefuegte Songs) - dafuer gibt es aktiv()
+    tick(client)                 bot.alltag_loop, jede Minute (hoechstens
+                                 bot.ALLTAG_FRIST, dann abgebrochen). Die
+                                 Sendepause prueft bot.py hier NICHT - wer von
+                                 sich aus postet, fragt admin.is_locked() selbst
     jackpot(uid, netto)          casino/lotto, SYNCHRON, nach einem dicken Gewinn
     prompt_zeile(gid) -> str     ai._system_prompt, hinter dem Gedaechtnis und
-                                 vor dem Schlusswort - NIE in einer Notlage. Die
-                                 Zeile aendert nur den Ton und endet mit dem
-                                 Satz, dass Grenze und Notlagen-Regel trotzdem
-                                 gelten.
+                                 vor dem Schlusswort. ai.py fragt nur, wenn
+                                 is_enabled() und der Schalter 'launen' auf dem
+                                 Server an ist, und NIE, wenn im Gespraech eine
+                                 Notlage steht (in der Frage oder im Verlauf,
+                                 der mit in den Prompt geht). Die Zeile aendert
+                                 nur den Ton und endet mit dem Satz, dass
+                                 Grenze und Notlagen-Regel trotzdem gelten.
     status_zeile(gid, spruch)    bot.status_loop: Spruch fuer den Status oder
                                  None (dann bleibt der normale Spruch)
     stand(gid) -> str            bot.status_loop: die aktuelle Laune als kurzes
@@ -59,6 +72,10 @@ class Laune(FeatureBasis):
             return None
         return None
 
+    def aktiv(self, msg):
+        """Auf dem Server hat ein Mensch etwas geschrieben. Synchron, billig."""
+        return None
+
     def nachricht(self, msg, angesprochen):
         """Eine Chatnachricht zaehlen (Spam an Flo, Funkstille ...). Synchron."""
         return None
@@ -89,6 +106,7 @@ instance = Laune()
 setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle
+aktiv = instance.aktiv
 nachricht = instance.nachricht
 tick = instance.tick
 jackpot = instance.jackpot

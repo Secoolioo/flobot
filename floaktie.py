@@ -1783,9 +1783,10 @@ class FloAktie(FeatureBasis):
             # Einmal pro Tag den Schlusskurs fuer den Langzeit-Chart festhalten.
             # NUR VORWAERTS (uhr.py): mit '!=' schrieb der Uhrsprung beim
             # Booten denselben Tag zweimal in den Chart, und zwar in falscher
-            # Reihenfolge (morgen, heute, morgen).
+            # Reihenfolge (morgen, heute, morgen). Ein gespeicherter Tag WEIT
+            # in der Zukunft haelt den Chart aber nicht an (uhr.glaubhaft).
             today = self._today()
-            if uhr.spaeter_als(today, st.get("day")):
+            if uhr.spaeter_als(today, uhr.glaubhaft(st.get("day"), today)):
                 st["day"] = today
                 if not isinstance(st.get("history"), list):
                     st["history"] = []

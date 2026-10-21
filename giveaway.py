@@ -663,25 +663,11 @@ class Giveaway(FeatureBasis):
         Server mit eigenem Praefix, mit 'Florian' oder mit '@Flo' davor war
         jede Nachricht eine "Antwort" - und wurde geschluckt. Jetzt derselbe
         Lead wie ueberall (ai.lead_re) plus eine fuehrende Erwaehnung von Flo
-        selbst oder seiner Bot-Rolle."""
-        guild = getattr(message, "guild", None)
-        # 'hey flo ...', 'ok flo ...' - die alte Pruefung kannte das, lead_re nicht.
-        text = re.sub(r"(?i)^\s*(?:hey|hei|ok|okay|yo|ey|na|hallo)\s*,?\s+", "", text)
-        try:
-            if ai.lead_re(getattr(guild, "id", 0)).match(text):
-                return True
-        except Exception:  # noqa: BLE001 - lieber durchlassen als abstuerzen
-            log.debug("Lead-Pruefung im Giveaway-Assistenten fehlgeschlagen", exc_info=True)
-        m = re.match(r"\s*<@([!&]?)(\d+)>", text)
-        if not m:
-            return False
-        ziel = int(m.group(2))
-        if m.group(1) == "&":
-            rolle = getattr(guild, "self_role", None)
-            return rolle is not None and getattr(rolle, "id", None) == ziel
-        ich = (getattr(getattr(guild, "me", None), "id", None)
-               or getattr(getattr(self.client, "user", None), "id", None))
-        return ich is not None and int(ich) == ziel
+        selbst oder seiner Bot-Rolle.
+
+        Die Pruefung steht in basis.an_flo: der Playlist-Assistent nimmt
+        dieselbe, und zwei Kopien liefen frueher oder spaeter auseinander."""
+        return basis.an_flo(message, text)
 
     async def _daneben(self, message, w, hinweis):
         """Eine Antwort, mit der der Assistent nichts anfangen kann.

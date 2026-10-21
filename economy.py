@@ -726,10 +726,12 @@ class Economy(FeatureBasis):
         'Neuer Tag' heisst SPAETER als der gespeicherte, nicht bloss anders: nach
         dem Uhrsprung beim Booten (uhr.py) laege der gespeicherte Tag sonst in
         der Zukunft, und jeder Start wuerfelte den Shop noch einmal neu. Den
-        Tag danach holt der 2-Uhr-Takt (force) ohnehin."""
+        Tag danach holt der 2-Uhr-Takt (force) ohnehin. Ein Tag WEIT in der
+        Zukunft (kaputte Datei) zaehlt nicht - uhr.glaubhaft."""
         st = self._shop_state()
+        tag = self._shop_tag()
         if (not force and st.get("items")
-                and not uhr.spaeter_als(self._shop_tag(), st.get("date"))):
+                and not uhr.spaeter_als(tag, uhr.glaubhaft(st.get("date"), tag))):
             return st
         items = titles.random_titles(self.SHOP_SIZE)
         for i, e in enumerate(items, 1):

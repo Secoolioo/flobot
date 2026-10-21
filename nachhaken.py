@@ -12,8 +12,13 @@ Wo was aufgerufen wird:
                                  Gedaechtnis-Haken - nie bei Notlagen
     vielleicht_nachfragen(msg)   bot.on_message, im Hintergrund, fuer jede
                                  Nachricht, die NICHT an Flo geht - nie bei
-                                 Notlagen. True = Flo hat nachgefragt.
-    tick(client)                 bot.alltag_loop, jede Minute
+                                 Notlagen und nie in der Sendepause (beides
+                                 prueft bot.py). True = Flo hat nachgefragt.
+    tick(client)                 bot.alltag_loop, jede Minute (hoechstens
+                                 bot.ALLTAG_FRIST, dann abgebrochen - die
+                                 gebuendelten KI-Aufrufe brauchen eine Frist,
+                                 die darunter liegt). Die Sendepause prueft
+                                 bot.py hier NICHT
     vergiss(gid, uid) -> int     gehirn 'vergiss mich': wie viel weg ist
     zeilen_fuer(gid, uid)        gehirn 'gedaechtnis': worauf Flo noch wartet
 

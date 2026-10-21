@@ -71,6 +71,9 @@ flo funktionen              was auf diesem Server an ist
 flo funktion casino aus     abschalten (global aus bleibt global aus)
 ```
 
+Was beim Start gar nicht hochkam (kein ffmpeg, keine KI, ein Teil, der noch ein
+Gerüst ist), steht dort als ⚪ *nicht geladen* — wie im Panel.
+
 > **Sofort statt nach dem Neustart.** Wer einen Wert nicht bei jedem Gebrauch
 > liest, sondern sich ihn merkt, erfährt sonst nie von einer Änderung. Genau das
 > war bei der **Lautstärke** so: sie wurde nur beim *Anlegen* eines Players
@@ -224,13 +227,24 @@ Und falls die Uhr doch springt, während Flo schon läuft (`uhr.py`):
   Aktien-Chart, alles aus dem Server-Leben), merkt sich, was erledigt ist, als
   Schlüssel (`2026-10-21`, `2026-10`, `2026-W43`), der nur **vorwärts** zählt
   (`uhr.spaeter_als`, nie `!=`). Vorher wurde bei einem Sprung über den
-  Monatswechsel derselbe Lotto-Monat zwei- bis dreimal ausgelost.
+  Monatswechsel derselbe Lotto-Monat zwei- bis dreimal ausgelost. Ein
+  gespeicherter Schlüssel *weit* in der Zukunft (kaputte Datei, größerer
+  Sprung) hält dagegen nichts an: mehr als einen Schritt voraus gilt er bei
+  stabiler Uhr als kaputt (`uhr.glaubhaft`, eine Warnung im Log).
 * **Erst planen, wenn die Uhr stimmt.** `uhr.stabil()` ist in den ersten fünf
   Minuten nach dem Start (`UHR_START_GNADE`) und fünf Minuten nach einem Sprung
-  falsch; so lange wartet, wer nach der Uhr plant, und holt danach nach.
+  falsch; so lange wartet, wer nach der Uhr plant, und holt danach nach. Die
+  Lotto-Ziehung nach einem Neustart über den Monatswechsel kommt so ein paar
+  Minuten nach dem Start — nicht erst im nächsten 6-Stunden-Takt. Auf die Uhr
+  schaut der Status-Takt alle 10 s; ein Sprung steht also gleich im Log.
 
-Die Loops mit fester Uhrzeit (2-Uhr-Shop, 18-Uhr-Erinnerung) regelt discord.py
-selbst: wachen sie zu früh auf, legen sie sich bis zur Uhrzeit wieder hin.
+Die Loops mit fester Uhrzeit (2-Uhr-Shop, 18-Uhr-Erinnerung) flickt `uhr.py`
+nicht. Wachen sie nach einem Sprung zu früh auf, legt discord.py sie bis zur
+Uhrzeit wieder hin. Startet Flo aber in den zwei Stunden davor, solange die
+Uhr noch vorgeht (0–2 Uhr bzw. 16–18 Uhr), plant er die erste Runde für
+morgen: an diesem Tag fallen die 2-Uhr-Runde (Shop **und** Vermögenssteuer)
+bzw. die Erinnerung aus. Den Shop würfelt der Start ohnehin neu; die Steuer
+fehlt dann einen Tag. Das war schon immer so.
 
 ### Wirtschaft zurücksetzen
 
@@ -431,8 +445,10 @@ Taktrate über `GEHIRN_TICK_SECONDS` (Standard 600).
 
 *Im Bau* — das Gerüst steht (`laune.py`, Schalter `launen`). Fest ist schon:
 die Laune färbt nur den Ton und steht im Prompt **hinter** der Grenze und vor
-dem Schlusswort; bei einer Notlage kommt sie gar nicht erst mit, und keine
-Laune reagiert auf eine Notlage. Der Status zeigt die Laune des Hauptservers.
+dem Schlusswort; bei einer Notlage — in der Frage oder im Chatverlauf, der mit
+in den Prompt geht — kommt sie gar nicht erst mit, und keine Laune reagiert auf
+eine Notlage. Ist der Schalter auf einem Server aus, färbt sie dort weder Ton
+noch Status. Der Status zeigt die Laune des Hauptservers.
 
 ### Er hält nach
 
@@ -725,7 +741,8 @@ Ergebnis hält. Über Hetze lässt er nicht abstimmen.
 
 **Rechtsklick** (Apps-Menü) an einer Nachricht: *Flo, sag was dazu* und *Als
 Zitat speichern* — an einer Person: *Roasten*. Dieselben Schalter wie im Chat
-(KI, Zitate bzw. Chaos, Sendepause), 20 s Abkühlzeit je Person. Angemeldet wird
+(KI, Zitate bzw. Chaos, Sendepause), 20 s Abkühlzeit je Person für die beiden
+mit KI (ein Zitat speichern kostet keine und sperrt sie nicht). Angemeldet wird
 beim Start, aber nur, wenn sich die Befehle geändert haben (`data/befehle.json`)
 — alle drei immer, auch wenn ein Teil aus ist: sonst gäbe jedes An- und
 Abschalten einen neuen Abgleich mit Discord.
@@ -748,7 +765,9 @@ Hilfe-Seite: „Server-Leben" (`flo hilfe`).
 
 *Im Bau* — das Gerüst steht (`zitate.py`, Schalter `zitate`, Rechtsklick *Als
 Zitat speichern*). Das Ergebnis der Sonntags-Abstimmung geht an `zitate`, nicht
-an den normalen Umfrage-Kommentar.
+an den normalen Umfrage-Kommentar. `flo zitate` ist jetzt ein eigenes Wort —
+vorher wurde es per Tippfehler-Korrektur zu `zitat` (Quote-Meme); bis der Teil
+steht, antwortet darauf die KI.
 
 ### Geburtstage
 

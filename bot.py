@@ -394,6 +394,10 @@ MERCHANT_TICK_SECONDS = float(os.getenv("MERCHANT_TICK_SECONDS", "60"))
 # Takt, in dem das Lotto den Monatswechsel (= Ziehung) prueft. 6h -> auch beim
 # Start eine sofortige Pruefung (seconds-Loop feuert die erste Runde direkt).
 LOTTO_TICK_SECONDS = float(os.getenv("LOTTO_TICK_SECONDS", "21600"))
+# Haelt nur die Uhr die Ziehung auf (gerade gestartet, Sprung - uhr.stabil),
+# schaut Flo in diesem Takt nach, ob sie wieder stimmt, statt sechs Stunden
+# bis zum naechsten Lotto-Takt zu warten.
+LOTTO_NACHHOL_SEKUNDEN = 30.0
 # Wort des Tages: alle 5 Minuten nachsehen, ob genug Leute im Voice sitzen.
 # Bewusst kurz getaktet - der Moment, in dem der Call voll wird, soll nicht
 # eine halbe Stunde ungenutzt verstreichen.
@@ -419,6 +423,10 @@ SCHULDEN_MAHN_SECONDS = float(os.getenv("SCHULDEN_MAHN_SECONDS", "3600"))
 # Musik-Wrapped). Jedes Modul entscheidet selbst, ob etwas faellig ist - eine
 # Minute reicht, damit nichts merklich zu spaet kommt.
 ALLTAG_TAKT = float(os.getenv("ALLTAG_TAKT", "60") or "60")
+# So lange darf EIN Modul im Alltags-Takt brauchen (KI-Aufrufe gebuendelt,
+# Bilder rendern, Posten). Haengt es laenger, wird es abgebrochen - sonst
+# warteten alle anderen Module und jede weitere Runde mit.
+ALLTAG_FRIST = 3 * ALLTAG_TAKT
 
 # Module mit Knoepfen, die einen Neustart ueberleben (DYNAMISCHE_KNOEPFE) - in
 # setup_hook angemeldet. Steht als Liste hier, damit der Test, der die Vorlagen
@@ -556,10 +564,18 @@ _HELP_CATEGORY_ALIASES = {
 def _help_category_key(content):
     """Kategorie-Schluessel, wenn die Nachricht NUR aus einem Kategorie-Wort
     besteht ('Flo moderation?') - auch mit 'hilfe' davor ('Flo hilfe musik').
-    Sonst None."""
+    Sonst None.
+
+    Nach einem ausdruecklichen 'hilfe' auch jede andere aktive Seite unter
+    ihrem Schluessel ('Flo hilfe playlist', 'Flo hilfe leben'). OHNE 'hilfe'
+    davor bleiben 'playlist' & Co. Befehle - deshalb kein Alias fuer sie."""
     word = ai.strip_lead(content).lower().strip(" ?!.,")
-    word = re.sub(r"^(?:hilfe|help)\s+", "", word)
-    return _HELP_CATEGORY_ALIASES.get(word)
+    ohne = re.sub(r"^(?:hilfe|help)\s+", "", word)
+    if ohne in _HELP_CATEGORY_ALIASES:
+        return _HELP_CATEGORY_ALIASES[ohne]
+    if ohne != word and any(k == ohne for k, _e, _l in client._help_categories()):
+        return ohne
+    return None
 
 
 # --- Neustart (nur Bot-Besitzer) -----------------------------------------
@@ -775,6 +791,36 @@ _HELP_DATA = {
         ("flo einstellung <name> standard", "zurück auf den Standard"),
     ]),
 }
+# Zeilen, die nur gelten, solange IHR Modul geladen ist - die Seite selbst
+# erscheint schon, wenn eins davon laeuft (siehe _help_categories). Sonst
+# stuende 'flo nachhaken' auf einem Server ohne KI in der Hilfe, oder 'flo
+# wrapped', solange es nur Playlists gibt - und beides fiele zur KI durch.
+# Schluessel: der Befehl wie in _HELP_DATA, Wert: der Schalter hier in bot.py
+# (erst beim Aufruf gelesen - Tests und --check stellen ihn um).
+_HELP_ZEILE_BRAUCHT = {
+    "flo playlist neu <name>": "PLAYLISTS_ENABLED",
+    "flo playlist <name>": "PLAYLISTS_ENABLED",
+    "flo playlists": "PLAYLISTS_ENABLED",
+    "flo playlist <name> dazu · löschen": "PLAYLISTS_ENABLED",
+    "flo queue speichern <name>": "PLAYLISTS_ENABLED",
+    "flo wrapped": "MUSIKSTATS_ENABLED",
+    "flo laune": "LAUNEN_ENABLED",
+    "flo nachhaken aus · an": "NACHHAKEN_ENABLED",
+    "Rechtsklick → Apps → Als Zitat speichern": "ZITATE_ENABLED",
+    "flo zitate · zitat der woche": "ZITATE_ENABLED",
+    "flo geburtstag 12.03.": "GEBURTSTAGE_ENABLED",
+    "flo geburtstage": "GEBURTSTAGE_ENABLED",
+}
+
+
+def _hilfe_eintraege(key):
+    """Die Zeilen einer Hilfe-Seite ohne die, deren Modul nicht geladen ist."""
+    _titel, _farbe, eintraege = _HELP_DATA[key]
+    schalter = globals()
+    return [(befehl, was) for befehl, was in eintraege
+            if schalter.get(_HELP_ZEILE_BRAUCHT.get(befehl, ""), True)]
+
+
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
     "musik": "spiel · skip · queue · history",
@@ -803,9 +849,8 @@ def _hilfe_befehle(key):
     """Die Befehle einer Kategorie zum KOPIEREN - mit dem Namen, den Flo auf
     diesem Server hat (auf der Karte steht immer 'flo')."""
     name = ai.bot_name().lower()
-    _titel, _farbe, eintraege = _HELP_DATA[key]
     return "\n".join(f"`{_FLO_WORT_RE.sub(name, befehl)}` – {was}"
-                      for befehl, was in eintraege)
+                      for befehl, was in _hilfe_eintraege(key))
 
 
 class HilfeAuswahl(discord.ui.DynamicItem[discord.ui.Select],
@@ -1046,6 +1091,9 @@ class FloBot(discord.Client):
         self._arbeit_views_ready = False
         # Und fuer die Selbsttests von KI und Musik (siehe _selbsttests_starten).
         self._selbsttest_gelaufen = False
+        # Holt eine Lotto-Ziehung nach, die nur auf die Uhr wartet (siehe
+        # _lotto_nachholen) - hoechstens einer gleichzeitig.
+        self._lotto_nachholer = None
         # Die gesicherte Warteschlange wird nur nach dem START zurueckgeholt,
         # nicht nach jedem Reconnect (on_ready feuert dann erneut).
         self._musik_wiederhergestellt = False
@@ -1116,6 +1164,7 @@ class FloBot(discord.Client):
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
         task.add_done_callback(_task_fehler_melden)
+        return task
 
     async def _reply_chunks(self, message, text):
         """Schickt eine (ggf. lange) Antwort: erstes Stueck als Antwort, Rest normal.
@@ -1162,9 +1211,16 @@ class FloBot(discord.Client):
             pass
         await self._restart_bot()
 
-    async def _alles_sichern(self):
+    async def _alles_sichern(self, vor_abmelden=False):
         """Alles, was noch im Speicher wartet, auf die Platte - vor Neustart UND
         vor dem Beenden (SIGTERM).
+
+        vor_abmelden=True nur im ERSTEN Durchgang von _herunterfahren: dann
+        auch die laufende Warteschlange und offene Playlist-Assistenten. Beim
+        Nachsichern hat das Abmelden die Voice-Verbindungen schon getrennt -
+        ein zweiter Schnappschuss saehe nur noch die halb abgebaute Musik (der
+        Song, der lief, ist dann weg), und ein zweites Speichern haengte die
+        Songs eines Assistenten doppelt an.
 
         Schulden, Handel und Profil fuehren eigene "geaendert"-Merker und hingen
         NICHT an store.alle_sichern. Wurde innerhalb ihrer 3 s Sammelzeit neu
@@ -1189,13 +1245,13 @@ class FloBot(discord.Client):
             schritte.append((name, speichern))
         # Die laufende Warteschlange (Position, Pause, Radio) - sie soll den
         # Neustart ueberleben. sichern() merkt sich dabei, dass Flo herunter-
-        # faehrt: das Trennen vom Voice beim Abmelden loescht den Stand dann
-        # nicht mehr.
-        if MUSIKZUSTAND_ENABLED:
+        # faehrt: das Trennen vom Voice beim Abmelden aendert und loescht den
+        # Stand dann nicht mehr (merken/vergessen sind danach No-ops).
+        if vor_abmelden and MUSIKZUSTAND_ENABLED:
             schritte.append(("Musik-Zustand", musikzustand.sichern))
         # Playlist-Assistenten mit Songs, die noch keiner mit 'fertig'
         # abgeschlossen hat - sonst waeren die eingefuegten Songs weg.
-        if PLAYLISTS_ENABLED:
+        if vor_abmelden and PLAYLISTS_ENABLED:
             schritte.append(("Playlist-Assistenten", playlists.offene_sichern))
         # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
         # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
@@ -1240,7 +1296,8 @@ class FloBot(discord.Client):
     async def _herunterfahren(self):
         """Die Reihenfolge ist Absicht:
         1. sichern - solange noch alles lebt (haengt das Abmelden, ist das
-           Wichtige trotzdem auf der Platte; docker stop wartet nur 10 s),
+           Wichtige trotzdem auf der Platte; docker stop wartet nur 10 s);
+           NUR hier auch Warteschlange und Playlist-Assistenten,
         2. Web-Panel zu - von dort kommen keine neuen Buchungen mehr,
         3. Discord ab - Voice, Gateway, HTTP,
         4. nachsichern - was beim Abmelden noch gebucht wurde (Voice-Ende,
@@ -1252,7 +1309,7 @@ class FloBot(discord.Client):
         NEBEN dem Dienst und duerften dessen Dateien nie ueberschreiben."""
         if MODE == "loop":
             try:
-                await self._alles_sichern()
+                await self._alles_sichern(vor_abmelden=True)
             except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
                 log.exception("Sichern beim Beenden fehlgeschlagen")
         try:
@@ -1313,7 +1370,10 @@ class FloBot(discord.Client):
         """Liefert (key, emoji, label) je AKTIVEM Bereich - Reihenfolge = Button-Reihenfolge."""
         cats = [
             ("musik", "🎵", "Musik", MUSIC_ENABLED),
-            ("playlist", "🎶", "Playlists & Radio", MUSIC_ENABLED and PLAYLISTS_ENABLED),
+            # Die Seite, sobald eins ihrer Module laeuft - welche Zeilen darauf
+            # stehen, entscheidet _hilfe_eintraege (Radio & Abstimmung sind Musik).
+            ("playlist", "🎶", "Playlists & Radio",
+             MUSIC_ENABLED and (PLAYLISTS_ENABLED or MUSIKSTATS_ENABLED)),
             ("spiele", "🎮", "Spiele", GAMES_ENABLED),
             ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
             ("casino", "🎰", "Casino", CASINO_ENABLED),
@@ -1347,9 +1407,9 @@ class FloBot(discord.Client):
                         render.help_card, f"{ai.bot_name().upper()} – HILFE",
                         (88, 101, 242), entries, subtitle="Kategorie unten antippen")
                 else:
-                    titel, farbe, entries = _HELP_DATA[key]
+                    titel, farbe, _alle = _HELP_DATA[key]
                     buf = await asyncio.to_thread(render.help_card, titel,
-                                                  _rgb(farbe), entries)
+                                                  _rgb(farbe), _hilfe_eintraege(key))
                 png = buf.getvalue()
                 self._help_png_cache[(key, ai.bot_name())] = png
             except Exception:  # noqa: BLE001 - dann eben Text-Fallback
@@ -1504,6 +1564,12 @@ class FloBot(discord.Client):
         """Wechselt den Status-Text (Bot bleibt 'idle') - hoechstens alle
         STATUS_WECHSEL_SEKUNDEN - und schreibt den Namensverlauf weg."""
         jetzt = time.monotonic()
+        # Einmal je Takt auf die Uhr schauen: uhr.stabil() merkt einen Sprung
+        # nur, wenn jemand fragt. Dieser Loop laeuft immer (auch ohne ein
+        # einziges Modul aus dem Server-Leben) - so steht der Sprung beim
+        # Booten nach Sekunden im Log, nicht erst beim naechsten Monatswechsel,
+        # und die Gnade danach zaehlt ab dem Sprung.
+        uhr.stabil()
         # Hat Flo eine neue Laune, zeigt der Status sie im naechsten Takt -
         # nicht erst, wenn der Spruch sowieso dran waere.
         if LAUNEN_ENABLED and self._laune_gewechselt():
@@ -1628,7 +1694,12 @@ class FloBot(discord.Client):
         Servern es an ist (features.is_on_in). Wer nach der Wanduhr plant,
         fragt uhr.stabil() und merkt sich, was er erledigt hat, als Schluessel,
         der nur vorwaerts laeuft: so feuert nach einem Uhrsprung nichts doppelt,
-        und das Nachhol-Fenster sorgt dafuer, dass kein Tag ausfaellt."""
+        und das Nachhol-Fenster sorgt dafuer, dass kein Tag ausfaellt.
+
+        Jedes Modul bekommt hoechstens ALLTAG_FRIST - wer haengt (Netz, KI
+        ohne eigene Frist), wird abgebrochen, statt alle anderen aufzuhalten.
+        Die Sendepause prueft der Takt NICHT: was ein Modul von sich aus
+        postet, fragt admin.is_locked() selbst (und holt danach nach)."""
         # Bei jedem Takt einmal auf die Uhr schauen - so faellt ein Sprung auch
         # dann auf, wenn gerade kein Modul nach ihr fragt.
         uhr.stabil()
@@ -1646,7 +1717,10 @@ class FloBot(discord.Client):
             if not geladen:
                 continue
             try:
-                await modul.tick(self)
+                await asyncio.wait_for(modul.tick(self), ALLTAG_FRIST)
+            except asyncio.TimeoutError:
+                log.error("%s-Takt hing laenger als %.0f s - abgebrochen, die "
+                          "naechste Runde versucht es neu.", name, ALLTAG_FRIST)
             except Exception:
                 log.exception("%s-Takt fehlgeschlagen - laeuft weiter", name)
 
@@ -1826,7 +1900,26 @@ class FloBot(discord.Client):
     @tasks.loop(seconds=LOTTO_TICK_SECONDS)
     async def lotto_loop(self):
         """Prueft den Monatswechsel: ist ein Monat rum, wird gezogen und der
-        Gewinner oeffentlich ausgerufen. Sonst No-op (siehe lotto.tick)."""
+        Gewinner oeffentlich ausgerufen. Sonst No-op (siehe lotto.tick).
+
+        Haelt nur die Uhr die Ziehung auf (die erste Runde nach dem Start
+        faellt immer in uhr.START_GNADE), holt _lotto_nachholen sie nach,
+        sobald die Uhr stabil ist - nicht erst sechs Stunden spaeter."""
+        await self._lotto_runde()
+        if lotto.wartet_auf_uhr() and (self._lotto_nachholer is None
+                                       or self._lotto_nachholer.done()):
+            self._lotto_nachholer = self._spawn(self._lotto_nachholen())
+
+    async def _lotto_nachholen(self):
+        """Wartet, bis man der Uhr wieder traut, und zieht dann. Ein neuer
+        Sprung mittendrin verlaengert nur das Warten."""
+        while lotto.wartet_auf_uhr():
+            await asyncio.sleep(LOTTO_NACHHOL_SEKUNDEN)
+            if uhr.stabil():
+                await self._lotto_runde()
+
+    async def _lotto_runde(self):
+        """Eine Lotto-Pruefung: ziehen, wenn faellig, und ausrufen."""
         try:
             res = await lotto.tick()
         except Exception:
@@ -2367,6 +2460,15 @@ class FloBot(discord.Client):
                 nachhaken.note_message(message)
             except Exception:
                 log.exception("Nachhaken-Hook fehlgeschlagen")
+        # Flos Laune: hier ist was los. VOR den Spielen und Assistenten, die
+        # unten Zaehlen, Quiz-Antworten und eingefuegte Songs schlucken - die
+        # sieht laune.nachricht sonst nie, und Flo waere auf einem Server
+        # beleidigt, auf dem nur im Zaehl-Kanal geschrieben wird.
+        if mit_laune and not notlage:
+            try:
+                laune.aktiv(message)
+            except Exception:
+                log.exception("Launen-Hook (aktiv) fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and _on("food"):
             self._spawn(food.on_message_passive(message))
@@ -2748,9 +2850,13 @@ class FloBot(discord.Client):
         except Exception:  # noqa: BLE001 - Rechtsklick ist Zugabe, kein Startgrund
             log.exception("Rechtsklick-Befehle: Abgleich gescheitert")
 
-    async def _rk_darf(self, interaction, schalter, geladen):
+    async def _rk_darf(self, interaction, schalter, geladen, *, abkuehlen=True):
         """Dieselben Schranken wie im Chat: Server, Sendepause, Funktionsschalter,
-        dazu eine kurze Abkuehlzeit (jeder Klick ist ein KI-Aufruf)."""
+        dazu eine kurze Abkuehlzeit (jeder Klick ist ein KI-Aufruf).
+
+        abkuehlen=False fuer Eintraege ohne KI ('Als Zitat speichern'): die
+        teilen sich die Abkuehlzeit nicht - zwei Zitate hintereinander sind
+        kein Grund fuer "Chill mal", und sie sperren 'Flo, sag was dazu' nicht."""
         abfuhr = None
         uid = interaction.user.id
         if interaction.guild_id is None:
@@ -2759,13 +2865,14 @@ class FloBot(discord.Client):
             abfuhr = "Sendepause. Ich red gerade mit keinem - mit dir schon gar nicht."
         elif not (geladen and features.is_on_in(interaction.guild_id, schalter)):
             abfuhr = "Ist auf diesem Server abgeschaltet. Pech gehabt."
-        else:
+        elif abkuehlen:
             rest = (self._rechtsklick_zuletzt.get(uid, float("-inf"))
                     + self.RECHTSKLICK_ABKUEHLEN - time.monotonic())
             if rest > 0:
                 abfuhr = f"Chill mal. Noch {int(rest) + 1} s, dann darfst du wieder."
         if abfuhr is None:
-            self._rechtsklick_zuletzt[uid] = time.monotonic()
+            if abkuehlen:
+                self._rechtsklick_zuletzt[uid] = time.monotonic()
             return True
         try:
             await interaction.response.send_message(abfuhr, ephemeral=True)
@@ -2830,8 +2937,10 @@ class FloBot(discord.Client):
             log.exception("KI-Fehler: Rechtsklick-Antwort konnte nicht gesendet werden")
 
     async def _rk_zitat(self, interaction, nachricht: discord.Message):
-        """Rechtsklick auf eine Nachricht -> Kandidat fuers Zitat der Woche."""
-        if not await self._rk_darf(interaction, "zitate", ZITATE_ENABLED):
+        """Rechtsklick auf eine Nachricht -> Kandidat fuers Zitat der Woche.
+        Ohne Abkuehlzeit: kein KI-Aufruf, und doppelt speichern faengt zitate ab."""
+        if not await self._rk_darf(interaction, "zitate", ZITATE_ENABLED,
+                                   abkuehlen=False):
             return
         log.info("Rechtsklick 'Als Zitat speichern' von %s auf %s",
                  interaction.user.display_name, nachricht.id)

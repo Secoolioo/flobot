@@ -1036,8 +1036,9 @@ class Track:
     requested_by_id: int = 0
     # Vom Endlos-Radio angehaengt, nicht gewuenscht.
     radio: bool = False
-    # Nach einem Neustart aus musikzustand.json zurueckgeholt - laeuft schon
-    # zum zweiten Mal an und zaehlt in der Musik-Statistik nicht noch einmal.
+    # Zurueckgeholt - nach einem Neustart aus musikzustand.json oder nach dem
+    # Parken (GuildPlayer._parken): laeuft schon zum zweiten Mal an und zaehlt
+    # in der Musik-Statistik nicht noch einmal.
     wiederhergestellt: bool = False
 
     # Kopfzeilen, die ffmpeg selbst setzen muss - die durchzureichen bricht die
@@ -2278,7 +2279,10 @@ class GuildPlayer:
                 # Die Uhr steht seit dem Abriss (heal: _uhr_nachfuehren,
                 # _abriss_merken, _reconnect) auf der zuletzt GEHOERTEN Stelle.
                 ab = min(self.position(), float(track.duration))
-            self.queue.insert(0, replace(track, weiter_ab=ab if ab >= 1.0 else 0.0))
+            # wiederhergestellt: 'weiter' startet ihn neu, aber er lief schon -
+            # fuers Musik-Wrapped zaehlt er nach jedem Netz-Aussetzer sonst doppelt.
+            self.queue.insert(0, replace(track, weiter_ab=ab if ab >= 1.0 else 0.0,
+                                         wiederhergestellt=True))
         self._vorladen_stoppen()
         self.current = None
         self._played = 0.0

@@ -107,6 +107,9 @@ class Lotto(FeatureBasis):
         self._geschuetzt = {}
         self._store = None
         self._win_chance = WIN_CHANCE
+        # Monatswechsel erkannt, aber die Uhr war noch nicht stabil (siehe
+        # tick) - bot.py holt die Ziehung dann nach, sobald sie es ist.
+        self._wartet_auf_uhr = False
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -219,15 +222,21 @@ class Lotto(FeatureBasis):
         st["entries"] = {}
 
     # --- Monats-Ziehung ---------------------------------------------------
+    def wartet_auf_uhr(self):
+        """Hat der letzte tick() die Ziehung nur wegen der Uhr verschoben?"""
+        return self._wartet_auf_uhr
+
     async def tick(self):
         """Von bot.py periodisch aufgerufen. Wechselt der Monat, wird der ALTE
         Monat ausgelost: JEDES Los gewinnt nur mit winziger Chance. Gewinnt jemand,
         gibt's einen frischen Jackpot - sonst rollt der (gewachsene) weiter.
 
         Rueckgabe:
-        - None            -> nichts zu tun
+        - None            -> nichts zu tun (oder: wartet auf die Uhr, siehe
+                             wartet_auf_uhr)
         - LottoResult(...) -> es wurde ausgelost (Ansage-Embed + Gewinner-IDs)
         """
+        self._wartet_auf_uhr = False
         if not self._enabled:
             return None
         st = self._state()
@@ -240,14 +249,19 @@ class Lotto(FeatureBasis):
         # NUR VORWAERTS. Mit '==' zaehlte jede Abweichung als neuer Monat -
         # auch ein Monat aus der Zukunft: springt die Uhr kurz nach dem Booten
         # zwei Stunden zurueck und liegt dazwischen ein Monatswechsel, wurde
-        # derselbe Monat zwei- bis dreimal ausgelost (uhr.py).
-        if not uhr.spaeter_als(self._month_str(), st["month"]):
+        # derselbe Monat zwei- bis dreimal ausgelost (uhr.py). Ein gespeicherter
+        # Monat WEIT in der Zukunft hielte die Ziehung dagegen fuer immer an,
+        # waehrend sich die Lose stapeln - den verwirft uhr.glaubhaft.
+        monat = self._month_str()
+        if not uhr.spaeter_als(monat, uhr.glaubhaft(st["month"], monat)):
             return None  # noch derselbe Monat - nichts auszulosen
-        # ... und erst, wenn man der Uhr wieder traut. Der naechste Takt holt
-        # die Ziehung nach (LOTTO_TICK_SECONDS) - verschoben, nicht verloren.
+        # ... und erst, wenn man der Uhr wieder traut. bot.py holt die Ziehung
+        # nach, sobald sie stabil ist (wartet_auf_uhr) - verschoben, nicht
+        # verloren, und nicht erst im naechsten 6-Stunden-Takt.
         if not uhr.stabil():
+            self._wartet_auf_uhr = True
             log.info("Lotto: Monatswechsel erkannt, die Uhr ist aber noch nicht "
-                     "stabil - Ziehung beim naechsten Takt.")
+                     "stabil - Ziehung, sobald sie es ist.")
             return None
         # Monat ist rum -> ziehen.
         result = self._draw()
@@ -698,5 +712,6 @@ setup = instance.setup
 is_enabled = instance.is_enabled
 handle = instance.handle
 tick = instance.tick
+wartet_auf_uhr = instance.wartet_auf_uhr
 buy = instance.buy
 withdraw = instance.withdraw

@@ -13,10 +13,22 @@ Wo was aufgerufen wird:
                                     geprueft hat
     ist_eigene_umfrage(msg) -> bool bot.on_message bei einem Umfrage-Ergebnis
                                     von Flo: gehoert es zur Zitat-Abstimmung?
-    ergebnis(msg)                   ... dann landet es hier statt bei umfrage
-    tick(client)                    bot.alltag_loop, jede Minute
+    ergebnis(msg)                   ... dann landet es hier statt bei umfrage.
+                                    Die Sendepause prueft bot.py hier NICHT
+                                    (anders als bei normalen Umfragen, deren
+                                    Ergebnis dann verfaellt) - der Sieger darf
+                                    nicht verloren gehen: in der Sendepause
+                                    nichts posten, tick() holt es nach
+    tick(client)                    bot.alltag_loop, jede Minute (hoechstens
+                                    bot.ALLTAG_FRIST, dann abgebrochen) - auch
+                                    hier selbst admin.is_locked() fragen
 
 Beim Import passiert nichts.
+
+'zitate' ist ab dem Fundament ein eigener Befehl (cmdnorm.KNOWN). Vorher machte
+die Tippfehler-Korrektur daraus 'zitat' und damit media's Quote-Meme; bis
+dieses Modul gefuellt ist, faellt 'flo zitate' zur KI durch. Gewollt - das
+Wort gehoert dem Zitat der Woche.
 """
 
 import logging

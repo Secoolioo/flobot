@@ -1307,11 +1307,16 @@ class FloAI:
         # Flos Tageslaune (laune.py) faerbt nur den TON. Sie steht hinter der
         # Grenze und vor dem Schlusswort, beides gewinnt also - und in einer
         # Notlage kommt sie gar nicht erst mit: wer am Boden ist, kriegt keinen
-        # gereizten Flo. Lazy importiert wie gehirn (laune importiert ai).
+        # gereizten Flo. 'notlage' heisst hier: irgendwo im Gespraech, das mit
+        # in den Prompt geht (_notlage_im_verlauf). Und nur, wenn das Modul
+        # laeuft UND der Server die Launen nicht abgeschaltet hat - wie beim
+        # Status in bot.py. Lazy importiert wie gehirn (laune importiert ai).
         if gid and not notlage:
             try:
+                import features
                 import laune
-                base += laune.prompt_zeile(gid)
+                if laune.is_enabled() and features.is_on_in(gid, "launen"):
+                    base += laune.prompt_zeile(gid)
             except Exception:  # noqa: BLE001 - ohne Laune redet er trotzdem
                 pass
         if bavarian:
@@ -1589,6 +1594,17 @@ class FloAI:
             "t": time.monotonic(),
         })
 
+    def _notlage_im_verlauf(self, history):
+        """Ein Notsignal in einer der Nutzer-Zeilen, die mit in den Prompt gehen?
+
+        Nur fuer die Laune (_system_prompt): wer vor zehn Minuten geschrieben
+        hat, dass er nicht mehr will, bekommt jetzt keinen gereizten Flo - auch
+        wenn die neue Frage harmlos ist. An der Antwort selbst (Notlagen-Regel,
+        Ersatzsatz) aendert das nichts."""
+        return any(e.get("role") == "user"
+                   and self._NOTLAGE_RE.search(str(e.get("content") or ""))
+                   for e in history)
+
     def _recent(self, channel_id, skip_content = ""):
         """Baut den juengsten Gespraechsverlauf als LLM-Nachrichten. 'skip_content'
         laesst die aktuelle Frage weg (die wird separat als letzte user-Nachricht
@@ -1649,8 +1665,9 @@ class FloAI:
                                skip_content=(verlauf_frage or user_message).strip())
         messages = [
             {"role": "system",
-             "content": self._system_prompt(author, title, tone, bavarian, gid, uid,
-                                            notlage=notlage)},
+             "content": self._system_prompt(
+                 author, title, tone, bavarian, gid, uid,
+                 notlage=notlage or self._notlage_im_verlauf(history))},
             *history,
             {"role": "user", "content": text},
         ]
@@ -1803,8 +1820,10 @@ class FloAI:
         history = self._recent(channel_id, skip_content=(user_message or "").strip())
         messages = [
             {"role": "system",
-             "content": self._system_prompt(author, title, tone, bavarian, gid, uid,
-                                            notlage=self.ist_notlage(user_message))},
+             "content": self._system_prompt(
+                 author, title, tone, bavarian, gid, uid,
+                 notlage=(self.ist_notlage(user_message)
+                          or self._notlage_im_verlauf(history)))},
             *history,
             {"role": "user", "content": [
                 {"type": "text", "text": text},

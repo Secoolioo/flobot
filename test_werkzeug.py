@@ -34,20 +34,61 @@ def test_attrappe_kann_alles_was_der_store_kann():
     # hatten eine lokale 'class FakeStore' nur mit save(): sobald economy
     # gesammelt speichert (save_soon), platzte das Speichern - im Log stand
     # "Speichern nach dem Raub fehlgeschlagen", und der Test war trotzdem gruen.
+    # Dasselbe ohne Klasse: ein SimpleNamespace(data=..., save=...) oder ein
+    # type("S", ...)() als _store/_stats - die konnten noch weniger.
     import ast
     import pathlib
+    import re
     zu_klein = []
     for pfad in sorted(pathlib.Path(".").glob("test*.py")):
         for knoten in ast.walk(ast.parse(pfad.read_text(encoding="utf-8"))):
-            if not (isinstance(knoten, ast.ClassDef) and "store" in knoten.name.lower()):
-                continue
-            kann = {k.name for k in knoten.body
-                    if isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef))}
-            if not {"save_soon", "flush_now"} <= kann:
-                zu_klein.append(f"{pfad.name}:{knoten.lineno} class {knoten.name}")
+            fund = _eigene_store_attrappe(knoten, ast, re)
+            if fund:
+                zu_klein.append(f"{pfad.name}:{knoten.lineno} {fund}")
     assert not zu_klein, (
         "Diese Store-Attrappen koennen weniger als der echte Store - "
         "testhilfe._FakeStore nehmen:\n  " + "\n  ".join(zu_klein))
+
+    # Der Waechter selbst: er findet beide Formen und schont, was nur zufaellig
+    # 'store' im Namen hat ('_RestoreProbe').
+    probe = ast.parse(
+        "class FakeStore:\n    async def save(self): pass\n"
+        "class _RestoreProbe:\n    pass\n"
+        "class Attrappe_store:\n    pass\n"
+        "x._store = SimpleNamespace(data={}, save=lambda: None)\n"
+        "y.instance._stats = type('S', (), {'data': {}})()\n"
+        "z._store = _FakeStore({})\n"
+        "w._store = None\n")
+    gefunden = [f for f in (_eigene_store_attrappe(k, ast, re) for k in ast.walk(probe)) if f]
+    assert gefunden == ["class FakeStore", "class Attrappe_store",
+                        "_store = SimpleNamespace(...)", "_stats = type(...)()"], gefunden
+
+
+def _eigene_store_attrappe(knoten, ast, re):
+    """Ist dieser AST-Knoten eine selbstgebaute Store-Attrappe? -> Beschreibung
+    oder "". Eine Klasse zaehlt, wenn ihr Name ein eigenes Wort 'store' traegt
+    ('FakeStore', 'Attrappe_store' - nicht '_RestoreProbe') und save_soon oder
+    flush_now fehlt; eine Zuweisung an ._store/._stats, wenn der Wert ein
+    SimpleNamespace(...) oder ein type(...)() ist."""
+    if isinstance(knoten, ast.ClassDef):
+        if not re.search(r"(?:^|_)[Ss]tore|Store", knoten.name):
+            return ""
+        kann = {k.name for k in knoten.body
+                if isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        return "" if {"save_soon", "flush_now"} <= kann else f"class {knoten.name}"
+    if not isinstance(knoten, ast.Assign) or not isinstance(knoten.value, ast.Call):
+        return ""
+    ziele = [z.attr for z in knoten.targets
+             if isinstance(z, ast.Attribute) and z.attr in ("_store", "_stats")]
+    if not ziele:
+        return ""
+    aufruf = knoten.value.func
+    if isinstance(aufruf, ast.Name) and aufruf.id == "SimpleNamespace":
+        return f"{ziele[0]} = SimpleNamespace(...)"
+    if (isinstance(aufruf, ast.Call) and isinstance(aufruf.func, ast.Name)
+            and aufruf.func.id == "type"):
+        return f"{ziele[0]} = type(...)()"
+    return ""
 
 
 
@@ -468,7 +509,8 @@ def test_beenden_sichert_alles_auch_schulden_und_handel():
            handel.instance._store)
     schulden.instance._store = _FakeStore({})
     schulden.instance._save = lambda: merke("schulden")
-    handel.instance._store = SimpleNamespace(save=lambda: merke("handel"))
+    handel.instance._store = _FakeStore({})
+    handel.instance._store.save = lambda: merke("handel")
     geschlossen = []
 
     async def zu(_self):
@@ -519,8 +561,10 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
     schritte = []
 
     def schritt(name, fehler=False, dauer=0.0):
-        async def ausfuehren(*_a):
-            schritte.append(name)
+        async def ausfuehren(*_a, **kw):
+            # Das erste Sichern laeuft mit vor_abmelden=True (Warteschlange,
+            # Playlist-Assistenten), das Nachsichern ohne.
+            schritte.append(f"{name} (vorher)" if kw.get("vor_abmelden") else name)
             if dauer:
                 await asyncio.sleep(dauer)
             if fehler:
@@ -543,7 +587,7 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
                 mock.patch.object(ai, "aclose", schritt("ki")):
             herunterfahren()
             # Nachgesichert wird ALLES (Schulden, Handel, ...), nicht nur economy.
-            assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+            assert schritte == ["sichern (vorher)", "panel", "discord", "sichern", "ki"], schritte
 
             # --check/--once laufen womoeglich NEBEN dem Dienst - dort wird
             # nichts geschrieben, geschlossen aber schon.
@@ -564,7 +608,7 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
                 mock.patch.object(discord.Client, "close", schritt("discord")), \
                 mock.patch.object(ai, "aclose", schritt("ki")):
             herunterfahren()
-        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+        assert schritte == ["sichern (vorher)", "panel", "discord", "sichern", "ki"], schritte
 
         # Ein haengendes Web-Panel (offene BotSicht-Leitung: gemessen 46 s)
         # haelt das Abmelden nicht auf - nach PANEL_FRIST geht es weiter.
@@ -578,7 +622,7 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
                 mock.patch.object(bot.FloBot, "PANEL_FRIST", 0.05):
             herunterfahren()
         assert time.monotonic() - start < 5, "haengendes Panel blockiert das Beenden"
-        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+        assert schritte == ["sichern (vorher)", "panel", "discord", "sichern", "ki"], schritte
 
         # Bricht jemand SEIN Warten ab (etwa ein abgebrochener Neustart-Task),
         # laeuft das Herunterfahren trotzdem bis zum Ende durch.
@@ -596,7 +640,7 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
                 mock.patch.object(discord.Client, "close", schritt("discord")), \
                 mock.patch.object(ai, "aclose", schritt("ki")):
             asyncio.run(abgebrochen())
-        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+        assert schritte == ["sichern (vorher)", "panel", "discord", "sichern", "ki"], schritte
     finally:
         bot.MODE = alt_modus
         bot.client._schliessen = None

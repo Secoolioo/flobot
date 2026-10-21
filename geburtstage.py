@@ -6,7 +6,10 @@ Haken ist ein No-op. Der Teil "Server-Leben" fuellt nur diese Datei.
 
 Wo was aufgerufen wird:
     handle(message)   Handler-Kette, nach umfrage
-    tick(client)      bot.alltag_loop, jede Minute
+    tick(client)      bot.alltag_loop, jede Minute (hoechstens
+                      bot.ALLTAG_FRIST, dann abgebrochen). Die Sendepause
+                      prueft bot.py hier NICHT - selbst admin.is_locked()
+                      fragen und den Glueckwunsch danach nachholen
 
 Beim Import passiert nichts.
 """

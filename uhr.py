@@ -10,6 +10,8 @@ Flo kann vorher starten. Fuer alles, was nach der Wanduhr plant, heisst das:
   einmal morgen. Deshalb gibt es hier Schluessel ('2026-10-21', '2026-10',
   '2026-W43'), die NUR VORWAERTS verglichen werden (spaeter_als). Wer etwas
   erledigt hat, merkt sich den Schluessel; ein kleinerer ist dann nie "neu".
+  Ein gespeicherter Schluessel, der WEIT in der Zukunft liegt, hielte so
+  alles an - glaubhaft() verwirft ihn (siehe dort).
 * stabil() sagt, ob man der Wanduhr gerade trauen kann: nicht in den ersten
   Minuten nach dem Start (UHR_START_GNADE) und nicht kurz nach einem Sprung.
   Wer nach der Uhr plant, wartet so lange - und holt danach auf (jeder Plan
@@ -23,8 +25,9 @@ nur fuer diesen Lauf.
 
 import logging
 import os
+import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as tageszeit, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 log = logging.getLogger("dcbot.uhr")
@@ -53,6 +56,39 @@ def spaeter_als(neu, alt):
     return str(neu or "") > str(alt or "")
 
 
+# Wie die Schluessel aussehen - naechster_key rechnet von dort eine Einheit weiter.
+_TAG_RE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})")
+_MONAT_RE = re.compile(r"([0-9]{4})-([0-9]{2})")
+_WOCHE_RE = re.compile(r"([0-9]{4})-W([0-9]{2})")
+
+
+def naechster_key(key):
+    """Der Schluessel eine Einheit nach 'key': '2026-10-21' -> '2026-10-22',
+    '2026-12' -> '2027-01', '2026-W53' -> '2027-W01'. "" fuer alles, was
+    kein Schluessel ist (auch ein 31. Februar)."""
+    key = str(key or "")
+    try:
+        m = _TAG_RE.fullmatch(key)
+        if m:
+            tag = date(int(m[1]), int(m[2]), int(m[3])) + timedelta(days=1)
+            return tag.strftime("%Y-%m-%d")
+        m = _MONAT_RE.fullmatch(key)
+        if m:
+            jahr, monat = int(m[1]), int(m[2])
+            if not 1 <= monat <= 12:
+                return ""
+            jahr, monat = (jahr + 1, 1) if monat == 12 else (jahr, monat + 1)
+            return f"{jahr:04d}-{monat:02d}"
+        m = _WOCHE_RE.fullmatch(key)
+        if m:
+            montag = date.fromisocalendar(int(m[1]), int(m[2]), 1) + timedelta(days=7)
+            jahr, woche, _tag = montag.isocalendar()
+            return f"{jahr}-W{woche:02d}"
+    except ValueError:
+        return ""
+    return ""
+
+
 class Uhr:
     """Wanduhr mit Sprung-Erkennung.
 
@@ -67,6 +103,9 @@ class Uhr:
         self._start = mono()
         self._versatz = zeit() - self._start
         self._sprung_um = float("-inf")     # monotonic des letzten Sprungs ('nie')
+        # Gespeicherte Schluessel, die glaubhaft() schon verworfen hat - jeder
+        # steht nur EINMAL im Log.
+        self._verworfen = set()
 
     # --- Jetzt und die Schluessel ------------------------------------------
     def jetzt(self):
@@ -110,15 +149,44 @@ class Uhr:
             return False
         return mono - self._sprung_um >= SPRUNG_GNADE
 
+    def glaubhaft(self, alt, jetzt_key):
+        """Ein gespeicherter Schluessel so, wie spaeter_als ihn sehen soll.
+
+        NUR VORWAERTS hat eine Kehrseite: ein Schluessel aus der Zukunft haelt
+        den Plan an, bis die Uhr ihn eingeholt hat. Eine Einheit voraus ist
+        normal - vor dem Sprung zurueck war schon morgen bzw. naechster Monat.
+        Liegt er WEITER vorn (ein groesserer Sprung, eine Datei von einem
+        anderen Rechner), stuende alles wochen- oder jahrelang still: kein
+        Aktien-Tageschart, keine Lotto-Ziehung, waehrend sich die Lose stapeln.
+        Das alte '!=' hatte sich da selbst geheilt. Deshalb gilt so ein
+        Schluessel bei stabiler Uhr als kaputt: "" = "noch nie", und der Plan
+        laeuft ab jetzt weiter. Bei unstabiler Uhr bleibt er stehen - dann ist
+        nicht klar, welche der beiden Uhren luegt.
+
+        jetzt_key ist der Schluessel, den der Aufrufer gerade rechnet (Tag,
+        Monat oder Woche - dieselbe Art wie 'alt')."""
+        alt = str(alt or "")
+        grenze = naechster_key(jetzt_key)
+        if not alt or not grenze or not spaeter_als(alt, grenze):
+            return alt
+        if not self.stabil():
+            return alt
+        if alt not in self._verworfen:
+            self._verworfen.add(alt)
+            log.warning("Uhr: gespeicherter Stand '%s' liegt mehr als einen Schritt "
+                        "nach '%s' - gilt als kaputt, es geht ab jetzt weiter.",
+                        alt, jetzt_key)
+        return ""
+
     # --- discord.py-Loops ----------------------------------------------------
     @staticmethod
-    def _probe_loop():
+    def _probe_loop(**takt):
         """Ein nie gestarteter Loop - nur, um sein Innenleben anzusehen."""
         from discord.ext import tasks
 
         async def _nichts():
             return None
-        return tasks.loop(seconds=1)(_nichts)
+        return tasks.loop(**takt)(_nichts)
 
     def zeitsprungfest_machen(self):
         """Relative tasks.loop (seconds=...) planen ab JETZT statt ab der
@@ -135,12 +203,23 @@ class Uhr:
              einen Takt - fuer den Sprung, der genau in seinen Rumpf faellt
              (dort ist die naechste Runde schon geplant).
         Loops mit fester Uhrzeit (2-Uhr-Shop, 18-Uhr-Erinnerung) bleiben,
-        wie sie sind: wacht so einer zu frueh auf, legt discord.py sich selbst
-        bis zur Uhrzeit wieder hin.
+        wie sie sind. Wacht so einer nach dem Sprung zu FRUEH auf, legt
+        discord.py ihn selbst bis zur Uhrzeit wieder hin. Was das nicht heilt:
+        plant er seine erste Runde, solange die Uhr noch zwei Stunden vorgeht
+        (Start zwischen 0 und 2 bzw. 16 und 18 Uhr), ist die Uhrzeit fuer ihn
+        heute schon vorbei - er schlaeft bis morgen, und die Runde von heute
+        faellt aus: 2-Uhr-Shop samt Vermoegenssteuer, 18-Uhr-Erinnerung. Das
+        war vor dem Flicken genauso; den Shop wuerfelt der Start ohnehin neu
+        (economy.refresh_shop), die Steuer fehlt dann einen Tag.
 
         discord.py ist nur als '>=2.7.1,<3' festgelegt, und beides ist
-        Innenleben. Passt es nicht mehr, wird nichts geraten: eine Warnung,
-        kein Flicken. Rueckgabe: True = geflickt (auch: war es schon)."""
+        Innenleben. Geprueft wird deshalb nicht nur, ob es die Teile gibt,
+        sondern auch, ob sie noch dasselbe BEDEUTEN: der Flicken erkennt einen
+        relativen Loop an '_sleep is not MISSING'. Speicherte eine neue Version
+        fuer feste Uhrzeiten dort None oder 0, planten 2-Uhr-Shop und
+        Erinnerung mit timedelta(seconds=None) - und stuerben. Passt es nicht,
+        wird nichts geraten: eine Warnung, kein Flicken. Rueckgabe: True =
+        geflickt (auch: war es schon)."""
         try:
             from discord.ext import tasks
             from discord.utils import MISSING
@@ -149,11 +228,16 @@ class Uhr:
             alt_schlaf = getattr(klasse, "_try_sleep_until", None)
             if getattr(alt_plan, "_flo_zeitsprungfest", False):
                 return True
-            probe = self._probe_loop()
+            relativ = self._probe_loop(seconds=1)
+            fest = self._probe_loop(time=tageszeit(hour=2, tzinfo=timezone.utc))
+            teile = ("_sleep", "_time", "_last_iteration", "_next_iteration")
             passt = (callable(alt_plan) and callable(alt_schlaf)
-                     and isinstance(probe, klasse)
-                     and hasattr(probe, "_sleep") and hasattr(probe, "_last_iteration")
-                     and hasattr(probe, "_next_iteration"))
+                     and isinstance(relativ, klasse) and isinstance(fest, klasse)
+                     and all(hasattr(p, t) for p in (relativ, fest) for t in teile)
+                     # ... und was der Flicken daraus liest: relativ = Takt in
+                     # Sekunden und keine Uhrzeit, fest = umgekehrt.
+                     and relativ._sleep == 1.0 and relativ._time is MISSING
+                     and fest._sleep is MISSING and fest._time is not MISSING)
         except Exception as exc:  # noqa: BLE001 - lieber ungeflickt als kein Start
             log.warning("Uhr: discord.py-Loops nicht pruefbar (%s: %s) - relative "
                         "Loops bleiben ungeflickt.", type(exc).__name__, exc)
@@ -198,4 +282,5 @@ monat_key = instance.monat_key
 vormonat_key = instance.vormonat_key
 woche_key = instance.woche_key
 stabil = instance.stabil
+glaubhaft = instance.glaubhaft
 zeitsprungfest_machen = instance.zeitsprungfest_machen

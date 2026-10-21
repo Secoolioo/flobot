@@ -25,6 +25,7 @@ EINE Wahrheit ueber die Einstellungen, nicht zwei.
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 
 import discord
@@ -590,20 +591,34 @@ class GuildConfig(FeatureBasis):
         return bool(getattr(rechte, "manage_guild", False))
 
     # --- Befehl -----------------------------------------------------------
+    @staticmethod
+    def _geladen():
+        """Welche Module beim Start hochgekommen sind ({key: bool} aus bot.py,
+        wie einstellungen._geladen) - {} ohne laufenden Bot."""
+        modul = sys.modules.get("bot")
+        return dict(getattr(modul, "FEATURE_LOADED", {}) or {}) if modul else {}
+
     async def _funktionen(self, message, rest):
         """'Flo funktionen' / 'Flo funktion casino aus' - je Server.
 
         Bisher gab es diese Schalter NUR im Web-Panel. Wer kein Panel offen
-        hatte, konnte auf seinem eigenen Server das Casino nicht abschalten."""
+        hatte, konnte auf seinem eigenen Server das Casino nicht abschalten.
+
+        Was beim Start gar nicht hochkam (kein ffmpeg, keine KI, ein Teil, der
+        erst noch gebaut wird), steht als ⚪ "nicht geladen" da - wie im
+        Panel. Vorher war es gruen, und wer es probierte, bekam die KI."""
         import features
         gid = message.guild.id
         if not rest:
+            geladen = self._geladen()
             zeilen = []
             for eintrag in features.CATALOG:
                 an = features.is_on_in(gid, eintrag["key"])
                 global_aus = not features.is_on(eintrag["key"])
                 zeichen = "🟢" if an else "🔴"
                 notiz = " _(global aus)_" if global_aus else ""
+                if geladen and not geladen.get(eintrag["key"], False):
+                    zeichen, notiz = "⚪", " _(nicht geladen)_"
                 zeilen.append(f"{zeichen} `{eintrag['key']}` – {eintrag['label']}{notiz}")
             emb = discord.Embed(
                 title="🧩 Funktionen auf diesem Server",

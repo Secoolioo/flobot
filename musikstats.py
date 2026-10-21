@@ -8,8 +8,13 @@ False, und jeder Haken ist ein No-op. Der Musik-Teil fuellt nur diese Datei
 Wo was aufgerufen wird:
     handle(message)        Handler-Kette, direkt VOR music.handle
     notieren(gid, track)   music.verlauf_notieren, SYNCHRON, bei jedem neu
-                           gestarteten Song (nicht bei wiederhergestellten)
-    tick(client)           bot.alltag_loop, jede Minute
+                           gestarteten Song - nicht bei wiederhergestellten
+                           (nach einem Neustart oder nach dem Parken: die
+                           liefen schon einmal)
+    tick(client)           bot.alltag_loop, jede Minute (hoechstens
+                           bot.ALLTAG_FRIST, dann abgebrochen). Die Sendepause
+                           prueft bot.py hier NICHT - selbst admin.is_locked()
+                           fragen und das Wrapped danach nachholen
 
 Beim Import passiert nichts.
 """

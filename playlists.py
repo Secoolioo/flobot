@@ -10,9 +10,18 @@ Wo bot.py was aufruft:
     handle(message)              Handler-Kette, direkt VOR music.handle
     on_message_passive(message)  passiver Haken direkt nach dem Giveaway-
                                  Assistenten, vor der Ansprache-Pruefung:
-                                 True = die Nachricht gehoerte dem Assistenten
-    tick(client)                 im Voice-Watchdog-Takt (alle 15 s)
-    offene_sichern()             beim Herunterfahren, vor store.alle_sichern
+                                 True = die Nachricht gehoerte dem Assistenten.
+                                 Laeuft VOR der Sendepause-Pruefung von bot.py -
+                                 in der Sendepause selbst admin.is_locked()
+                                 fragen, bevor der Assistent antwortet
+    tick(client)                 im Voice-Watchdog-Takt (alle 15 s) - auch hier
+                                 prueft bot.py die Sendepause nicht
+    offene_sichern()             beim Herunterfahren: EINMAL, im ersten
+                                 Durchgang VOR dem Abmelden, vor
+                                 store.alle_sichern. Idempotent halten: ein
+                                 gespeicherter Assistent ist danach zu (sonst
+                                 haengt ein zweiter Aufruf seine Songs doppelt
+                                 an eine bestehende Playlist)
     DYNAMISCHE_KNOEPFE           werden in setup_hook angemeldet
                                  (bot.DYNAMISCHE_MODULE)
 
@@ -65,7 +74,8 @@ class Playlists(FeatureBasis):
         return None
 
     async def offene_sichern(self):
-        """Beim Herunterfahren: Assistenten mit Songs noch speichern."""
+        """Beim Herunterfahren: Assistenten mit Songs noch speichern - und
+        schliessen, damit ein zweiter Aufruf nichts doppelt anhaengt."""
         return None
 
 

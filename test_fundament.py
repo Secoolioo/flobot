@@ -41,7 +41,10 @@ NEUE_MODULE = {
 
 
 class _Mitschnitt:
-    """Faengt Log-Eintraege eines Loggers mit (als Kontext)."""
+    """Faengt Log-Eintraege eines Loggers mit (als Kontext) - und NUR hier:
+    was ein Test absichtlich ausloest (ein Uhrsprung, ein kaputter Takt),
+    stand sonst bei jedem 'lauf.py --leise' als echte Warnung im Lauf, als
+    waere im Betrieb etwas schiefgegangen."""
 
     def __init__(self, name):
         self.logger = logging.getLogger(name)
@@ -50,14 +53,16 @@ class _Mitschnitt:
         self.griff.emit = self.eintraege.append
 
     def __enter__(self):
-        self.alt_stufe = self.logger.level
+        self.alt = (self.logger.level, self.logger.propagate)
         self.logger.addHandler(self.griff)
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
         return self
 
     def __exit__(self, *_a):
         self.logger.removeHandler(self.griff)
-        self.logger.setLevel(self.alt_stufe)
+        self.logger.setLevel(self.alt[0])
+        self.logger.propagate = self.alt[1]
         return False
 
     def ab(self, stufe):
@@ -152,8 +157,43 @@ def test_uhr_stabil_erst_nach_der_startgnade_und_nicht_nach_einem_sprung():
     assert u.tag_key() == datetime.fromtimestamp(wand[0], uhr.TIMEZONE).strftime("%Y-%m-%d")
 
     # Vorwaerts zaehlt genauso.
-    weiter(10, sprung=+7200)
-    assert u.stabil() is False
+    with _Mitschnitt("dcbot.uhr"):
+        weiter(10, sprung=+7200)
+        assert u.stabil() is False
+
+
+def test_uhr_verwirft_schluessel_weit_in_der_zukunft():
+    """Nur vorwaerts hiesse sonst: ein gespeicherter Tag aus dem Jahr 2999
+    (kaputte Datei, Uhr eines anderen Rechners) haelt den Plan fuer immer an.
+    Eine Einheit voraus ist normal (vor dem Sprung zurueck war schon morgen) -
+    mehr gilt bei stabiler Uhr als kaputt, und das steht einmal im Log."""
+    nk = uhr.naechster_key
+    assert nk("2026-10-21") == "2026-10-22" and nk("2026-02-28") == "2026-03-01"
+    assert nk("2026-12-31") == "2027-01-01"
+    assert nk("2026-10") == "2026-11" and nk("2026-12") == "2027-01"
+    assert nk("2026-W43") == "2026-W44" and nk("2026-W53") == "2027-W01"
+    assert nk("2025-W52") == "2026-W01"
+    for kaputt in ("", None, "2026-02-31", "2026-13", "morgen", "2026-W60"):
+        assert nk(kaputt) == "", kaputt
+
+    stabil = [True]
+    u = uhr.Uhr()
+    with mock.patch.object(u, "stabil", lambda: stabil[0]), \
+            _Mitschnitt("dcbot.uhr") as mit:
+        assert u.glaubhaft("2026-10-22", "2026-10-21") == "2026-10-22"   # morgen: ok
+        assert u.glaubhaft("2026-10-20", "2026-10-21") == "2026-10-20"
+        assert u.glaubhaft("", "2026-10-21") == "" and u.glaubhaft(None, "2026-10") == ""
+        assert u.glaubhaft("2026-11", "2026-10") == "2026-11"
+        assert u.glaubhaft("2026-W44", "2026-W43") == "2026-W44"
+        for _ in range(3):
+            assert u.glaubhaft("2999-01-01", "2026-10-21") == ""
+        assert u.glaubhaft("2026-12", "2026-10") == ""
+        assert u.glaubhaft("2026-W46", "2026-W43") == ""
+        # Bei unstabiler Uhr wird nichts verworfen - wer weiss, welche luegt.
+        stabil[0] = False
+        assert u.glaubhaft("2999-02-02", "2026-10-21") == "2999-02-02"
+    warnungen = [e.getMessage() for e in mit.ab(logging.WARNING)]
+    assert len(warnungen) == 3 and "2999-01-01" in warnungen[0], warnungen
 
 
 def test_relative_loops_planen_nach_dem_uhrsprung_ab_jetzt():
@@ -227,10 +267,25 @@ def test_zeitsprung_flicken_nur_bei_bekanntem_innenleben():
             return None
         with mock.patch.object(tasks.Loop, "_get_next_sleep_time", fremd), \
                 mock.patch.object(uhr.Uhr, "_probe_loop",
-                                  staticmethod(lambda: SimpleNamespace())):
+                                  staticmethod(lambda **_takt: SimpleNamespace())):
             assert frisch.zeitsprungfest_machen() is False
             assert tasks.Loop._get_next_sleep_time is fremd
-    assert len(mit.ab(logging.WARNING)) == 2, [e.getMessage() for e in mit.eintraege]
+        # 3) Die Teile gibt es noch, sie BEDEUTEN aber etwas anderes: ein Loop
+        #    mit fester Uhrzeit speichert None statt MISSING in _sleep. Der
+        #    Flicken hielte ihn fuer relativ, rechnete timedelta(seconds=None)
+        #    - und 2-Uhr-Shop samt Steuer stuerben. Also: nicht flicken.
+        echt = uhr.Uhr._probe_loop
+
+        def anders(**takt):
+            schleife = echt(**takt)
+            if "time" in takt:
+                schleife._sleep = None
+            return schleife
+        with mock.patch.object(tasks.Loop, "_get_next_sleep_time", fremd), \
+                mock.patch.object(uhr.Uhr, "_probe_loop", staticmethod(anders)):
+            assert frisch.zeitsprungfest_machen() is False
+            assert tasks.Loop._get_next_sleep_time is fremd
+    assert len(mit.ab(logging.WARNING)) == 3, [e.getMessage() for e in mit.eintraege]
 
     # Schon geflickt: True, und es wird nicht doppelt gewickelt.
     vorher = (tasks.Loop._get_next_sleep_time, tasks.Loop._try_sleep_until)
@@ -267,6 +322,13 @@ def test_neue_module_sind_ueberall_angemeldet():
         assert antwort is None, modul.__name__
     for wort in ("radio", "endlosradio", "autoplay", "geburtstag", "playlist"):
         assert wort in cmdnorm.ZUSTAND, wort
+    # Die neuen Woerter sind auch Tippfehler-Ziele - Alltagssaetze, die einen
+    # Buchstaben daneben liegen, duerfen dort nicht landen ('laue' ist ein
+    # Adjektiv, kein vertipptes 'laune').
+    for satz in ("laue luft heute", "lauen abend gehabt", "launen hast du",
+                 "zitaten von goethe", "moods heute", "rapped er jetzt"):
+        assert cmdnorm.normalize(satz) is None, satz
+    assert cmdnorm.normalize("luane") == "laune"          # echter Vertipper bleibt
     # Die neuen Hilfe-Seiten sind eigene Kategorien - und kein Alias, denn
     # 'playlist', 'zitate', 'geburtstage' sind selbst Befehle.
     assert {"playlist", "leben"} <= set(bot._HELP_DATA) and {"playlist", "leben"} <= set(bot._HELP_HINTS)
@@ -281,6 +343,70 @@ def test_neue_module_sind_ueberall_angemeldet():
                 "geburtstag_channel", "geburtstag_coins", "geburtstag_rolle"):
         assert guildcfg.instance.defn(key) is not None, key
         assert any(key in werte for werte in einstellungen.ZUORDNUNG.values()), key
+
+
+def test_hilfe_zeigt_nur_was_geladen_ist():
+    """Die neuen Seiten erscheinen, sobald EIN Modul darauf laeuft - ihre
+    Zeilen aber nur fuer Module, die wirklich geladen sind: 'flo nachhaken'
+    auf einem Server ohne KI, 'flo wrapped', solange es nur Playlists gibt,
+    fielen sonst zur KI durch. Und 'flo hilfe playlist' oeffnet die Seite,
+    waehrend 'flo playlist' ein Befehl bleibt."""
+    import bot
+    with _nur_geladen(bot, "MUSIC_ENABLED", "PLAYLISTS_ENABLED", "ZITATE_ENABLED"):
+        seiten = {k for k, _e, _l in bot.client._help_categories()}
+        assert {"playlist", "leben"} <= seiten, seiten
+        playlist = " ".join(b for b, _ in bot._hilfe_eintraege("playlist"))
+        assert "flo playlist neu" in playlist and "flo wrapped" not in playlist
+        assert "flo radio" in playlist, "Radio gehoert zur Musik selbst"
+        leben = [b for b, _ in bot._hilfe_eintraege("leben")]
+        assert leben == ["Rechtsklick → Apps → Als Zitat speichern",
+                         "flo zitate · zitat der woche"], leben
+        assert "nachhaken" not in bot._hilfe_befehle("leben")
+        assert bot._help_category_key("flo hilfe playlist") == "playlist"
+        assert bot._help_category_key("flo help leben?") == "leben"
+        assert bot._help_category_key("flo playlist") is None, "ein Befehl, keine Hilfe"
+        assert bot._help_category_key("flo leben") is None
+        assert bot._help_category_key("flo hilfe musik") == "musik"   # alter Weg
+    with _nur_geladen(bot, "MUSIC_ENABLED", "MUSIKSTATS_ENABLED", "LAUNEN_ENABLED",
+                      "NACHHAKEN_ENABLED", "GEBURTSTAGE_ENABLED"):
+        playlist = [b for b, _ in bot._hilfe_eintraege("playlist")]
+        assert "flo wrapped" in playlist and "flo playlists" not in playlist, playlist
+        leben = " ".join(b for b, _ in bot._hilfe_eintraege("leben"))
+        assert "flo laune" in leben and "flo nachhaken" in leben and "flo geburtstag" in leben
+        assert "Zitat" not in leben
+    with _nur_geladen(bot):
+        seiten = {k for k, _e, _l in bot.client._help_categories()}
+        assert not ({"playlist", "leben"} & seiten), seiten
+        assert bot._help_category_key("flo hilfe leben") is None
+
+
+def test_funktionen_zeigen_was_nicht_geladen_ist():
+    """'flo funktionen' zeigte alles gruen - auch, was beim Start gar nicht
+    hochkam (kein ffmpeg, keine KI, ein Teil, der noch ein Geruest ist). Wer
+    es probierte, bekam die KI. Jetzt ⚪ 'nicht geladen', wie im Panel."""
+    import bot
+    import features
+    import guildcfg
+    gesendet = []
+
+    async def senden(embed=None, **_kw):
+        gesendet.append(embed.description)
+
+    msg = SimpleNamespace(guild=SimpleNamespace(id=77), channel=SimpleNamespace(send=senden),
+                          author=SimpleNamespace(id=5))
+    with mock.patch.dict(bot.FEATURE_LOADED, {"launen": False, "casino": True}), \
+            mock.patch.object(features, "is_on_in", lambda _g, _k: True), \
+            mock.patch.object(features, "is_on", lambda _k: True):
+        asyncio.run(guildcfg.instance._funktionen(msg, []))
+    text = gesendet[0]
+    assert "⚪ `launen`" in text and "nicht geladen" in text, text
+    assert "🟢 `casino`" in text, text
+    # Ohne laufenden Bot (Werkzeuge) bleibt es beim alten Bild.
+    with mock.patch.dict(sys.modules, {"bot": None}), \
+            mock.patch.object(features, "is_on_in", lambda _g, _k: True), \
+            mock.patch.object(features, "is_on", lambda _k: True):
+        asyncio.run(guildcfg.instance._funktionen(msg, []))
+    assert "⚪" not in gesendet[1], gesendet[1]
 
 
 def test_rechtsklick_als_zitat_speichern():
@@ -311,11 +437,17 @@ def test_rechtsklick_als_zitat_speichern():
         klick = _Klick(uid=32, gid=77)
         asyncio.run(bot.client._rk_zitat(klick, nachricht))
         assert gerufen == [(32, 9)] and klick.arten() == ["send"]
+        # Kein KI-Aufruf, also keine Abkuehlzeit: das naechste Zitat geht
+        # gleich, und 'Flo, sag was dazu' ist danach nicht 20 s gesperrt.
+        klick = _Klick(uid=32, gid=77)
+        asyncio.run(bot.client._rk_zitat(klick, nachricht))
+        assert gerufen == [(32, 9), (32, 9)] and "Chill" not in klick.protokoll[0][1]
+        assert 32 not in bot.client._rechtsklick_zuletzt
 
         async def kaputt(_interaction, _nachricht):
             raise RuntimeError("absichtlich")
 
-        with mock.patch.object(bot.zitate, "rechtsklick", kaputt):
+        with mock.patch.object(bot.zitate, "rechtsklick", kaputt), _Mitschnitt("dcbot"):
             klick = _Klick(uid=33, gid=77)
             asyncio.run(bot.client._rk_zitat(klick, nachricht))
         assert klick.arten() == ["send"] and "schiefgelaufen" in klick.protokoll[0][1]
@@ -420,6 +552,7 @@ def test_launen_und_nachhaken_sehen_jede_nachricht_ausser_notlagen():
         return False
 
     with _nur_geladen(bot, "LAUNEN_ENABLED", "NACHHAKEN_ENABLED"), \
+            mock.patch.object(bot.laune, "aktiv", lambda msg: gesehen.append(("aktiv", msg.id))), \
             mock.patch.object(bot.laune, "nachricht", laune_haken), \
             mock.patch.object(bot.nachhaken, "note_message", notiz), \
             mock.patch.object(bot.nachhaken, "vielleicht_nachfragen", nachfragen):
@@ -429,7 +562,8 @@ def test_launen_und_nachhaken_sehen_jede_nachricht_ausser_notlagen():
             await asyncio.sleep(0)
 
         asyncio.run(lauf("morgen schreib ich die mathe pruefung", 1))
-        assert gesehen == [("notiz", 1), ("laune", 1, False), ("nachfragen", 1)], gesehen
+        assert gesehen == [("notiz", 1), ("aktiv", 1), ("laune", 1, False),
+                           ("nachfragen", 1)], gesehen
         gesehen.clear()
         asyncio.run(lauf("flo wie spaet ist es", 2))
         assert ("laune", 2, True) in gesehen and ("nachfragen", 2) not in gesehen, gesehen
@@ -448,6 +582,31 @@ def test_launen_und_nachhaken_sehen_jede_nachricht_ausser_notlagen():
         with mock.patch.object(bot.features, "fuer", lambda _g: (lambda key: False)):
             asyncio.run(lauf("morgen schreib ich die mathe pruefung", 10))
         assert gesehen == [], gesehen
+
+
+def test_laune_sieht_auch_was_spiele_und_assistenten_schlucken():
+    """Zaehlen, Quiz-Antworten, eingefuegte Songs: das schlucken Spiele und
+    Assistenten, bevor laune.nachricht drankommt. 'Hier ist was los' muss die
+    Laune trotzdem sehen - sonst ist Flo auf einem Server beleidigt, auf dem
+    nur im Zaehl-Kanal geschrieben wird."""
+    import bot
+    gesehen = []
+
+    async def spielzug(msg):
+        gesehen.append(("spiel", msg.id))
+        return True
+
+    with _nur_geladen(bot, "LAUNEN_ENABLED", "GAMES_ENABLED"), \
+            mock.patch.object(bot.laune, "aktiv", lambda msg: gesehen.append(("aktiv", msg.id))), \
+            mock.patch.object(bot.laune, "nachricht",
+                              lambda msg, an: gesehen.append(("laune", msg.id))), \
+            mock.patch.object(bot.games, "on_message_passive", spielzug):
+        asyncio.run(bot.client.on_message(_menschen_nachricht("41", 21)))
+        assert gesehen == [("aktiv", 21), ("spiel", 21)], gesehen
+        gesehen.clear()
+        # Notlage: auch kein "hier ist was los".
+        asyncio.run(bot.client.on_message(_menschen_nachricht("ich will nicht mehr leben", 22)))
+        assert gesehen == [("spiel", 22)], gesehen
 
 
 # --- Takte und Herunterfahren ---------------------------------------------------
@@ -504,14 +663,68 @@ def test_voice_takt_treibt_assistenten_und_musik_zustand():
             mock.patch.object(bot.music, "heal_voice", heilen), \
             mock.patch.object(bot.playlists, "tick", pl_tick), \
             mock.patch.object(bot.musikzustand, "takt", takt):
-        asyncio.run(bot.client.voice_heal_loop.coro(bot.client))
+        with _Mitschnitt("dcbot"):
+            asyncio.run(bot.client.voice_heal_loop.coro(bot.client))
     gerufen = [g for g in gerufen if g != "heal"]
     assert gerufen == ["playlists", "musikzustand"], gerufen
 
 
+def test_alltag_takt_bricht_haengende_module_ab():
+    """Ein Modul, das im Takt haengt (Netz, KI ohne eigene Frist), haelt nicht
+    alle anderen und jede weitere Runde auf - nach ALLTAG_FRIST ist Schluss."""
+    import bot
+    gerufen = []
+
+    async def haengt(client):
+        gerufen.append("laune")
+        await asyncio.sleep(3600)
+
+    async def zitate_tick(client):
+        gerufen.append("zitate")
+
+    alt_gw = (bot.client._gateway_weg_seit, bot.client._gateway_zurueck_um)
+    try:
+        with _nur_geladen(bot, "LAUNEN_ENABLED", "ZITATE_ENABLED", ALLTAG_FRIST=0.05), \
+                mock.patch.object(bot.laune, "tick", haengt), \
+                mock.patch.object(bot.zitate, "tick", zitate_tick), \
+                _Mitschnitt("dcbot") as mit:
+            bot.client._gateway_weg_seit, bot.client._gateway_zurueck_um = None, float("-inf")
+            start = time.monotonic()
+            asyncio.run(bot.client.alltag_loop.coro(bot.client))
+            dauer = time.monotonic() - start
+    finally:
+        bot.client._gateway_weg_seit, bot.client._gateway_zurueck_um = alt_gw
+    assert gerufen == ["laune", "zitate"], gerufen
+    assert dauer < 2, dauer
+    assert any("Launen-Takt hing" in e.getMessage() for e in mit.ab(logging.ERROR))
+
+
+def _herunterfahren(bot, abmelden):
+    """FloBot.close() wie beim Neustart (MODE 'loop'), mit Attrappen fuer Panel,
+    Discord und KI. 'abmelden' laeuft an der Stelle von discord.Client.close."""
+    async def nichts(*_a):
+        return None
+
+    async def discord_zu(_self):
+        abmelden()
+
+    with mock.patch.object(bot, "MODE", "loop"), \
+            mock.patch.object(bot.webpanel, "stop", nichts), \
+            mock.patch.object(discord.Client, "close", discord_zu), \
+            mock.patch.object(bot.ai, "aclose", nichts):
+        bot.client._schliessen = None
+        try:
+            asyncio.run(bot.client.close())
+        finally:
+            bot.client._schliessen = None
+
+
 def test_herunterfahren_sichert_warteschlange_und_assistenten():
     """Beides VOR store.alle_sichern - was sie dabei anstossen, schreibt der
-    letzte Schritt gleich mit auf die Platte."""
+    letzte Schritt gleich mit auf die Platte. Und beides nur EINMAL, VOR dem
+    Abmelden: beim Nachsichern hat discord.py die Voice-Verbindungen schon
+    getrennt - ein zweiter Schnappschuss saehe den Song nicht mehr, der lief,
+    und ein Assistent haengte seine Songs zweimal an."""
     import bot
     schritte = []
 
@@ -526,8 +739,53 @@ def test_herunterfahren_sichert_warteschlange_und_assistenten():
             mock.patch.object(bot.musikzustand, "sichern", schritt("musikzustand")), \
             mock.patch.object(bot.playlists, "offene_sichern", schritt("playlists")), \
             mock.patch.object(bot.store, "alle_sichern", schritt("speicher")):
+        asyncio.run(bot.client._alles_sichern(vor_abmelden=True))
+        assert schritte == ["musikzustand", "playlists", "speicher"], schritte
+        schritte.clear()
         asyncio.run(bot.client._alles_sichern())
-    assert schritte == ["musikzustand", "playlists", "speicher"], schritte
+        assert schritte == ["speicher"], schritte
+        # Der ganze Weg: sichern, abmelden (dabei meldet die Musik noch einen
+        # Player ohne Song), nachsichern - Warteschlange und Assistenten genau
+        # einmal, und zwar vor dem Abmelden.
+        schritte.clear()
+        with mock.patch.object(bot.musikzustand, "merken",
+                               lambda _p: schritte.append("merken")):
+            _herunterfahren(bot, lambda: bot.musikzustand.merken(
+                SimpleNamespace(guild_id=77, current=None)))
+    assert schritte == ["musikzustand", "playlists", "speicher", "merken",
+                        "speicher"], schritte
+
+
+def test_warteschlange_ueberlebt_das_abmelden():
+    """Der Vertrag fuer musikzustand (steht dort im Kopf): beim Abmelden trennt
+    discord.py jede Voice-Verbindung, der after-Callback schaltet weiter, und
+    music.py meldet einen Player OHNE Song. Was sichern() vorher auf die Platte
+    geschrieben hat, darf das nicht mehr aendern - sonst fehlt nach jedem
+    Neustart genau der Song, der lief. Solange musikzustand ein Geruest ist,
+    prueft das nur den Ablauf; ab dem Musik-Teil den echten Stand."""
+    import music
+    datei = store.DATA_DIR / "musikzustand.json"
+
+    def auf_platte():
+        return datei.read_text(encoding="utf-8") if datei.exists() else None
+
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = 77
+    try:
+        with _mit_setup(musikzustand):
+            player.start(_track("A"))
+            music.instance._einreihen(player, _track("B"))
+            asyncio.run(musikzustand.sichern())
+            vorher = auf_platte()
+            # Das Abmelden: Song weg, Schlange weiter, dann 'disconnect'.
+            player.current = None
+            musikzustand.merken(player)
+            musikzustand.vergessen(77)
+            asyncio.run(musikzustand.sichern())      # idempotent
+            asyncio.run(store.alle_sichern())
+            assert auf_platte() == vorher
+    finally:
+        aufraeumen()
 
 
 def test_status_zeigt_flos_laune_und_wechselt_sofort():
@@ -566,6 +824,25 @@ def test_status_zeigt_flos_laune_und_wechselt_sofort():
         c._status_gewechselt, c._weisheit_index, c._laune_im_status = alt
 
 
+def test_status_takt_schaut_auf_die_uhr():
+    """uhr.stabil() merkt einen Sprung nur, wenn jemand fragt. Der Status-Takt
+    laeuft immer - auch wenn kein Modul aus dem Server-Leben geladen ist und
+    der Alltags-Takt gar nicht startet. Sonst fiele der Sprung beim Booten
+    erst beim naechsten Monatswechsel auf (Lotto), Wochen zu spaet."""
+    import bot
+    gefragt = []
+    c = bot.client
+    alt = c._status_gewechselt
+    try:
+        with _nur_geladen(bot), \
+                mock.patch.object(bot.uhr, "stabil", lambda: gefragt.append(1) or True):
+            c._status_gewechselt = time.monotonic()        # kein Spruch faellig
+            asyncio.run(c.status_loop.coro(c))
+    finally:
+        c._status_gewechselt = alt
+    assert gefragt == [1], gefragt
+
+
 # --- KI: die Laune faerbt den Ton, nie die Notlage ------------------------------
 _LAUNE_ZEILE = (
     " Deine Laune heute: gereizt, weil dich drei Leute in fuenf Minuten zugespammt "
@@ -577,9 +854,14 @@ _LAUNE_ZEILE = (
 def test_laune_faerbt_den_prompt_aber_nie_in_der_notlage():
     """Die Zeile steht hinter der Grenze und vor dem Schlusswort, die Anteile
     aus test_ki (Grenze vorne, Schlusshieb hinten) halten - und in einer Notlage
-    fragt ai.py die Laune gar nicht erst."""
+    fragt ai.py die Laune gar nicht erst. Auch nicht, wenn das Modul nicht
+    laeuft oder der Server die Launen abgeschaltet hat (wie beim Status)."""
     import ai
-    with mock.patch.object(laune, "prompt_zeile", lambda gid: _LAUNE_ZEILE):
+    import features
+    an = [True]
+    with mock.patch.object(laune, "prompt_zeile", lambda gid: _LAUNE_ZEILE), \
+            mock.patch.object(laune, "is_enabled", lambda: True), \
+            mock.patch.object(features, "is_on_in", lambda gid, key: an[0] or key != "launen"):
         p = ai.instance._system_prompt(author="Tester", title="", gid=77)
         assert _LAUNE_ZEILE in p
         assert p.index("Herkunft") < len(p) * 0.5
@@ -590,6 +872,13 @@ def test_laune_faerbt_den_prompt_aber_nie_in_der_notlage():
         assert _LAUNE_ZEILE not in ohne
         # Ohne Server (DM) gibt es keine Laune.
         assert _LAUNE_ZEILE not in ai.instance._system_prompt(author="Tester", title="")
+        # Server hat die Launen im Panel abgeschaltet: keine Zeile.
+        an[0] = False
+        assert _LAUNE_ZEILE not in ai.instance._system_prompt(author="Tester", title="", gid=77)
+        an[0] = True
+        with mock.patch.object(laune, "is_enabled", lambda: False):
+            assert _LAUNE_ZEILE not in ai.instance._system_prompt(
+                author="Tester", title="", gid=77)
 
         # ask_flo und see_image reichen die Notlage durch.
         flo, _anbieter = _ki_frisch([])
@@ -606,6 +895,20 @@ def test_laune_faerbt_den_prompt_aber_nie_in_der_notlage():
         asyncio.run(flo.see_image("ich will nicht mehr leben", "http://x/b.png",
                                   author="T", gid=77, uid=1))
         assert gesehen[0] is True and gesehen[1] is False and gesehen[2] is True, gesehen
+
+        # Die Notlage steht nicht in der Frage, aber im Verlauf, der mit in den
+        # Prompt geht (bot.py merkt sich JEDE Nachricht, auch nicht an Flo).
+        # Dann auch keine Laune - die neue Frage ist harmlos, der Mensch nicht.
+        gesehen.clear()
+        flo.note_message(555, "Anna", "ich will nicht mehr leben")
+        flo.note_message(555, "Bob", "was geht heute abend")
+        asyncio.run(flo.ask_flo("flo bist du da", author="Anna", channel_id=555,
+                                gid=77, uid=1))
+        asyncio.run(flo.see_image("schau mal", "http://x/b.png", author="Anna",
+                                  channel_id=555, gid=77, uid=1))
+        asyncio.run(flo.ask_flo("flo bist du da", author="Anna", channel_id=556,
+                                gid=77, uid=1))
+        assert gesehen == [True, True, False], gesehen
 
 
 def test_hintergrund_pause_steht_einmal_im_journal():
@@ -758,7 +1061,8 @@ def test_musik_merkt_sich_den_stand_an_den_richtigen_stellen():
             asyncio.run(player._advance())             # Schlange leer -> trotzdem merken
             assert len(gemerkt) == 7
             player.queue.append(_track("D"))
-            asyncio.run(player._parken(_VoiceChannelStub()))
+            with _Mitschnitt("dcbot"):          # "GEPARKT" ist hier gewollt
+                asyncio.run(player._parken(_VoiceChannelStub()))
             assert len(gemerkt) == 8 and player._geparkt
             asyncio.run(player.disconnect())
             assert vergessen == [77]
@@ -770,6 +1074,37 @@ def test_musik_merkt_sich_den_stand_an_den_richtigen_stellen():
             voice.stop()
             player.start(_track("E"))
             assert player.current.title == "E"
+    finally:
+        aufraeumen()
+
+
+def test_geparkter_song_zaehlt_fuers_wrapped_nur_einmal():
+    """_parken legt den laufenden Song vorne in die Schlange zurueck, 'weiter'
+    startet ihn neu - gelaufen ist er aber schon. Ohne Merker zaehlte er fuers
+    Musik-Wrapped nach jedem Netz-Aussetzer doppelt (der DJ des Monats waere
+    der mit dem wackligsten Internet)."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = 77
+    gezaehlt = []
+    try:
+        with mock.patch.object(musikstats, "notieren",
+                               lambda gid, track: gezaehlt.append(track.title)):
+            player.start(music.Track(title="A", stream_url="http://stream/a",
+                                     query="ytsearch1:A", duration=300))
+            player.queue.append(_track("B"))
+            with _Mitschnitt("dcbot"):          # "GEPARKT" ist hier gewollt
+                asyncio.run(player._parken(_VoiceChannelStub()))
+            assert player.queue[0].title == "A" and player.queue[0].wiederhergestellt
+            # 'weiter': die geparkte Schlange laeuft wieder an.
+            player.active_channel_id = 42
+            voice.stop()
+            asyncio.run(player._advance())
+            assert player.current.title == "A"
+            voice.stop()
+            asyncio.run(player._advance())
+            assert player.current.title == "B"
+        assert gezaehlt == ["A", "B"], gezaehlt
     finally:
         aufraeumen()
 
@@ -789,6 +1124,15 @@ def test_an_flo_erkennt_die_ansprache_fuer_assistenten():
     for text in ("despacito", "https://youtu.be/abc", "<@2> fertig", "<@&9> x",
                  "flohmarkt morgen", ""):
         assert not basis.an_flo(msg, text), text
+    # Der Giveaway-Assistent fragt dieselbe Pruefung - keine zweite Kopie, die
+    # mit der Zeit auseinanderlaeuft.
+    import giveaway
+    gefragt = []
+    with mock.patch.object(basis, "an_flo",
+                           lambda m, t: gefragt.append(t) or t.startswith("x")):
+        assert giveaway.instance._an_flo(msg, "x fertig") is True
+        assert giveaway.instance._an_flo(msg, "flo fertig") is False
+    assert gefragt == ["x fertig", "flo fertig"], gefragt
 
 
 def test_lotto_zieht_nach_uhrsprung_nicht_doppelt():
@@ -823,24 +1167,90 @@ def test_lotto_zieht_nach_uhrsprung_nicht_doppelt():
                 mock.patch.object(lotto.uhr, "stabil", lambda: True):
             assert asyncio.run(lt.tick()) is not None
         assert len(lt._state()["history"]) == 2
+        # Ein gespeicherter Monat WEIT in der Zukunft (kaputte Datei) hielte
+        # die Ziehung fuer immer an, waehrend sich die Lose stapeln - er wird
+        # verworfen und der Monat ausgelost.
+        lt._store.data["month"] = "2999-01"
+        with mock.patch.object(lt, "_month_str", lambda: monat[0]), \
+                mock.patch.object(lotto.uhr, "stabil", lambda: True), \
+                mock.patch.object(lotto.uhr.instance, "stabil", lambda: True), \
+                _Mitschnitt("dcbot.uhr"):
+            assert asyncio.run(lt.tick()) is not None
+        assert lt._state()["month"] == "2026-12" and len(lt._state()["history"]) == 3
     finally:
         lt._store, lt._enabled, lt._win_chance = alt
+
+
+def test_lotto_holt_die_ziehung_gleich_nach_dem_start_nach():
+    """Die erste Lotto-Runde nach dem Start faellt immer in die Startgnade der
+    Uhr (uhr.START_GNADE) - der Monatswechsel wird erkannt, die Ziehung aber
+    verschoben. Der naechste Lotto-Takt kommt erst in sechs Stunden: also holt
+    bot.py sie nach, sobald die Uhr stabil ist. Mit einer FRISCHEN Uhr, nicht
+    der aus testhilfe, die als laengst gestartet gilt."""
+    import bot
+    import lotto
+    gestellt = [1000.0]
+
+    def mono():
+        gestellt[0] += 20.0          # jede Frage an die Uhr: 20 s spaeter
+        return gestellt[0]
+
+    u = uhr.Uhr(zeit=lambda: 1_800_000_000.0 + gestellt[0], mono=mono)
+    start = gestellt[0]
+    lt = lotto.instance
+    alt = (lt._store, lt._enabled, lt._win_chance, lt._wartet_auf_uhr)
+    lt._store = _FakeStore({"month": "2026-10", "jackpot": 5_000_000,
+                            "ticket_price": 2500, "entries": {}, "house": 0,
+                            "history": []})
+    lt._enabled, lt._win_chance = True, 0.0
+    gesendet = []
+
+    async def senden(content=None, embed=None):
+        gesendet.append(embed.title)
+
+    kanal = SimpleNamespace(name="lotto", send=senden)
+    try:
+        with mock.patch.object(lt, "_month_str", lambda: "2026-11"), \
+                mock.patch.object(uhr, "stabil", u.stabil), \
+                mock.patch.object(bot, "LOTTO_NACHHOL_SEKUNDEN", 0.001), \
+                mock.patch.object(bot.client, "_ansage_channels", lambda _f=None: [kanal]):
+            async def lauf():
+                await bot.client.lotto_loop.coro(bot.client)
+                assert not gesendet and lotto.wartet_auf_uhr(), "erst nach der Gnade"
+                await asyncio.wait_for(bot.client._lotto_nachholer, 5)
+                # Ein weiterer Takt zieht nicht noch einmal.
+                await bot.client.lotto_loop.coro(bot.client)
+            asyncio.run(lauf())
+        assert len(gesendet) == 1, gesendet
+        assert len(lt._state()["history"]) == 1 and lt._state()["month"] == "2026-11"
+        assert not lotto.wartet_auf_uhr()
+        # Gezogen innerhalb von Minuten nach dem Start - nicht sechs Stunden spaeter.
+        assert gestellt[0] - start <= uhr.START_GNADE + 120, gestellt[0] - start
+    finally:
+        lt._store, lt._enabled, lt._win_chance, lt._wartet_auf_uhr = alt
+        bot.client._lotto_nachholer = None
 
 
 def test_shop_und_aktienchart_laufen_nur_vorwaerts():
     """Der Shop wuerfelt beim Start nur neu, wenn der Shop-Tag SPAETER ist als
     der gespeicherte, und der Aktien-Chart schreibt einen Tag nur einmal - ein
-    gespeicherter Tag aus der Zukunft (Uhrsprung) loest nichts mehr aus."""
+    gespeicherter Tag aus der Zukunft (Uhrsprung: morgen) loest nichts mehr aus.
+    Einer WEIT in der Zukunft (kaputte Datei) haelt aber nichts an."""
     import floaktie
     restore = _with_economy({})
     e = economy.instance
     try:
-        e._store.data["shop"] = {"date": "2999-01-01", "items": [{"n": 1, "x": "alt"}]}
+        morgen = uhr.naechster_key(e._shop_tag())
+        e._store.data["shop"] = {"date": morgen, "items": [{"n": 1, "x": "alt"}]}
         assert e.refresh_shop(force=False)["items"] == [{"n": 1, "x": "alt"}]
         e._store.data["shop"]["date"] = "2000-01-01"
         assert e.refresh_shop(force=False)["date"] == e._shop_tag()
         st = e.refresh_shop(force=True)
         assert st["date"] == e._shop_tag()
+        e._store.data["shop"] = {"date": "2999-01-01", "items": [{"n": 1, "x": "alt"}]}
+        with _Mitschnitt("dcbot.uhr"):
+            st = e.refresh_shop(force=False)
+        assert st["date"] == e._shop_tag() and st["items"] != [{"n": 1, "x": "alt"}]
     finally:
         restore()
 
@@ -861,8 +1271,13 @@ def test_shop_und_aktienchart_laufen_nur_vorwaerts():
             asyncio.run(fa.sample_and_tick([leer], dt=20.0))
             tag[0] = "2026-10-23"
             asyncio.run(fa.sample_and_tick([leer], dt=20.0))
+            # Ein Tag aus dem Jahr 2999 im Speicher: der Chart laeuft weiter.
+            fa._store.data["day"] = "2999-01-01"
+            tag[0] = "2026-10-24"
+            with _Mitschnitt("dcbot.uhr"):
+                asyncio.run(fa.sample_and_tick([leer], dt=20.0))
         tage = [h["day"] for h in fa._store.data["history"]]
-        assert tage == ["2026-10-22", "2026-10-23"], tage
+        assert tage == ["2026-10-22", "2026-10-23", "2026-10-24"], tage
     finally:
         fa._store, fa._enabled = alt
 

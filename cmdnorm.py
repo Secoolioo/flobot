@@ -397,6 +397,10 @@ class CmdNorm:
         # Nachgemessen nach dem Fundament (neue Befehle 'wrapped', 'laune' ...):
         # 'rapped' landete auf dem Musik-Wrapped.
         "rapped",
+        # ... und mit Alltagswoertern, die im Repo nicht vorkommen (die Messung
+        # sieht nur Repo-Woerter): 'laue luft heute' wurde 'laune luft heute',
+        # 'launen hast du' die Laune, 'zitaten von goethe' die Zitate.
+        "laue", "lauen", "launen", "moods", "zitaten", "zitates",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

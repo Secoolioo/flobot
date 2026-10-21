@@ -195,8 +195,8 @@ def test_luxus_fmt_coins():
 
 def test_luxus_besitz_und_rahmen():
     # Fake-Store: Besitz-Logik ohne Datei/Discord testen (Zustand lebt in der Instanz).
-    luxus.instance._store = type("S", (), {"data": {"users": {}, "throne": {
-        "owner": "", "preis": luxus.THRONE_START, "n": 0}}})()
+    luxus.instance._store = _FakeStore({"users": {}, "throne": {
+        "owner": "", "preis": luxus.THRONE_START, "n": 0}})
     luxus.instance._enabled = True
     try:
         uid = 42
@@ -3468,7 +3468,17 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
 
     alt_wiki = terraria.instance._api_get
     terraria.instance._api_get = kein_wiki
-    session_vorher = ai.instance._http
+    # Und ueberhaupt kein Netz: wer die geteilte Session will, bekommt einen
+    # Verbindungsfehler und steht in der Liste. Nur zu pruefen, ob eine NEUE
+    # Session entstand, reichte nicht - lag von einem frueheren Test noch eine
+    # offene herum, haette ein Befehl sie still mitbenutzt.
+    import aiohttp
+    from unittest import mock
+    ins_netz = []
+
+    def kein_netz(*_a, **_kw):
+        ins_netz.append(True)
+        raise aiohttp.ClientConnectionError("kein Netz im Test")
 
     async def alles_durchspielen():
         for modul, befehle in mit_argumenten.items():
@@ -3483,12 +3493,13 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
                             f"{type(exc).__name__}: {str(exc)[:100]}")
 
     try:
-        asyncio.run(alles_durchspielen())
+        with mock.patch.object(ai, "http_session", kein_netz), \
+                mock.patch.object(ai.instance, "http_session", kein_netz):
+            asyncio.run(alles_durchspielen())
     finally:
         terraria.instance._api_get = alt_wiki
     assert wiki_fragen, "der Terraria-Befehl hat das Wiki gar nicht gefragt"
-    # Und keine neue HTTP-Session, die hinterher offen bliebe.
-    assert ai.instance._http is session_vorher, "ein Befehl hat doch ins Netz gegriffen"
+    assert not ins_netz, f"{len(ins_netz)} Befehle haben doch ins Netz gegriffen"
     # Doppelte Meldungen zusammenfassen - sonst steht derselbe Fehler 47-mal da.
     eindeutig = sorted(set(abstuerze))
     assert not eindeutig, (f"{len(abstuerze)} Abstuerze bei feindlicher Eingabe:\n  "
