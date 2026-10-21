@@ -1253,12 +1253,14 @@ class GuildPlayer:
         Mit 'timeout' bekommt discord.py die Frist SELBST. Vorher stand im
         Neuaufbau asyncio.wait_for(channel.connect(...), 20), und discord.py
         wartet intern 30 s: die kuerzere Frist von aussen brach den Aufbau per
-        CancelledError ab. Aufgeraeumt wird in discord.py aber nur bei SEINEM
-        TimeoutError (abc.Connectable.connect) - zurueck blieb ein halb offener
-        Voice-Client in guild.voice_client (nachgestellt mit discord.py 2.7.1).
-        Der sperrte danach jedes channel.connect mit 'Already connected', auch
-        das von Soundboard und TTS. Die Frist von aussen bleibt nur als Netz
-        fuer einen Haenger, bevor discord.pys eigene Uhr laeuft."""
+        CancelledError ab. discord.py setzt den Client dabei nur halb zurueck
+        (soft_disconnect in VoiceConnectionState._wrap_connect); getrennt und
+        aus der Liste genommen wird er nur bei SEINEM TimeoutError
+        (abc.Connectable.connect). Zurueck blieb ein halb offener Voice-Client
+        in guild.voice_client (nachgestellt mit discord.py 2.7.1), und der
+        sperrte danach jedes channel.connect mit 'Already connected', auch das
+        von Soundboard und TTS. Die Frist von aussen bleibt nur als Netz fuer
+        einen Haenger, bevor discord.pys eigene Uhr laeuft."""
         if timeout is None:
             return await channel.connect(**_VOICE_FLAGS)
         return await asyncio.wait_for(
@@ -1267,10 +1269,13 @@ class GuildPlayer:
     async def _halboffen_wegraeumen(self, guild):
         """Nach einem gescheiterten Verbindungsversuch: einen halb offenen
         Voice-Client wegraeumen, falls einer stehengeblieben ist (siehe
-        _verbinden). Erst die Trennung setzt seinen Zustand zurueck - und weckt
-        damit auch discord.pys eigene Warter (Event.wait in _wait_for_state).
-        Bleibt so ein Client liegen und wird spaeter eingesammelt, meldet
-        asyncio "Task was destroyed but it is pending! coro=<Event.wait()>"."""
+        _verbinden). Erst die Trennung nimmt ihn aus discord.pys Liste - und
+        aendert seinen Zustand. Das ist auch die einzige Weckung fuer einen
+        Event.wait()-Task, den utils.sane_wait_for nach einem Timeout liegen
+        laesst (er raeumt ihn nicht weg). Faellt so ein Client spaeter ohne
+        Zustandswechsel weg (etwa ConnectionState.clear bei einer
+        Neuanmeldung), meldet asyncio "Task was destroyed but it is pending!
+        coro=<Event.wait()>" - siehe auch _verwaist_wegraeumen."""
         rest = getattr(guild, "voice_client", None)
         if rest is None or rest.is_connected():
             return
@@ -1538,6 +1543,8 @@ class GuildPlayer:
         # Watchdog in dieser Luecke KEINEN Zombie-Alarm ausloest.
         if gen is not None and gen != self._play_gen:
             return
+        if gen is not None and self._abriss_merken():
+            return              # Verbindung weg, nicht Songende - der Song bleibt
         if gen is None:
             # Ausdruecklich angestossen (skip, weiter, Reconnect) - dann ist eine
             # frueher aufgegebene Warteschlange wieder freigegeben.
@@ -1793,11 +1800,7 @@ class GuildPlayer:
             return False
         gehoert = self.position()
         if track.live:
-            if gehoert >= LIVE_NEUSTART_FRISCH:
-                # Lief lange sauber (YouTube-Live-Adressen laufen nach einigen
-                # Stunden ab) - ein neuer Aussetzer, kein Dauerfehler. Sonst
-                # waere ein 24/7-Stream nach dem zweiten Ablauf einfach aus.
-                self._neustart_versuche = 0
+            self._live_neustarts_auffrischen()
         elif not track.duration:
             return False                 # ohne bekannte Laenge nicht zu beurteilen
         elif track.duration - gehoert <= ABBRUCH_TOLERANZ:
@@ -1819,6 +1822,58 @@ class GuildPlayer:
                         self._neustart_versuche, NEUSTART_MAX_VERSUCHE)
         # Zwei Sekunden Ueberlappung: bis zum Abbruch war ja Ton da.
         return await self._neustart_an_position(verlust=2.0)
+
+    def _live_neustarts_auffrischen(self):
+        """Lief ein Live-Stream lange sauber, zaehlen seine Neustarts wieder frisch.
+
+        YouTube-Live-Adressen laufen nach einigen Stunden ab - ein neuer
+        Aussetzer ist dann kein Dauerfehler. Ohne das waere ein 24/7-Stream
+        nach dem zweiten Aussetzer einfach aus, egal wie viele Stunden
+        dazwischen lagen. Fuer BEIDE Wege, die neu starten: den Abbruch
+        (_nach_abbruch_fortsetzen) und den stillen Stall (heal, Fall 1).
+        Die Uhr eines Live-Streams beginnt bei jedem Neustart bei 0."""
+        track = self.current
+        if track is not None and track.live and self.position() >= LIVE_NEUSTART_FRISCH:
+            self._neustart_versuche = 0
+
+    def _abriss_merken(self):
+        """Der after-Callback kam, weil die VERBINDUNG weg ist - nicht weil der
+        Song zu Ende ist. Dann bleibt der Song stehen, statt verloren zu gehen.
+
+        discord.py beendet die Wiedergabe bei einem Abriss selbst, und beides
+        sieht aus wie ein normales Songende (after ohne Fehler): der
+        AudioPlayer wartet nur client.timeout Sekunden auf die Verbindung und
+        gibt dann auf (player.py, 'Aborting playback'), und
+        VoiceConnectionState.disconnect() - etwa nach einem nachgereichten
+        VOICE_STATE_UPDATE - stoppt ihn. Vorher lief das in
+        _nach_abbruch_fortsetzen (Neustart scheitert: keine Verbindung) und
+        dann in 'keine Verbindung -> current weg': nach dem Neuaufbau spielte
+        gleich der naechste Song, der unterbrochene war weg.
+
+        Jetzt: der Song bleibt current, die Uhr haelt an der gehoerten Stelle,
+        das Panel bleibt. Der Watchdog setzt ihn nach dem Neuaufbau dort fort
+        (_reconnect, heal Fall 2) oder parkt ihn mit dieser Stelle (_parken).
+        Nur solange der Watchdog zustaendig ist (active_channel_id) - nach
+        'stop' oder einem Rauswurf gilt das nicht.
+
+        Rueckgabe True = uebernommen (nicht weiterschalten)."""
+        if self.current is None or self.active_channel_id is None:
+            return False
+        if self.voice is not None and self.voice.is_connected():
+            return False
+        self._clock_pause()
+        if self.voice is not None:
+            # Der abgebrochene AudioPlayer meldet sonst weiter is_playing():
+            # discord.py setzt beim Aufgeben nach client.timeout sein Ende-
+            # Signal nicht. Dann hielte jeder den toten Song fuer laufend.
+            try:
+                self.voice.stop()
+            except Exception:  # noqa: BLE001 - stop darf nie werfen
+                log.debug("voice.stop nach Abriss fehlgeschlagen", exc_info=True)
+        log.warning("Voice weg mitten in '%s' (bei %.0f s) - der Song bleibt stehen, "
+                    "der Watchdog setzt ihn nach dem Neuaufbau dort fort.",
+                    self.current.title, self.position())
+        return True
 
     async def _neustart_an_position(self, *, verlust=None):
         """Startet den laufenden Song an der zuletzt GEHOERTEN Stelle neu -
@@ -1873,6 +1928,9 @@ class GuildPlayer:
         laeuft oder schon eine voice-Op (connect/reconnect/Tempo) aktiv ist."""
         if self.active_channel_id is None or self._advancing or self._voice_lock.locked():
             return
+        # Die Uhr folgt der Verbindung bei JEDEM Takt - auch dann, wenn der
+        # Watchdog gleich darunter sonst nichts anfasst.
+        self._uhr_nachfuehren(guild)
         if not laufzeit.gateway_stabil():
             # Discord selbst ist weg (oder gerade erst wieder da). Dann kann
             # kein Voice-Beitritt klappen - ohne Gateway kommt die Antwort auf
@@ -1880,6 +1938,8 @@ class GuildPlayer:
             # einer Minute Netz-Wackler alle Reconnects verbrannt und danach
             # die Warteschlange weggeworfen. Jetzt wartet er, bis die
             # Verbindung wieder eine Weile steht.
+            if laufzeit.gateway_stabil(gnade=0):
+                await self._verwaist_wegraeumen(guild)   # gerade erst wieder da
             return
         if time.monotonic() < self._rauswurf_bis:
             return      # flo_getrennt sieht gerade nach, ob ihn jemand rausgeworfen hat
@@ -1916,6 +1976,7 @@ class GuildPlayer:
                 if self._frozen_ticks >= VOICE_STALL_TICKS:
                     self._frozen_ticks = 0
                     self._last_frames = -1
+                    self._live_neustarts_auffrischen()
                     if self._neustart_versuche >= NEUSTART_MAX_VERSUCHE:
                         # Der Song ist nicht zu retten. WEITER statt ewig
                         # dasselbe versuchen: genau diese Endlosschleife war
@@ -1945,6 +2006,17 @@ class GuildPlayer:
         # Fall 2 - ZOMBIE: es SOLLTE etwas laufen, tut es aber mehrere Ticks nicht.
         if self.current is not None:
             self._stall_ticks += 1
+            if self._stall_ticks == 1 and self._seg_start is None:
+                # Kein Verdacht, sondern bekannt: der Song stand beim Abriss
+                # (_abriss_merken, die Uhr steht), und discord.py hat die
+                # Verbindung inzwischen selbst zurueckgeholt. Gleich an der
+                # gehoerten Stelle weiter statt drei stille Takte abzuwarten.
+                # Klappt das nicht, laeuft die normale Zombie-Zaehlung weiter.
+                log.info("Voice ist wieder da - setze '%s' bei %.0f s fort.",
+                         self.current.title, self.position())
+                if await self._neustart_an_position(verlust=0.0):
+                    self._stall_ticks = 0
+                return
             if self._stall_ticks >= VOICE_ZOMBIE_TICKS:
                 self._stall_ticks = 0
                 log.warning("Voice-Zombie: verbunden, aber still - starte neu.")
@@ -1999,6 +2071,59 @@ class GuildPlayer:
         # weil das Netz weg war - und oft ist dabei auch die Voice-Verbindung
         # gerissen. Der Reconnect holt sie zurueck und versucht die Schlange neu.
         return leer and not self.queue
+
+    def _uhr_nachfuehren(self, guild):
+        """Die Positions-Uhr laeuft nur, solange auch Ton rausgehen KANN.
+
+        position() rechnet mit der Wanduhr. Reisst die Verbindung, wartet
+        discord.pys AudioPlayer still auf sie - die Uhr lief aber weiter.
+        Angehalten hat sie erst _reconnect, und seit heal() bei wackeligem
+        Gateway nichts mehr anfasst, kam das eine ganze Minute Aussetzer plus
+        Gnadenfrist zu spaet: nachgestellt setzte ein Song, der bei 60 s
+        abriss, bei 165 s wieder ein. Lag das in den letzten ABBRUCH_TOLERANZ
+        Sekunden, galt er sogar als fertig und wurde uebersprungen.
+
+        Also bei jedem Takt: keine Verbindung -> Uhr anhalten. Spielt es
+        wieder, weil discord.py die Verbindung selbst zurueckgeholt hat und
+        der AudioPlayer weitermacht -> Uhr weiter. Genau auf einen Takt
+        (VOICE_HEAL_SECONDS) - so genau war es vorher auch."""
+        if self.current is None or self.pausiert:
+            return
+        vc = (self.voice if (self.voice and self.voice.is_connected())
+              else getattr(guild, "voice_client", None))
+        if vc is None or not vc.is_connected():
+            self._clock_pause()
+        elif vc.is_playing():
+            self._clock_resume()
+
+    async def _verwaist_wegraeumen(self, guild):
+        """Nach einer Neuanmeldung beim Gateway: unseren verwaisten Voice-Client
+        trennen, bevor wir ihn vergessen.
+
+        Bei der Neuanmeldung leert discord.py seine Liste der Voice-Clients
+        (ConnectionState.clear in parse_ready), OHNE sie zu trennen. self.voice
+        haengt dann an einem Client, den discord.py nicht mehr kennt - er
+        bekommt keine Voice-Events mehr, versucht aber womoeglich weiter, sich
+        neu zu verbinden. Wartet er dabei gerade auf einen Zustandswechsel
+        (utils.sane_wait_for raeumt seinen Event.wait()-Task bei einem
+        Timeout nicht weg), kommt der nur mit der naechsten Zustandsaenderung
+        frei. Faellt der Client vorher ganz weg, meldet asyncio "Task was
+        destroyed but it is pending! coro=<Event.wait()>". Die Trennung IST
+        so eine Zustandsaenderung. Danach baut _reconnect frisch auf."""
+        alt = self.voice
+        if alt is None or alt.is_connected() or getattr(guild, "voice_client", None) is alt:
+            return
+        async with self._voice_lock:
+            if self.voice is not alt:
+                return
+            log.info("Voice-Client nach der Neuanmeldung verwaist - trenne ihn.")
+            self._selbst_trennen_ankuendigen()   # sonst haelt flo_getrennt es fuer einen Rauswurf
+            self._play_gen += 1                  # sein after-Callback gehoert zu nichts mehr
+            try:
+                await asyncio.wait_for(alt.disconnect(force=True), timeout=10)
+            except Exception:  # noqa: BLE001 - aufraeumen darf nie werfen
+                log.debug("Verwaisten Voice-Client nicht wegbekommen", exc_info=True)
+            self.voice = None
 
     async def _reconnect(self, channel):
         """Raeumt eine tote/zombie Verbindung weg, verbindet frisch und setzt den
@@ -2099,8 +2224,8 @@ class GuildPlayer:
         if track is not None:
             ab = 0.0
             if track.duration and not track.live:
-                # Die Uhr hat _reconnect beim Abriss angehalten - sie steht auf
-                # der zuletzt GEHOERTEN Stelle.
+                # Die Uhr steht seit dem Abriss (heal: _uhr_nachfuehren,
+                # _abriss_merken, _reconnect) auf der zuletzt GEHOERTEN Stelle.
                 ab = min(self.position(), float(track.duration))
             self.queue.insert(0, replace(track, weiter_ab=ab if ab >= 1.0 else 0.0))
         self._vorladen_stoppen()
@@ -3169,6 +3294,9 @@ class Music(FeatureBasis):
             return False          # nichts offen, oder es war unser eigenes 'stop'
         if time.monotonic() < player._selbst_getrennt_bis:
             return False          # wir bauen gerade selbst neu auf
+        # Gleich beim Event fragen, nicht erst nach der Frist: verpasste Events
+        # kommen nach einem Resume nur Augenblicke vor 'resumed' an.
+        vom_netz = laufzeit.gateway_wackelt()
         player._rauswurf_bis = time.monotonic() + VOICE_RAUSWURF_FRIST + 10.0
         try:
             await asyncio.sleep(VOICE_RAUSWURF_FRIST)
@@ -3176,13 +3304,15 @@ class Music(FeatureBasis):
                 return False      # inzwischen selbst beendet
             if self._voice_client_lebt(guild_id, gid, player):
                 return False      # discord.py hat ihn noch - nur ein Aussetzer
-            if not laufzeit.gateway_stabil():
+            if vom_netz or laufzeit.gateway_wackelt():
                 # Die Discord-Verbindung wackelt: das war das Netz, kein
                 # Moderator. Nach einer Neuanmeldung raeumt discord.py seine
                 # Voice-Clients sogar ganz weg - als Rauswurf gewertet, waere
                 # die Warteschlange genau bei dem Netz-Wackler weg, vor dem
                 # der Watchdog sie jetzt schuetzt. Er holt Flo zurueck, sobald
-                # die Verbindung wieder steht.
+                # die Verbindung wieder steht. Nur das enge Fenster aus
+                # gateway_wackelt: nach Discords routinemaessigem Resume
+                # zaehlt ein Rauswurf schon wenige Sekunden spaeter wieder.
                 return False
             war_musik = player.current is not None or bool(player.queue)
             log.warning("Flo wurde aus dem Sprachkanal %s geworfen (Server %s) - "
@@ -4327,8 +4457,16 @@ class Music(FeatureBasis):
         except VOICE_CONNECT_FEHLER as exc:
             await interaction.followup.send(embed=self._voice_kaputt(exc, "Verlauf"))
             return
-        if player.is_active():
+        geparkt = getattr(player, "_geparkt", False)
+        if player.is_active() or geparkt:
             self._einreihen(player, track)
+            if geparkt:
+                # Geparkte Schlange (GuildPlayer._parken): wie bei 'spiel' erst
+                # dort weiter, der Song stellt sich hinten an. Vorher sprang er
+                # vor, und das Parken war nebenbei weg.
+                await player._advance()
+                if player.current is track:
+                    return                  # _advance hat das Panel gepostet
             await interaction.followup.send(
                 embed=self._added_embed(track, len(player.queue), len(player.queue)))
             return
@@ -4394,9 +4532,15 @@ class Music(FeatureBasis):
         except discord.HTTPException:
             pass
 
-        # Laeuft schon was? -> einreihen, sonst starten + Panel posten.
-        if player.is_active():
+        # Laeuft schon was? -> einreihen, sonst starten + Panel posten. Eine
+        # geparkte Schlange (GuildPlayer._parken) geht vor, wie bei 'spiel'.
+        geparkt = getattr(player, "_geparkt", False)
+        if player.is_active() or geparkt:
             self._einreihen(player, track)
+            if geparkt:
+                await player._advance()
+                if player.current is track:
+                    return                  # _advance hat das Panel gepostet
             await interaction.followup.send(
                 embed=self._added_embed(track, len(player.queue), len(player.queue)))
             return

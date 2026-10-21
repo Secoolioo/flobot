@@ -97,3 +97,17 @@ def gateway_stabil(gnade=None):
     except Exception:  # noqa: BLE001 - im Zweifel nicht blockieren
         log.debug("gateway_stabil ging nicht", exc_info=True)
         return True
+
+
+def gateway_wackelt():
+    """Kann eine Voice-Trennung gerade vom Netz kommen statt von einem
+    Menschen (FloBot.gateway_wackelt)? Ohne Bot (Tests, Werkzeuge) oder wenn
+    der Bot es nicht weiss: nein - dann zaehlt eine Trennung wie immer."""
+    frage = getattr(client, "gateway_wackelt", None)
+    if not callable(frage):
+        return False
+    try:
+        return bool(frage())
+    except Exception:  # noqa: BLE001 - im Zweifel wie immer werten
+        log.debug("gateway_wackelt ging nicht", exc_info=True)
+        return False

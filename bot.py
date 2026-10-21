@@ -403,6 +403,10 @@ STATUS_WECHSEL_SEKUNDEN = float(os.getenv("STATUS_WECHSEL_SEKUNDEN", "60") or "6
 # erst noch Server und Voice-Zustaende ein - der Musik-Watchdog soll in diese
 # Luecke nicht hineinreparieren.
 GATEWAY_GNADE_SEKUNDEN = 30.0
+# So lange nach einem einfachen RESUME kann eine Voice-Trennung noch vom
+# Aussetzer stammen (siehe FloBot.gateway_wackelt): Discord spielt verpasste
+# Events vor 'resumed' nach, ausgewertet werden sie aber erst Augenblicke danach.
+GATEWAY_NACHLAUF_SEKUNDEN = 5.0
 
 # Alle nachrichtengetriebenen Features brauchen die Message-Events + den Text.
 _NEED_MESSAGES = any(
@@ -933,6 +937,8 @@ class FloBot(discord.Client):
         # weg ist (None = steht) und wann sie zuletzt zurueckkam.
         self._gateway_weg_seit = None
         self._gateway_zurueck_um = float("-inf")
+        # ... und wann zuletzt per NEUANMELDUNG statt per Resume (gateway_wackelt).
+        self._gateway_neu_angemeldet_um = float("-inf")
         # Zwischenspeicher der gerenderten Hilfe-Karten (PNG je Kategorie).
         self._help_png_cache = {}
         # Schutz aktiver Spiele vorm Auto-Loeschen (siehe PROTECT_RELEASE_GRACE oben).
@@ -957,6 +963,9 @@ class FloBot(discord.Client):
         # gleichzeitig -> 429). Stattdessen sammeln wir faellige Nachrichten je Channel
         # und loeschen sie gebuendelt (Bulk-Delete: bis 100 Nachrichten = 1 API-Call).
         self._pending_deletes = {}
+        # IDs, deren Loeschung autodelete_batch_loop gerade abschickt - schon
+        # aus _pending_deletes heraus, aber noch nicht weg (siehe _sweepable).
+        self._loescht_gerade = set()
         # Rechtsklick-Befehle (Nachricht/Person -> Apps). Der Baum haengt sich
         # selbst an den Client; angemeldet wird in setup_hook.
         self.tree = app_commands.CommandTree(self)
@@ -1716,6 +1725,10 @@ class FloBot(discord.Client):
         vorgemerkt = self._pending_deletes.get(getattr(m.channel, "id", None)) or ()
         if any(gemerkt.id == m.id for _ts, gemerkt in vorgemerkt):
             return False
+        # ... oder ist ihre Loeschung gerade unterwegs? Dann ist sie aus der
+        # Vormerkung schon heraus, aber noch nicht weg.
+        if m.id in self._loescht_gerade:
+            return False
         return True
 
     @staticmethod
@@ -1805,25 +1818,34 @@ class FloBot(discord.Client):
             if not due:
                 continue
             channel = due[0].channel
-            for i in range(0, len(due), 100):
-                chunk = due[i:i + 100]
-                try:
-                    if len(chunk) == 1:
-                        await chunk[0].delete()
-                    else:
-                        await channel.delete_messages(chunk)
-                except discord.NotFound:
-                    pass  # schon weg (Sweep/manuell)
-                except discord.Forbidden:
-                    log.warning(
-                        "Auto-Loeschen: mir fehlt 'Nachrichten verwalten' in #%s.",
-                        getattr(channel, "name", cid))
-                except discord.HTTPException as exc:
-                    log.warning("Auto-Loeschen (Buendel) fehlgeschlagen: %s", exc)
-                except Exception as exc:  # noqa: BLE001
-                    # Netzwerkfehler (z. B. aiohttp/OSError) sind KEINE HTTPException
-                    # und wuerden sonst den ganzen tasks.loop dauerhaft killen.
-                    log.warning("Auto-Loeschen (Buendel) unerwartet fehlgeschlagen: %s", exc)
+            # Ab hier sind sie aus _pending_deletes heraus - bis der Aufruf
+            # zurueck ist, muss der Sweep trotzdem wissen, dass sie gleich weg
+            # sind. Sonst holte eine Sweep-Runde, die in dieses await faellt,
+            # sie erneut (Rate-Limit-Pause, langsames Netz) und bekam 404.
+            unterwegs = {m.id for m in due}
+            self._loescht_gerade |= unterwegs
+            try:
+                for i in range(0, len(due), 100):
+                    chunk = due[i:i + 100]
+                    try:
+                        if len(chunk) == 1:
+                            await chunk[0].delete()
+                        else:
+                            await channel.delete_messages(chunk)
+                    except discord.NotFound:
+                        pass  # schon weg (Sweep/manuell)
+                    except discord.Forbidden:
+                        log.warning(
+                            "Auto-Loeschen: mir fehlt 'Nachrichten verwalten' in #%s.",
+                            getattr(channel, "name", cid))
+                    except discord.HTTPException as exc:
+                        log.warning("Auto-Loeschen (Buendel) fehlgeschlagen: %s", exc)
+                    except Exception as exc:  # noqa: BLE001
+                        # Netzwerkfehler (z. B. aiohttp/OSError) sind KEINE HTTPException
+                        # und wuerden sonst den ganzen tasks.loop dauerhaft killen.
+                        log.warning("Auto-Loeschen (Buendel) unerwartet fehlgeschlagen: %s", exc)
+            finally:
+                self._loescht_gerade -= unterwegs
 
     def protect_message(self, message):
         """Meldet eine aktive Spiel-Nachricht beim Auto-Loesch-Schutz an. Nur in den
@@ -2597,7 +2619,7 @@ class FloBot(discord.Client):
             log.exception("Musik-Selbsttest abgebrochen")
 
     async def on_ready(self):
-        weg = self._gateway_zurueck()   # Neuanmeldung nach verfallener Sitzung
+        weg = self._gateway_zurueck(neu_angemeldet=True)   # nach verfallener Sitzung
         if weg is not None:
             log.info("Discord-Verbindung neu angemeldet (war %.0f s weg).", weg)
         log.info("Eingeloggt als %s (ID %s)", self.user, self.user.id)
@@ -2761,6 +2783,26 @@ class FloBot(discord.Client):
             return False
         return time.monotonic() - self._gateway_zurueck_um >= gnade
 
+    def gateway_wackelt(self):
+        """Kann eine Voice-Trennung GERADE vom Netz kommen statt von einem Menschen?
+
+        Enger als 'nicht gateway_stabil()', das flo_getrennt vorher fragte:
+        dessen 30-s-Gnadenfrist gilt nach JEDEM Resume, auch nach Discords
+        routinemaessigem op-7-Reconnect alle paar Stunden. Ein Moderator-
+        Rauswurf in diesen 30 s zaehlte nicht, und danach holte der Watchdog
+        Flo zurueck in den Kanal. Deshalb:
+          - Gateway weg: ja (es kommen ohnehin keine Events);
+          - nach einem RESUME nur GATEWAY_NACHLAUF_SEKUNDEN: verpasste Events
+            spielt Discord VOR 'resumed' nach, danach ist eine Trennung echt;
+          - nach einer NEUANMELDUNG GATEWAY_GNADE_SEKUNDEN: discord.py hat
+            dabei seine Voice-Clients weggeworfen (ConnectionState.clear), und
+            Discord raeumt die Voice der alten Sitzung erst danach ab."""
+        if self._gateway_weg_seit is not None:
+            return True
+        jetzt = time.monotonic()
+        return (jetzt - self._gateway_zurueck_um < GATEWAY_NACHLAUF_SEKUNDEN
+                or jetzt - self._gateway_neu_angemeldet_um < GATEWAY_GNADE_SEKUNDEN)
+
     def _gateway_weg(self):
         """on_disconnect: ab jetzt gilt das Gateway als weg. Feuert bei jedem
         gescheiterten Neuversuch erneut - gezaehlt wird ab dem ERSTEN."""
@@ -2769,15 +2811,18 @@ class FloBot(discord.Client):
             log.info("Discord-Verbindung weg - Musik-Watchdog, Status und "
                      "Auto-Loeschen warten, bis sie wieder steht.")
 
-    def _gateway_zurueck(self):
+    def _gateway_zurueck(self, *, neu_angemeldet=False):
         """on_resumed/on_ready: das Gateway steht wieder. Gibt zurueck, wie
-        lange es weg war (None = es war gar nicht weg, z. B. der erste Start)."""
+        lange es weg war (None = es war gar nicht weg, z. B. der erste Start).
+        neu_angemeldet: zurueck per Neuanmeldung (on_ready), nicht per Resume."""
         if self._gateway_weg_seit is None:
             return None
         jetzt = time.monotonic()
         weg = jetzt - self._gateway_weg_seit
         self._gateway_weg_seit = None
         self._gateway_zurueck_um = jetzt
+        if neu_angemeldet:
+            self._gateway_neu_angemeldet_um = jetzt
         # Status gleich im naechsten Takt neu setzen: nach einer Neuanmeldung
         # zeigt Discord sonst bis zum naechsten Wechsel den Spruch vom Start.
         self._status_gewechselt = float("-inf")

@@ -1268,11 +1268,13 @@ class _Mitschnitt:
 def _gateway_sichern(client):
     """Was die Gateway-Tests am Bot verstellen - zum Zuruecklegen."""
     return (client._gateway_weg_seit, client._gateway_zurueck_um,
+            client._gateway_neu_angemeldet_um,
             client._status_gewechselt, client._weisheit_index)
 
 
 def _gateway_zurueck(client, stand):
     (client._gateway_weg_seit, client._gateway_zurueck_um,
+     client._gateway_neu_angemeldet_um,
      client._status_gewechselt, client._weisheit_index) = stand
 
 
@@ -1314,7 +1316,8 @@ def test_gateway_zustand_kennt_aussetzer_und_gnadenfrist():
 
         # Verfaellt die Sitzung ("session has been invalidated"), kommt kein
         # RESUMED, sondern eine Neuanmeldung - die endet in on_ready.
-        assert "self._gateway_zurueck()" in inspect.getsource(bot.FloBot.on_ready)
+        assert "self._gateway_zurueck(neu_angemeldet=True)" in inspect.getsource(
+            bot.FloBot.on_ready)
         # Und genau so meldet discord.py 2.7.1 die Ereignisse. Aendert sich das,
         # soll dieser Test es sagen - nicht der naechste Ausfall.
         assert "self.dispatch('disconnect')" in inspect.getsource(discord.client.Client.connect)
@@ -1424,6 +1427,94 @@ def test_autodelete_sweep_bleibt_bei_netz_und_404_ruhig():
                 assert warnungen[0].exc_info is None, f"Traceback fuer {netz!r}"
     finally:
         c._pending_deletes.pop(cid, None)
+        _gateway_zurueck(c, stand)
+
+
+def test_autodelete_sweep_laesst_laufende_loeschung_in_ruhe():
+    """autodelete_batch_loop nahm faellige Nachrichten aus _pending_deletes,
+    BEVOR es auf delete() wartete. Fiel eine Sweep-Runde in dieses await
+    (Rate-Limit-Pause, langsames Netz), hielt _sweepable sie fuer frei, purge
+    holte sie nochmal - und bekam 404. Jetzt gelten sie bis zur Antwort als
+    'unterwegs', fuer Einzel- wie fuer Buendel-Loeschung."""
+    import bot
+    c = bot.client
+    cid = 99119
+    kanal = SimpleNamespace(id=cid, name="aufraeumen")
+    sweep_sah = []
+
+    class Nachricht:
+        def __init__(self, mid):
+            self.id, self.pinned, self.embeds = mid, False, []
+            self.author, self.channel = SimpleNamespace(id=5), kanal
+
+        async def delete(self):
+            sweep_sah.append(c._sweepable(self))      # Sweep mitten im await
+
+    async def delete_messages(chunk):
+        sweep_sah.extend(c._sweepable(m) for m in chunk)
+
+    kanal.delete_messages = delete_messages
+    try:
+        einzeln = Nachricht(1)
+        c._queue_delete(einzeln, -1.0)                 # sofort faellig
+        asyncio.run(c.autodelete_batch_loop.coro(c))
+        assert sweep_sah == [False], "Sweep greift nach einer Nachricht, die gerade geloescht wird"
+        assert not c._loescht_gerade, "Markierung bleibt nach dem Loeschen haengen"
+
+        sweep_sah.clear()
+        for mid in (2, 3):
+            c._queue_delete(Nachricht(mid), -1.0)
+        asyncio.run(c.autodelete_batch_loop.coro(c))
+        assert sweep_sah == [False, False], sweep_sah
+        assert not c._loescht_gerade
+    finally:
+        c._pending_deletes.pop(cid, None)
+        c._loescht_gerade.clear()
+
+
+def test_gateway_wackelt_nach_einem_resume_nur_kurz():
+    """flo_getrennt wertete JEDE Voice-Trennung in den 30 s nach irgendeinem
+    Resume als Netz - auch nach Discords routinemaessigem op-7-Reconnect alle
+    paar Stunden. Ein echter Moderator-Rauswurf in diesem Fenster zaehlte
+    nicht, und nach der Gnadenfrist holte der Watchdog Flo zurueck in den
+    Kanal, aus dem er geflogen war.
+
+    Jetzt: nach einem Resume nur GATEWAY_NACHLAUF_SEKUNDEN (verpasste Events
+    kommen vor 'resumed'), nach einer Neuanmeldung die volle Gnadenfrist
+    (discord.py hat dabei seine Voice-Clients weggeworfen). Die Gnadenfrist
+    des Watchdogs (gateway_stabil) bleibt davon unberuehrt."""
+    import bot
+    import laufzeit
+    c = bot.client
+    stand = _gateway_sichern(c)
+    alt_client = laufzeit.client
+    laufzeit.client = c
+    c._gateway_weg_seit = None
+    c._gateway_zurueck_um = c._gateway_neu_angemeldet_um = float("-inf")
+    nachlauf = bot.GATEWAY_NACHLAUF_SEKUNDEN
+    try:
+        assert not c.gateway_wackelt() and not laufzeit.gateway_wackelt()
+
+        asyncio.run(c.on_disconnect())
+        assert c.gateway_wackelt() and laufzeit.gateway_wackelt()
+
+        # Resume: kurz noch (nachgereichte Events), dann zaehlt ein Rauswurf.
+        asyncio.run(c.on_resumed())
+        assert c.gateway_wackelt(), "nachgereichte Trennung als Rauswurf gewertet"
+        c._gateway_zurueck_um -= nachlauf + 0.5
+        assert not c.gateway_wackelt(), "Rauswurf nach einem Routine-Resume zaehlt nicht"
+        assert not c.gateway_stabil(), "die Gnadenfrist des Watchdogs ist mit weg"
+
+        # Neuanmeldung (on_ready): die ganze Gnadenfrist lang.
+        asyncio.run(c.on_disconnect())
+        c._gateway_zurueck(neu_angemeldet=True)
+        c._gateway_zurueck_um -= nachlauf + 0.5
+        c._gateway_neu_angemeldet_um -= nachlauf + 0.5
+        assert c.gateway_wackelt(), "nach der Neuanmeldung schon wieder streng"
+        c._gateway_neu_angemeldet_um -= bot.GATEWAY_GNADE_SEKUNDEN
+        assert not c.gateway_wackelt()
+    finally:
+        laufzeit.client = alt_client
         _gateway_zurueck(c, stand)
 
 

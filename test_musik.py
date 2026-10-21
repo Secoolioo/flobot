@@ -8,7 +8,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _FakeStore, _VoiceChannelStub, _cfg_frisch, _embed_text, _fake_person,
+    _FakeStore, _StallVoice, _VoiceChannelStub, _cfg_frisch, _embed_text, _fake_person,
     _musik_umgebung, _track, _verlauf_frisch, _verlauf_track)
 
 
@@ -3810,7 +3810,8 @@ def test_musik_watchdog_wartet_auf_das_gateway():
     player, voice, aufraeumen = _musik_umgebung()
     alt_client = laufzeit.client
     stabil = [False]
-    laufzeit.client = SimpleNamespace(gateway_stabil=lambda gnade=None: stabil[0])
+    laufzeit.client = SimpleNamespace(gateway_stabil=lambda gnade=None: stabil[0],
+                                      gateway_wackelt=lambda: not stabil[0])
     neu_verbunden = []
 
     async def reconnect(_kanal):
@@ -3890,6 +3891,7 @@ def test_musik_netz_wackler_parkt_die_warteschlange():
     player._sag = sag
     aufrufe = []
     halb_getrennt = []
+    gilde = SimpleNamespace(voice_client=None)
 
     class HalbOffen:
         """Was discord.py nach einem von aussen abgebrochenen Beitritt stehen laesst."""
@@ -3899,13 +3901,18 @@ def test_musik_netz_wackler_parkt_die_warteschlange():
 
         async def disconnect(self, force=False):
             halb_getrennt.append(force)
+            if gilde.voice_client is self:
+                gilde.voice_client = None      # wie discord.py: getrennt = aus der Liste
 
     async def connect_scheitert(**kw):
         aufrufe.append(kw)
+        # Erst der GESCHEITERTE Versuch hinterlaesst den halb offenen Client -
+        # NACH dem Abriss, den _reconnect vor jedem Versuch selbst macht. Nur
+        # so prueft der Test das Wegraeumen danach und nicht diesen Abriss.
+        gilde.voice_client = HalbOffen()
         raise asyncio.TimeoutError()
 
-    kanal = SimpleNamespace(id=42, name="Musik", connect=connect_scheitert,
-                            guild=SimpleNamespace(voice_client=HalbOffen()))
+    kanal = SimpleNamespace(id=42, name="Musik", connect=connect_scheitert, guild=gilde)
     try:
         lang = music.Track(title="Lang", stream_url="http://stream/lang",
                            query="ytsearch1:Lang", duration=200)
@@ -3920,9 +3927,22 @@ def test_musik_netz_wackler_parkt_die_warteschlange():
         assert len(aufrufe) == music.VOICE_RECONNECT_MAX_FAILS
         for kw in aufrufe:
             assert kw == {**music._VOICE_FLAGS, "timeout": music.VOICE_CONNECT_TIMEOUT}, kw
-        assert halb_getrennt and all(halb_getrennt), "halb offener Client blieb stehen"
+        # Nach JEDEM Fehlschlag weg (hart, force=True) - auch nach dem letzten,
+        # nach dem kein Anlauf mehr kommt, der ihn nebenbei abreissen wuerde.
+        assert halb_getrennt == [True] * music.VOICE_RECONNECT_MAX_FAILS, halb_getrennt
+        assert gilde.voice_client is None, "halb offener Client blieb stehen"
         assert player._selbst_getrennt_bis > _t.monotonic(), (
             "das Wegraeumen haelt flo_getrennt fuer einen Rauswurf")
+
+        # Ein VERBUNDENER Client ist kein halb offener - der bleibt.
+        class Verbunden(HalbOffen):
+            def is_connected(self):
+                return True
+
+        gilde.voice_client = Verbunden()
+        halb_getrennt.clear()
+        player.loop.run_until_complete(player._halboffen_wegraeumen(gilde))
+        assert halb_getrennt == [] and isinstance(gilde.voice_client, Verbunden)
 
         # Geparkt statt weggeworfen.
         assert player.current is None and player.active_channel_id is None
@@ -4209,6 +4229,405 @@ def test_arzt_nennt_ffmpeg_version_und_extension_picky():
     text, probleme = mit("5.1.6-0+deb12u1", False)
     assert "Version 5.1.6-0+deb12u1" in text and "nicht" in text, text
     assert probleme == [], "ffmpeg 5.1 ist kein Fehler - es braucht die Option nicht"
+
+
+# --- Netz-Wackler, Teil 2: Uhr, Abriss, verwaiste Clients ----------------------
+def _kanal_zum_verbinden(guild, connect):
+    """Wie _kanal_mit, aber mit eigenem connect() und guild - fuer Tests, in
+    denen heal() wirklich bis zum Neuaufbau (_reconnect) durchlaeuft."""
+    import discord
+
+    class Kanal(discord.VoiceChannel):
+        members = property(lambda self: [SimpleNamespace(bot=False)])
+
+    ch = object.__new__(Kanal)
+    ch.id = 42
+    ch.name = "Musik"
+    ch.guild = guild
+    ch.connect = connect
+    return ch
+
+
+def test_musik_uhr_steht_waehrend_des_aussetzers():
+    """Seit heal() bei wackeligem Gateway nichts mehr anfasst, fasste es auch
+    die Positions-Uhr nicht mehr an. Nachgestellt: ein Song reisst bei 60 s
+    ab, Discord ist eine Minute weg, dazu 30 s Gnadenfrist - _reconnect setzte
+    ihn bei 165 s fort statt bei 60 s (lag das im letzten Stueck, galt er als
+    fertig und flog raus). Genauso falsch waren die Stelle beim Parken und die
+    Uhr, wenn discord.py die Verbindung selbst zurueckholt.
+
+    Jetzt haelt der erste Watchdog-Takt ohne Verbindung die Uhr an, und sie
+    laeuft erst weiter, wenn wieder Ton rausgeht."""
+    import time as _t
+    import laufzeit
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    vorspann = []
+
+    def ffmpeg_audio(_url, before_options="", options=""):
+        vorspann.append(before_options)
+        return SimpleNamespace(cleanup=lambda: None)
+
+    music.discord.FFmpegPCMAudio = ffmpeg_audio
+    uhr = [1000.0]
+    # da = Gateway verbunden (gnade=0), stabil = auch die Gnadenfrist ist um.
+    gateway = {"da": True, "stabil": True}
+    alt = (music.time, laufzeit.client)
+    music.time = SimpleNamespace(monotonic=lambda: uhr[0], time=_t.time)
+    laufzeit.client = SimpleNamespace(
+        gateway_stabil=lambda gnade=None: gateway["da"] if gnade == 0 else gateway["stabil"])
+    verbunden = {"alt": True, "neu": False}
+    voice.is_connected = lambda: verbunden["alt"]
+    neu = _StallVoice()                                 # was der Neuaufbau liefert
+    neu.is_connected = lambda: verbunden["neu"]
+    klappt = [True]
+    beitritte = []
+
+    async def connect(**kw):
+        beitritte.append(kw)
+        if not klappt[0]:
+            raise asyncio.TimeoutError()
+        verbunden["neu"] = True
+        return neu
+
+    guild = SimpleNamespace(id=1, voice_client=None)
+    kanal = _kanal_zum_verbinden(guild, connect)
+    guild.get_channel = lambda _c: kanal
+
+    def takt(n=1):
+        for _ in range(n):
+            uhr[0] += music.VOICE_HEAL_SECONDS
+            player.loop.run_until_complete(player.heal(guild))
+
+    def abriss():
+        # Netz weg: Voice und Gateway. Der erste Watchdog-Takt kommt sofort.
+        verbunden["alt"] = verbunden["neu"] = False
+        gateway["da"] = gateway["stabil"] = False
+        player.loop.run_until_complete(player.heal(guild))
+
+    try:
+        lang = music.Track(title="Lang", stream_url="http://stream/lang",
+                           query="ytsearch1:Lang", duration=200)
+        player.start(lang)
+        player.queue.append(_track("B"))
+
+        # (1) Abriss bei 60 s, eine Minute Discord weg, dann die Gnadenfrist.
+        uhr[0] += 60.0
+        abriss()
+        takt(4)
+        gateway["da"] = True
+        takt(2)
+        assert beitritte == [], "Neuaufbau, bevor das Gateway wieder steht"
+        assert abs(player.position() - 60.0) < 0.5, player.position()
+        gateway["stabil"] = True
+        takt()
+        assert len(beitritte) == 1 and player.voice is neu and player.current is lang
+        assert "-ss 60.00" in vorspann[-1], vorspann[-1]
+
+        # (2) discord.py holt die Verbindung SELBST zurueck und der AudioPlayer
+        #     macht weiter: dann laeuft die Uhr ab da weiter, nicht ab dem Abriss.
+        uhr[0] += 30.0                                  # bis 90 s gehoert
+        abriss()
+        takt(3)
+        verbunden["neu"] = gateway["da"] = True         # neu spielt noch
+        takt()                                          # Gnadenfrist: nur die Uhr
+        uhr[0] += 10.0
+        assert abs(player.position() - 100.0) < 0.5, player.position()
+        assert len(beitritte) == 1, "Neuaufbau, obwohl die Verbindung schon wieder steht"
+
+        # (3) Kommt er gar nicht mehr hinein, parkt er den Song an der Stelle,
+        #     an der der Ton abriss - nicht an der, die die Wanduhr meint.
+        abriss()                                        # bei 100 s
+        takt(4)
+        gateway["da"] = gateway["stabil"] = True
+        klappt[0] = False
+        for _ in range(music.VOICE_RECONNECT_MAX_FAILS):
+            player._last_reconnect = float("-inf")      # Loop-Bremse aus
+            takt()
+        assert player.current is None and player.active_channel_id is None
+        assert [(t.title, t.weiter_ab) for t in player.queue] == [
+            ("Lang", 100.0), ("B", 0.0)], [(t.title, t.weiter_ab) for t in player.queue]
+    finally:
+        music.time, laufzeit.client = alt
+        aufraeumen()
+
+
+def test_musik_abriss_verliert_den_laufenden_song_nicht():
+    """discord.py beendet die Wiedergabe bei einem Abriss selbst: der
+    AudioPlayer gibt nach client.timeout Sekunden ohne Verbindung auf, und
+    VoiceConnectionState.disconnect() (etwa nach einem nachgereichten
+    VOICE_STATE_UPDATE) stoppt ihn. Beides kommt im after-Callback als ganz
+    normales Songende an. Vorher hiess das: Neustart scheitert (keine
+    Verbindung), current weg, Panel weg - nach dem Neuaufbau spielte gleich
+    der naechste Song, und zum Parken war der unterbrochene auch nicht mehr da.
+
+    Jetzt bleibt er stehen, mit seiner Stelle, und der Watchdog setzt ihn
+    fort oder parkt ihn. Nur solange der Watchdog zustaendig ist."""
+    import laufzeit
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    vorspann = []
+
+    def ffmpeg_audio(_url, before_options="", options=""):
+        vorspann.append(before_options)
+        return SimpleNamespace(cleanup=lambda: None)
+
+    music.discord.FFmpegPCMAudio = ffmpeg_audio
+    weggeraeumt = []
+
+    async def retire(p):
+        weggeraeumt.append(p)
+
+    async def sag(_text):
+        return None
+
+    music._retire_panel = retire                # aufraeumen() legt das Original zurueck
+    player._sag = sag
+    alt_client = laufzeit.client
+    laufzeit.client = None                      # ohne Bot: Gateway gilt als stabil
+    verbunden = [True]
+    voice.is_connected = lambda: verbunden[0]
+    guild = SimpleNamespace(id=1, voice_client=voice,
+                            get_channel=lambda _c: _kanal_mit([SimpleNamespace(bot=False)]))
+    lang = music.Track(title="Lang", stream_url="http://stream/lang",
+                       query="ytsearch1:Lang", duration=200)
+
+    def abgerissen_bei(sekunden, *, spielt_noch):
+        verbunden[0], voice.spielt = True, False
+        player.queue[:] = [_track("B")]
+        player.start(lang)
+        player._played, player._seg_start = sekunden, None   # heal hat die Uhr angehalten
+        verbunden[0] = False
+        voice.spielt = spielt_noch
+        player.loop.run_until_complete(player._advance(player._play_gen))   # after-Callback
+
+    try:
+        # (1) discord.py trennt selbst: disconnect() -> stop() -> after.
+        abgerissen_bei(60.0, spielt_noch=False)
+        assert player.current is lang, "unterbrochener Song verloren"
+        assert [t.title for t in player.queue] == ["B"]
+        assert weggeraeumt == [], "Panel weg, obwohl der Song gleich weiterlaeuft"
+        assert player._neustart_versuche == 0, "Abriss als kaputter Song gezaehlt"
+        assert abs(player.position() - 60.0) < 0.5, player.position()
+        player.loop.run_until_complete(player._parken(SimpleNamespace(name="Musik")))
+        assert [(t.title, t.weiter_ab) for t in player.queue] == [("Lang", 60.0), ("B", 0.0)]
+
+        # (2) Der AudioPlayer gibt auf - und meldet danach weiter is_playing(),
+        #     discord.py setzt sein Ende-Signal dabei nicht.
+        player.active_channel_id = 42
+        abgerissen_bei(80.0, spielt_noch=True)
+        assert player.current is lang and not voice.is_playing(), "toter Player gilt als laufend"
+        # Die Verbindung ist wieder da: gleich an der Stelle weiter, ohne drei
+        # stille Takte als 'Zombie' abzuwarten.
+        verbunden[0] = True
+        player.loop.run_until_complete(player.heal(guild))
+        assert player.current is lang and voice.is_playing()
+        assert "-ss 80.00" in vorspann[-1], vorspann[-1]
+        assert [t.title for t in player.queue] == ["B"]
+
+        # (3) Nach 'stop' oder einem Rauswurf (active_channel_id aus) wie bisher.
+        player.active_channel_id = None
+        abgerissen_bei(30.0, spielt_noch=False)
+        assert player.current is None
+    finally:
+        laufzeit.client = alt_client
+        aufraeumen()
+
+
+def test_musik_raeumt_verwaisten_voice_client_nach_neuanmeldung_weg():
+    """Bei einer Neuanmeldung (Sitzung verfallen) leert discord.py seine
+    Voice-Client-Liste (ConnectionState.clear), ohne die Clients zu trennen.
+    self.voice hing dann an einem Client, den discord.py nicht mehr kennt;
+    ein Event.wait(), auf das er gerade wartete (utils.sane_wait_for raeumt
+    es nicht weg), kam nie mehr frei - 'Task was destroyed but it is
+    pending!'. Sobald das Gateway wieder da ist, trennt der Watchdog so einen
+    Client selbst - die Trennung ist der Zustandswechsel, der es weckt."""
+    import time as _t
+    import laufzeit
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    getrennt = []
+
+    class Verwaist:
+        def is_connected(self):
+            return False
+
+        async def disconnect(self, force=False):
+            getrennt.append(force)
+
+    gateway = {"da": False}
+    alt_client = laufzeit.client
+    # Gnadenfrist laeuft (gnade=None -> False), verbunden nur, wenn 'da'.
+    laufzeit.client = SimpleNamespace(
+        gateway_stabil=lambda gnade=None: gateway["da"] and gnade == 0)
+    guild = SimpleNamespace(id=1, voice_client=None,
+                            get_channel=lambda _c: _kanal_mit([SimpleNamespace(bot=False)]))
+    try:
+        player.start(_track("A"))
+        waise = Verwaist()
+        player.voice = waise
+        # Gateway noch weg: nichts anfassen.
+        player.loop.run_until_complete(player.heal(guild))
+        assert getrennt == [] and player.voice is waise
+
+        # Wieder da (Gnadenfrist): weg damit, noch vor dem Neuaufbau.
+        gateway["da"] = True
+        player.loop.run_until_complete(player.heal(guild))
+        assert getrennt == [True] and player.voice is None
+        assert player._selbst_getrennt_bis > _t.monotonic(), "Trennung gilt als Rauswurf"
+        assert player.current is not None, "den Song setzt der Neuaufbau fort"
+
+        # Einen Client, den discord.py noch kennt oder der verbunden ist, nie.
+        guild.voice_client = player.voice = Verwaist()
+        player.loop.run_until_complete(player.heal(guild))
+        player.voice = voice
+        player.loop.run_until_complete(player.heal(guild))
+        assert getrennt == [True] and player.voice is voice
+    finally:
+        laufzeit.client = alt_client
+        aufraeumen()
+
+
+def test_musik_live_stall_zaehlt_nach_langem_lauf_frisch():
+    """Der 'nie zweimal neu starten'-Zaehler eines Live-Streams wurde nur im
+    Abbruch-Weg wieder frisch (LIVE_NEUSTART_FRISCH). Der stille Stall in
+    heal() zaehlte immer weiter: ein 24/7-Stream mit drei kurzen Haengern,
+    ueber Stunden verteilt, flog raus ('liefert keinen Ton mehr')."""
+    import music
+    player, voice, aufraeumen = _musik_umgebung()
+    guild = SimpleNamespace(id=1, get_channel=lambda _c: _VoiceChannelStub())
+    try:
+        live = music.Track(title="lofi radio", stream_url="http://stream/live",
+                           query="ytsearch1:lofi radio", live=True)
+        naechster = _track("Naechster")
+        player.start(live)
+        player.queue.append(naechster)
+
+        def haenger_nach(sekunden):
+            player._neustart_versuche = music.NEUSTART_MAX_VERSUCHE
+            player._played, player._seg_start = sekunden, None
+            voice.stall = False
+            voice.takt(50)
+            asyncio.run(player.heal(guild))
+            voice.stall = True                  # ab hier kommt kein Ton mehr
+            for _ in range(music.VOICE_STALL_TICKS):
+                voice.takt(50)
+                asyncio.run(player.heal(guild))
+
+        haenger_nach(music.LIVE_NEUSTART_FRISCH + 60.0)
+        assert player.current is live, "lief lange sauber und flog trotzdem raus"
+        assert player._neustart_versuche == 1 and player.queue == [naechster]
+
+        # Haengt er dagegen gleich wieder: aufgeben, weiter.
+        haenger_nach(5.0)
+        assert player.current is naechster, player.current
+    finally:
+        aufraeumen()
+
+
+def test_musik_zufall_und_verlauf_setzen_eine_geparkte_schlange_fort():
+    """'spiel', 'weiter' und Playlists setzten eine geparkte Schlange fort -
+    der Zufalls-Song aus dem Genre-Dropdown und 'nochmal' aus dem Verlauf
+    fragten nur is_active(). Ihr Song sprang vor die geparkten, und das
+    Parken war nebenbei weg. Jetzt stellen sie sich hinten an, wie 'spiel'."""
+    import music
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    neu = music.Track(title="Neu", stream_url="http://stream/neu", query="ytsearch1:Neu")
+    gesendet = []
+
+    async def extract(_eingabe, *a, **k):
+        return neu
+
+    async def nix(*a, **k):
+        return None
+
+    async def merken(*a, **k):
+        gesendet.append(k.get("embed"))
+
+    def inter():
+        hier = SimpleNamespace(id=42, name="Musik", guild=SimpleNamespace(voice_client=voice))
+        return SimpleNamespace(
+            guild=SimpleNamespace(id=1), channel=SimpleNamespace(id=2),
+            user=SimpleNamespace(id=7, display_name="wer", voice=SimpleNamespace(channel=hier)),
+            response=SimpleNamespace(defer=nix, send_message=merken),
+            followup=SimpleNamespace(send=merken), edit_original_response=nix)
+
+    alt = (mi._enabled, mi._player_for, mi._extract, mi.verlauf_eintrag, mi._send_panel)
+    mi._enabled = True
+    mi._player_for = lambda _gid: player
+    mi._extract = extract
+    mi.verlauf_eintrag = lambda _gid, _nr: ({"t": "Neu", "u": "https://x/neu"}, "")
+    mi._send_panel = nix
+    try:
+        for name, klick in (("Zufall", lambda: mi.start_random(inter(), "rock")),
+                            ("Verlauf", lambda: mi.verlauf_abspielen(inter(), 1))):
+            geparkt = music.Track(title="Alt", stream_url="http://stream/alt",
+                                  query="ytsearch1:Alt", duration=300, weiter_ab=30.0)
+            voice.spielt = False
+            player.current = None
+            player.queue[:] = [geparkt]
+            player._geparkt, player.active_channel_id = True, None
+            gesendet.clear()
+            asyncio.run(klick())
+            assert player.current is not None and player.current.title == "Alt", (
+                name, player.current)
+            assert abs(player.position() - 30.0) < 1.0, (name, player.position())
+            assert player.queue == [neu], (name, player.queue)
+            assert not player._geparkt, name
+            assert gesendet and "#1" in _embed_text(gesendet[-1]), (name, gesendet)
+    finally:
+        mi._enabled, mi._player_for, mi._extract, mi.verlauf_eintrag, mi._send_panel = alt
+        aufraeumen()
+
+
+def test_musik_rauswurf_zaehlt_auch_kurz_nach_einem_routine_resume():
+    """flo_getrennt nahm JEDE Trennung in den 30 s nach irgendeinem Resume
+    fuers Netz - auch nach Discords routinemaessigem op-7-Reconnect. Ein
+    Moderator-Rauswurf in dem Fenster zaehlte nicht, und nach der Gnadenfrist
+    holte der Watchdog Flo in den Kanal zurueck, aus dem er geflogen war.
+
+    Jetzt fragt flo_getrennt das engere gateway_wackelt - und zwar schon beim
+    Event: verpasste Events kommen nach einem Resume Augenblicke VOR
+    'resumed', ausgewertet wird erst nach VOICE_RAUSWURF_FRIST."""
+    import laufzeit
+    import music
+    mi = music.instance
+    gid = 4720
+    player, voice, aufraeumen = _musik_umgebung()
+    alt = (music.VOICE_RAUSWURF_FRIST, mi._players.get(gid), laufzeit.client)
+    music.VOICE_RAUSWURF_FRIST = 0.0
+    mi._players[gid] = player
+
+    async def sag(_text):
+        return None
+
+    player._sag = sag
+    antworten = []
+    laufzeit.client = SimpleNamespace(
+        gateway_stabil=lambda gnade=None: False,     # die Gnadenfrist des Watchdogs laeuft
+        gateway_wackelt=lambda: antworten.pop(0) if antworten else False)
+    weg = SimpleNamespace(id=gid, voice_client=None)
+    try:
+        player.start(_track("A"))
+        player.queue.append(_track("B"))
+        # Beim Event wackelte es noch (nachgereicht), nach der Frist nicht mehr:
+        # trotzdem das Netz.
+        antworten[:] = [True, False]
+        assert asyncio.run(mi.flo_getrennt(weg, 42)) is False
+        assert player.active_channel_id == 42 and player.queue
+
+        # Nur noch die Gnadenfrist des Watchdogs - ein Rauswurf ist ein Rauswurf.
+        assert asyncio.run(mi.flo_getrennt(weg, 42)) is True
+        assert player.active_channel_id is None and not player.queue
+    finally:
+        music.VOICE_RAUSWURF_FRIST = alt[0]
+        if alt[1] is None:
+            mi._players.pop(gid, None)
+        else:
+            mi._players[gid] = alt[1]
+        laufzeit.client = alt[2]
+        aufraeumen()
 
 
 
