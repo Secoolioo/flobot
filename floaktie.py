@@ -1816,14 +1816,15 @@ class FloAktie(FeatureBasis):
         view = KursView(days)
         try:
             file = await self._chart_file(days, self._range_label(days))
-            view.message = await message.reply(
-                file=file, view=view, mention_author=False)
-            self._protect(view.message, slot="chart")
-            self._chart_msg = view.message
-            self._chart_days = days
+            # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+            view.message = await basis.antworte(message, file=file, view=view)
         except Exception:  # noqa: BLE001
             log.exception("Kurs-Chart konnte nicht gesendet werden")
+        if view.message is None:
             return "Der Kurs-Chart klemmt gerade - versuch's gleich nochmal."
+        self._protect(view.message, slot="chart")
+        self._chart_msg = view.message
+        self._chart_days = days
         return HANDLED
 
     def _panel_embed(self, member=None):
@@ -2167,14 +2168,16 @@ class FloAktie(FeatureBasis):
         # aktualisiert, sobald sich der Boersenwert aendert (jede Minute + bei Trades).
         view = FloAktieView()
         try:
-            view.message = await message.reply(
-                embed=self._panel_embed(message.author), view=view, mention_author=False)
-            self._protect(view.message)
-            self._panel_msg = view.message
-            self._panel_uid = message.author.id
-        except (discord.HTTPException, TypeError):
+            # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+            view.message = await basis.antworte(
+                message, embed=self._panel_embed(message.author), view=view)
+        except TypeError:
             log.exception("FloCorp-Panel konnte nicht gesendet werden")
+        if view.message is None:
             return "Die Börse klemmt gerade - versuch's gleich nochmal."
+        self._protect(view.message)
+        self._panel_msg = view.message
+        self._panel_uid = message.author.id
         return HANDLED
 
     @staticmethod

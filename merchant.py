@@ -445,12 +445,14 @@ class Merchant(FeatureBasis):
             return self._closed_text()
         view = HaendlerView()
         try:
-            view.message = await message.reply(
-                embed=self._panel_embed(), view=view, mention_author=False)
-            self._protect(view.message)
-        except (discord.HTTPException, TypeError):
+            # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+            view.message = await basis.antworte(message, embed=self._panel_embed(),
+                                                view=view)
+        except TypeError:
             log.exception("Haendler-Panel konnte nicht gesendet werden")
+        if view.message is None:
             return "Der Händler kramt gerade in seiner Truhe - versuch's gleich nochmal."
+        self._protect(view.message)
         return HANDLED
 
     # --- Kauf -------------------------------------------------------------

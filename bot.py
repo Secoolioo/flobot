@@ -994,8 +994,11 @@ class FloBot(discord.Client):
         Hier melden sich die Knoepfe an, die einen Neustart ueberleben: ein
         DynamicItem erkennt man an seiner custom_id, egal welche Nachricht es
         traegt. Vorher waren die Panels von Lotto, Aktie und Haendler nach jedem
-        Neustart tot ("Diese Interaktion ist fehlgeschlagen")."""
-        for modul in (lotto, floaktie, merchant, music, voicegags):
+        Neustart tot ("Diese Interaktion ist fehlgeschlagen").
+
+        Giveaway- und Wordle-Knopf stehen auch hier: sie waren normale Knoepfe
+        in Views ohne Timeout, und discord.py hielt jede davon fuer immer fest."""
+        for modul in (lotto, floaktie, merchant, music, voicegags, giveaway, arbeit):
             knoepfe = getattr(modul, "DYNAMISCHE_KNOEPFE", ()) or ()
             if knoepfe:
                 self.add_dynamic_items(*knoepfe)

@@ -218,6 +218,12 @@ class Giveaway(FeatureBasis):
         if self._store is not None:
             await self._store.save()
 
+    def _spaeter_speichern(self):
+        """Gesammelt speichern (store.save_soon) - fuer Klicks, die zuerst
+        antworten muessen. Die Ziehung liest ohnehin den Stand im Speicher."""
+        if self._store is not None:
+            self._store.save_soon()
+
     def _active(self):
         return self._state().setdefault("active", {})
 
@@ -874,6 +880,11 @@ class Giveaway(FeatureBasis):
     # --- Mitmachen --------------------------------------------------------
     async def join(self, interaction, gid):
         """Knopf 'Mitmachen'. Antwortet immer NUR dem Klickenden (ephemeral)."""
+        if not self._enabled:
+            # Der Knopf ist dauerhaft angemeldet (DynamicItem) - auch dann, wenn
+            # Giveaways inzwischen ausgeschaltet sind und es keinen Store gibt.
+            await self._ephemeral(interaction, "Giveaways sind gerade aus.")
+            return
         g = self._active().get(str(gid))
         if g is None:
             await self._ephemeral(interaction, "Dieses Giveaway läuft nicht mehr.")
@@ -899,17 +910,26 @@ class Giveaway(FeatureBasis):
                              f"Gewinnchance: **{100.0 / max(1, len(entries)):.1f}%**")
             return
         entries.append(uid)
-        await self._save()
+        # ERST antworten, DANN speichern. Vorher lief hier ein volles save()
+        # (Sperre + fsync) VOR der Antwort. Klickten viele gleichzeitig, standen
+        # die spaeten Klicks in der Schlange hinter den anderen Speicherungen,
+        # rissen Discords 3-Sekunden-Frist und sahen "Interaktion
+        # fehlgeschlagen" - obwohl sie eingetragen waren. Der Eintrag steht
+        # sofort im Speicher (die Ziehung liest genau den), auf die Platte
+        # kommt er gesammelt.
         await self._ephemeral(
             interaction, f"🎉 Du bist dabei! **{fmt(len(entries))}** Teilnehmer · "
                          f"Gewinnchance **{100.0 / len(entries):.1f}%**")
+        self._spaeter_speichern()
         await self._panel_aktualisieren(interaction, g)
 
     async def _ephemeral(self, interaction, text):
         try:
             await interaction.response.send_message(text, ephemeral=True)
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as exc:
+            # Nicht mehr still: eine abgelaufene Interaktion (10062) heisst, der
+            # Klickende hat "Interaktion fehlgeschlagen" gesehen.
+            log.warning("Giveaway-Antwort nicht zustellbar: %s", exc)
 
     async def _panel_aktualisieren(self, interaction, g):
         """Teilnehmerzahl im Panel nachziehen - gedrosselt (Rate-Limit)."""
@@ -1180,21 +1200,23 @@ class Giveaway(FeatureBasis):
 
     # --- Views nach Neustart wieder anmelden ------------------------------
     def register_views(self, client):
-        """Macht die Mitmach-Knoepfe nach einem Bot-Neustart wieder klickbar."""
+        """Merkt sich den Client (fuer Ansagen) und meldet den Mitmach-Knopf an.
+
+        Frueher stand hier je laufendem Giveaway eine eigene View, die discord.py
+        nie wieder losliess. Jetzt ist der Knopf ein DynamicItem: EINE Vorlage
+        fuer alle Giveaways. bot.setup_hook meldet sie schon an - doppelt
+        anmelden ist harmlos (discord.py merkt sie sich je Muster).
+        Rueckgabe: wie viele laufende Giveaways damit wieder klickbar sind."""
         if client is not None:
             self._client = client
         if not self._enabled or client is None:
             return 0
-        n = 0
-        for g in list(self._active().values()):
-            try:
-                client.add_view(JoinView(int(g["id"])))
-                n += 1
-            except Exception:  # noqa: BLE001
-                log.debug("Giveaway-View #%s nicht anmeldbar", g.get("id"), exc_info=True)
-        if n:
-            log.info("%d Giveaway-Knopf/Knöpfe wieder angemeldet.", n)
-        return n
+        try:
+            client.add_dynamic_items(*DYNAMISCHE_KNOEPFE)
+        except Exception:  # noqa: BLE001
+            log.debug("Giveaway-Knopf nicht anmeldbar", exc_info=True)
+            return 0
+        return len(self._active())
 
     def _protect(self, msg, *, slot="panel"):
         """Neues Panel schuetzen und das VORIGE freigeben.
@@ -1217,24 +1239,55 @@ class Giveaway(FeatureBasis):
 
 
 # --- Mitmach-Knopf (ueberlebt Neustarts dank custom_id) ----------------------
-class _JoinButton(discord.ui.Button):
+# Ein DynamicItem mit fester custom_id ('flo:gw:12' = Giveaway 12). Was ein
+# Klick sonst noch wissen muss, steht im Store.
+#
+# Vorher: ein normaler Knopf in einer View mit timeout=None. Discord.py legte
+# JEDE dieser Views fuer immer ab - beim Posten und noch einmal je laufendem
+# Giveaway in register_views -, und niemand hat sie je gestoppt, auch nach der
+# Ziehung nicht (das Abschluss-Edit nimmt nur den Knopf aus der Nachricht).
+# Jedes Giveaway ein Leck. Eine View nur aus DynamicItems legt discord.py gar
+# nicht erst ab; bot.py meldet die Vorlage einmal an (DYNAMISCHE_KNOEPFE).
+# Die custom_id ist dieselbe geblieben - alte Panels bleiben klickbar.
+#
+# WICHTIG: JoinView NIE stop()pen und keinen Timeout geben. stop() (und ein
+# Timeout ruft intern dasselbe) entfernt die Vorlage GLOBAL aus discord.py -
+# danach waeren die Knoepfe ALLER laufenden Giveaways tot.
+class _JoinButton(discord.ui.DynamicItem[discord.ui.Button],
+                  template=r"flo:gw:(?P<gid>[0-9]{1,12})"):
     def __init__(self, gid):
-        super().__init__(label="Mitmachen", emoji="🎉",
-                         style=discord.ButtonStyle.success,
-                         custom_id=f"flo:gw:{int(gid)}")
+        super().__init__(discord.ui.Button(
+            label="Mitmachen", emoji="🎉", style=discord.ButtonStyle.success,
+            custom_id=f"flo:gw:{int(gid)}"))
         self.gid = int(gid)
+
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["gid"]))
 
     async def callback(self, interaction):
         await instance.join(interaction, self.gid)
 
 
 class JoinView(discord.ui.View):
-    """Bleibt dauerhaft aktiv (timeout=None) - auch nach einem Bot-Neustart."""
+    """Bleibt dauerhaft aktiv (timeout=None) - auch nach einem Bot-Neustart.
+
+    Nur noch ein Behaelter fuer den DynamicItem-Knopf oben. Kein Timeout, nie
+    stop() (siehe oben)."""
 
     def __init__(self, gid):
         super().__init__(timeout=None)
         self.message = None
         self.add_item(_JoinButton(gid))
+
+
+#: Alle DynamicItem-Klassen dieses Moduls. bot.py meldet sie im setup_hook an
+#: (client.add_dynamic_items), damit die Knoepfe nach einem Neustart weiterleben.
+DYNAMISCHE_KNOEPFE = (_JoinButton,)
 
 
 # --- Singleton + Modul-API ---------------------------------------------------

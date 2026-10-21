@@ -13,7 +13,6 @@ from testhilfe import (  # noqa: F401 - die privaten Helfer
     _schulden_setup, _with_economy)
 
 
-
 def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
     """_roulette_payout liefert bei einem unbekannten Tipp (None, target) - und
     direkt danach stand 'payout > 0'. Das ist ein TypeError, kein Fehlschlag.
@@ -56,8 +55,6 @@ def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
 
     # Ein gueltiger Tipp verhaelt sich unveraendert.
     assert casino._roulette_payout("rot", 10, 1) == (20, "Rot")
-
-
 
 
 # --- Steal (Coin-Raub) ---------------------------------------------------------
@@ -129,13 +126,9 @@ def test_steal_heist():
         economy.instance._store, economy.instance._enabled = alt_eco
 
 
-
-
 def test_economy_display_name_of():
     # economy ist im Test nicht aktiviert -> None statt Crash.
     assert economy.display_name_of(123456789012345678) is None
-
-
 
 
 # --- Luxus-Shop ------------------------------------------------------------------
@@ -175,16 +168,12 @@ def test_luxus_katalog():
     assert luxus.THRONE_START >= preise[0]
 
 
-
-
 def test_luxus_fmt_coins():
     assert luxus.fmt_coins(1_500) == "1.500"
     assert luxus.fmt_coins(400_000) == "400.000"
     assert luxus.fmt_coins(2_500_000) == "2,5 Mio"
     assert luxus.fmt_coins(20_000_000) == "20 Mio"
     assert luxus.fmt_coins(1_000_000_000) == "1 Mrd"
-
-
 
 
 def test_luxus_besitz_und_rahmen():
@@ -212,8 +201,6 @@ def test_luxus_besitz_und_rahmen():
     finally:
         luxus.instance._store = None
         luxus.instance._enabled = False
-
-
 
 
 def test_luxus_kauf_antwortet_zuerst():
@@ -258,8 +245,6 @@ def test_luxus_kauf_antwortet_zuerst():
         vars(lx).pop("_flush_all", None)
         lx._store, lx._enabled = alt
         restore()
-
-
 
 
 # --- Coin-Handelsbuch ------------------------------------------------------------
@@ -318,8 +303,6 @@ def test_handel_buchhaltung():
         handel.instance._store, handel.instance._enabled = alt
 
 
-
-
 # --- economy Titel-API (grant/remove/list/owns) --------------------------------
 def test_economy_title_helpers():
     restore = _with_economy({1: 0})
@@ -344,8 +327,6 @@ def test_economy_title_helpers():
         assert economy.list_titles(1)[0]["rarity"] == "normal"
     finally:
         restore()
-
-
 
 
 # --- economy: Aktien duerfen ins Minus (Casino nicht) --------------------------
@@ -375,8 +356,6 @@ def test_economy_stock_debt():
         assert economy.get_coins(2) == 0
     finally:
         restore()
-
-
 
 
 # --- Fahrender Haendler --------------------------------------------------------
@@ -475,8 +454,6 @@ def test_merchant_shop_und_trade():
         restore_eco()
 
 
-
-
 def test_haendler_panel_ueberlebt_den_neustart():
     """Der Haendler steht eine Stunde da - aber nach einem Neustart in dieser
     Stunde war sein Panel tot ("Interaktion fehlgeschlagen"), und jedes
@@ -552,8 +529,6 @@ def test_haendler_panel_ueberlebt_den_neustart():
         restore_eco()
 
 
-
-
 # --- Titel: die Seltenheits-Leiter -------------------------------------------
 def test_titles_leiter():
     """Acht Stufen, saubere Verteilung, eigene Farbe/Rolle je Stufe - und die
@@ -597,8 +572,6 @@ def test_titles_leiter():
                for t in ("Goldener König", "Wilder Wolf", "Titan des Chaos"))
     # 'goettlich' ist die hoechste Stufe.
     assert titles.RANK["goettlich"] == max(titles.RANK.values())
-
-
 
 
 # --- Monats-Lotto --------------------------------------------------------------
@@ -718,8 +691,6 @@ def test_lotto_flow():
         restore_eco()
 
 
-
-
 def test_lotto_knoepfe_ueberleben_den_neustart():
     """Nach JEDEM Neustart waren alle Lotto-Panels tot (vom Betreiber gemeldet).
 
@@ -781,8 +752,6 @@ def test_lotto_knoepfe_ueberleben_den_neustart():
         restore_eco()
 
 
-
-
 def test_knopf_muster_ueberschneiden_sich_nie():
     """Die Panels von Lotto, Aktie und Haendler leben ueber Neustarts, weil ihre
     Knoepfe DynamicItems sind (siehe test_lotto_knoepfe_ueberleben_den_neustart).
@@ -823,8 +792,6 @@ def test_knopf_muster_ueberschneiden_sich_nie():
                     assert passend == [type(knopf).__name__], (cid, passend)
     finally:
         merchant.instance._store = alt
-
-
 
 
 def test_floaktie_kein_pump_and_dump():
@@ -886,8 +853,6 @@ def test_floaktie_kein_pump_and_dump():
         assert economy.get_coins(1) <= bal
     finally:
         restore()
-
-
 
 
 def test_exploit_fixes_games_und_steal():
@@ -977,8 +942,6 @@ def test_exploit_fixes_games_und_steal():
     assert economy.parse_amount("-5") is None
 
 
-
-
 def test_exploit_kurspump_und_verschluckte_einsaetze():
     """REGRESSION für die drei im zweiten Audit BEWIESENEN Löcher:
 
@@ -1052,8 +1015,6 @@ def test_exploit_kurspump_und_verschluckte_einsaetze():
         assert f'_slot_frei("{art}"' in quelle, art
 
 
-
-
 def test_money_leaderboard_bild_und_namen():
     """'flo reichste' ist ein BILD, und ein fehlender/ID-artiger Name wird zum
     echten Discord-Namen aufgelöst (war ein Bug: da stand die rohe ID)."""
@@ -1093,8 +1054,6 @@ def test_money_leaderboard_bild_und_namen():
         restore()
 
 
-
-
 def test_economy_money_leaderboard():
     """Geld-Rangliste sortiert nach aktuellem Kontostand, zeigt 'insgesamt verdient'
     (Lebenszeit) mit Tausenderpunkten; earned zaehlt nur echte Zufluesse."""
@@ -1116,8 +1075,6 @@ def test_economy_money_leaderboard():
         assert all(r["earned"] >= r["coins"] for r in rows)
     finally:
         restore()
-
-
 
 
 def test_economy_saetze_sind_keine_befehle():
@@ -1193,8 +1150,6 @@ def test_economy_saetze_sind_keine_befehle():
         restore()
 
 
-
-
 def test_schulden_entstehen_nur_mit_zustimmung():
     """DER Kernumbau: eine Zahlung ist ein GESCHENK, keine Forderung.
 
@@ -1234,8 +1189,6 @@ def test_schulden_entstehen_nur_mit_zustimmung():
         assert sch.saldo(1, 2) == 6_000
     finally:
         restore()
-
-
 
 
 def test_schulden_pay_geht_immer_durch():
@@ -1290,8 +1243,6 @@ def test_schulden_pay_geht_immer_durch():
     finally:
         economy.instance._flush = alt_flush
         restore()
-
-
 
 
 def test_pay_zahlt_an_den_getippten_menschen():
@@ -1350,8 +1301,6 @@ def test_pay_zahlt_an_den_getippten_menschen():
         restore()
 
 
-
-
 def test_schulden_automatische_tilgung():
     """Der Zwang zum Zahlen: von jeder ECHTEN Einnahme wandert ein Anteil
     automatisch an die Glaeubiger - anteilig an ALLE, nicht mehr alles an den
@@ -1407,8 +1356,6 @@ def test_schulden_automatische_tilgung():
         assert sch._tilgung_laeuft is False
     finally:
         restore()
-
-
 
 
 def test_giveaway_sprachverstaendnis():
@@ -1480,8 +1427,6 @@ def test_giveaway_sprachverstaendnis():
         restore()
 
 
-
-
 def test_shop_wuerfelt_nur_einmal_pro_nacht():
     """Die Tagesauswahl wechselt GENAU EINMAL, naemlich um 2 Uhr.
 
@@ -1520,8 +1465,6 @@ def test_shop_wuerfelt_nur_einmal_pro_nacht():
         assert [i["label"] for i in st3["items"]] == namen1
     finally:
         e._store, e._enabled = alt
-
-
 
 
 def test_voice_coins_haben_einen_tagesdeckel():
@@ -1587,8 +1530,6 @@ def test_voice_coins_haben_einen_tagesdeckel():
         e._store, e._enabled, e.XP_PER_VOICE_TICK, e._today = alt
 
 
-
-
 def test_erste_nachricht_nach_dem_hochfahren_bringt_xp():
     """time.monotonic() zaehlt ab dem Hochfahren des RECHNERS. Der Nachrichten-
     Cooldown stand fuer "noch nie geschrieben" auf 0.0 - in den ersten 45 s
@@ -1629,8 +1570,6 @@ def test_erste_nachricht_nach_dem_hochfahren_bringt_xp():
         economy.time = alt_time
         vars(e).pop("add_xp", None)
         e._store, e._enabled, e._last_msg_xp = alt
-
-
 
 
 def test_einsatz_rueckgabe_ist_keine_einnahme():
@@ -1710,8 +1649,6 @@ def test_einsatz_rueckgabe_ist_keine_einnahme():
          games.instance._store, games.instance._enabled) = alt
 
 
-
-
 def test_store_verliert_nie_daten():
     """Eine kaputte Datei darf NIEMALS stillschweigend ueberschrieben werden.
 
@@ -1762,8 +1699,6 @@ def test_store_verliert_nie_daten():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-
-
 def test_giveaway_verneinung_startet_nie():
     """Eine Verneinung darf NIE als Zustimmung durchgehen - hier haengt Geld dran.
 
@@ -1790,8 +1725,6 @@ def test_giveaway_verneinung_startet_nie():
     for t in zusagen:
         assert g.is_yes(t), t
         assert not g.is_no(t), t
-
-
 
 
 def test_giveaway_geldweg_und_ziehung():
@@ -1850,8 +1783,6 @@ def test_giveaway_geldweg_und_ziehung():
         restore()
 
 
-
-
 def test_giveaway_exploit_schutz():
     """REGRESSION: kein Geld aus dem Nichts. Zu wenig Guthaben, doppeltes Ziehen,
     Veranstalter als Teilnehmer, mehrere Giveaways gleichzeitig."""
@@ -1897,8 +1828,6 @@ def test_giveaway_exploit_schutz():
         assert len(gw._active()) == 1
     finally:
         restore()
-
-
 
 
 def test_giveaway_escrow_grenzen():
@@ -1958,8 +1887,6 @@ def test_giveaway_escrow_grenzen():
         restore()
 
 
-
-
 def test_giveaway_schnellstart_und_assistent():
     """'giveaway 5k 2h weil ...' liest alles aus einer Zeile; der Assistent fragt
     nur das Fehlende nach und akzeptiert lockere Antworten."""
@@ -2012,8 +1939,6 @@ def test_giveaway_schnellstart_und_assistent():
         assert economy.get_coins(1) == 100_000 and not gw._active()
     finally:
         restore()
-
-
 
 
 def test_giveaway_gw_heisst_meistens_glueckwunsch():
@@ -2154,8 +2079,6 @@ def test_admin_meldet_das_echte_delta():
          economy.instance._enabled) = alt
 
 
-
-
 def test_teurer_kauf_fragt_nach():
     """Ueber `kaufen <n>` kostet ein Tippfehler in EINER Ziffer bis zu 90 Mio
     Coins - unwiderruflich und bisher ohne jede Rueckfrage.
@@ -2229,8 +2152,6 @@ def test_teurer_kauf_fragt_nach():
         e._store, e._enabled, e._kauf_offen, e._sync_role = alt
 
 
-
-
 def test_shop_und_inventar_antworten_vor_dem_rollen_sync():
     """Discord gibt einem Klick 3 Sekunden. Der Shop-Knopf und die Inventar-
     Knoepfe zogen aber ZUERST die Seltenheits-Rolle nach (bis zu drei REST-
@@ -2290,8 +2211,6 @@ def test_shop_und_inventar_antworten_vor_dem_rollen_sync():
     finally:
         vars(e).pop("_sync_role", None)
         e._store, e._enabled = alt
-
-
 
 
 def test_floaktie_kein_minus_und_anteil_limit():
@@ -2360,8 +2279,6 @@ def test_floaktie_kein_minus_und_anteil_limit():
         restore()
 
 
-
-
 def test_luxus_jenseits_der_milliarde():
     """Die neuen Stufen ueber dem Imperium muessen WIRKEN: sichtbarer Rahmen,
     richtige Besitz-Logik, eigener KI-Ton. REGRESSION: get_frame() hatte einen
@@ -2404,8 +2321,6 @@ def test_luxus_jenseits_der_milliarde():
         lx._store, lx._enabled = alt
 
 
-
-
 def test_bilder_grosse_zahlen():
     """REGRESSION (Design): Seit der Wirtschafts-Umstellung sind Millionen und
     Milliarden normal. '3.000.000.000' war breiter als seine Spalte und lief in die
@@ -2440,8 +2355,6 @@ def test_bilder_grosse_zahlen():
     f = r._font(23)
     for v in (123_456_789_012, 3_000_000_000, 9_999_999):
         assert d.textlength(r._coin_kurz(v), font=f) < 170, v
-
-
 
 
 def test_seltenheiten_ueberall_bekannt():
@@ -2511,8 +2424,6 @@ def test_seltenheiten_ueberall_bekannt():
     finally:
         titles.RARITY["normal"]["pool_pct"] = alt_pct
         t.__dict__["_grenz_cache"] = alt_cache
-
-
 
 
 def test_seltenheits_rollen_werden_gepflegt():
@@ -2589,8 +2500,6 @@ def test_seltenheits_rollen_werden_gepflegt():
         assert not stats2["created"] and not stats2["recolored"]
     finally:
         restore()
-
-
 
 
 def test_vermoegenssteuer_als_senke():
@@ -2720,8 +2629,6 @@ def test_vermoegenssteuer_als_senke():
         restore()
 
 
-
-
 def test_economy_reset_umfang():
     """Das Reset-Skript muss GENAU das treffen, was es soll: alles Coin-nahe auf 0,
     aber Level/XP, Voice-Stunden und Chat-Nachrichten unangetastet.
@@ -2828,8 +2735,6 @@ def test_economy_reset_umfang():
     assert "schreiben(" not in quelle[i_lade:i_schreib]
 
 
-
-
 def test_embeds_statt_fliesstext():
     """Die haeufigsten Antworten muessen ECHTE Embeds sein (mit Farbe, Feldern und
     allem, was man nach der Aktion wissen will) - vorher waren das ein bis zwei
@@ -2895,8 +2800,6 @@ def test_embeds_statt_fliesstext():
         restore()
 
 
-
-
 def test_aktie_zaehlt_alle_server_zusammen():
     """Die Aktie ist fuer alle Server dieselbe: die Aktivitaet wird summiert,
     die Dividende bekommt trotzdem jeder nur EINMAL."""
@@ -2946,8 +2849,6 @@ def test_aktie_zaehlt_alle_server_zusammen():
         fa._store, fa._enabled = alt_store, alt_on
 
 
-
-
 # --- Schwere Fehler aus dem Volltest (B1-B8) --------------------------------
 def test_alle_modul_aliase_existieren():
     """bot.py ruft Modul-Funktionen ueber den Alias am Dateiende auf.
@@ -2973,8 +2874,6 @@ def test_alle_modul_aliase_existieren():
         if not hasattr(m, attr):
             fehlend.append(f"{mod}.{attr}")
     assert not fehlend, f"bot.py ruft nicht existierende Aliase: {sorted(set(fehlend))}"
-
-
 
 
 def test_kaputte_datei_haelt_den_bot_nicht_auf():
@@ -3034,8 +2933,6 @@ def test_kaputte_datei_haelt_den_bot_nicht_auf():
         store.DATA_DIR = alt_dir
 
 
-
-
 def test_haendler_nimmt_keinen_besseren_titel_als_einsatz():
     """Der Tausch prueft nur eine UNTERGRENZE. Wer fuer einen Tausch
     'mindestens episch' braucht, konnte damit seinen GOETTLICHEN Titel
@@ -3069,8 +2966,6 @@ def test_haendler_nimmt_keinen_besseren_titel_als_einsatz():
     assert titles.RANK["goettlich"] > titles.RANK["exklusiv"] > titles.RANK["episch"]
 
 
-
-
 def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
     """Die Bestaetigung band nur an die SLOT-NUMMER. Wuerfelt der Shop um 2 Uhr
     neu, kaufte 'nochmal derselbe Befehl' danach den Titel auf derselben
@@ -3095,8 +2990,6 @@ def test_kauf_rueckfrage_haengt_am_titel_nicht_an_der_nummer():
         e._kauf_offen = alt
 
 
-
-
 def test_los_und_lose_erreichen_das_lotto():
     """'Flo los' / 'Flo lose 5' landeten im Casino (frueher in der Kette) als
     Rubbellos - das Lotto-Panel war darueber nicht erreichbar."""
@@ -3110,8 +3003,6 @@ def test_los_und_lose_erreichen_das_lotto():
     # Das Rubbellos behaelt seine eindeutigen Woerter.
     for wort in ("rubbellos", "rubbel", "scratch"):
         assert f'"{wort}"' in handle_teil, wort
-
-
 
 
 def test_los_als_normales_wort_oeffnet_kein_lotto():
@@ -3145,8 +3036,6 @@ def test_los_als_normales_wort_oeffnet_kein_lotto():
     finally:
         lt._store, lt._enabled = alt
         restore_eco()
-
-
 
 
 def test_kleine_fehler_der_wirtschaft():
@@ -3186,8 +3075,6 @@ def test_kleine_fehler_der_wirtschaft():
     assert "SKILL_MAX_BET" in slot_teil, "Slot-Textpfad ohne Hoechsteinsatz"
 
 
-
-
 def test_giveaway_schnellstart_lost_nichts_aus():
     """'jetzt', 'ende' und 'stop' sind normale Woerter. Weil sie IRGENDWO im
     Text gesucht wurden, loste 'giveaway 5k 2h weil ich jetzt Lust habe' ein
@@ -3197,8 +3084,6 @@ def test_giveaway_schnellstart_lost_nichts_aus():
     assert "erstes" in teil and "low.split()" in teil, \
         "ziehen/abbrechen wird nicht mehr am ERSTEN Wort erkannt"
     assert "self._hat(low, (\"abbrechen\"" not in teil
-
-
 
 
 def test_kaputte_daten_toeten_kein_feature_zur_laufzeit():
@@ -3304,8 +3189,6 @@ def test_kaputte_daten_toeten_kein_feature_zur_laufzeit():
         (words.instance._store, words.instance._enabled) = alt_w
 
 
-
-
 def test_kaputte_games_json_kostet_keinen_gewinn():
     """Eine games.json mit  "daily": null  ist GUELTIGES JSON und kommt deshalb
     an der Quarantaene im Store vorbei. setdefault() half nur gegen einen
@@ -3350,8 +3233,6 @@ def test_kaputte_games_json_kostet_keinen_gewinn():
     # Luecke beim naechsten frischen Server wieder.
     quelle = inspect.getsource(games.Games.setup)
     assert '"daily"' in quelle, "der Store-Standard kennt 'daily' nicht"
-
-
 
 
 def test_tts_nutzertext_ist_niemals_eine_option():
@@ -3427,8 +3308,6 @@ def test_tts_nutzertext_ist_niemals_eine_option():
     assert quelle.index('"--"') < quelle.index("text,"), "'--' steht nicht VOR dem Text"
     assert 'lstrip("-")' in inspect.getsource(voicegags.VoiceGags._cmd_say), (
         "der zweite Riegel (fuehrende Bindestriche weg) fehlt")
-
-
 
 
 def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
@@ -3516,8 +3395,6 @@ def test_rauchtest_jeder_befehl_laeuft_wirklich_durch():
                        "der Befehl faellt zur KI durch):\n  " + "\n  ".join(stumm))
 
 
-
-
 def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
     """Aktiv gesuchte Grenzfaelle statt Hoffnung: jeder Befehl, der Argumente
     nimmt, bekommt 47 gemeine Eingaben - leer, negativ, absurd gross, falsche
@@ -3586,8 +3463,6 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
     eindeutig = sorted(set(abstuerze))
     assert not eindeutig, (f"{len(abstuerze)} Abstuerze bei feindlicher Eingabe:\n  "
                            + "\n  ".join(eindeutig[:20]))
-
-
 
 
 def test_die_tonfall_rampe_zeigt_nach_unten():
@@ -3719,8 +3594,6 @@ def test_kein_titel_verbietet_das_roasten():
         assert (stufe.get("tone") or "").strip(), f"{key} hat gar keinen Tonfall"
 
 
-
-
 def test_schnell_event_verspricht_nichts_was_es_nicht_zahlt():
     """Bei 100 Coins fiel es nie auf - bei fuenfstelligen Preisen schon:
     _auszahlen kuerzt auf die Tageskappe, die Siegermeldung nannte aber den
@@ -3735,8 +3608,6 @@ def test_schnell_event_verspricht_nichts_was_es_nicht_zahlt():
         "die Siegermeldung nennt weiter den ausgelobten statt den gezahlten Betrag")
     # Und der Betrag muss mit Tausenderpunkten dastehen, nicht als '25000'.
     assert "numfmt.fmt(gezahlt)" in rumpf, rumpf[:200]
-
-
 
 
 def test_ein_sentinel_fuer_alle():
@@ -3775,7 +3646,6 @@ def test_ein_sentinel_fuer_alle():
         "bot._HANDLED_SENTINELS kennt basis.HANDLED nicht")
 
 
-
 def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
     """Der Rauchtest nuetzt nichts, wenn er ein Modul vergisst, das bot.py
     aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten."""
@@ -3804,8 +3674,6 @@ def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
                    if m not in ausgenommen and f"({m}, (" not in eigen)
     assert not fehlt, (f"bot.py ruft diese Module auf, der Rauchtest kennt sie "
                        f"aber nicht: {fehlt}")
-
-
 
 
 def test_zeitstempel_aus_der_zukunft_sperren_nicht_stundenlang():
@@ -3850,6 +3718,219 @@ def test_zeitstempel_aus_der_zukunft_sperren_nicht_stundenlang():
         assert steal.instance._remaining(5) == 0
     finally:
         steal.instance._store, steal.instance._cooldown = alt
+
+
+# --- Klicks & Antworten -------------------------------------------------------
+def test_giveaway_mitmachen_antwortet_vor_dem_speichern():
+    """Mitmachen lief ein volles save() (Sperre + fsync) VOR der Antwort. Bei
+    einem Ansturm standen spaete Klicks hinter den anderen Speicherungen an,
+    rissen Discords 3-Sekunden-Frist und sahen "Interaktion fehlgeschlagen" -
+    obwohl sie eingetragen waren. Jetzt: erst antworten, dann gesammelt
+    speichern. Die Ziehung liest den Stand im Speicher, also zaehlt der
+    Eintrag sofort."""
+    from testhilfe import _Klick
+    restore, gw = _giveaway_setup({1: 10_000, 2: 0})
+    try:
+        asyncio.run(gw._starten(_giveaway_msg(host=1),
+                                {"stake": 5_000, "reason": "", "seconds": 60}))
+        g = list(gw._active().values())[0]
+        klick = _Klick(uid=2)
+        gw._store.save_soon = lambda: klick.protokoll.append(("speichern",))
+        gespeichert = gw._store.gespeichert
+        asyncio.run(gw.join(klick, g["id"]))
+        assert klick.arten()[:2] == ["send", "speichern"], klick.protokoll
+        assert gw._store.gespeichert == gespeichert, "volles save() im Klick"
+        assert 2 in g["entries"]
+        # Die Ziehung sieht den Eintrag sofort.
+        asyncio.run(gw._auslosen(None, g))
+        assert economy.get_coins(2) == 5_000
+    finally:
+        restore()
+
+
+def test_giveaway_knopf_ist_dauerhaft_und_bleibt_nicht_liegen():
+    """Der Mitmach-Knopf war ein normaler Knopf in einer View ohne Timeout:
+    jedes Giveaway (und register_views je laufendem noch einmal) legte eine
+    View fuer immer in discord.py ab, auch nach der Ziehung. Jetzt ein
+    DynamicItem mit derselben custom_id - alte Panels bleiben klickbar."""
+    import discord
+    import discord.ui.view as ui_view
+    import giveaway
+    from testhilfe import _Klick, _dynamisch_klicken
+    restore, gw = _giveaway_setup({1: 10_000, 3: 0})
+    try:
+        asyncio.run(gw._starten(_giveaway_msg(host=1),
+                                {"stake": 5_000, "reason": "", "seconds": 60}))
+        gid = list(gw._active().values())[0]["id"]
+        view = giveaway.JoinView(gid)
+        knopf = view.children[0]
+        assert isinstance(knopf, discord.ui.DynamicItem) and view.timeout is None
+        assert type(knopf) in giveaway.DYNAMISCHE_KNOEPFE
+        assert knopf.custom_id == f"flo:gw:{gid}" and knopf.label == "Mitmachen"
+        lager = ui_view.ViewStore(SimpleNamespace())
+        lager.add_view(view, 4242)
+        assert not lager._views and not lager._synced_message_views, "View bleibt liegen"
+
+        # Klick ueber den echten discord.py-Weg - wie nach einem Neustart.
+        klick = _Klick(uid=3)
+        assert _dynamisch_klicken(giveaway.DYNAMISCHE_KNOEPFE, view,
+                                  f"flo:gw:{gid}", klick) == 1
+        assert 3 in gw._active()[str(gid)]["entries"], klick.protokoll
+
+        # register_views: nur noch die Vorlage, keine View je Giveaway.
+        angemeldet = []
+        client = SimpleNamespace(add_dynamic_items=lambda *k: angemeldet.extend(k),
+                                 add_view=lambda *_a, **_k: angemeldet.append("view"))
+        assert gw.register_views(client) == 1
+        assert angemeldet == [giveaway._JoinButton], angemeldet
+
+        # Giveaways aus (kein Store): Absage statt AssertionError.
+        gw._enabled = False
+        klick = _Klick(uid=3)
+        asyncio.run(gw.join(klick, gid))
+        assert klick.arten() == ["send"] and "aus" in klick.protokoll[0][1]
+    finally:
+        restore()
+
+
+def _rollen_person(uid, *, manage_roles=True, rolle_pos=1, flo_pos=10):
+    """Mitglied, dem Discord jede Rolle verweigert - mit einem Server, der sagt,
+    warum (fehlendes Recht oder Rollen-Reihenfolge)."""
+    import discord
+    import titles
+
+    async def verweigert(*_a, **_k):
+        raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"),
+                                {"code": 50013, "message": "Missing Permissions"})
+    rollen = [SimpleNamespace(name=titles.RARITY[r]["role"], position=rolle_pos)
+              for r in titles.RARITY_ORDER]
+    guild = SimpleNamespace(
+        id=1, name="Testserver", roles=rollen,
+        me=SimpleNamespace(guild_permissions=SimpleNamespace(manage_roles=manage_roles),
+                           top_role=SimpleNamespace(name="Flo", position=flo_pos)))
+    return SimpleNamespace(id=uid, display_name="T", name="T", guild=guild, roles=[],
+                           add_roles=verweigert, remove_roles=verweigert)
+
+
+def test_titel_rolle_die_nicht_ankommt_wird_gemeldet():
+    """Nach einem BEZAHLTEN Titel-Kauf schluckte _sync_role jeden Rollen-Fehler
+    ('except (Forbidden, HTTPException): pass'). Der Kaeufer hatte bezahlt, sah
+    keine Rolle, und im Log stand nichts. Jetzt: Warnung mit dem Grund
+    (fehlendes Recht oder Rollen-Reihenfolge) und EIN kurzer Hinweis an den
+    Kaeufer. Geld zurueck gibt es nicht - der Titel gehoert ihm ja."""
+    import logging
+    from testhilfe import _Klick
+    e = economy.instance
+    alt = (e._store, e._enabled, dict(e._rollen_zuletzt))
+
+    class Merker(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.zeilen = []
+
+        def emit(self, record):
+            self.zeilen.append(record.getMessage())
+    merker = Merker()
+    logging.getLogger("dcbot.economy").addHandler(merker)
+
+    def frisch():
+        e._store = _FakeStore({"users": {"1": {
+            "coins": 10_000, "xp": 0, "owned": [], "name": "T", "title": "",
+            "title_rarity": "", "voice_secs": 0, "msgs": 0, "streak": 0,
+            "last_daily": ""}}, "shop": {}})
+        e._rollen_zuletzt.clear()
+    item = {"n": 1, "label": "🦊 Fuchs", "text": "Fuchs", "rarity": "normal",
+            "price": 1_000}
+    try:
+        e._enabled = True
+        # 1) Textbefehl: kein Recht 'Rollen verwalten'.
+        frisch()
+        text = asyncio.run(e._do_buy(_rollen_person(1, manage_roles=False), item))
+        assert e.owns_title(1, "Fuchs") and e.get_coins(1) == 9_000, "Kauf gekippt"
+        assert text.count("doch nicht drauf") == 1, text
+        assert any("Rollen verwalten" in z for z in merker.zeilen), merker.zeilen
+
+        # 2) Shop-Knopf: Rolle steht ueber Flos hoechster Rolle -> nach der
+        #    Antwort GENAU EIN Hinweis als Folgenachricht.
+        frisch()
+        merker.zeilen.clear()
+        klick = _Klick(uid=1)
+        klick.user = _rollen_person(1, rolle_pos=20, flo_pos=10)
+
+        async def klicken():
+            await economy._ShopView([item])._buy(klick, 1)
+            await asyncio.gather(*list(e._hintergrund))
+        asyncio.run(klicken())
+        assert klick.arten() == ["send", "followup"], klick.protokoll
+        assert "doch nicht drauf" in klick.protokoll[1][1]
+        assert klick.protokoll[1][2]["ephemeral"]
+        assert any("Reihenfolge" in z for z in merker.zeilen), merker.zeilen
+        assert e.get_coins(1) == 9_000, "automatisch erstattet?"
+
+        # 3) Klappt alles, kommt auch kein Hinweis.
+        frisch()
+        person = _rollen_person(1)
+        gegeben = []
+
+        async def geben(*rollen, **_k):
+            gegeben.extend(rollen)
+        person.add_roles = geben
+        assert asyncio.run(e._sync_role(person)) == ""   # nichts besessen, nichts zu tun
+        text = asyncio.run(e._do_buy(person, item))
+        assert gegeben and "doch nicht drauf" not in text, text
+    finally:
+        logging.getLogger("dcbot.economy").removeHandler(merker)
+        e._store, e._enabled = alt[0], alt[1]
+        e._rollen_zuletzt.clear()
+        e._rollen_zuletzt.update(alt[2])
+
+
+def test_thron_bestaetigt_vor_dem_speichern():
+    """_ThroneConfirm eroberte zuerst (zwei Stores komplett auf die Platte) und
+    antwortete danach. Riss das die 3-Sekunden-Frist: "Interaktion
+    fehlgeschlagen", obwohl Thron und Geld laengst gebucht waren. Jetzt erst
+    defer(), dann erobern, dann das Ergebnis - und ein zweiter Klick bucht
+    nicht doppelt."""
+    from testhilfe import _Klick
+    restore = _with_economy({1: 1_000_000})
+    lx = luxus.instance
+    alt = (lx._store, lx._enabled)
+    lx._store = _FakeStore({"users": {}, "throne": {
+        "owner": "", "preis": luxus.THRONE_START, "n": 0}})
+    lx._enabled = True
+    try:
+        klick = _Klick(uid=1)
+        alt_flush = lx._flush_all
+
+        async def speichern_merken():
+            klick.protokoll.append(("speichern",))
+            await alt_flush()
+        lx._flush_all = speichern_merken
+        ja = luxus._ThroneConfirm._yes
+        ja = getattr(ja, "callback", ja)
+        view = luxus._ThroneConfirm(1, SimpleNamespace(message=None))
+        asyncio.run(ja(view, klick, None))
+        assert klick.arten() == ["defer", "speichern", "edit_original"], klick.protokoll
+        assert lx.throne_owner() == 1
+        assert economy.get_coins(1) == 1_000_000 - luxus.THRONE_START
+        assert "erobert" in klick.protokoll[-1][1]["content"]
+
+        # Zweiter Klick: kein zweites Mal bezahlen.
+        klick = _Klick(uid=1)
+        asyncio.run(ja(luxus._ThroneConfirm(1, SimpleNamespace(message=None)), klick, None))
+        assert economy.get_coins(1) == 1_000_000 - luxus.THRONE_START
+
+        # Bestaetigen scheitert -> keine Eroberung, kein Coin weg.
+        lx.throne_state()["owner"] = ""
+        vorher = economy.get_coins(1)
+        klick = _Klick(uid=1, kaputt={"defer"})
+        asyncio.run(ja(luxus._ThroneConfirm(1, SimpleNamespace(message=None)), klick, None))
+        assert economy.get_coins(1) == vorher and not lx.throne_owner()
+    finally:
+        vars(lx).pop("_flush_all", None)
+        lx._store, lx._enabled = alt
+        restore()
+
 
 if __name__ == "__main__":
     run(globals())

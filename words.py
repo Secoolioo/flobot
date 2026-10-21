@@ -441,16 +441,14 @@ class Words(FeatureBasis):
 
     # --- Befehle ----------------------------------------------------------------
     async def _send(self, message, *, embed=None, file=None):
-        kwargs = {"mention_author": False}
+        # Ueber basis.antworte - kommt auch an, wenn die Frage schon geloescht
+        # ist oder Flo 'Nachrichtenverlauf lesen' fehlt (dann ohne Antwort-Pfeil).
+        kwargs = {}
         if embed is not None:
             kwargs["embed"] = embed
         if file is not None:
             kwargs["file"] = file
-        try:
-            return await message.reply(**kwargs)
-        except discord.HTTPException:
-            log.exception("Wort-Zaehler: Antwort konnte nicht gesendet werden")
-            return None
+        return await basis.antworte(message, **kwargs)
 
     def _scan_hint(self):
         return ("\n⏳ *Ich lese gerade noch alte Nachrichten ein – die Zahlen "

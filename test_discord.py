@@ -631,7 +631,8 @@ def test_alle_dauerhaften_knoepfe_ueberschneiden_sich_nie():
     import music
     import voicegags
     alle = [bot.HilfeAuswahl]
-    for modul in (bot.lotto, bot.floaktie, bot.merchant, music, voicegags):
+    for modul in (bot.lotto, bot.floaktie, bot.merchant, music, voicegags,
+                  bot.giveaway, bot.arbeit):
         alle.extend(getattr(modul, "DYNAMISCHE_KNOEPFE", ()))
     assert len(set(alle)) == len(alle)
     player = music.GuildPlayer(loop=None)
@@ -640,6 +641,8 @@ def test_alle_dauerhaften_knoepfe_ueberschneiden_sich_nie():
         music: [music.MusikPanel(player), music._klassisches_panel(player)],
         voicegags: [voicegags.SoundboardView([f"s{i}" for i in range(20)],
                                              [_snd(5, "srv")], [_snd(1, "std")])],
+        bot.giveaway: [bot.giveaway.JoinView(123456)],
+        bot.arbeit: [bot.arbeit.TagesView(987654321098765432)],
     }
     hilfe, _ = asyncio.run(bot.client._hilfe_nachricht(None))
     views[bot] = [hilfe]
@@ -1516,6 +1519,144 @@ def test_gateway_wackelt_nach_einem_resume_nur_kurz():
     finally:
         laufzeit.client = alt_client
         _gateway_zurueck(c, stand)
+
+
+# --- Klicks & Antworten ------------------------------------------------------
+def test_antworten_laufen_ueber_basis_antworte():
+    """Ein nacktes message.reply() scheitert, wenn Flo 'Nachrichtenverlauf
+    lesen' fehlt (Discord 160002) oder die Frage schon geloescht ist - und dann
+    sagt Flo gar nichts, auch wenn das Geld schon gebucht ist. 33 solche
+    Stellen gab es; jetzt gehen sie ueber basis.antworte. Uebrig sind nur die,
+    die selbst einen Rueckfall haben - neue sollen gar nicht erst dazukommen."""
+    import ast
+    import pathlib
+    erlaubt = {
+        "basis.py": 1,   # antworte() selbst
+        "fun.py": 1,     # Gegenrede: faellt selbst auf channel.send zurueck
+        "food.py": 1,    # _deliver: erst Reply, dann channel.send
+        "games.py": 1,   # Wortsalat: IST schon der Rueckfall nach channel.send
+        "bot.py": 1,     # Neustart-Abfrage des Besitzers (meist in der DM)
+    }
+    wurzel = pathlib.Path(__file__).resolve().parent
+    gefunden = {}
+    for datei in sorted(wurzel.glob("*.py")):
+        if datei.name.startswith(("test_", "testhilfe", "lauf")):
+            continue
+        baum = ast.parse(datei.read_text(encoding="utf-8"))
+        n = sum(1 for knoten in ast.walk(baum)
+                if isinstance(knoten, ast.Call)
+                and isinstance(knoten.func, ast.Attribute)
+                and knoten.func.attr == "reply"
+                and isinstance(knoten.func.value, ast.Name)
+                and knoten.func.value.id == "message")
+        if n:
+            gefunden[datei.name] = n
+    assert gefunden == erlaubt, (
+        f"message.reply() ohne Rueckfall - bitte basis.antworte nehmen: {gefunden}")
+
+
+def test_antworte_traegt_ansicht_datei_und_rueckfall():
+    """basis.antworte nimmt alles mit, was die Module bisher an reply()
+    gegeben haben (Embed, Knoepfe, Datei) - auch im zweiten Anlauf ohne Bezug,
+    und dort mit der zurueckgespulten Datei."""
+    import io as _io
+    import basis
+    versuche = []
+
+    async def senden(content=None, **kw):
+        datei = kw.get("file")
+        versuche.append((content, dict(kw), datei.fp.read() if datei else None))
+        if kw.get("reference") is not None:
+            raise discord.HTTPException(SimpleNamespace(status=400, reason="x"),
+                                        {"code": 160002, "message": "history"})
+        return SimpleNamespace(id=9)
+
+    view = discord.ui.View()
+    emb = discord.Embed(title="Panel")
+    m = SimpleNamespace(channel=SimpleNamespace(send=senden),
+                        author=SimpleNamespace(mention="<@5>"),
+                        to_reference=lambda **_k: SimpleNamespace(message_id=1))
+    datei = discord.File(_io.BytesIO(b"PNGDATEN"), filename="x.png")
+    gesendet = asyncio.run(basis.antworte(m, embed=emb, view=view, file=datei))
+    assert gesendet is not None and gesendet.id == 9
+    assert len(versuche) == 2, versuche
+    _inhalt, kw, roh = versuche[1]
+    assert kw["embed"] is emb and kw["view"] is view and "reference" not in kw
+    assert roh == b"PNGDATEN", "Datei im zweiten Anlauf leer (nicht zurueckgespult)"
+    assert kw["allowed_mentions"].users is False, "Rueckfall pingt jemanden an"
+
+
+def test_soundknopf_spielt_auch_wenn_die_bestaetigung_scheitert():
+    """voicegags._klick baute die Sound-Coroutine, BEVOR die Bestaetigung
+    rausging. Scheiterte die (abgelaufene Interaktion, Rate-Limit), wurde die
+    Coroutine nie gestartet - der Sound fiel still aus. Die Bestaetigung ist
+    Kuer, der Sound ist der Klick."""
+    import pathlib
+    import voicegags
+    from testhilfe import _http_fehler
+    vg = voicegags.VoiceGags()
+    gespielt, gespawnt = [], []
+
+    async def spielen(*_a):
+        gespielt.append(1)
+        return True, ""
+
+    class Antwort:
+        def __init__(self, schritt):
+            self.schritt, self.fertig = schritt, False
+
+        def is_done(self):
+            return self.fertig
+
+        async def defer(self, **_kw):
+            self.fertig = True
+
+        async def send_message(self, *_a, **_k):
+            raise _http_fehler("abgelaufen")
+
+    async def folge_kaputt(*_a, **_k):
+        raise _http_fehler("abgelaufen")
+
+    async def finden(_g, _a, _w):
+        return _snd(1, "airhorn")
+
+    def klick(art):
+        return SimpleNamespace(
+            guild=SimpleNamespace(id=77), response=Antwort(art),
+            followup=SimpleNamespace(send=folge_kaputt),
+            user=SimpleNamespace(voice=SimpleNamespace(channel=_SoundKanal())))
+
+    async def lauf(art, wert):
+        await vg._klick(klick(art), art, wert)
+        for coro in gespawnt:
+            await coro
+        gespawnt.clear()
+
+    with mock.patch.object(vg, "_finde_discord_sound", finden), \
+            mock.patch.object(vg, "_discord_sound_spielen", spielen), \
+            mock.patch.object(vg, "_play_path", spielen), \
+            mock.patch.object(vg, "_find_sound", lambda _n: pathlib.Path("pups.mp3")), \
+            mock.patch.object(vg, "_voice_beschaeftigt", lambda _g: False), \
+            mock.patch.object(vg, "soundboard_enabled", lambda _g=None: True), \
+            mock.patch.object(vg, "_spawn", gespawnt.append):
+        # Discord-Sound: defer, dann scheitert die Folgenachricht.
+        asyncio.run(lauf("discord", "1"))
+        # Datei-Sound: schon die erste Antwort scheitert.
+        asyncio.run(lauf("datei", "pups"))
+    assert gespielt == [1, 1], f"Sound still verloren: {gespielt}"
+
+
+def test_giveaway_und_wordle_knoepfe_werden_beim_start_angemeldet():
+    """Giveaway- und Wordle-Knopf sind jetzt DynamicItems. Ohne Anmeldung im
+    setup_hook waeren sie nach einem Neustart tot - genau der Fehler, den die
+    alten persistenten Views per register_views verhindert hatten."""
+    import inspect
+    import bot
+    quelle = inspect.getsource(bot.FloBot.setup_hook)
+    zeile = next(z for z in quelle.splitlines() if "for modul in" in z)
+    for name in ("giveaway", "arbeit", "lotto", "floaktie", "merchant", "music",
+                 "voicegags"):
+        assert name in zeile, (name, zeile)
 
 
 if __name__ == "__main__":

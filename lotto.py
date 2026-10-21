@@ -465,12 +465,14 @@ class Lotto(FeatureBasis):
         # sonst: Panel mit Kauf-Buttons.
         view = LottoView()
         try:
-            view.message = await message.reply(
-                embed=self._panel_embed(message.author), view=view, mention_author=False)
-            self._protect(view.message)
-        except (discord.HTTPException, TypeError):
+            # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+            view.message = await basis.antworte(
+                message, embed=self._panel_embed(message.author), view=view)
+        except TypeError:
             log.exception("Lotto-Panel konnte nicht gesendet werden")
+        if view.message is None:
             return "Das Lotto klemmt gerade - versuch's gleich nochmal."
+        self._protect(view.message)
         return HANDLED
 
     @staticmethod

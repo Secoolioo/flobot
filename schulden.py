@@ -1287,11 +1287,9 @@ class Schulden(FeatureBasis):
             inline=False)
         emb.set_footer(text=("Ohne Bestätigung passiert nichts. Das Angebot läuft "
                              f"nach {ANFRAGE_TIMEOUT // 60} Minuten ab."))
-        try:
-            view.message = await message.reply(embed=emb, view=view,
-                                               mention_author=False)
-        except discord.HTTPException:
-            log.exception("Anfrage konnte nicht gesendet werden")
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+        view.message = await basis.antworte(message, embed=emb, view=view)
+        if view.message is None:
             return "Das Angebot ließ sich gerade nicht posten – versuch's nochmal."
         return HANDLED
 
@@ -1373,10 +1371,8 @@ class Schulden(FeatureBasis):
                 f"Schulden.\n\n_Ein ehrlicher Neuanfang – aber er kostet._"),
             color=FARBE_SCHULDEN)
         view = _InsolvenzView(self, message.author)
-        try:
-            view.message = await message.reply(embed=emb, view=view,
-                                               mention_author=False)
-        except discord.HTTPException:
+        view.message = await basis.antworte(message, embed=emb, view=view)
+        if view.message is None:
             return "Die Rückfrage ließ sich nicht posten – versuch's nochmal."
         return HANDLED
 
@@ -1789,6 +1785,7 @@ class _InsolvenzView(discord.ui.View):
         self._modul = modul
         self.autor = autor
         self.message = None
+        self._laeuft = False
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.autor.id:
@@ -1800,17 +1797,52 @@ class _InsolvenzView(discord.ui.View):
     @discord.ui.button(label="Ja, Insolvenz anmelden", emoji="⚖️",
                        style=discord.ButtonStyle.danger)
     async def _ja(self, interaction, _b):
+        if self._laeuft:
+            await self._still(interaction)       # zweiter Klick: nichts tun
+            return
+        self._laeuft = True          # SYNCHRON, vor dem ersten await
+        # ERST bestaetigen, DANN durchfuehren. insolvenz_durchfuehren schreibt
+        # economy und das Schuldbuch komplett auf die Platte - das lief VOR der
+        # Antwort. Riss es Discords 3-Sekunden-Frist, sah der Schuldner
+        # "Interaktion fehlgeschlagen", obwohl die Insolvenz gebucht war, und
+        # das gescheiterte Edit danach verschluckte ein 'except: pass'.
+        # Geht schon das Bestaetigen schief, passiert NICHTS - eine Insolvenz
+        # laesst sich nicht zuruecknehmen, also nie ohne sichtbare Antwort.
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            log.exception("Insolvenz: Bestaetigen fehlgeschlagen - nichts durchgefuehrt")
+            self._laeuft = False
+            return
         text = await self._modul.insolvenz_durchfuehren(self.autor.id)
         for ch in self.children:
             ch.disabled = True
+        self.stop()
         try:
-            await interaction.response.edit_message(content=text, embed=None, view=self)
+            await interaction.edit_original_response(content=text, embed=None, view=self)
+        except discord.HTTPException:
+            log.warning("Insolvenz: Rueckfrage nicht aenderbar - Ergebnis kommt "
+                        "als eigene Nachricht", exc_info=True)
+            try:
+                await interaction.followup.send(text, ephemeral=True)
+            except discord.HTTPException:
+                log.exception("Insolvenz: Antwort fehlgeschlagen (ist durchgefuehrt)")
+
+    @staticmethod
+    async def _still(interaction):
+        try:
+            await interaction.response.defer()
         except discord.HTTPException:
             pass
-        self.stop()
 
     @discord.ui.button(label="Abbrechen", style=discord.ButtonStyle.secondary)
     async def _nein(self, interaction, _b):
+        if self._laeuft:
+            # Die Insolvenz laeuft schon - "es bleibt alles, wie es ist" waere
+            # jetzt gelogen.
+            await self._still(interaction)
+            return
+        self._laeuft = True          # auch gegen "Abbrechen UND Ja"
         for ch in self.children:
             ch.disabled = True
         try:

@@ -177,10 +177,8 @@ class Media(FeatureBasis):
         except Exception:  # noqa: BLE001
             log.exception("Quote-Render fehlgeschlagen")
             return "Das Zitat-Bild ist gerade abgestürzt."
-        try:
-            await message.reply(file=discord.File(buf, "flo_quote.png"), mention_author=False)
-        except discord.HTTPException:
-            log.exception("Quote senden fehlgeschlagen")
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+        if await basis.antworte(message, file=discord.File(buf, "flo_quote.png")) is None:
             return "Konnte das Zitat-Bild nicht senden."
         return self.HANDLED
 

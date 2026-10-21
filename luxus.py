@@ -472,13 +472,12 @@ class Luxus(FeatureBasis):
 
     async def _luxus_overview(self, message):
         view = _LuxusView(message.author.id)
-        try:
-            msg = await message.reply(embed=self._luxus_embed(message.author.id),
-                                      view=view, mention_author=False)
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+        msg = await basis.antworte(message, embed=self._luxus_embed(message.author.id),
+                                   view=view)
+        if msg is not None:
             view.message = msg
             self._protect(msg)
-        except discord.HTTPException:
-            log.exception("Luxus-Katalog konnte nicht gesendet werden")
         return HANDLED
 
     def _throne_embed(self):
@@ -502,13 +501,10 @@ class Luxus(FeatureBasis):
 
     async def _throne_overview(self, message):
         view = _ThroneView()
-        try:
-            msg = await message.reply(embed=self._throne_embed(), view=view,
-                                      mention_author=False)
+        msg = await basis.antworte(message, embed=self._throne_embed(), view=view)
+        if msg is not None:
             view.message = msg
             self._protect(msg)
-        except discord.HTTPException:
-            log.exception("Thron konnte nicht gesendet werden")
         return HANDLED
 
     # --- Auto-Loesch-Schutz (wie in den anderen Modulen) -------------------------
@@ -599,11 +595,26 @@ class _ThroneConfirm(discord.ui.View):
     @discord.ui.button(label="Ja, Thron erobern!", emoji="⚔️",
                        style=discord.ButtonStyle.danger)
     async def _yes(self, interaction, _b):
+        # ERST bestaetigen, DANN erobern. _seize_throne schreibt zwei Stores
+        # komplett auf die Platte (Luxus + economy) - vorher lief das VOR der
+        # Antwort. Riss es Discords 3-Sekunden-Frist, sah der Kaeufer
+        # "Interaktion fehlgeschlagen", obwohl Thron und Geld laengst gebucht
+        # waren. Ein zweiter Klick bucht nicht doppelt: _seize_throne setzt den
+        # Besitzer, bevor es zum ersten Mal wartet.
+        # Geht schon das Bestaetigen schief, wird NICHT erobert.
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            log.exception("Thron: Bestaetigen fehlgeschlagen - keine Eroberung")
+            return
         text, ok = await instance._seize_throne(interaction.user)
         for ch in self.children:
             ch.disabled = True
-        await interaction.response.edit_message(content=text, view=self)
         self.stop()
+        try:
+            await interaction.edit_original_response(content=text, view=self)
+        except discord.HTTPException:
+            log.exception("Thron: Antwort fehlgeschlagen (Eroberung ist gebucht)")
         if ok and self.panel.message is not None:
             try:  # Panel aktualisieren + Eroberung oeffentlich ausrufen
                 await self.panel.message.edit(embed=instance._throne_embed())

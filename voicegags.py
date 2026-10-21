@@ -560,7 +560,8 @@ class VoiceGags(FeatureBasis):
                     "Gerade läuft Musik – Datei-Sounds müssen warten. Die Server- und "
                     "Discord-Sounds im Menü gehen trotzdem. 🎶", ephemeral=True)
                 return
-            name, spielen = path.stem, self._play_path(guild, channel, str(path))
+            name = path.stem
+            spielen = lambda: self._play_path(guild, channel, str(path))  # noqa: E731
         else:
             # Die Sound-Liste kann einen Abruf bei Discord kosten (nach einem
             # Neustart oder alle paar Minuten) - erst bestaetigen, sonst reisst
@@ -570,14 +571,23 @@ class VoiceGags(FeatureBasis):
             if sound is None:
                 await sagen("Den Sound gibt's nicht mehr. 👻")
                 return
-            name, spielen = sound.name, self._discord_sound_spielen(guild, channel, sound)
+            name = sound.name
+            spielen = lambda: self._discord_sound_spielen(guild, channel, sound)  # noqa: E731
         # Sofort bestaetigen (ein Datei-Sound spielt bis zu 60 s im Hintergrund).
-        if interaction.response.is_done():
-            await interaction.followup.send(f"🔊 **{name}**", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"🔊 **{name}**", ephemeral=True,
-                                                    delete_after=6)
-        self._spawn(self._melden(interaction, spielen))
+        # Der Sound wird erst DANACH gebaut: vorher stand die Coroutine schon
+        # vor dem Senden fertig da - scheiterte das Bestaetigen, wurde sie nie
+        # gestartet, und der Sound fiel still aus. Die Bestaetigung ist Kuer,
+        # der Sound ist der Klick.
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"🔊 **{name}**", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"🔊 **{name}**", ephemeral=True,
+                                                        delete_after=6)
+        except discord.HTTPException as exc:
+            log.warning("Soundboard: Bestaetigung fuer '%s' gescheitert (%s) - "
+                        "spiele trotzdem.", name, exc)
+        self._spawn(self._melden(interaction, spielen()))
 
     async def _melden(self, interaction, spielen):
         ok, err = await spielen

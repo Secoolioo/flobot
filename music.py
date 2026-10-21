@@ -5308,11 +5308,9 @@ class Music(FeatureBasis):
             emb = view.embed()
             if not self.verlauf(message.guild.id):
                 return emb              # leer -> kein Menue, nur der Hinweis
-            try:
-                view.message = await message.reply(embed=emb, view=view,
-                                                   mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Verlauf konnte nicht gesendet werden: %s", exc)
+            # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+            view.message = await basis.antworte(message, embed=emb, view=view)
+            if view.message is None:
                 return self._embed("Den Verlauf konnte ich gerade nicht posten.",
                                    color=_COL_ERR)
             return HANDLED
@@ -5325,10 +5323,8 @@ class Music(FeatureBasis):
                 "Song raus und leg ihn im Voice auf.\n_(Du musst dafür in einem "
                 "Sprachkanal sein.)_",
                 title="🎲  Zufalls-Song", color=_COL_QUEUE)
-            try:
-                view.message = await message.reply(embed=emb, view=view, mention_author=False)
-            except discord.HTTPException as exc:
-                log.error("Random-Menü konnte nicht gesendet werden: %s", exc)
+            view.message = await basis.antworte(message, embed=emb, view=view)
+            if view.message is None:
                 return self._embed("Das Zufalls-Menü ging gerade nicht auf.", color=_COL_ERR)
             return HANDLED
 
@@ -5346,14 +5342,10 @@ class Music(FeatureBasis):
                 thumb = getattr(player.current, "thumbnail", "") or None
             async with message.channel.typing():
                 emb, lview = await self._build_lyrics(raw, thumb)
-            kwargs = {"embed": emb, "mention_author": False}
+            kwargs = {"embed": emb}
             if lview is not None:
                 kwargs["view"] = lview
-            try:
-                msg = await message.reply(**kwargs)
-            except discord.HTTPException:
-                log.exception("Lyrics senden fehlgeschlagen")
-                return HANDLED
+            msg = await basis.antworte(message, **kwargs)
             if lview is not None:
                 lview.message = msg
             return HANDLED
@@ -5632,10 +5624,8 @@ class Music(FeatureBasis):
                 view = QueuePositionView(player, track, message.author.id)
                 emb = self._added_embed(track, pos, pos,
                                         footer="⏭️ = als Nächstes · 📍 = Position wählen")
-                try:
-                    view.message = await message.reply(embed=emb, view=view, mention_author=False)
-                except discord.HTTPException as exc:
-                    log.error("Queue-Embed mit Buttons fehlgeschlagen: %s", exc)
+                view.message = await basis.antworte(message, embed=emb, view=view)
+                if view.message is None:
                     return emb  # Notfall: wenigstens das Embed ohne Buttons
                 log.info("In Warteschlange (#%d) + Position-Buttons: %s", pos, track.title)
                 return HANDLED

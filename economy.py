@@ -49,6 +49,13 @@ HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 # Woerter, mit denen man den getragenen Titel ablegt ('titel ab', 'trage aus').
 _TITEL_AB = ("ab", "aus", "weg", "kein", "keinen", "none", "off")
 
+# Wenn die Titel-Rolle nach einem Kauf nicht ankommt (Rechte/Rollen-Reihenfolge).
+# Einmal je Kauf - der Titel ist bezahlt und gehoert ihm trotzdem. "Korrektur",
+# weil die Kauf-Antwort die Rolle schon versprochen hat.
+_ROLLE_KLEMMT = ("⚠️ Korrektur: Die Rolle krieg ich dir doch nicht drauf – die Admins "
+                 "haben mir die Rechte dafür nicht gegeben. Der Titel gehört dir "
+                 "trotzdem. Beschwer dich bei denen, nicht bei mir.")
+
 
 class Economy(FeatureBasis):
     """Kapselt das komplette Level-/Coin-System: Konfiguration, Datenzugriff,
@@ -629,7 +636,7 @@ class Economy(FeatureBasis):
         besessenen Seltenheit (andere Module rufen das nach grant/remove auf)."""
         await self._sync_role(member)
 
-    def rolle_spaeter(self, member):
+    def rolle_spaeter(self, member, *, melden=None):
         """Rollen-Sync im HINTERGRUND - fuer Knoepfe, NACHDEM geantwortet wurde.
 
         _sync_role macht bis zu drei REST-Aufrufe (Rollen weg, Rolle anlegen,
@@ -640,7 +647,9 @@ class Economy(FeatureBasis):
         spaeter kommen, die Antwort nicht.
 
         Fehler landen im Log statt im Nichts (ein vergessener Task schluckt
-        seine Ausnahme sonst still). Rueckgabe: der Task (oder None ohne Loop)."""
+        seine Ausnahme sonst still). 'melden' (async, bekommt einen Text) sagt
+        dem Kaeufer EINMAL Bescheid, wenn die Rolle nicht vergeben werden konnte.
+        Rueckgabe: der Task (oder None ohne Loop)."""
         uid = getattr(member, "id", 0)
 
         async def lauf():
@@ -656,11 +665,17 @@ class Economy(FeatureBasis):
                         ziel = await member.guild.fetch_member(uid)
                     except Exception:  # noqa: BLE001 - dann eben der alte Stand
                         ziel = member
+                problem = ""
                 try:
-                    await self._sync_role(ziel)
+                    problem = await self._sync_role(ziel)
                 except Exception:  # noqa: BLE001 - Deko darf nichts sprengen
                     log.exception("Rollen-Sync im Hintergrund fehlgeschlagen (%s)", uid)
                 self._rollen_zuletzt[uid] = time.monotonic()
+            if problem and melden is not None:
+                try:
+                    await melden(_ROLLE_KLEMMT)
+                except Exception:  # noqa: BLE001 - der Hinweis ist Kuer
+                    log.debug("Rollen-Hinweis nicht zustellbar (%s)", uid, exc_info=True)
         try:
             task = asyncio.get_running_loop().create_task(lauf())
         except RuntimeError:
@@ -912,37 +927,70 @@ class Economy(FeatureBasis):
         except Exception:  # noqa: BLE001 - Reihenfolge ist reine Deko
             log.debug("Rollen-Reihenfolge konnte nicht gesetzt werden.", exc_info=True)
 
+    @staticmethod
+    def _rollen_grund(guild, rollen, exc=None):
+        """Warum Flo diese Rollen nicht geben/nehmen darf - fuers Log, so konkret
+        wie moeglich: fehlendes Recht, Rollen-Reihenfolge oder Discords Antwort."""
+        ich = getattr(guild, "me", None)
+        rechte = getattr(ich, "guild_permissions", None)
+        if rechte is not None and getattr(rechte, "manage_roles", True) is False:
+            return "Flo fehlt das Recht 'Rollen verwalten'"
+        oben = getattr(ich, "top_role", None)
+        if oben is not None:
+            zu_hoch = [getattr(r, "name", "?") for r in rollen
+                       if getattr(r, "position", 0) >= getattr(oben, "position", 0)]
+            if zu_hoch:
+                return (f"Rollen-Reihenfolge: {', '.join(zu_hoch)} steht nicht unter "
+                        f"Flos hoechster Rolle '{getattr(oben, 'name', '?')}'")
+        return f"Discord sagt nein ({exc})" if exc is not None else "Grund unbekannt"
+
     async def _sync_role(self, member):
         """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
         besessenen Seltenheit (die anderen werden entfernt). Alles fehlertolerant –
-        ein Rechteproblem darf den Kauf nie sprengen."""
+        ein Rechteproblem darf den Kauf nie sprengen.
+
+        Rueckgabe: "" wenn alles sitzt, sonst der Grund (steht schon im Log).
+        Vorher wurde ein Fehler hier still geschluckt: der Kaeufer hatte bezahlt,
+        bekam keine Rolle, und niemand erfuhr, warum."""
         guild = getattr(member, "guild", None)
         if guild is None:
-            return
+            return ""
         best = self.get_user_rarity(member.id)
         want = titles.RARITY[best]["role"] if best else None
         flo_roles = {titles.RARITY[r]["role"] for r in titles.RARITY_ORDER}
         have = list(getattr(member, "roles", []))
         to_remove = [r for r in have if r.name in flo_roles and r.name != want]
+        probleme = []
         try:
             if to_remove:
                 await member.remove_roles(*to_remove, reason="Flo Titel-Update")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            probleme.append("alte Rolle bleibt: " + self._rollen_grund(guild, to_remove, exc))
         if want and not any(r.name == want for r in have):
             role = await self._find_or_create_role(guild, best)
-            if role is not None:
+            if role is None:
+                # Das Anlegen selbst hat _find_or_create_role schon geloggt.
+                probleme.append(f"'{want}' fehlt und liess sich nicht anlegen: "
+                                + self._rollen_grund(guild, []))
+            else:
                 try:
                     await member.add_roles(role, reason="Flo Titel gekauft")
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    probleme.append(f"'{want}' nicht vergeben: "
+                                    + self._rollen_grund(guild, [role], exc))
+        if not probleme:
+            return ""
+        grund = "; ".join(probleme)
+        log.warning("Titel-Rolle fuer %s in '%s' klemmt - %s.",
+                    getattr(member, "id", "?"), getattr(guild, "name", "?"), grund)
+        return grund
 
     async def _do_buy(self, member, item):
         """Kauft (oder legt an) den Titel 'item' fuer 'member', vergibt die Rolle und
         gibt eine Antwort als Text zurueck."""
         text, rolle_noetig = await self._kaufen(member, item)
-        if rolle_noetig:
-            await self._sync_role(member)
+        if rolle_noetig and await self._sync_role(member):
+            text = f"{text}\n{_ROLLE_KLEMMT}"
         return text
 
     async def _kaufen(self, member, item):
@@ -1684,11 +1732,10 @@ class Economy(FeatureBasis):
         if not owned:
             return emb
         view = _InventoryView(member.id, owned)
-        try:
-            msg = await message.reply(embed=emb, view=view, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Inventar konnte nicht gesendet werden")
-            return HANDLED
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+        msg = await basis.antworte(message, embed=emb, view=view)
+        if msg is None:
+            return HANDLED          # basis.antworte hat es schon geloggt
         view.message = msg
         self._protect(msg)
         return HANDLED
@@ -1963,14 +2010,13 @@ class Economy(FeatureBasis):
         if file is not None:
             emb.set_image(url="attachment://shop.png")
         view = _ShopView(items)
-        try:
-            kwargs = {"embed": emb, "view": view, "mention_author": False}
-            if file is not None:
-                kwargs["file"] = file
-            msg = await message.reply(**kwargs)
-        except discord.HTTPException:
-            log.exception("Shop konnte nicht gesendet werden")
-            return HANDLED
+        kwargs = {"embed": emb, "view": view}
+        if file is not None:
+            kwargs["file"] = file
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht).
+        msg = await basis.antworte(message, **kwargs)
+        if msg is None:
+            return HANDLED          # basis.antworte hat es schon geloggt
         view.message = msg
         self._protect(msg)
         return HANDLED
@@ -2106,7 +2152,11 @@ class _ShopView(discord.ui.View):
         except discord.HTTPException:
             log.exception("Shop-Kauf: Antwort fehlgeschlagen (Kauf ist gebucht)")
         if rolle:
-            instance.rolle_spaeter(interaction.user)
+            # Klemmt die Rolle, erfaehrt der Kaeufer es - die Antwort ist da
+            # schon raus, also als zweite (nur fuer ihn sichtbare) Nachricht.
+            instance.rolle_spaeter(
+                interaction.user,
+                melden=lambda hinweis: interaction.followup.send(hinweis, ephemeral=True))
 
     @discord.ui.button(label="Luxus", emoji="🏆", style=discord.ButtonStyle.primary, row=1)
     async def _luxus(self, interaction, _b):

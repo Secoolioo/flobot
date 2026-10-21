@@ -611,6 +611,91 @@ def test_skill_sperre_haelt_frisch_gebootet_niemanden_auf():
         restore()
 
 
+def _kanal_ohne_leserecht(cid, *, gar_nichts=False):
+    """Kanal, in dem Antworten MIT Bezug scheitern - wie ohne das Recht
+    'Nachrichtenverlauf lesen' (Discord 160002). 'gar_nichts': jedes Senden
+    scheitert (dann darf auch keine Runde laufen)."""
+    import discord as _d
+    kanal = _FakeChannel(cid=cid)
+    echt = kanal.send
+
+    async def senden(content=None, **kw):
+        if gar_nichts or kw.get("reference") is not None:
+            raise _d.HTTPException(SimpleNamespace(status=400, reason="x"), {
+                "code": 160002,
+                "message": "Cannot reply without permission to read message history"})
+        return await echt(content, **kw)
+    kanal.send = senden
+    return kanal
+
+
+def test_gewinn_ansage_kommt_auch_ohne_leserecht_an():
+    """Aus der Pruefung 'Klicks & Antworten': 33 Stellen antworteten mit einem
+    nackten message.reply(). Das scheitert, wenn Flo das Recht 'Nachrichten-
+    verlauf lesen' fehlt (Discord 160002) oder die Frage schon geloescht ist.
+    Beim Zahlenraten und beim Quiz war der Gewinn dann gebucht, die Ansage aber
+    still weg ('except HTTPException: pass'). Jetzt laeuft alles ueber
+    basis.antworte - notfalls ohne Antwort-Pfeil, aber es kommt an."""
+    from testhilfe import _with_economy
+    import games
+    g = games.Games()
+    g._store = _FakeStore({})
+    restore = _with_economy({7: 0})
+    kanal = _kanal_ohne_leserecht(4713)
+    try:
+        msg = SimpleNamespace(content="42", channel=kanal, guild=SimpleNamespace(id=1),
+                              author=_fake_person(uid=7),
+                              to_reference=lambda **_k: SimpleNamespace(message_id=1))
+        g._guess[kanal.id] = {"number": 42, "tries": 0, "token": 1, "msg": None,
+                              "expires": time.monotonic() + 60}
+        assert asyncio.run(g._check_guess(msg)) is True
+        assert economy.get_coins(7) > 0, "Gewinn nicht gebucht"
+        texte = [s["content"] or "" for s in kanal.sent]
+        assert any("hat's mit der 42" in t for t in texte), texte
+
+        # Quiz: dasselbe - Ansage kommt, mit dem Namen vorne statt Antwort-Pfeil.
+        kanal.sent.clear()
+        g._skill_cd.clear()
+        g._quiz[kanal.id] = {"answer": "Rom", "frage": "Hauptstadt Italiens?",
+                             "expires": time.monotonic() + 30, "token": 1, "msg": None}
+        msg.content = "Rom"
+        assert asyncio.run(g._check_quiz(msg)) is True
+        texte = [s["content"] or "" for s in kanal.sent]
+        assert any("Richtig" in t and t.startswith("<@7>") for t in texte), texte
+    finally:
+        restore()
+
+
+def test_mathe_einsatz_kommt_zurueck_wenn_nichts_ankommt():
+    """Mathe-Blitz zieht den Einsatz VOR dem Senden ein. Kommt die Aufgabe gar
+    nicht an (auch nicht ohne Bezug), muss er zurueck - frueher hing das an
+    'except HTTPException', jetzt an basis.antworte, das None zurueckgibt."""
+    from testhilfe import _with_economy
+    import games
+    g = games.Games()
+    g._store = _FakeStore({})
+    restore = _with_economy({7: 1_000})
+    try:
+        kanal = _kanal_ohne_leserecht(4714, gar_nichts=True)
+        msg = SimpleNamespace(content="Flo mathe 100", channel=kanal,
+                              guild=SimpleNamespace(id=1), author=_fake_person(uid=7),
+                              to_reference=lambda **_k: SimpleNamespace(message_id=1))
+        assert asyncio.run(g._start_mathe(msg, ["100"])) is games.HANDLED
+        assert economy.get_coins(7) == 1_000, "Einsatz weg, obwohl nichts ankam"
+        assert kanal.id not in g._mathe, "Runde laeuft ohne sichtbare Aufgabe"
+
+        # Fehlt nur das Leserecht, laeuft die Runde ganz normal.
+        kanal = _kanal_ohne_leserecht(4715)
+        msg.channel = kanal
+        g._skill_cd.clear()         # die Anti-Farm-Pause gilt hier nicht
+        assert asyncio.run(g._start_mathe(msg, ["100"])) is games.HANDLED
+        assert economy.get_coins(7) == 900 and kanal.id in g._mathe
+        assert kanal.sent and kanal.sent[0]["embed"] is not None
+    finally:
+        g._mathe.clear()
+        restore()
+
+
 # --- Gegenrede: Flo haelt gegen Hetze dagegen ---------------------------------
 def _hetz_msg(text, uid=7, bot=False):
     """Nachricht mit einem Kanal, der mitschreibt - und einer Reply-Attrappe."""

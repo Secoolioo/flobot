@@ -870,24 +870,21 @@ class Games(FeatureBasis):
     def _release(self, msg):
         self.freigeben(msg)
 
+    # Alle Antworten hier laufen ueber basis.antworte: ein nacktes message.reply()
+    # scheitert, sobald die Frage geloescht ist oder Flo das Recht
+    # 'Nachrichtenverlauf lesen' fehlt (Discord 160002) - und dann war bei einem
+    # Gewinn das Geld gebucht, die Ansage aber still weg.
     async def _say(self, message, text):
         """Schickt eine Text-Antwort als Reply und gibt die Nachricht zurueck."""
-        try:
-            return await message.reply(text, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Spiel-Nachricht konnte nicht gesendet werden")
-            return None
+        return await basis.antworte(message, text)
 
     async def _send_image(self, message, emb,
                           buf, fname):
         """Schickt ein Spiel-Bild als Reply (Embed mit Anhang). Gibt HANDLED zurueck,
         damit bot.py nicht zusaetzlich antwortet."""
         emb.set_image(url=f"attachment://{fname}")
-        try:
-            await message.reply(embed=emb, file=discord.File(buf, filename=fname),
-                                mention_author=False)
-        except discord.HTTPException:
-            log.exception("Spiel-Bild konnte nicht gesendet werden")
+        await basis.antworte(message, embed=emb,
+                             file=discord.File(buf, filename=fname))
         return HANDLED
 
     def setup(self):
@@ -1165,11 +1162,9 @@ class Games(FeatureBasis):
     async def _open_game(self, message, kind):
         """Oeffnet das interaktive Menue (Einsatz-Dropdown + Buttons) fuer 'kind'."""
         view = _GAME_VIEWS[kind](message.author.id, channel_id=message.channel.id)
-        try:
-            msg = await message.reply(embed=view._embed(), view=view, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Spiel-Menue konnte nicht gesendet werden")
-            return HANDLED
+        msg = await basis.antworte(message, embed=view._embed(), view=view)
+        if msg is None:
+            return HANDLED          # basis.antworte hat es schon geloggt
         view.message = msg
         self._protect(msg)
         return HANDLED
@@ -1205,11 +1200,7 @@ class Games(FeatureBasis):
                             color=discord.Color.blurple())
         emb.set_footer(text=f"{QUIZ_TIMEOUT}s Zeit · Antwort einfach in den Chat · "
                             f"+{QUIZ_REWARD} Flo Coins")
-        try:
-            msg = await message.reply(embed=emb, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Quiz-Frage konnte nicht gesendet werden")
-            msg = None
+        msg = await basis.antworte(message, embed=emb)
         self._quiz[cid] = {"answer": antwort, "frage": frage,
                            "expires": time.monotonic() + QUIZ_TIMEOUT, "token": tok,
                            "msg": msg}
@@ -1296,12 +1287,11 @@ class Games(FeatureBasis):
                 reward = f" (+{gezahlt} Flo Coins)" if gezahlt else " (Tageskappe erreicht)"
             await economy.add_xp(message.author, 30)
             await economy.flush()
-        try:
-            await message.reply(
-                f"✅ Richtig, **{message.author.display_name}**! "
-                f"Antwort: {runde['answer']}{reward}", mention_author=False)
-        except discord.HTTPException:
-            pass
+        # Die Belohnung ist schon gebucht - die Ansage muss ankommen, auch wenn
+        # die Antwort-Nachricht inzwischen weg ist.
+        await basis.antworte(
+            message, f"✅ Richtig, **{message.author.display_name}**! "
+                     f"Antwort: {runde['answer']}{reward}")
         return True
 
     # --- Zahlenraten ---------------------------------------------------------
@@ -1317,11 +1307,7 @@ class Games(FeatureBasis):
                         "schreib deine Tipps einfach in den Chat!",
             color=discord.Color.blurple())
         emb.set_footer(text=f"{GUESS_TIMEOUT}s Zeit · je weniger Versuche, desto mehr Coins")
-        try:
-            msg = await message.reply(embed=emb, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Zahlenraten konnte nicht gestartet werden")
-            msg = None
+        msg = await basis.antworte(message, embed=emb)
         self._guess[cid] = {"number": number, "tries": 0,
                             "expires": time.monotonic() + GUESS_TIMEOUT, "token": tok,
                             "msg": msg}
@@ -1374,12 +1360,10 @@ class Games(FeatureBasis):
                     extra = (f" (+{gezahlt} Flo Coins)" if gezahlt
                              else " (Tageskappe erreicht)")
                 await economy.flush()
-            try:
-                await message.reply(
-                    f"🎯 **{message.author.display_name}** hat's mit der {ziel} - "
-                    f"nach {tries} Versuch(en)!{extra}", mention_author=False)
-            except discord.HTTPException:
-                pass
+            # Gewinn ist gebucht - Ansage ueber basis.antworte (siehe _say).
+            await basis.antworte(
+                message, f"🎯 **{message.author.display_name}** hat's mit der {ziel} - "
+                         f"nach {tries} Versuch(en)!{extra}")
             return True
         try:
             await message.add_reaction("⬆️" if tip < ziel else "⬇️")
@@ -1684,9 +1668,8 @@ class Games(FeatureBasis):
                                 color=discord.Color.blurple())
             emb.set_footer(text=f"{message.author.display_name} · {MATHE_TIMEOUT}s · "
                                 f"richtig = {numfmt.fmt(bet * 2)} Flo Coins")
-            try:
-                msg = await message.reply(embed=emb, mention_author=False)
-            except discord.HTTPException:
+            msg = await basis.antworte(message, embed=emb)
+            if msg is None:
                 economy.add_coins(uid, bet, reason="spiele-rueck")  # nichts gesendet
                 await economy.flush()
                 return HANDLED
@@ -1793,9 +1776,8 @@ class Games(FeatureBasis):
         emb.set_footer(text=f"{message.author.display_name} · {ANA_TIMEOUT}s · "
                             f"{ANA_MAX_TRIES} Versuche · "
                             f"richtig = {numfmt.fmt(bet * 3)} Flo Coins")
-        try:
-            msg = await message.reply(embed=emb, mention_author=False)
-        except discord.HTTPException:
+        msg = await basis.antworte(message, embed=emb)
+        if msg is None:
             economy.add_coins(uid, bet, reason="spiele-rueck")
             await economy.flush()
             return HANDLED
@@ -1872,9 +1854,8 @@ class Games(FeatureBasis):
                                         "schnell wie möglich klicken!",
                             color=discord.Color.blurple())
         emb.set_footer(text=f"{message.author.display_name} · Einsatz: {numfmt.fmt(bet)} Flo Coins")
-        try:
-            msg = await message.reply(embed=emb, view=view, mention_author=False)
-        except discord.HTTPException:
+        msg = await basis.antworte(message, embed=emb, view=view)
+        if msg is None:
             economy.add_coins(uid, bet, reason="spiele-rueck")
             await economy.flush()
             return HANDLED
@@ -1950,12 +1931,10 @@ class Games(FeatureBasis):
                         f"**{numfmt.fmt(bet)} Flo Coins** pro Kopf.\nSchnellste richtige Antwort "
                         f"nimmt den Pot!",
             color=discord.Color.gold())
-        try:
-            msg = await message.reply(embed=emb, view=view, mention_author=False)
+        msg = await basis.antworte(message, embed=emb, view=view)
+        if msg is not None:
             view.message = msg
             self._protect(msg)
-        except discord.HTTPException:
-            log.exception("Quiz-Duell konnte nicht gestartet werden")
         return HANDLED
 
     # --- SSP-Duell (PvP um den Pot) --------------------------------------------
@@ -1974,12 +1953,10 @@ class Games(FeatureBasis):
         emb = view._emb(f"{message.author.mention} vs {gegner.mention} – "
                         f"**{numfmt.fmt(bet)} Flo Coins** pro Kopf.\nBeide wählen unten "
                         f"(der erste Klick des Gegners nimmt an).")
-        try:
-            msg = await message.reply(embed=emb, view=view, mention_author=False)
+        msg = await basis.antworte(message, embed=emb, view=view)
+        if msg is not None:
             view.message = msg
             self._protect(msg)
-        except discord.HTTPException:
-            log.exception("SSP-Duell konnte nicht gestartet werden")
         return HANDLED
 
     # --- Passiver Hook (bot.py ruft das fuer JEDE Nicht-Bot-Nachricht) -------

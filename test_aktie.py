@@ -169,7 +169,7 @@ def test_floaktie_market():
                 s.content = content
                 s.guild = SimpleNamespace(id=1)
 
-            async def reply(s, **kw):
+            async def reply(s, *_a, **kw):
                 return SimpleNamespace(id=1, channel=SimpleNamespace(id=1))
         assert asyncio.run(fa.handle(FakeMsg(1, "aktienkurs"))) is floaktie.HANDLED
         assert asyncio.run(fa.handle(FakeMsg(1, "aktie chart"))) is floaktie.HANDLED

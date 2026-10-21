@@ -859,5 +859,61 @@ def test_casino_rueckgaben_werden_nicht_besteuert():
                        "verliert davon 20 %:\n  " + "\n  ".join(fehlt))
 
 
+# --- Klicks & Antworten -------------------------------------------------------
+def test_insolvenz_klick_bestaetigt_zuerst_und_nur_einmal():
+    """Der Insolvenz-Knopf rechnete ab und schrieb economy und Schuldbuch
+    komplett auf die Platte - und antwortete erst danach. Riss das Discords
+    3-Sekunden-Frist, sah der Schuldner "Interaktion fehlgeschlagen", und das
+    gescheiterte Edit verschluckte ein 'except: pass'. Jetzt: defer(), dann
+    die Insolvenz, dann das Ergebnis - notfalls als eigene Nachricht. Ein
+    zweiter Klick (oder 'Abbrechen' mittendrin) aendert nichts mehr."""
+    from testhilfe import _Klick
+    import schulden
+    restore, sch = _schulden_setup({1: 10_000, 2: 0})
+    alt_save = sch._save
+    try:
+        _schuld(sch, 2, 1, 30_000)
+        klick = None
+
+        async def speichern_merken():
+            klick.protokoll.append(("speichern",))
+            await alt_save()
+        sch._save = speichern_merken
+        ja = schulden._InsolvenzView._ja
+        ja = getattr(ja, "callback", ja)
+        nein = schulden._InsolvenzView._nein
+        nein = getattr(nein, "callback", nein)
+        autor = SimpleNamespace(id=1)
+
+        # Bestaetigen scheitert -> NICHTS passiert (unwiderruflich!).
+        view = schulden._InsolvenzView(sch, autor)
+        klick = _Klick(uid=1, kaputt={"defer"})
+        asyncio.run(ja(view, klick, None))
+        assert economy.get_coins(1) == 10_000 and sch.summen(1)[1] > 0
+
+        # Normal: defer -> speichern -> Ergebnis ins Panel.
+        klick = _Klick(uid=1)
+        asyncio.run(ja(view, klick, None))
+        assert klick.arten() == ["defer", "speichern", "edit_original"], klick.protokoll
+        assert economy.get_coins(1) == 5_000 and sch.summen(1)[1] == 0
+        assert "Privatinsolvenz" in klick.protokoll[-1][1]["content"]
+
+        # Zweiter Klick und 'Abbrechen' danach: nur still bestaetigt.
+        for knopf in (ja, nein):
+            klick = _Klick(uid=1)
+            asyncio.run(knopf(view, klick, None))
+            assert klick.arten() == ["defer"], klick.protokoll
+        assert economy.get_coins(1) == 5_000
+
+        # Panel nicht aenderbar -> das Ergebnis kommt trotzdem an.
+        _schuld(sch, 2, 1, 1_000)
+        klick = _Klick(uid=1, kaputt={"edit_original"})
+        asyncio.run(ja(schulden._InsolvenzView(sch, autor), klick, None))
+        assert klick.arten() == ["defer", "speichern", "followup"], klick.protokoll
+    finally:
+        vars(sch).pop("_save", None)
+        restore()
+
+
 if __name__ == "__main__":
     run(globals())

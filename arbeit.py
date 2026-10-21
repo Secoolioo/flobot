@@ -935,10 +935,13 @@ class Arbeit(FeatureBasis):
         return Tagesraetsel(gid, daten)
 
     def _speichern(self):
-        try:
-            asyncio.get_running_loop().create_task(self._store.save())
-        except RuntimeError:
-            pass        # kein Loop (Tests) - der Stand steht trotzdem im RAM
+        # Gesammelt speichern. Vorher startete JEDER Aufruf einen eigenen
+        # Task mit vollem save() - ohne Referenz (der Task konnte mitten im
+        # Schreiben eingesammelt werden, ein Fehler verschwand still) und bei
+        # einer Wordle-Antwort gleich drei- bis viermal hintereinander.
+        # save_soon haelt hoechstens EINEN Sammel-Task je Store; ohne Loop
+        # (Tests) bleibt der Stand im RAM und der naechste Aufruf schreibt mit.
+        self._store.save_soon()
 
     def _tageskonto(self, prof):
         """Was heute schon verdient wurde - der Deckel haengt daran."""
@@ -1594,6 +1597,12 @@ class Arbeit(FeatureBasis):
     # --- Wort des Tages: die Interaktionen --------------------------------
     async def tages_knopf(self, interaction, gid):
         """Klick auf 'Raten' - prueft, ob die Person ueberhaupt noch darf."""
+        if not self._enabled:
+            # Der Knopf ist dauerhaft angemeldet (DynamicItem) - auch dann, wenn
+            # Arbeit inzwischen aus ist und es keinen Store gibt.
+            await interaction.response.send_message(
+                "Das Wort des Tages ist gerade aus.", ephemeral=True)
+            return
         raetsel = self.raetsel(gid)
         if not raetsel.laeuft:
             await interaction.response.send_message(
@@ -1621,23 +1630,35 @@ class Arbeit(FeatureBasis):
         await interaction.response.send_modal(TagesModal(gid, spiel.laenge))
 
     async def tages_antwort(self, interaction, gid, roh):
-        """Ein abgeschickter Versuch aus dem Eingabefeld."""
+        """Ein abgeschickter Versuch aus dem Eingabefeld.
+
+        ERST bestaetigen, DANN werten und das Brett malen. Vorher wurde das
+        Brett VOR der Antwort gezeichnet (im Thread, aber unter Last trotzdem
+        gern ueber eine Sekunde) - riss das Discords 3-Sekunden-Frist, sah der
+        Rater "Interaktion fehlgeschlagen", obwohl sein Versuch gezaehlt war,
+        und beim Sieger fiel sogar die oeffentliche Ansage weg.
+
+        Geht schon das Bestaetigen schief, wird der Versuch NICHT gewertet: der
+        Rater sieht ohnehin einen Fehler, und ein still verbrauchter Versuch
+        (oder ein still kassierter Topf) waere schlimmer."""
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            log.exception("Wort des Tages: Bestaetigen fehlgeschlagen - Versuch nicht gewertet")
+            return
         raetsel = self.raetsel(gid)
         status, spiel = raetsel.raten(interaction.user.id, roh)
         self._speichern()
 
         if status == "kein_wort":
-            await interaction.response.send_message("Gerade läuft kein Wort.",
-                                                    ephemeral=True)
+            await self._ephemer(interaction, "Gerade läuft kein Wort.")
             return
         if status == "laenge":
-            await interaction.response.send_message(
-                f"{len(raetsel.wort)} Buchstaben, nur Buchstaben. Nochmal.",
-                ephemeral=True)
+            await self._ephemer(
+                interaction, f"{len(raetsel.wort)} Buchstaben, nur Buchstaben. Nochmal.")
             return
         if status == "fertig":
-            await interaction.response.send_message("Für heute bist du durch.",
-                                                    ephemeral=True)
+            await self._ephemer(interaction, "Für heute bist du durch.")
             return
         # Teilnahme mitschreiben - genau einmal am Tag, beim ersten Versuch.
         prof = self._nutzer(interaction.user.id)
@@ -1710,7 +1731,23 @@ class Arbeit(FeatureBasis):
         await self._tages_ausrufen(interaction, raetsel, spiel, echt)
 
     @staticmethod
-    async def _ephemer_mit_brett(interaction, embed, spiel, titel, untertitel,
+    async def _ephemer(interaction, text=None, **kw):
+        """Antwort nur fuer den Rater - nach defer() als Folgenachricht.
+
+        Scheitert sie, steht es im Log; der Versuch ist trotzdem gewertet, und
+        beim Sieger muss danach noch die oeffentliche Ansage raus."""
+        if text is not None:
+            kw["content"] = text
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(ephemeral=True, **kw)
+            else:
+                await interaction.response.send_message(ephemeral=True, **kw)
+        except discord.HTTPException:
+            log.exception("Wort des Tages: Antwort an den Rater fehlgeschlagen")
+
+    @classmethod
+    async def _ephemer_mit_brett(cls, interaction, embed, spiel, titel, untertitel,
                                  *, verdeckt=False):
         """Antwortet nur dem Klickenden - mit dem Brett als Bild.
 
@@ -1719,10 +1756,9 @@ class Arbeit(FeatureBasis):
         datei, name = await _wordle_bild(spiel, titel, untertitel, verdeckt=verdeckt)
         if datei is not None:
             embed.set_image(url=f"attachment://{name}")
-            await interaction.response.send_message(embed=embed, file=datei,
-                                                    ephemeral=True)
+            await cls._ephemer(interaction, embed=embed, file=datei)
         else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await cls._ephemer(interaction, embed=embed)
 
     async def _tages_ausrufen(self, interaction, raetsel, spiel, betrag):
         """Sieg oeffentlich machen und die Ansage auf 'entschieden' umstellen.
@@ -1769,24 +1805,27 @@ class Arbeit(FeatureBasis):
 
     # --- Views nach Neustart wieder anmelden ------------------------------
     def register_views(self, client):
-        """Macht die Rate-Knoepfe laufender Runden wieder klickbar."""
+        """Macht die Rate-Knoepfe laufender Runden wieder klickbar.
+
+        Der Knopf ist ein DynamicItem (siehe TagesKnopf): EINE Vorlage fuer alle
+        Server statt einer View je Runde, die discord.py nie wieder losliess.
+        bot.setup_hook meldet sie schon an - doppelt anmelden ist harmlos.
+        Rueckgabe: wie viele laufende Runden damit wieder klickbar sind."""
         if client is not None:
             self._client = client
         if not self._enabled or client is None or self._views_ready:
             return 0
+        try:
+            client.add_dynamic_items(*DYNAMISCHE_KNOEPFE)
+        except Exception:  # noqa: BLE001
+            log.debug("Wordle-Knopf nicht anmeldbar", exc_info=True)
+            return 0
+        self._views_ready = True
         n = 0
         for gid, daten in list((self._store.data.get("tag") or {}).items()):
             raetsel = Tagesraetsel(gid, daten)
-            if not raetsel.laeuft or raetsel.entschieden:
-                continue
-            try:
-                client.add_view(TagesView(int(gid)))
+            if raetsel.laeuft and not raetsel.entschieden:
                 n += 1
-            except Exception:  # noqa: BLE001
-                log.debug("Wordle-View %s nicht anmeldbar", gid, exc_info=True)
-        self._views_ready = True
-        if n:
-            log.info("%d Wordle-Knopf/Knöpfe wieder angemeldet.", n)
         return n
 
     @staticmethod
@@ -2292,12 +2331,31 @@ class TagesModal(discord.ui.Modal):
         await instance.tages_antwort(interaction, self.gid, str(self.feld.value))
 
 
-class TagesKnopf(discord.ui.Button):
+# Der Knopf ist ein DynamicItem mit fester custom_id ('flo:wordle:<server>');
+# den Rest (laeuft die Runde, wer hat wie oft geraten) holt der Klick aus dem
+# Store. Vorher war es ein normaler Knopf in einer View mit timeout=None: JEDE
+# Ansage, jedes 'Flo wordle' und register_views legten je eine View fuer immer
+# in discord.py ab - gestoppt wurde keine, auch nicht nach dem Sieg. Eine View
+# nur aus DynamicItems legt discord.py gar nicht erst ab; bot.py meldet die
+# Vorlage einmal an (DYNAMISCHE_KNOEPFE). Die custom_id ist dieselbe geblieben.
+#
+# WICHTIG: TagesView NIE stop()pen und keinen Timeout geben - stop() nimmt die
+# Vorlage GLOBAL aus discord.py, danach waere der Raten-Knopf ueberall tot.
+class TagesKnopf(discord.ui.DynamicItem[discord.ui.Button],
+                 template=r"flo:wordle:(?P<gid>[0-9]{1,20})"):
     def __init__(self, gid):
-        super().__init__(label="Raten", emoji="🟩",
-                         style=discord.ButtonStyle.success,
-                         custom_id=f"flo:wordle:{int(gid)}")
+        super().__init__(discord.ui.Button(
+            label="Raten", emoji="🟩", style=discord.ButtonStyle.success,
+            custom_id=f"flo:wordle:{int(gid)}"))
         self.gid = int(gid)
+
+    @property
+    def label(self):
+        return self.item.label
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(int(match["gid"]))
 
     async def callback(self, interaction):
         await instance.tages_knopf(interaction, self.gid)
@@ -2305,12 +2363,18 @@ class TagesKnopf(discord.ui.Button):
 
 class TagesView(discord.ui.View):
     """Bleibt dauerhaft aktiv (timeout=None) - auch nach einem Neustart, dank
-    fester custom_id und register_views()."""
+    fester custom_id. Nur noch ein Behaelter fuer den DynamicItem-Knopf oben:
+    kein Timeout, nie stop() (siehe oben)."""
 
     def __init__(self, gid):
         super().__init__(timeout=None)
         self.message = None
         self.add_item(TagesKnopf(gid))
+
+
+#: Alle DynamicItem-Klassen dieses Moduls. bot.py meldet sie im setup_hook an
+#: (client.add_dynamic_items), damit der Raten-Knopf Neustarts ueberlebt.
+DYNAMISCHE_KNOEPFE = (TagesKnopf,)
 
 
 # --- Singleton + Modul-API ---------------------------------------------------

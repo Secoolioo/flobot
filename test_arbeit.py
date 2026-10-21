@@ -8,9 +8,8 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _als_coro, _arbeit_frisch, _embed_text, _fake_person,
-    _karriere_durchspielen)
-
+    _als_coro, _arbeit_frisch, _dynamisch_klicken, _embed_text, _fake_person,
+    _karriere_durchspielen, _Klick)
 
 
 def test_arbeit_spasswordle_haelt_den_vertrag_der_basisklasse():
@@ -32,8 +31,6 @@ def test_arbeit_spasswordle_haelt_den_vertrag_der_basisklasse():
         assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()), (
             f"{name}.bauen nimmt kein **_extra - arbeit.py:1214 reicht aber "
             f"beliebige Schluesselwoerter durch")
-
-
 
 
 # --- Mittlere und niedrige Fehler aus dem Volltest --------------------------
@@ -123,8 +120,6 @@ def test_cmdnorm_kapert_keine_alltagswoerter():
     assert not (cmdnorm.ZUSTAND - cmdnorm.KNOWN), cmdnorm.ZUSTAND - cmdnorm.KNOWN
 
 
-
-
 def test_schicht_rechnet_bei_doppelklick_nur_einmal_ab():
     """SchichtView.beenden() setzte self.fertig, hat es aber nie GEPRUEFT - und
     interaction_check prueft nur, WER klickt, nicht wie oft. Zwei schnelle
@@ -167,8 +162,6 @@ def test_schicht_rechnet_bei_doppelklick_nur_einmal_ab():
     assert v.fertig is True
 
 
-
-
 def test_arbeit_woerter_sind_sauber():
     """Jedes Wort muss GENAU so lang sein, wie sein Fach sagt, und darf nur
     A-Z enthalten.
@@ -193,8 +186,6 @@ def test_arbeit_woerter_sind_sauber():
         assert laenge in arbeit.WOERTER, f"Ziehung verlangt {laenge}, gibt es nicht"
     assert len(arbeit.TAGES_GEWICHT_WOCHE) == len(arbeit.TAGES_LAENGEN)
     assert len(arbeit.TAGES_GEWICHT_WOCHENENDE) == len(arbeit.TAGES_LAENGEN)
-
-
 
 
 def test_arbeit_wordle_faerbung():
@@ -226,8 +217,6 @@ def test_arbeit_wordle_faerbung():
     assert W("KATZE").muster("ZEBRA") == "🟨🟨⬛⬛🟨"
 
 
-
-
 def test_arbeit_wordle_ablauf():
     """Versuche zaehlen, Zustand stimmt, Murks wird abgewiesen."""
     import arbeit
@@ -252,8 +241,6 @@ def test_arbeit_wordle_ablauf():
     spiel = arbeit.Wordle("ABEND")
     assert spiel.raten("ABEND") == "geloest"
     assert spiel.geloest and spiel.lohnfaktor() == 2.0
-
-
 
 
 def test_arbeit_wort_des_tages_ist_berechnet():
@@ -304,8 +291,6 @@ def test_arbeit_wort_des_tages_ist_berechnet():
         assert arbeit.laenge_des_tages("2026-08-17", wurf) in arbeit.TAGES_LAENGEN
 
 
-
-
 def test_arbeit_tageswordle_ist_ein_wettrennen():
     """Wer zuerst loest, nimmt alles - danach ist die Runde durch.
 
@@ -337,8 +322,6 @@ def test_arbeit_tageswordle_ist_ein_wettrennen():
         restore()
 
 
-
-
 def test_arbeit_tageswordle_preis():
     """Der Topf haengt an der WORTLAENGE, der Faktor an den Versuchen.
 
@@ -363,8 +346,6 @@ def test_arbeit_tageswordle_preis():
         assert r.preis(sechs) == 80_000
     finally:
         restore()
-
-
 
 
 def test_arbeit_wordle_faellt_nur_wenn_was_los_ist():
@@ -409,8 +390,6 @@ def test_arbeit_wordle_faellt_nur_wenn_was_los_ist():
         restore()
 
 
-
-
 def test_arbeit_tagesdeckel_und_serie():
     """Der Tagesdeckel begrenzt WIRKLICH, und die Serie zahlt sich aus.
 
@@ -451,8 +430,6 @@ def test_arbeit_tagesdeckel_und_serie():
         restore()
 
 
-
-
 def test_arbeit_safe_hinweis_zaehlt_zweistufig():
     """Beim Zahlenschloss dieselbe Falle wie beim Wordle: '111' gegen '123'
     darf NICHT dreimal 'richtige Ziffer am falschen Platz' ergeben."""
@@ -464,8 +441,6 @@ def test_arbeit_safe_hinweis_zaehlt_zweistufig():
     assert view.hinweis("321") == (1, 2)
     assert view.hinweis("456") == (0, 0)
     assert view.hinweis("213") == (1, 2)
-
-
 
 
 def test_arbeit_schichten_sind_vollstaendig():
@@ -491,8 +466,6 @@ def test_arbeit_schichten_sind_vollstaendig():
         arbeit.SCHICHTEN["wordle"].bauen(arbeit.instance, autor))
     assert datei is not None, "Wordle-Schicht ohne Brett-Bild"
     assert arbeit.SCHICHTEN["wordle"].frist > arbeit.SCHICHTEN["sortieren"].frist
-
-
 
 
 def test_arbeit_cooldown_und_befehle():
@@ -539,8 +512,6 @@ def test_arbeit_cooldown_und_befehle():
         restore()
 
 
-
-
 def test_arbeit_kanal_wird_vernuenftig_gesucht():
     """Reihenfolge: eingestellter Kanal -> ein Kanal, der passend heisst ->
     Ansagen-Kanal. Eine feste ID im Code gibt es bewusst nicht."""
@@ -570,8 +541,6 @@ def test_arbeit_kanal_wird_vernuenftig_gesucht():
             arbeit.instance._cfg = alt
     finally:
         restore()
-
-
 
 
 def test_arbeit_tick_merkt_sich_die_ansage():
@@ -624,8 +593,6 @@ def test_arbeit_tick_merkt_sich_die_ansage():
         restore()
 
 
-
-
 def test_arbeit_laufende_schicht_wird_nicht_weggeraeumt():
     """Eine laufende Schicht MUSS sich beim Auto-Loesch-Schutz anmelden.
 
@@ -670,8 +637,6 @@ def test_arbeit_laufende_schicht_wird_nicht_weggeraeumt():
         restore()
 
 
-
-
 def test_arbeit_wordle_brett_wird_gezeichnet():
     """Das Brett kommt als Bild - mit Tastatur, damit man sieht, welche
     Buchstaben schon raus sind. Und die Farben kommen aus EINER Quelle:
@@ -699,8 +664,6 @@ def test_arbeit_wordle_brett_wird_gezeichnet():
     assert kopf.startswith(b"\x89PNG"), kopf
     # Auch mit acht Buchstaben und ohne Tastatur darf nichts umfallen.
     assert render.wordle_board([], 8, titel="LEER").read(4) == b"\x89PNG"
-
-
 
 
 def test_arbeit_wordle_ist_selten_und_nicht_bestellbar():
@@ -742,8 +705,6 @@ def test_arbeit_wordle_ist_selten_und_nicht_bestellbar():
         restore()
 
 
-
-
 def test_arbeit_neue_schichten_funktionieren():
     """Werkzeug sortieren (Memory) und Qualitaetskontrolle - die zwei, die den
     Platz fuellen, den Wordle als seltene Schicht frei gemacht hat."""
@@ -776,8 +737,6 @@ def test_arbeit_neue_schichten_funktionieren():
     assert len(alle) == len(set(alle)), "Wort kommt in zwei Kisten vor"
 
 
-
-
 def test_arbeit_karriere_geht_nie_zurueck():
     """Die Stufe ist das Rueckgrat: sie zaehlt GESCHAFFTE Schichten und faellt
     nie. Vorher gab es nur die Serie - ein Reinfall und alles war weg, ueber
@@ -801,8 +760,6 @@ def test_arbeit_karriere_geht_nie_zurueck():
     assert arbeit.STUFEN[0].ab == 0, "es gibt keine Stufe fuer Anfaenger"
     assert arbeit.naechste_stufe(0).titel == "Aushilfe"
     assert arbeit.naechste_stufe(10**6) is None, "oben muss Schluss sein"
-
-
 
 
 def test_arbeit_lohn_ist_additiv_und_gedeckelt():
@@ -835,8 +792,6 @@ def test_arbeit_lohn_ist_additiv_und_gedeckelt():
         restore()
 
 
-
-
 def test_arbeit_goldene_schicht_verdoppelt():
     """Gold wird BEIM START gewuerfelt, damit es dransteht, waehrend man
     arbeitet - und verdoppelt am Ende den Lohn. Auf null bleibt null: fuer eine
@@ -866,8 +821,6 @@ def test_arbeit_goldene_schicht_verdoppelt():
         restore()
 
 
-
-
 def test_arbeit_wordle_bilanz_wird_mitgeschrieben():
     """Jede Teilnahme am Wort des Tages zaehlt genau einmal, jeder Erfolg
     landet in der Verteilung - auch der, fuer den es kein Geld mehr gab."""
@@ -878,22 +831,12 @@ def test_arbeit_wordle_bilanz_wird_mitgeschrieben():
         r.starten()
         wort = r.wort
 
-        gesendet = []
-
-        class Antwort:
-            def __init__(self):
-                self.done = False
-
-            async def send_message(self, **kw):
-                gesendet.append(kw)
-
-        class Ia:
-            def __init__(self, uid):
-                self.user = SimpleNamespace(id=uid, display_name=f"U{uid}")
-                self.response = Antwort()
-                self.channel = SimpleNamespace(
-                    send=lambda **kw: _als_coro(None))
-                self.client = SimpleNamespace(get_channel=lambda _c: None)
+        def Ia(uid):
+            klick = _Klick(uid)
+            klick.user = SimpleNamespace(id=uid, display_name=f"U{uid}")
+            klick.channel = SimpleNamespace(send=lambda *_a, **kw: _als_coro(None))
+            klick.client = SimpleNamespace(get_channel=lambda _c: None)
+            return klick
 
         # Nutzer 1: einmal daneben, dann richtig -> Sieger.
         asyncio.run(wp.tages_antwort(Ia(1), 900, "X" * len(wort)))
@@ -912,8 +855,6 @@ def test_arbeit_wordle_bilanz_wird_mitgeschrieben():
         assert r.gewinner == 1, "Sieger ueberschrieben"
     finally:
         restore()
-
-
 
 
 def test_arbeit_lohnzettel_und_rangliste_als_karte():
@@ -956,8 +897,6 @@ def test_arbeit_lohnzettel_und_rangliste_als_karte():
         assert gesendet and "file" in gesendet[0]
     finally:
         restore()
-
-
 
 
 def test_arbeit_nimmt_economy_die_bestenliste_nicht_weg():
@@ -1006,8 +945,6 @@ def test_arbeit_karriere_steigt_wirklich_und_faellt_nie_zurueck():
         restore()
 
 
-
-
 def test_arbeit_zeigt_den_fortschritt_zur_naechsten_stufe():
     """Die Karriere FUNKTIONIERTE, aber wie weit es noch ist, stand nur klein in
     der Fusszeile - ueber Stunden sah es deshalb aus, als passiere nichts. Der
@@ -1033,8 +970,6 @@ def test_arbeit_zeigt_den_fortschritt_zur_naechsten_stufe():
     assert balken(29) == 9, "29 von 30 darf NICHT voll aussehen"
     assert balken(7) == 7
     assert balken(600) is None, "hoechste Stufe hat keinen naechsten Schritt"
-
-
 
 
 def test_arbeit_spasswordle_deckel_haelt_wirklich():
@@ -1071,8 +1006,6 @@ def test_arbeit_spasswordle_deckel_haelt_wirklich():
         restore()
 
 
-
-
 def test_arbeit_spasswordle_ist_keine_karriere():
     """Zeitvertreib zaehlt NICHT fuer Stufe und Serie.
 
@@ -1102,8 +1035,6 @@ def test_arbeit_spasswordle_ist_keine_karriere():
     finally:
         random.seed()
         restore()
-
-
 
 
 def test_arbeit_spasswordle_eigener_cooldown_und_laenge():
@@ -1148,8 +1079,6 @@ def test_arbeit_spasswordle_eigener_cooldown_und_laenge():
         restore()
 
 
-
-
 def test_arbeit_wordle_versteht_vertipper_und_fremdsprachen():
     """'Flo wordle' muss auch bei Vertippern und auf Englisch/Bayrisch greifen.
 
@@ -1165,8 +1094,6 @@ def test_arbeit_wordle_versteht_vertipper_und_fremdsprachen():
     assert "daily" not in arbeit._TAGES_CMDS
     assert "daily" in cmdnorm.KNOWN
     assert not set(arbeit._WORDLE_CMDS) & set(arbeit._TAGES_CMDS)
-
-
 
 
 def test_wordle_von_hand_nimmt_niemandem_seine_versuche():
@@ -1224,9 +1151,6 @@ def test_wordle_von_hand_nimmt_niemandem_seine_versuche():
         restore()
 
 
-
-
-
 def test_arbeit_frist_aus_der_zukunft_sperrt_nicht_stundenlang():
     """Eine Schicht, angetreten in den Sekunden nach dem Booten (Uhr noch zwei
     Stunden vor), sperrte danach 2 h 15 min statt 15 min. Eine Frist, die
@@ -1258,6 +1182,131 @@ def test_arbeit_frist_aus_der_zukunft_sperrt_nicht_stundenlang():
         assert arbeit.Arbeit._rest_pause(prof, "cooldown", arbeit.COOLDOWN) <= 0
     finally:
         restore()
+
+
+# --- Klicks & Antworten -----------------------------------------------------
+def test_wordle_antwort_bestaetigt_vor_dem_brett():
+    """Das Brett wurde VOR der Antwort gemalt. Riss das Discords 3-Sekunden-
+    Frist, sah der Rater "Interaktion fehlgeschlagen" - obwohl sein Versuch
+    gezaehlt war -, und beim Sieger fiel die oeffentliche Ansage gleich mit
+    weg. Jetzt: erst defer(), dann werten und malen, dann die Folgenachricht.
+    Scheitert schon das Bestaetigen, wird der Versuch NICHT gewertet."""
+    arbeit, restore = _arbeit_frisch({1: 0})
+    alt_bild = arbeit._wordle_bild
+    try:
+        wp = arbeit.instance
+        r = wp.raetsel(901)
+        r.starten()
+        klick = None
+
+        async def bild(*_a, **_k):
+            klick.protokoll.append(("brett",))
+            return None, ""
+        arbeit._wordle_bild = bild
+
+        def Ia(uid, **kw):
+            k = _Klick(uid, **kw)
+            k.user = SimpleNamespace(id=uid, display_name=f"U{uid}")
+            k.channel = SimpleNamespace(
+                send=lambda *_a, **_k: _als_coro(k.protokoll.append(("jubel",))))
+            k.client = SimpleNamespace(get_channel=lambda _c: None)
+            return k
+
+        # Daneben: defer -> Brett -> Folgenachricht.
+        klick = Ia(1)
+        asyncio.run(wp.tages_antwort(klick, 901, "X" * len(r.wort)))
+        assert klick.arten() == ["defer", "brett", "followup"], klick.protokoll
+        assert len(r.spiel_von(1).versuche) == 1
+
+        # Bestaetigen scheitert -> nichts gewertet, kein Versuch verbraucht.
+        klick = Ia(1, kaputt={"defer"})
+        asyncio.run(wp.tages_antwort(klick, 901, r.wort))
+        assert len(r.spiel_von(1).versuche) == 1 and not r.entschieden
+
+        # Sieger, dessen Folgenachricht scheitert: der Topf ist gebucht UND die
+        # oeffentliche Ansage geht trotzdem raus.
+        klick = Ia(1, kaputt={"followup"})
+        asyncio.run(wp.tages_antwort(klick, 901, r.wort))
+        assert r.gewinner == 1 and economy.get_coins(1) > 0
+        assert klick.arten() == ["defer", "brett", "jubel"], klick.protokoll
+    finally:
+        arbeit._wordle_bild = alt_bild
+        restore()
+
+
+def test_arbeit_speichert_gesammelt():
+    """_speichern startete je Aufruf einen eigenen Task mit vollem save() - ohne
+    Referenz, und bei einer Wordle-Antwort drei- bis viermal hintereinander.
+    Jetzt sammelt store.save_soon: ein Sammel-Task je Store, keine losen Tasks."""
+    arbeit, restore = _arbeit_frisch({1: 0})
+    try:
+        wp = arbeit.instance
+
+        async def lauf():
+            vorher = len(asyncio.all_tasks())
+            for _ in range(5):
+                wp._speichern()
+            lose = len(asyncio.all_tasks()) - vorher
+            await asyncio.sleep(0)
+            return lose
+        assert asyncio.run(lauf()) == 0, "lose Speicher-Tasks"
+        assert wp._store.angemeldet == 5 and wp._store.gespeichert == 0, (
+            wp._store.angemeldet, wp._store.gespeichert)
+    finally:
+        restore()
+
+
+def test_wordle_knopf_ist_dauerhaft_und_bleibt_nicht_liegen():
+    """Der Raten-Knopf war ein normaler Knopf in einer View ohne Timeout: jede
+    Ansage, jedes 'Flo wordle' und register_views legten eine View fuer immer
+    in discord.py ab. Jetzt ein DynamicItem - dieselbe custom_id, der Klick
+    holt seinen Zustand aus dem Store, auch nach einem Neustart."""
+    import discord
+    import discord.ui.view as ui_view
+    arbeit, restore = _arbeit_frisch({1: 0})
+    try:
+        view = arbeit.TagesView(902)
+        knopf = view.children[0]
+        assert isinstance(knopf, discord.ui.DynamicItem)
+        assert type(knopf) in arbeit.DYNAMISCHE_KNOEPFE
+        assert knopf.custom_id == "flo:wordle:902" and view.timeout is None
+        # discord.py legt eine View nur aus DynamicItems nicht ab.
+        lager = ui_view.ViewStore(SimpleNamespace())
+        lager.add_view(view, 4242)
+        assert not lager._views and not lager._synced_message_views
+
+        # Klick ueber den echten discord.py-Weg (wie nach einem Neustart).
+        arbeit.instance.raetsel(902).starten()
+        klick = _Klick(1)
+        assert _dynamisch_klicken(arbeit.DYNAMISCHE_KNOEPFE, view,
+                                  "flo:wordle:902", klick) == 1
+        assert klick.arten() == ["modal"], klick.protokoll
+
+        # register_views meldet nur noch die Vorlage an - keine View je Runde.
+        angemeldet = []
+        client = SimpleNamespace(add_dynamic_items=lambda *k: angemeldet.extend(k),
+                                 add_view=lambda *_a, **_k: angemeldet.append("view"))
+        arbeit.instance._views_ready = False
+        assert arbeit.instance.register_views(client) == 1
+        assert angemeldet == [arbeit.TagesKnopf], angemeldet
+    finally:
+        arbeit.instance._views_ready = False
+        restore()
+
+
+def test_wordle_knopf_bei_ausgeschalteter_arbeit():
+    """Der Knopf ist jetzt immer angemeldet - auch wenn Arbeit aus ist und es
+    keinen Store gibt. Dann eine Absage statt eines AttributeError."""
+    import arbeit
+    alt = (arbeit.instance._enabled, arbeit.instance._store)
+    try:
+        arbeit.instance._enabled, arbeit.instance._store = False, None
+        klick = _Klick(1)
+        asyncio.run(arbeit.instance.tages_knopf(klick, 903))
+        assert klick.arten() == ["send"] and "aus" in klick.protokoll[0][1]
+    finally:
+        arbeit.instance._enabled, arbeit.instance._store = alt
+
 
 if __name__ == "__main__":
     run(globals())

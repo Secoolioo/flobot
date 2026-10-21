@@ -402,19 +402,22 @@ class Casino(FeatureBasis):
             return await asyncio.to_thread(static_fn, *args, **kwargs), "png"
 
     async def _send(self, message, *, embed=None, file=None, view=None):
-        """Sendet eine Casino-Antwort als Reply. Gibt die Nachricht zurueck (oder None)."""
-        kwargs = {"mention_author": False}
+        """Sendet eine Casino-Antwort als Reply. Gibt die Nachricht zurueck (oder None).
+
+        Ueber basis.antworte: die Runde ist hier schon verbucht. Ein nacktes
+        message.reply() scheiterte, wenn die Frage geloescht war oder Flo das
+        Recht 'Nachrichtenverlauf lesen' fehlte - der Spieler sah dann nie, was
+        er gewonnen oder verloren hatte."""
+        kwargs = {}
         if embed is not None:
             kwargs["embed"] = embed
         if file is not None:
             kwargs["file"] = file
         if view is not None:
             kwargs["view"] = view
-        try:
-            msg = await message.reply(**kwargs)
-        except discord.HTTPException:
-            log.exception("Casino-Antwort konnte nicht gesendet werden")
-            return None
+        msg = await basis.antworte(message, **kwargs)
+        if msg is None:
+            return None             # basis.antworte hat es schon geloggt
         if view is not None:
             self._protect(msg)   # aktives Spiel -> vorm Auto-Loeschen schuetzen
         return msg
