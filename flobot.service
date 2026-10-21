@@ -1,7 +1,12 @@
 [Unit]
 Description=Discord Server-Icon Bot (Tageszeit/Jahreszeit)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+# time-sync.target: erst starten, wenn die Uhr gestellt ist. Auf der VM laeuft
+# die Hardware-Uhr auf Ortszeit, ~15 s nach dem Booten springt die Systemzeit
+# zwei Stunden zurueck - alles, was Flo vorher stempelt, laege in der Zukunft.
+# Wirkt nur mit  systemctl enable systemd-time-wait-sync  (sonst ist das Ziel
+# sofort erreicht); 'bash k alles' prueft die Uhr mit.
 # KEIN hartes Startlimit: der Bot soll sich immer wieder selbst fangen. Statt
 # aufzugeben wird der Abstand groesser (siehe RestartSteps unten).
 StartLimitIntervalSec=0

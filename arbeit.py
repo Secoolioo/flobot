@@ -1100,7 +1100,7 @@ class Arbeit(FeatureBasis):
         except Exception:  # noqa: BLE001
             log.exception("Lohnzettel-Karte fehlgeschlagen - Text-Fallback")
             return self._lohnzettel_text(ziel, prof, heute, stufe, weiter)
-        warte = int(prof.get("cooldown", 0)) - int(time.time())
+        warte = self._rest_pause(prof, "cooldown", COOLDOWN)
         e = discord.Embed(
             title=f"🧾 Lohnzettel · {ziel.display_name}",
             description=(f"{stufe.symbol} **{stufe.titel}** · "
@@ -1196,6 +1196,22 @@ class Arbeit(FeatureBasis):
         except Exception:  # noqa: BLE001
             return None
 
+    @staticmethod
+    def _rest_pause(prof, schluessel, pause):
+        """Sekunden bis zur naechsten Schicht dieser Art (<= 0: sofort).
+
+        Gespeichert ist die Frist ('gesperrt bis'). Liegt sie weiter in der
+        Zukunft, als die Pause je dauern kann, stammt sie von einer falsch
+        gehenden Uhr (siehe basis.glaubhafte_zeit) - dann gilt sie wie 'gerade
+        eben angetreten', statt zwei Stunden zu sperren. Die berichtigte Frist
+        wird zurueckgeschrieben, sonst rueckte sie bei jeder Abfrage mit."""
+        jetzt = int(time.time())
+        bis = int(prof.get(schluessel, 0))
+        echt = int(basis.glaubhafte_zeit(bis, jetzt, vorlauf=pause))
+        if echt != bis:
+            prof[schluessel] = echt
+        return echt - jetzt
+
     async def _schicht_starten(self, message, schicht=None, **extra):
         prof = self._nutzer(message.author.id)
         # Jede Art hat ihren eigenen Cooldown-Schluessel: ein Spass-Wordle darf
@@ -1204,7 +1220,7 @@ class Arbeit(FeatureBasis):
         pause = COOLDOWN
         if schicht is not None and schicht.cooldown_sek is not None:
             pause = int(schicht.cooldown_sek)
-        warte = int(prof.get(schluessel, 0)) - int(time.time())
+        warte = self._rest_pause(prof, schluessel, pause)
         if warte > 0:
             wie_lang = (f"**{warte // 60 + 1} Minuten**" if warte >= 60
                         else f"**{warte} Sekunden**")

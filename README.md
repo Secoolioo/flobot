@@ -184,6 +184,26 @@ Was dabei zu wissen ist:
 > aus an, so wie `Flo einstellungen` es beschreibt. Zeigt ein `DATA_DIR` in der
 > `.env` auf einen leeren Ordner, startet Flo nicht (statt mit leeren Konten).
 
+### Die Uhr des Servers
+
+Auf der VM läuft die Hardware-Uhr auf Ortszeit, das System hält sie aber für
+UTC (`timedatectl`: „RTC in local TZ: no“). Folge: nach jedem Booten steht die
+Uhr zwei Stunden vor, ~15 s später stellt NTP sie zurück — und `systemctl
+status flobot` zeigt „active since“ zwei Stunden in der Zukunft. Was Flo in
+diesen Sekunden stempelt, läge ebenfalls in der Zukunft. Einmalig auf dem
+Server:
+
+```bash
+sudo timedatectl set-local-rtc 1                   # Hardware-Uhr läuft auf Ortszeit
+sudo systemctl enable systemd-time-wait-sync       # Flo startet erst mit gestellter Uhr
+```
+
+`flobot.service` wartet dafür auf `time-sync.target` (nach einem Update die
+Datei neu kopieren, siehe `k alles`). `k alles` prüft die Uhr mit und meldet,
+wenn eins von beidem fehlt. Flo selbst nimmt Zeitstempel, die Stunden in der
+Zukunft liegen, nicht mehr ernst: Raub- und Schicht-Cooldown laufen dann
+einmal normal lang, und der Aktien-Analyst fragt sofort neu.
+
 ### Wirtschaft zurücksetzen
 
 ```bash

@@ -2004,5 +2004,96 @@ def test_aktie_laesst_sich_je_server_abschalten():
         features.is_on, features.is_on_in = alt_on, alt_in
 
 
+
+
+def test_aktie_takt_flutet_das_journal_nicht():
+    """'FloCorp Takt: ...' stand alle 20 s auf INFO im Journal - 180 Zeilen pro
+    Stunde, und die echten Fehler gingen darin unter. Der Takt loggt jetzt auf
+    DEBUG; auf INFO steht hoechstens EINE Stundenbilanz."""
+    import logging
+    import floaktie
+    fa, restore = _aktie_frisch({})
+    alt_bilanz = fa._bilanz
+    fa._bilanz = None
+    puffer = io.StringIO()
+    griff = logging.StreamHandler(puffer)
+    griff.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    protokoll = logging.getLogger("dcbot.floaktie")
+    protokoll.addHandler(griff)
+    alt_stufe = protokoll.level
+    protokoll.setLevel(logging.DEBUG)
+    leer = SimpleNamespace(voice_channels=[], afk_channel=None)
+
+    async def eine_stunde_takte():
+        for _ in range(180):
+            await fa.sample_and_tick(leer, dt=20.0)
+    try:
+        asyncio.run(eine_stunde_takte())
+        zeilen = puffer.getvalue().splitlines()
+        takt = [z for z in zeilen if "FloCorp Takt" in z]
+        assert len(takt) == 180 and all(z.startswith("DEBUG") for z in takt), takt[:3]
+        assert not any(z.startswith("INFO") for z in zeilen), [
+            z for z in zeilen if z.startswith("INFO")][:3]
+
+        # Nach einer Stunde (monotonic, nicht Wanduhr): genau EINE Bilanz ...
+        seit = fa._bilanz["seit"]
+        kurs = fa._bilanz["kurs"]
+        assert fa._stundenbilanz(kurs, kurs * 1.1, 2.0, jetzt=seit + floaktie.BILANZ_SEK)
+        bilanz = [z for z in puffer.getvalue().splitlines() if z.startswith("INFO")]
+        assert len(bilanz) == 1 and "FloCorp Stunde" in bilanz[0], bilanz
+        assert "+10.00 %" in bilanz[0] and "181 Takten" in bilanz[0], bilanz[0]
+        # ... und die naechste erst wieder eine Stunde spaeter.
+        assert not fa._stundenbilanz(1, 1, 0.0, jetzt=seit + floaktie.BILANZ_SEK + 60)
+    finally:
+        protokoll.removeHandler(griff)
+        protokoll.setLevel(alt_stufe)
+        fa._bilanz = alt_bilanz
+        restore()
+
+
+
+
+def test_aktie_analyst_glaubt_keinem_stempel_aus_der_zukunft():
+    """Die Server-Uhr springt ~15 s nach dem Booten zwei Stunden zurueck. Ein
+    ki_zeit aus diesen Sekunden lag danach zwei Stunden in der Zukunft: die alte
+    Einschaetzung galt so lange als frisch, und ki_tick fragte keinen neuen
+    Analysten. So ein Stempel zaehlt jetzt wie 'nie'."""
+    import ai
+    import floaktie
+    from unittest import mock
+    fa, restore = _aktie_frisch({})
+    alt = (fa._ki_naechster_versuch, fa._ki_fehlschlaege)
+    fa._ki_naechster_versuch, fa._ki_fehlschlaege = 0.0, 0
+    jetzt = time.time()
+    gefragt = []
+
+    async def analyst(*_a, **_k):
+        gefragt.append(1)
+        return "10|Laeuft wieder."
+    try:
+        fa._store.data.update({"ki_zeit": jetzt + 2 * 3600, "ki_faktor": 0.2,
+                               "ki_text": "Zum Mond!"})
+        assert fa._ki_faktor() == 0.0 and fa.ki_text() == ""
+        with mock.patch.object(ai, "generate", analyst), \
+                mock.patch.object(ai, "is_enabled", lambda: True):
+            erg = asyncio.run(fa.ki_tick(SimpleNamespace(voice_channels=[],
+                                                         afk_channel=None)))
+        assert gefragt and erg is not None, "der Analyst schweigt zwei Stunden"
+        assert abs(fa._ki_faktor() - 0.10) < 1e-9 and fa.ki_text() == "Laeuft wieder."
+
+        # Ein normaler Stempel gilt weiter - auch mit ein paar Sekunden Drift.
+        for stempel in (jetzt - 300, jetzt + 60):
+            fa._store.data.update({"ki_zeit": stempel, "ki_faktor": 0.2,
+                                   "ki_text": "Zum Mond!"})
+            assert fa._ki_faktor() == 0.2 and fa.ki_text() == "Zum Mond!", stempel
+        # Und ein unendlicher Stempel sperrt nicht fuer immer.
+        fa._store.data["ki_zeit"] = float("inf")
+        assert fa._ki_faktor() == 0.0
+        assert floaktie.FloAktie._ki_zeit({"ki_zeit": "quatsch"}, jetzt) == 0.0
+    finally:
+        fa._ki_naechster_versuch, fa._ki_fehlschlaege = alt
+        restore()
+
+
 if __name__ == "__main__":
     run(globals())

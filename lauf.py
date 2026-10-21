@@ -21,6 +21,7 @@ Rueckgabecode 0 = alles gruen, 1 = mindestens ein Fehler.
 """
 
 import argparse
+import asyncio
 import importlib
 import os
 import random
@@ -258,7 +259,23 @@ class Lauf:
                   f"wiederholbar mit  python lauf.py --misch {self.misch}\n")
         for name, fn in paare:
             self.einer(name, fn, erg)
+        self._aufraeumen()
         return erg
+
+    @staticmethod
+    def _aufraeumen():
+        """Zum Schluss schliessen, was die Module ueber alle Tests hinweg offen
+        halten - so wie FloBot.close() es im Betrieb tut. Sonst endete jeder
+        Lauf mit 'Unclosed client session': die geteilte Session aus ai.py legt
+        der erste Test an, der etwas aus dem Netz holt, und keiner schloss sie."""
+        ai = sys.modules.get("ai")
+        aclose = getattr(getattr(ai, "instance", None), "aclose", None)
+        if aclose is None:
+            return
+        try:
+            asyncio.run(aclose())
+        except Exception:  # noqa: BLE001 - Aufraeumen darf den Bericht nie kippen
+            pass
 
     @staticmethod
     def bericht(erg):

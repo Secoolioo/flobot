@@ -1224,5 +1224,40 @@ def test_wordle_von_hand_nimmt_niemandem_seine_versuche():
         restore()
 
 
+
+
+
+def test_arbeit_frist_aus_der_zukunft_sperrt_nicht_stundenlang():
+    """Eine Schicht, angetreten in den Sekunden nach dem Booten (Uhr noch zwei
+    Stunden vor), sperrte danach 2 h 15 min statt 15 min. Eine Frist, die
+    weiter in der Zukunft liegt, als die Pause je dauern kann, gilt jetzt wie
+    'gerade eben angetreten'."""
+    arbeit, restore = _arbeit_frisch({5: 0})
+    try:
+        autor = _fake_person(5, name="tester", global_name="Tester")
+        kanal = SimpleNamespace(id=9, send=lambda **kw: _als_coro(SimpleNamespace(id=1)))
+        msg = SimpleNamespace(content="Flo work sortieren", author=autor, channel=kanal,
+                              guild=SimpleNamespace(id=42))
+        prof = arbeit.instance._nutzer(5)
+        prof["cooldown"] = int(time.time()) + arbeit.COOLDOWN + 2 * 3600
+        text = _embed_text(asyncio.run(arbeit.handle(msg)))
+        minuten = re.search(r"(\d+) Minuten", text)
+        assert minuten, text
+        assert int(minuten.group(1)) <= arbeit.COOLDOWN // 60 + 1, text
+        assert arbeit.Arbeit._rest_pause(prof, "cooldown", arbeit.COOLDOWN) <= arbeit.COOLDOWN
+        # Die berichtigte Frist steht jetzt in den Daten. Sonst rueckte 'gerade
+        # eben' bei jeder Abfrage mit, und die Sperre endete keine Minute frueher.
+        assert prof["cooldown"] <= int(time.time()) + arbeit.COOLDOWN, prof
+        prof["cooldown"] -= arbeit.COOLDOWN             # eine Pause spaeter ...
+        assert arbeit.Arbeit._rest_pause(prof, "cooldown", arbeit.COOLDOWN) <= 0
+
+        # Eine echte Frist bleibt, wie sie ist.
+        prof["cooldown"] = int(time.time()) + 300
+        assert 290 <= arbeit.Arbeit._rest_pause(prof, "cooldown", arbeit.COOLDOWN) <= 300
+        prof["cooldown"] = 0
+        assert arbeit.Arbeit._rest_pause(prof, "cooldown", arbeit.COOLDOWN) <= 0
+    finally:
+        restore()
+
 if __name__ == "__main__":
     run(globals())

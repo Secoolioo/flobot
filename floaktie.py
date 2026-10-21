@@ -247,6 +247,9 @@ MOM_DECAY = float(os.getenv("FLOAKTIE_MOM_DECAY", "0.7") or "0.7")
 KI_MAX = float(os.getenv("FLOAKTIE_KI_MAX", "0.4") or "0.4")          # +/- 40 %
 KI_ALLE_SEK = float(os.getenv("FLOAKTIE_KI_INTERVAL", "600") or "600")  # alle 10 min
 KI_MAX_ALTER = float(os.getenv("FLOAKTIE_KI_TTL", "2400") or "2400")   # nach 40 min ungueltig
+# So oft fasst der Kurs-Takt im Log zusammen (Sekunden) - der Takt selbst loggt
+# nur auf DEBUG.
+BILANZ_SEK = 3600.0
 # Sofort-Impulse fuer Ereignisse (unabhaengig vom Niveau, pro Minute gedeckelt).
 PULSE_STREAM = float(os.getenv("FLOAKTIE_PULSE_STREAM", "0.004") or "0.004")   # Livestream geht an: +0,4 %
 PULSE_JOIN = float(os.getenv("FLOAKTIE_PULSE_JOIN", "0.0015") or "0.0015")     # jemand kommt in den Call: +0,15 %
@@ -332,6 +335,8 @@ class FloAktie(FeatureBasis):
         # Die Rohwerte des letzten Takts (Leute, Streams, Kameras, Nachrichten) -
         # damit das Panel zeigen kann, WORAUS die Aktivitaet besteht.
         self._zuletzt_mess = (0, 0, 0, 0)
+        # Die laufende Stundenbilanz fuers Log (siehe _stundenbilanz).
+        self._bilanz = None
 
     # --- Lebenszyklus -----------------------------------------------------
     def setup(self):
@@ -1208,11 +1213,8 @@ class FloAktie(FeatureBasis):
         (ki_tick). Ist sie zu alt oder gar nicht da, ist sie 0 und der Kurs
         verhaelt sich wie ohne KI."""
         st = self._store.data if self._store is not None else {}
-        try:
-            alter = time.time() - float(st.get("ki_zeit", 0) or 0)
-        except (TypeError, ValueError):
-            return 0.0
-        if alter > KI_MAX_ALTER:
+        jetzt = time.time()
+        if jetzt - self._ki_zeit(st, jetzt) > KI_MAX_ALTER:
             return 0.0
         try:
             faktor = float(st.get("ki_faktor", 0.0) or 0.0)
@@ -1225,12 +1227,27 @@ class FloAktie(FeatureBasis):
     def ki_text(self):
         """Der letzte Analysten-Kommentar (oder '')."""
         st = self._store.data if self._store is not None else {}
-        try:
-            if time.time() - float(st.get("ki_zeit", 0) or 0) > KI_MAX_ALTER:
-                return ""
-        except (TypeError, ValueError):
+        jetzt = time.time()
+        if jetzt - self._ki_zeit(st, jetzt) > KI_MAX_ALTER:
             return ""
         return str(st.get("ki_text", "") or "")[:180]
+
+    @staticmethod
+    def _ki_zeit(st, jetzt):
+        """Wann der Analyst zuletzt geantwortet hat (0.0 = nie oder unbrauchbar).
+
+        Ein Stempel, der Stunden in der ZUKUNFT liegt, stammt aus den Sekunden
+        nach dem Booten, bevor NTP die Uhr zurueckgestellt hat (siehe
+        basis.glaubhafte_zeit). Er zaehlt wie 'nie': sonst galt die alte
+        Einschaetzung zwei Stunden laenger als frisch, und so lange fragte Flo
+        keinen neuen Analysten."""
+        try:
+            stempel = float(st.get("ki_zeit", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if stempel != stempel:                     # NaN
+            return 0.0
+        return basis.glaubhafte_zeit(stempel, jetzt, ersatz=0.0)
 
     def _ki_lage(self, people, streams, video, msgs):
         """Kurzer Marktbericht als Text - das bekommt die KI zu sehen."""
@@ -1279,11 +1296,7 @@ class FloAktie(FeatureBasis):
             return None
         st = self._state()
         jetzt = time.time()
-        try:
-            letzte = float(st.get("ki_zeit", 0) or 0)
-        except (TypeError, ValueError):
-            letzte = 0.0
-        if jetzt - letzte < KI_ALLE_SEK:
+        if jetzt - self._ki_zeit(st, jetzt) < KI_ALLE_SEK:
             return None
         if jetzt < self._ki_naechster_versuch:
             return None
@@ -1557,13 +1570,42 @@ class FloAktie(FeatureBasis):
             # (das jeweils zuletzt gepostete) live nachziehen.
             if neu != alt:
                 await self._refresh_live()
-            log.info("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
-                     "-> Kurs %s->%s (%+.3f%%/min, Ziel %s).",
-                     act, people, streams, video, msgs_since,
-                     self._fmt(alt), self._fmt(neu), drift * 100,
-                     self.ziel_kurs())
+            # Der Takt selbst nur noch auf DEBUG: alle 20 s eine INFO-Zeile
+            # waren 180 Zeilen pro Stunde, und die echten Fehler gingen im
+            # Journal darin unter. Fuer den Ueberblick reicht die Stundenbilanz.
+            log.debug("FloCorp Takt: Aktiv %.1f (Call %d, Stream %d, Cam %d, Msgs %d) "
+                      "-> Kurs %s->%s (%+.3f%%/min, Ziel %s).",
+                      act, people, streams, video, msgs_since,
+                      self._fmt(alt), self._fmt(neu), drift * 100,
+                      self.ziel_kurs())
+            self._stundenbilanz(alt, neu, act)
         except Exception:  # noqa: BLE001
             log.exception("FloCorp Sample/Tick fehlgeschlagen")
+
+    def _stundenbilanz(self, alt, neu, act, jetzt=None):
+        """Hoechstens EINE INFO-Zeile pro Stunde: wohin der Kurs gelaufen ist.
+        Rueckgabe: True, wenn gerade eine geschrieben wurde.
+
+        monotonic statt Wanduhr: die springt auf dem Server kurz nach dem Booten
+        zwei Stunden zurueck - eine Bilanz haette dann zwei Stunden geschwiegen."""
+        jetzt = time.monotonic() if jetzt is None else jetzt
+        if self._bilanz is None:
+            self._bilanz = {"seit": jetzt, "kurs": alt, "takte": 0, "aktiv": 0.0}
+        b = self._bilanz
+        b["takte"] += 1
+        b["aktiv"] += float(act)
+        if jetzt - b["seit"] < BILANZ_SEK:
+            return False
+        try:
+            prozent = (float(neu) / float(b["kurs"]) - 1.0) * 100
+        except (TypeError, ValueError, ZeroDivisionError):
+            prozent = 0.0
+        log.info("FloCorp Stunde: Kurs %s -> %s (%+.2f %%) in %d Takten, "
+                 "Aktivitaet im Schnitt %.1f, Ziel %s.",
+                 self._fmt(b["kurs"]), self._fmt(neu), prozent, b["takte"],
+                 b["aktiv"] / b["takte"], self.ziel_kurs())
+        self._bilanz = {"seit": jetzt, "kurs": neu, "takte": 0, "aktiv": 0.0}
+        return True
 
     # --- Dividende (Vorteil fuers Halten) --------------------------------
     def dividend_for(self, uid):

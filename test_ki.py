@@ -539,6 +539,87 @@ def test_ki_wechselt_die_signatur_wenn_cloudflare_sperrt():
 
 
 
+class _SchliessbarerAnbieter(_KiAnbieter):
+    """Falscher Anbieter, der wie AsyncOpenAI geschlossen werden kann."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.zu = 0
+
+    async def close(self):
+        self.zu += 1
+
+
+def test_ki_signaturwechsel_schliesst_den_alten_client():
+    """Bei einer Cloudflare-Sperre baut Flo bis zu dreimal je Anfrage einen neuen
+    Client - der alte behielt seinen httpx-Verbindungspool. Jetzt wird er
+    geschlossen, aber erst nach ZEITLIMIT: eine zweite Anfrage kann noch ueber
+    ihn laufen, und ein geschlossener Pool risse sie mitten im Lesen ab."""
+    gesperrt = _SchliessbarerAnbieter([_KiFehler(403, "error code: 1010")] * 8)
+    neu = _SchliessbarerAnbieter([_KiAntwort("Wieder da."), _KiAntwort("Immer noch.")])
+
+    flo, _ = _ki_frisch([])
+    flo._client = gesperrt
+    flo._client_bauen = lambda ua: neu
+    flo.ZEITLIMIT = 5.0
+
+    async def lauf():
+        antwort = await flo.ask_flo("hi")
+        sofort_zu = gesperrt.zu
+        await flo.aclose()             # beim Beenden: nicht erst 5 s warten
+        return antwort, sofort_zu
+    antwort, sofort_zu = asyncio.run(lauf())
+    assert antwort == "Wieder da."
+    assert sofort_zu == 0, "der alte Client wurde zugemacht, waehrend er noch laufen kann"
+    assert gesperrt.zu == 1 and neu.zu == 1, (gesperrt.zu, neu.zu)
+    assert not flo._schliess_tasks
+
+    # Ohne aclose: nach ZEITLIMIT ist er von selbst zu.
+    gesperrt = _SchliessbarerAnbieter([_KiFehler(403, "error code: 1010")] * 8)
+    flo, _ = _ki_frisch([])
+    flo._client = gesperrt
+    flo._client_bauen = lambda ua: _SchliessbarerAnbieter([_KiAntwort("Da.")])
+    flo.ZEITLIMIT = 0.0
+
+    async def warten():
+        await flo.ask_flo("hi")
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return gesperrt.zu
+    assert asyncio.run(warten()) == 1
+
+
+
+
+def test_ki_aclose_schliesst_alles_und_wirft_nie():
+    """Beim Beenden blieb die geteilte aiohttp-Session offen - jedes SIGTERM
+    endete mit 'Unclosed client session' im Journal. aclose() macht sie und den
+    LLM-Client zu, darf mehrfach laufen und kippt nie ueber einen Client, der
+    beim Schliessen selbst Aerger macht."""
+    import ai
+    flo = ai.FloAI()
+
+    class Zickig:
+        async def close(self):
+            raise RuntimeError("Pool schon weg")
+
+    async def lauf():
+        sitzung = flo.http_session()
+        await flo.aclose()
+        await flo.aclose()                     # zweimal: kein Fehler
+        return sitzung
+    flo._client = Zickig()
+    sitzung = asyncio.run(lauf())
+    assert sitzung.closed and flo._http is None
+
+    # Ohne Client und ohne Session: nichts zu tun, auch kein Fehler.
+    asyncio.run(ai.FloAI().aclose())
+    # Die Modul-API kennt es (bot.FloBot.close ruft ai.aclose).
+    assert ai.aclose == ai.instance.aclose
+
+
+
+
 def test_ki_stoerung_landet_nicht_im_gedaechtnis():
     """bot.py schreibt JEDE Antwort ins Kurzzeit-Gedaechtnis (bot.py:1529 und
     :1820) - auch eine Stoerungsmeldung. Die ging danach als Gespraechsverlauf

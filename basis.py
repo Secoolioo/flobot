@@ -19,6 +19,7 @@ Ein Test haelt fest, dass kein Modul sich wieder eine eigene Kopie anlegt.
 
 import logging
 import re
+import time
 
 import ai
 import laufzeit
@@ -182,6 +183,42 @@ def v2_text(message):
         str(teil.content) for teil in bausteine(message)
         if getattr(teil, "type", None) == discord.ComponentType.text_display
         and getattr(teil, "content", None))
+
+
+#: So weit darf ein gespeicherter Zeitstempel ueber das Erwartbare hinaus in
+#: der Zukunft liegen, bevor er als falsch gilt. Uhren driften, NTP stellt um
+#: Sekunden nach - zwei Stunden sind aber kein Drift mehr.
+ZUKUNFT_SPIELRAUM = 600.0
+
+
+def glaubhafte_zeit(stempel, jetzt=None, *, vorlauf=0.0, ersatz=None):
+    """Ein gespeicherter time.time()-Stempel - oder ein Ersatz, wenn er luegt.
+
+    Auf dem Server springt die Uhr ~15 s nach dem Booten zwei Stunden ZURUECK:
+    die Hardware-Uhr der VM laeuft auf Ortszeit, das System haelt sie fuer UTC,
+    und erst NTP stellt es richtig. Flo startet vorher. Was er in diesen
+    Sekunden stempelt, liegt danach zwei Stunden in der Zukunft - und jede
+    Sperre, die 'seit dem Stempel' rechnet, haelt dann zwei Stunden laenger
+    (der Analyst der Aktie schweigt, der Raub-Cooldown steht still).
+
+    stempel - der gespeicherte Wert (Zahl; umwandeln muss der Aufrufer, der
+              weiss, was bei Muell gelten soll)
+    vorlauf - wie weit der Stempel REGULAER in der Zukunft liegen darf: bei
+              einer gespeicherten Frist ('gesperrt bis') die Sperrdauer
+    ersatz  - was statt eines gelogenen Stempels gilt. Standard: jetzt +
+              vorlauf, also 'gerade eben' - die Sperre laeuft dann einmal
+              normal lang statt Stunden. Wo 'nie' sicherer ist, 0.0 uebergeben.
+
+    WICHTIG bei 'gerade eben': den Ersatz in die Daten zurueckschreiben. Sonst
+    wandert 'jetzt' bei jeder Abfrage mit, und die Sperre endet keine Minute
+    frueher als mit dem gelogenen Stempel. Bei 'nie' (0.0) ist das egal - da
+    sperrt nichts, und der naechste echte Stempel ersetzt den alten.
+
+    Auch ein unendlicher Stempel gilt als gelogen - der sperrte sonst fuer immer."""
+    jetzt = time.time() if jetzt is None else float(jetzt)
+    if stempel > jetzt + vorlauf + ZUKUNFT_SPIELRAUM:
+        return jetzt + vorlauf if ersatz is None else ersatz
+    return stempel
 
 
 class FeatureBasis:

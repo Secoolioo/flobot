@@ -490,7 +490,12 @@ class FloAI:
         # --- Geteilte HTTP-Session (Performance) ----------------------------------
         # Eine Session pro Prozess statt pro Anfrage: spart TCP/TLS-Handshakes und
         # haelt Verbindungen offen (Keep-Alive). Alle Module holen sie sich hier.
+        # Geschlossen wird sie in aclose() - bot.FloBot.close() ruft das beim Beenden.
         self._http = None
+        # Ersetzte LLM-Clients, deren Verbindungspool noch geschlossen wird:
+        # Task -> Client (siehe _alten_client_schliessen). Festgehalten, weil
+        # asyncio von einem Task nur eine schwache Referenz behaelt.
+        self._schliess_tasks = {}
         # Kurzzeit-Gedaechtnis pro Channel (deque je Channel-ID).
         self._HISTORY = {}
         # Fertige Namens-Regexe je (Art, Server). Ein Regex je Nachricht neu zu
@@ -739,16 +744,83 @@ class FloAI:
         nur eine andere Signatur. Flo probiert sie selbst durch."""
         if not self._basis_url or ua == self._signatur:
             return False
+        alt = self._client
         try:
             self._client = self._client_bauen(ua)
         except Exception as exc:  # noqa: BLE001
             log.warning("KI: Signaturwechsel fehlgeschlagen (%s).", type(exc).__name__)
             return False
+        # Der alte Client haelt seinen httpx-Pool offen. Bei einer Sperre wird
+        # bis zu dreimal je Anfrage gewechselt - ohne Schliessen sammeln die sich.
+        self._alten_client_schliessen(alt)
         self._signatur = ua
         self._signatur_offen = ua
         log.warning("KI: Cloudflare sperrt die bisherige Client-Signatur - "
                     "probiere %r.", ua)
         return True
+
+    def _alten_client_schliessen(self, client):
+        """Schliesst einen ersetzten LLM-Client im Hintergrund.
+
+        Nicht sofort: eine zweite Anfrage kann gerade noch ueber ihn laufen, und
+        ein geschlossener Pool risse sie mitten im Lesen ab. Nach ZEITLIMIT ist
+        jede Anfrage fertig oder abgelaufen. Ohne laufenden Loop (Werkzeuge,
+        Tests) bleibt es beim Wegwerfen."""
+        if client is None or not hasattr(client, "close"):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._client_spaeter_zu(client))
+        self._schliess_tasks[task] = client
+        task.add_done_callback(lambda t: self._schliess_tasks.pop(t, None))
+
+    async def _client_spaeter_zu(self, client):
+        # Bricht aclose() das Warten ab, schliesst aclose() selbst - ein Task,
+        # der noch gar nicht lief, kaeme sonst nie bis zu seinem Schliessen.
+        await asyncio.sleep(max(0.0, float(self.ZEITLIMIT)))
+        await self._client_zu(client)
+
+    @staticmethod
+    async def _client_zu(client):
+        try:
+            await client.close()
+        except Exception as exc:  # noqa: BLE001 - Aufraeumen darf nie werfen
+            log.debug("KI: Client liess sich nicht schliessen (%s).",
+                      type(exc).__name__)
+
+    async def aclose(self):
+        """Gibt beim Beenden frei, was Verbindungen offen haelt: die geteilte
+        aiohttp-Session, den httpx-Pool des LLM-Clients und ersetzte Clients,
+        die noch auf ihr Schliessen warten.
+
+        Vorher schloss das niemand - jedes SIGTERM endete mit 'Unclosed client
+        session' im Journal. Darf mehrfach laufen und wirft nie; eine Session
+        aus einem laengst beendeten Loop (Testlauf) schliesst aiohttp ohne
+        Netzverkehr."""
+        http, self._http = self._http, None
+        if http is not None and not getattr(http, "closed", True):
+            try:
+                await http.close()
+            except Exception as exc:  # noqa: BLE001 - Aufraeumen darf nie werfen
+                log.debug("KI: HTTP-Session liess sich nicht schliessen (%s).",
+                          type(exc).__name__)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - aclose laeuft immer im Loop
+            loop = None
+        # Ersetzte Clients nicht erst nach ZEITLIMIT, sondern jetzt.
+        offen = {t: c for t, c in list(self._schliess_tasks.items())
+                 if not t.done() and t.get_loop() is loop}
+        for task in offen:
+            task.cancel()
+        if offen:
+            await asyncio.gather(*offen, return_exceptions=True)
+        for alt in offen.values():
+            await self._client_zu(alt)
+        if self._client is not None and hasattr(self._client, "close"):
+            await self._client_zu(self._client)
 
     # --- Der EINZIGE Weg zum LLM -------------------------------------------
     @staticmethod
@@ -1802,6 +1874,7 @@ guild_zuruecksetzen = instance.guild_zuruecksetzen
 aktuelle_guild = instance.aktuelle_guild
 guild_kontext = FloAI.guild_kontext
 http_session = instance.http_session
+aclose = instance.aclose
 get_weather = instance.get_weather
 generate = instance.generate
 hintergrund_pausiert = instance.hintergrund_pausiert

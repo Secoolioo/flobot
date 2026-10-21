@@ -159,7 +159,15 @@ class Steal(FeatureBasis):
             last = float(last)
         except (TypeError, ValueError):
             last = 0
-        rest = self._cooldown - (time.time() - last)
+        jetzt = time.time()
+        # Ein Stempel aus der Zukunft (Uhr kurz nach dem Booten falsch, siehe
+        # basis.glaubhafte_zeit) zaehlt wie 'gerade eben' - und wird so
+        # zurueckgeschrieben. Sonst wanderte 'gerade eben' bei jeder Abfrage
+        # mit, und der Cooldown endete keine Minute frueher.
+        echt = basis.glaubhafte_zeit(last, jetzt)
+        if echt != last:
+            self._cooldowns()[str(uid)] = echt
+        rest = self._cooldown - (jetzt - echt)
         return rest if rest > 0 else 0
 
     # --- Befehl -----------------------------------------------------------

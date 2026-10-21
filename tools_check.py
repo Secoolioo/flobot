@@ -4,8 +4,8 @@
 
 Fuehrt die KI- und die Musik-Diagnose aus und nimmt die Systemseite dazu:
 Discord-Token, Datenordner, Plattenplatz, Stand gegenueber dem Repo, die
-systemd-Datei und die Pakete. Am Ende liegt alles ohne Farbcodes in einer
-Datei - eine Nachricht, statt fuenf Screenshots.
+systemd-Datei, die Pakete und die Uhr. Am Ende liegt alles ohne Farbcodes in
+einer Datei - eine Nachricht, statt fuenf Screenshots.
 
 Kein Teil des Bots. Aendert nichts. Geheimnisse werden NIE vollstaendig
 ausgegeben, auch nicht im Bericht.
@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from arzt import Arzt
 
@@ -207,6 +208,79 @@ class GesamtCheck(Arzt):
         except ValueError:
             pass
 
+    # --- Uhr ---------------------------------------------------------------
+    #: Ab dieser Abweichung zwischen Hardware-Uhr und Systemzeit ist es kein
+    #: Drift mehr, sondern eine Zeitzone (Sekunden).
+    RTC_GRENZE = 1800
+
+    @staticmethod
+    def _timedatectl():
+        """{'LocalRTC': 'no', 'NTPSynchronized': 'yes'} - oder {}, wenn es kein
+        timedatectl gibt (Container, kein systemd) oder es nicht antwortet."""
+        if not shutil.which("timedatectl"):
+            return {}
+        try:
+            fertig = subprocess.run(
+                ["timedatectl", "show", "-p", "LocalRTC", "-p", "NTPSynchronized"],
+                capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if fertig.returncode != 0:
+            return {}
+        return dict(z.split("=", 1) for z in (fertig.stdout or "").splitlines() if "=" in z)
+
+    @staticmethod
+    def _rtc_sekunden():
+        """Die Hardware-Uhr, wie der Kernel sie liest (als UTC) - oder None."""
+        try:
+            with open("/sys/class/rtc/rtc0/since_epoch", encoding="ascii") as f:
+                return int(f.read().strip())
+        except (OSError, ValueError):
+            return None
+
+    def uhr(self):
+        """Geht die Uhr des Servers richtig - und zwar schon beim Booten?
+
+        Gemessen auf dem Server: die Hardware-Uhr (RTC) der VM laeuft auf
+        Ortszeit, das System haelt sie fuer UTC ('RTC in local TZ: no'). Beim
+        Booten steht die Uhr damit zwei Stunden vor, ~15 s spaeter stellt NTP
+        sie zurueck. Flo startet vorher - alles, was er in diesen Sekunden
+        stempelt, liegt danach zwei Stunden in der Zukunft, und systemd zeigt
+        'active since' zwei Stunden voraus. Rein lesend; fehlt etwas, wird
+        die Pruefung leise uebersprungen."""
+        try:
+            werte = self._timedatectl() or {}
+            rtc = self._rtc_sekunden()
+        except Exception:  # noqa: BLE001 - Diagnose darf nie abbrechen
+            return
+        if not isinstance(werte, dict):
+            werte = {}
+        if isinstance(rtc, bool) or not isinstance(rtc, (int, float)):
+            rtc = None
+        lokal = str(werte.get("LocalRTC", "")).strip().lower()
+        ntp = str(werte.get("NTPSynchronized", "")).strip().lower()
+        rat = ("timedatectl set-local-rtc 1   (die Hardware-Uhr laeuft auf "
+               "Ortszeit) und  systemctl enable systemd-time-wait-sync   (Flo "
+               "startet erst mit gestellter Uhr)")
+        if rtc is not None and lokal != "yes":
+            # Mit LocalRTC=yes ist die Abweichung gewollt (genau die Zeitzone).
+            abweichung = rtc - time.time()
+            if abs(abweichung) >= self.RTC_GRENZE:
+                self.warn(f"Hardware-Uhr weicht {abweichung / 3600:+.1f} h von der "
+                          "Systemzeit ab - nach jedem Booten springt die Uhr, und "
+                          "Flo stempelt in den ersten Sekunden falsche Zeiten.")
+                self.merke("Uhr springt nach dem Booten", rat)
+            else:
+                self.ok("Hardware-Uhr passt zur Systemzeit")
+        if ntp == "no":
+            self.warn("Systemuhr ist NICHT per NTP gestellt - Zeiten koennen "
+                      "falsch sein.")
+            self.merke("Uhr nicht synchronisiert",
+                       "timedatectl set-ntp true   und  systemctl enable "
+                       "systemd-time-wait-sync")
+        elif ntp == "yes":
+            self.ok("Systemuhr per NTP gestellt")
+
     # --- Die einzelnen Aerzte -----------------------------------------------
     def unterarzt(self, name, bauen):
         """Fuehrt einen Einzel-Arzt aus und uebernimmt seine Befunde. Ein Arzt,
@@ -229,6 +303,7 @@ class GesamtCheck(Arzt):
         self.daten()
         self.stand()
         self.dienst()
+        self.uhr()
 
         import tools_ki_check
         import tools_musik_check

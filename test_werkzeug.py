@@ -334,38 +334,266 @@ def test_beenden_sichert_alles_auch_schulden_und_handel():
     """SIGTERM (systemctl stop, docker stop) beendete Python bisher sofort -
     und 'flo restart' sicherte Schulden, Handel und Profil nicht. Wurde in
     deren 3-s-Sammelfenster neu gestartet, stand eine Tilgung schon in
-    economy.json, der Posten aber noch offen in schulden.json: doppelt bezahlt."""
+    economy.json, der Posten aber noch offen in schulden.json: doppelt bezahlt.
+
+    Gesichert wird seitdem in close() selbst - der Signal-Weg muss also durch
+    das ECHTE close() laufen, abgeklemmt wird erst die Discord-Verbindung."""
+    import ai
     import bot
+    import discord
     import handel
     import schulden
+    import webpanel
+    from unittest import mock
     gesichert = []
 
     async def merke(name):
         gesichert.append(name)
 
     alt = (schulden.instance._store, getattr(schulden.instance, "_save", None),
-           handel.instance._store, bot.client.close)
+           handel.instance._store)
     schulden.instance._store = _FakeStore({})
     schulden.instance._save = lambda: merke("schulden")
     handel.instance._store = SimpleNamespace(save=lambda: merke("handel"))
     geschlossen = []
 
-    async def zu():
+    async def zu(_self):
         geschlossen.append(True)
 
-    bot.client.close = zu
     try:
-        asyncio.run(bot.client._sauber_beenden("SIGTERM"))
-        asyncio.run(bot.client._sauber_beenden("SIGTERM"))   # zweites Signal: nichts doppelt
+        with mock.patch.object(discord.Client, "close", zu), \
+                mock.patch.object(webpanel, "stop", lambda: merke("panel")), \
+                mock.patch.object(ai, "aclose", lambda: merke("ki")):
+            asyncio.run(bot.client._sauber_beenden("SIGTERM"))
+            asyncio.run(bot.client._sauber_beenden("SIGTERM"))   # zweites Signal: nichts doppelt
     finally:
         (schulden.instance._store, schulden.instance._save,
-         handel.instance._store, bot.client.close) = alt
+         handel.instance._store) = alt
         bot.client._beendet_schon = False
+        bot.client._schliessen = None
     assert "schulden" in gesichert and "handel" in gesichert, gesichert
     assert geschlossen == [True], geschlossen
+    assert gesichert.count("panel") == 1 and gesichert.count("ki") == 1, gesichert
     # Und der Signal-Weg ist wirklich angeschlossen.
     quelle = inspect.getsource(bot.FloBot.setup_hook)
     assert "SIGTERM" in quelle and "add_signal_handler" in quelle
+
+
+
+
+def test_close_faehrt_alles_herunter_und_nur_einmal():
+    """Vorher schloss close() nur die Discord-Verbindung: die geteilte
+    aiohttp-Session, der Pool des LLM-Clients und das Web-Panel blieben offen
+    ('Unclosed client session' bei JEDEM SIGTERM), und was nach dem letzten
+    Sichern noch gebucht wurde, hing in save_soon und starb mit dem Loop.
+
+    Jetzt: sichern -> Panel -> Discord -> nachsichern -> KI, genau einmal -
+    auch wenn Signal und das Ende von run() gleichzeitig close() rufen, und
+    auch wenn ein Schritt scheitert."""
+    import ai
+    import bot
+    import discord
+    import store
+    import webpanel
+    from unittest import mock
+    schritte = []
+
+    def schritt(name, fehler=False):
+        async def ausfuehren(*_a):
+            schritte.append(name)
+            if fehler:
+                raise RuntimeError(f"{name} kaputt")
+        return ausfuehren
+
+    def herunterfahren():
+        async def alles():
+            await asyncio.gather(bot.client.close(), bot.client.close())
+            # Das Ende von client.run(): discord.py ruft __aexit__ - das muss
+            # auf das GANZE Herunterfahren warten, nicht nur auf Discord.
+            await bot.client.__aexit__(None, None, None)
+        asyncio.run(alles())
+
+    alt_modus = bot.MODE
+    try:
+        with mock.patch.object(bot.client, "_alles_sichern", schritt("sichern")), \
+                mock.patch.object(webpanel, "stop", schritt("panel", fehler=True)), \
+                mock.patch.object(discord.Client, "close", schritt("discord")), \
+                mock.patch.object(store, "alle_sichern", schritt("nachsichern")), \
+                mock.patch.object(ai, "aclose", schritt("ki")):
+            herunterfahren()
+            assert schritte == ["sichern", "panel", "discord", "nachsichern", "ki"], schritte
+
+            # --check/--once laufen womoeglich NEBEN dem Dienst - dort wird
+            # nichts geschrieben, geschlossen aber schon.
+            schritte.clear()
+            bot.client._schliessen = None
+            bot.MODE = "check"
+            herunterfahren()
+            assert schritte == ["panel", "discord", "ki"], schritte
+    finally:
+        bot.MODE = alt_modus
+        bot.client._schliessen = None
+    # Und beide Wege nach draussen gehen durch close(), statt selbst zu sichern.
+    for weg in (bot.FloBot._sauber_beenden, bot.FloBot._restart_bot):
+        quelle = inspect.getsource(weg)
+        assert "self.close()" in quelle and "_alles_sichern()" not in quelle, weg
+
+
+
+
+def test_ki_und_netz_session_werden_beim_testende_geschlossen():
+    """Jeder Testlauf endete mit 'Unclosed client session': die geteilte Session
+    aus ai.py legt der erste Test an, der etwas aus dem Netz holt, und keiner
+    schloss sie. lauf.py raeumt jetzt am Ende auf wie FloBot.close() im
+    Betrieb - auch eine Session, deren Loop laengst zu ist."""
+    import ai
+    import lauf
+
+    async def anlegen():
+        return ai.instance.http_session()
+
+    alt = ai.instance._http
+    ai.instance._http = None
+    try:
+        sitzung = asyncio.run(anlegen())          # ihr Loop ist danach zu
+        assert not sitzung.closed
+        lauf.Lauf._aufraeumen()
+        assert sitzung.closed and ai.instance._http is None
+        lauf.Lauf._aufraeumen()                   # zweimal: kein Fehler
+    finally:
+        ai.instance._http = alt
+
+
+
+
+def test_selbsttests_laufen_nur_einmal_pro_prozess():
+    """on_ready feuert bei jedem Reconnect (neues IDENTIFY) erneut - und jedes
+    Mal liefen KI- und Musik-Selbsttest noch einmal: eine LLM-Anfrage vom
+    knappen Kontingent und ein echter yt-dlp/ffmpeg-Abruf. Dazu als lose Tasks
+    ohne Referenz, deren Fehler nie im Log landeten."""
+    import ai
+    import bot
+    from unittest import mock
+    gelaufen = []
+
+    async def ki():
+        gelaufen.append("ki")
+        return True
+
+    async def musik():
+        gelaufen.append("musik")
+
+    async def zweimal_bereit():
+        bot.client._selbsttests_starten()
+        bot.client._selbsttests_starten()         # Reconnect: on_ready noch einmal
+        loop = asyncio.get_running_loop()
+        aufgaben = [t for t in bot.client._bg_tasks if t.get_loop() is loop]
+        await asyncio.gather(*aufgaben)
+        return aufgaben
+
+    alt = (bot.AI_ENABLED, bot.MUSIC_ENABLED, bot.SELBSTTEST_MUSIK,
+           bot.client._selbsttest_gelaufen)
+    bot.AI_ENABLED = bot.MUSIC_ENABLED = bot.SELBSTTEST_MUSIK = True
+    bot.client._selbsttest_gelaufen = False
+    try:
+        with mock.patch.object(ai, "selbsttest", ki), \
+                mock.patch.object(bot.client, "_musik_selbsttest", musik):
+            aufgaben = asyncio.run(zweimal_bereit())
+    finally:
+        (bot.AI_ENABLED, bot.MUSIC_ENABLED, bot.SELBSTTEST_MUSIK,
+         bot.client._selbsttest_gelaufen) = alt
+    assert sorted(gelaufen) == ["ki", "musik"], gelaufen
+    # Ueber _spawn gestartet: festgehalten und mit Fehlermeldung.
+    assert len(aufgaben) == 2, aufgaben
+    quelle = inspect.getsource(bot.FloBot.on_ready)
+    assert "self._selbsttests_starten()" in quelle
+    assert "loop.create_task(" not in quelle, "on_ready startet wieder lose Tasks"
+
+
+
+
+def test_http_bibliotheken_fluten_das_log_nicht():
+    """httpx schrieb JEDE Anfrage ab INFO ins Journal ('HTTP Request: POST
+    https://api.groq.com/... 200 OK') - eine Zeile pro KI-Antwort und pro
+    Hintergrundjob. Die echten Fehler gingen darin unter."""
+    import logging
+    import bot                                                    # noqa: F401
+    for name in ("httpx", "httpcore", "httpx2", "httpcore2", "openai"):
+        stufe = logging.getLogger(name).getEffectiveLevel()
+        assert stufe >= logging.WARNING, (name, logging.getLevelName(stufe))
+    # Warnungen und Fehler kommen weiterhin durch.
+    assert logging.getLogger("httpx").isEnabledFor(logging.WARNING)
+
+
+
+
+def test_arzt_meldet_die_falsch_gehende_uhr():
+    """Auf dem Server springt die Uhr ~15 s nach dem Booten zwei Stunden zurueck:
+    die Hardware-Uhr der VM laeuft auf Ortszeit, das System haelt sie fuer UTC.
+    Flo startet vorher und stempelt in diesen Sekunden Zeiten aus der Zukunft.
+    Der Arzt muss das sehen - und darf dabei nie abstuerzen."""
+    import tools_check
+
+    def befund(werte, rtc):
+        arzt = tools_check.GesamtCheck()
+        arzt._timedatectl = lambda: werte
+        arzt._rtc_sekunden = lambda: rtc
+        puffer = io.StringIO()
+        alt_aus = sys.stdout
+        sys.stdout = puffer
+        try:
+            arzt.uhr()
+        finally:
+            sys.stdout = alt_aus
+        rat = " ".join(was for _u, was in arzt.probleme)
+        return re.sub(r"\x1b\[[0-9;]*m", "", puffer.getvalue()), rat
+
+    jetzt = time.time()
+    # Genau der Server: Hardware-Uhr zwei Stunden vor, 'RTC in local TZ: no'.
+    text, rat = befund({"LocalRTC": "no", "NTPSynchronized": "yes"}, int(jetzt + 7200))
+    assert "Hardware-Uhr" in text and "+2.0 h" in text, text
+    assert "timedatectl set-local-rtc 1" in rat, rat
+    assert "systemctl enable systemd-time-wait-sync" in rat, rat
+
+    # Alles richtig: kein Befund.
+    text, rat = befund({"LocalRTC": "no", "NTPSynchronized": "yes"}, int(jetzt))
+    assert not rat and "OK" in text, (text, rat)
+    # LocalRTC=yes: die Abweichung IST die Zeitzone - gewollt, kein Befund.
+    _text, rat = befund({"LocalRTC": "yes", "NTPSynchronized": "yes"}, int(jetzt + 7200))
+    assert not rat, rat
+    # Uhr nicht per NTP gestellt.
+    text, rat = befund({"LocalRTC": "no", "NTPSynchronized": "no"}, None)
+    assert "NTP" in text and "systemd-time-wait-sync" in rat, (text, rat)
+
+    # Nichts davon da (Container, kein systemd) oder Muell: leise, nie ein Absturz.
+    for werte, rtc in (({}, None), (None, "quatsch"), ({"LocalRTC": 3}, True)):
+        befund(werte, rtc)
+    arzt = tools_check.GesamtCheck()
+    arzt._timedatectl = lambda: 1 / 0
+    arzt.uhr()
+    # Und die Gesamtdiagnose fragt die Uhr wirklich.
+    assert "self.uhr()" in inspect.getsource(tools_check.GesamtCheck.lauf)
+
+
+
+
+def test_dienst_wartet_auf_die_gestellte_uhr():
+    """Startet Flo vor der NTP-Synchronisation, liegen alle Stempel aus den
+    ersten Sekunden zwei Stunden in der Zukunft - systemd zeigte 'active since'
+    zwei Stunden voraus. Der Dienst wartet deshalb auf time-sync.target."""
+    wurzel = os.path.dirname(os.path.abspath(__file__))
+    dienst = open(os.path.join(wurzel, "flobot.service"), encoding="utf-8").read()
+    einheit = dienst.split("[Service]")[0]
+    zeilen = {z.split("=", 1)[0]: z.split("=", 1)[1].split()
+              for z in einheit.splitlines() if "=" in z and not z.startswith("#")}
+    for schluessel in ("After", "Wants"):
+        assert "time-sync.target" in zeilen.get(schluessel, []), (schluessel, zeilen)
+        assert "network-online.target" in zeilen.get(schluessel, []), (schluessel, zeilen)
+    # Der Rest bleibt, wie er war.
+    assert "Restart=always" in dienst and "RestartMaxDelaySec=300" in dienst
+    readme = open(os.path.join(wurzel, "README.md"), encoding="utf-8").read()
+    assert "timedatectl set-local-rtc 1" in readme
+    assert "systemctl enable systemd-time-wait-sync" in readme
 
 
 

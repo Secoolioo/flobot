@@ -95,6 +95,14 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# httpx schreibt JEDE Anfrage ab INFO ins Log ("HTTP Request: POST
+# https://api.groq.com/... 200 OK") - eine Zeile pro KI-Antwort, dazu jeder
+# Hintergrundjob. Die echten Fehler gingen darin unter; was wirklich schiefgeht,
+# meldet ai.py ohnehin selbst als "KI-Fehler: ...". Warnungen kommen weiter durch.
+# Neuere openai-Pakete bringen httpx als 'httpx2'/'httpcore2' mit - mit anderem
+# Logger-Namen, aber derselben Zeile.
+for _laut in ("httpx", "httpcore", "httpx2", "httpcore2", "openai"):
+    logging.getLogger(_laut).setLevel(logging.WARNING)
 log = logging.getLogger("dcbot")
 
 # Laeuft Flo in Docker? (docker/Dockerfile setzt FLO_LAUFZEIT=docker)
@@ -949,6 +957,11 @@ class FloBot(discord.Client):
         self._giveaway_views_ready = False
         # Dasselbe fuer die Rate-Knoepfe einer laufenden Wordle-Runde.
         self._arbeit_views_ready = False
+        # Und fuer die Selbsttests von KI und Musik (siehe _selbsttests_starten).
+        self._selbsttest_gelaufen = False
+        # Der EINE Herunterfahr-Task (siehe close) - jeder weitere Aufruf wartet
+        # auf ihn, statt ein zweites Mal zu sichern und abzumelden.
+        self._schliessen = None
         # Das Soundboard lag frueher global in voicegags.json - einmal
         # uebernehmen, sobald die Server bekannt sind.
         self._soundboard_uebernommen = False
@@ -1087,15 +1100,70 @@ class FloBot(discord.Client):
             except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
                 log.exception("%s: Sichern vor dem Beenden fehlgeschlagen", name)
 
+    async def close(self):
+        """Faehrt Flo GANZ herunter. Jeder Weg nach draussen landet hier:
+        SIGTERM/SIGINT, 'flo restart', --check/--once und das Ende von run().
+
+        Vorher schloss close() nur die Discord-Verbindung. Die geteilte
+        aiohttp-Session, der Verbindungspool des LLM-Clients und das Web-Panel
+        blieben offen ("Unclosed client session" bei JEDEM Beenden), und was
+        nach dem letzten Sichern noch gebucht wurde, hing nur in save_soon und
+        starb mit dem Loop.
+
+        Mehrfache Aufrufe (Signal und danach das Ende von run()) laufen nur
+        einmal - jeder weitere wartet auf den ersten."""
+        if self._schliessen is None:
+            self._schliessen = asyncio.create_task(self._herunterfahren())
+        await self._schliessen
+
+    async def __aexit__(self, *_fehler):
+        # discord.py wartet hier nur auf SEINEN Schliess-Task, und der ist
+        # fertig, sobald die Verbindung zu ist. Das Nachsichern und das
+        # Schliessen der KI-Verbindungen danach liefen dann noch, waehrend
+        # asyncio.run schon alle Tasks abbricht. close() ist gegen Doppelaufrufe
+        # geschuetzt - hier also einfach auf das GANZE Herunterfahren warten.
+        await self.close()
+
+    async def _herunterfahren(self):
+        """Die Reihenfolge ist Absicht:
+        1. sichern - solange noch alles lebt (haengt das Abmelden, ist das
+           Wichtige trotzdem auf der Platte; docker stop wartet nur 10 s),
+        2. Web-Panel zu - von dort kommen keine neuen Buchungen mehr,
+        3. Discord ab - Voice, Gateway, HTTP,
+        4. nachsichern - was beim Abmelden noch gebucht wurde (Voice-Ende),
+        5. KI-Verbindungen zu - erst jetzt, damit eine Nachricht aus den
+           letzten Millisekunden nicht an einem geschlossenen Client scheitert.
+        Gesichert wird nur im Dauerbetrieb: --check/--once laufen womoeglich
+        NEBEN dem Dienst und duerften dessen Dateien nie ueberschreiben."""
+        if MODE == "loop":
+            await self._alles_sichern()
+        try:
+            await webpanel.stop()
+        except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
+            log.exception("Web-Panel liess sich beim Beenden nicht anhalten")
+        try:
+            await super().close()
+        except Exception:  # noqa: BLE001
+            log.exception("Abmelden bei Discord fehlgeschlagen")
+        if MODE == "loop":
+            try:
+                await store.alle_sichern()
+            except Exception:  # noqa: BLE001
+                log.exception("Nachsichern beim Beenden fehlgeschlagen")
+        try:
+            await ai.aclose()
+        except Exception:  # noqa: BLE001
+            log.exception("KI: Verbindungen liessen sich beim Beenden nicht schliessen")
+
     async def _sauber_beenden(self, sig=None):
-        """SIGTERM/SIGINT: sichern, abmelden, fertig. Zweimal hintereinander
-        (ungeduldiges Strg+C) laeuft es nur einmal."""
+        """SIGTERM/SIGINT: sichern, abmelden, fertig - das Sichern steckt in
+        close(). Zweimal hintereinander (ungeduldiges Strg+C) laeuft es nur
+        einmal."""
         if getattr(self, "_beendet_schon", False):
             return
         self._beendet_schon = True
         log.warning("Signal %s - sichere alles und melde mich ab.",
                     getattr(sig, "name", sig) or "?")
-        await self._alles_sichern()
         try:
             await self.close()
         except Exception:  # noqa: BLE001
@@ -1103,10 +1171,10 @@ class FloBot(discord.Client):
 
     async def _restart_bot(self):
         """Startet den GANZEN Prozess neu (re-exec) - funktioniert lokal und unter
-        systemd, unabhaengig von einem Supervisor. Vorher Voice/Gateway sauber
-        schliessen, damit ffmpeg-Subprozesse nicht verwaisen."""
+        systemd, unabhaengig von einem Supervisor. Vorher sichern und Voice/
+        Gateway sauber schliessen (beides macht close()), damit nichts verloren
+        geht und ffmpeg-Subprozesse nicht verwaisen."""
         await asyncio.sleep(0.4)  # der Interaktions-Antwort Zeit zum Rausgehen geben
-        await self._alles_sichern()
         try:
             await self.close()
         except Exception:  # noqa: BLE001 - egal, wir starten gleich eh neu
@@ -2610,6 +2678,32 @@ class FloBot(discord.Client):
         except Exception:
             log.exception("Server-Schalter konnten nicht geloescht werden")
 
+    def _selbsttests_starten(self):
+        """KI und Musik einmal wirklich pruefen - EINMAL pro Prozess.
+
+        on_ready feuert bei jedem Reconnect erneut (scheitert das RESUME, gibt
+        es ein neues IDENTIFY). Vorher lief dann jedes Mal beides noch einmal:
+        eine LLM-Anfrage vom knappen Kontingent und ein echter yt-dlp/ffmpeg-
+        Abruf - und das als lose Tasks ohne Referenz und ohne Fehlermeldung."""
+        if self._selbsttest_gelaufen:
+            return
+        self._selbsttest_gelaufen = True
+        if AI_ENABLED:
+            # Einmal wirklich nachfragen, statt "KI aktiv" nur zu behaupten.
+            # Bisher hing diese Meldung allein daran, dass ein Schluessel in der
+            # .env stand - ob er noch gilt und ob es das Modell ueberhaupt noch
+            # gibt, hat nie jemand geprueft. Laeuft nebenher und kann den Start
+            # nicht kippen; das Ergebnis steht danach im Log.
+            self._spawn(ai.selbsttest())
+        if MUSIC_ENABLED and SELBSTTEST_MUSIK:
+            # Dasselbe fuer die Musik, und aus demselben Grund: "Musik-Feature
+            # aktiv" hiess bisher nur, dass yt-dlp, ffmpeg und PyNaCl INSTALLIERT
+            # sind. Beim Ausfall am 20.08.2026 loeste yt-dlp sauber auf, ffmpeg
+            # bekam vom Ziel aber 403 - im Log stand trotzdem "aktiv", und
+            # gemerkt hat es erst jemand im Voice. Der Selbsttest holt echte
+            # Ton-Bytes und meldet genau diesen Fall.
+            self._spawn(self._musik_selbsttest())
+
     async def _musik_selbsttest(self):
         """Musik-Selbsttest nebenher - darf den Start nie kippen."""
         try:
@@ -2639,21 +2733,8 @@ class FloBot(discord.Client):
         # wir die Loops dann nicht doppelt.
         log.info("Flo laeuft auf %d Server(n): %s", len(self.guilds),
                  ", ".join(g.name for g in self.guilds) or "(keinem)")
-        if AI_ENABLED:
-            # Einmal wirklich nachfragen, statt "KI aktiv" nur zu behaupten.
-            # Bisher hing diese Meldung allein daran, dass ein Schluessel in der
-            # .env stand - ob er noch gilt und ob es das Modell ueberhaupt noch
-            # gibt, hat nie jemand geprueft. Laeuft nebenher und kann den Start
-            # nicht kippen; das Ergebnis steht danach im Log.
-            self.loop.create_task(ai.selbsttest())
+        self._selbsttests_starten()
         if MUSIC_ENABLED and SELBSTTEST_MUSIK:
-            # Dasselbe fuer die Musik, und aus demselben Grund: "Musik-Feature
-            # aktiv" hiess bisher nur, dass yt-dlp, ffmpeg und PyNaCl INSTALLIERT
-            # sind. Beim Ausfall am 20.08.2026 loeste yt-dlp sauber auf, ffmpeg
-            # bekam vom Ziel aber 403 - im Log stand trotzdem "aktiv", und
-            # gemerkt hat es erst jemand im Voice. Der Selbsttest holt echte
-            # Ton-Bytes und meldet genau diesen Fall.
-            self.loop.create_task(self._musik_selbsttest())
             for guild in self.guilds:
                 lesbar = [
                     c.name

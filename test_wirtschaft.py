@@ -3805,5 +3805,51 @@ def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
     assert not fehlt, (f"bot.py ruft diese Module auf, der Rauchtest kennt sie "
                        f"aber nicht: {fehlt}")
 
+
+
+
+def test_zeitstempel_aus_der_zukunft_sperren_nicht_stundenlang():
+    """Die Server-Uhr springt ~15 s nach dem Booten zwei Stunden zurueck (die
+    Hardware-Uhr der VM laeuft auf Ortszeit, das System haelt sie fuer UTC).
+    Was Flo in diesen Sekunden stempelt, liegt danach zwei Stunden in der
+    Zukunft - und jeder Cooldown 'seit dem Stempel' hielt zwei Stunden laenger.
+    basis.glaubhafte_zeit faengt das an EINER Stelle ab."""
+    import basis
+    import steal
+    jetzt = 1_800_000_000.0
+    g = basis.glaubhafte_zeit
+    # Normale Stempel und ein bisschen Drift bleiben, wie sie sind.
+    assert g(jetzt - 3600, jetzt) == jetzt - 3600
+    assert g(jetzt + 60, jetzt) == jetzt + 60
+    assert g(jetzt + basis.ZUKUNFT_SPIELRAUM, jetzt) == jetzt + basis.ZUKUNFT_SPIELRAUM
+    # Zwei Stunden voraus: gilt als 'gerade eben' - oder als Ersatz des Aufrufers.
+    assert g(jetzt + 7200, jetzt) == jetzt
+    assert g(jetzt + 7200, jetzt, ersatz=0.0) == 0.0
+    assert g(float("inf"), jetzt) == jetzt
+    # Gespeicherte FRIST: darf regulaer um die Sperrdauer voraus sein.
+    assert g(jetzt + 900, jetzt, vorlauf=900) == jetzt + 900
+    assert g(jetzt + 900 + 7200, jetzt, vorlauf=900) == jetzt + 900
+
+    # Der Raub-Cooldown: ein Stempel aus der Zukunft sperrt hoechstens EINEN
+    # normalen Cooldown lang, nicht drei Stunden.
+    alt = (steal.instance._store, steal.instance._cooldown)
+    steal.instance._store = _FakeStore({"cooldowns": {}})
+    steal.instance._cooldown = 3600
+    try:
+        cds = steal.instance._store.data["cooldowns"]
+        cds["5"] = time.time() + 7200
+        assert 3500 < steal.instance._remaining(5) <= 3600, steal.instance._remaining(5)
+        # Berichtigt zurueckgeschrieben - sonst wanderte 'gerade eben' mit, und
+        # nach einer Stunde stuende immer noch eine volle Stunde da.
+        assert cds["5"] <= time.time(), cds["5"]
+        cds["5"] -= 3600                                # eine Stunde spaeter ...
+        assert steal.instance._remaining(5) == 0, "... ist der Cooldown vorbei"
+        cds["5"] = time.time() - 600                    # normal: Rest laeuft weiter
+        assert 2900 < steal.instance._remaining(5) <= 3000, steal.instance._remaining(5)
+        cds["5"] = time.time() - 7200                   # laengst vorbei
+        assert steal.instance._remaining(5) == 0
+    finally:
+        steal.instance._store, steal.instance._cooldown = alt
+
 if __name__ == "__main__":
     run(globals())
