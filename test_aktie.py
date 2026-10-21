@@ -2019,8 +2019,11 @@ def test_aktie_analyst_glaubt_keinem_stempel_aus_der_zukunft():
         fa._store.data.update({"ki_zeit": jetzt + 2 * 3600, "ki_faktor": 0.2,
                                "ki_text": "Zum Mond!"})
         assert fa._ki_faktor() == 0.0 and fa.ki_text() == ""
+        # Richtwert fest auf 10: hier geht es um den Stempel, nicht darum, wie
+        # weit der Analyst vom Richtwert abweichen darf.
         with mock.patch.object(ai, "generate", analyst), \
-                mock.patch.object(ai, "is_enabled", lambda: True):
+                mock.patch.object(ai, "is_enabled", lambda: True), \
+                mock.patch.object(fa, "_ki_richtwert", lambda *_a, **_k: 10):
             erg = asyncio.run(fa.ki_tick(SimpleNamespace(voice_channels=[],
                                                          afk_channel=None)))
         assert gefragt and erg is not None, "der Analyst schweigt zwei Stunden"
