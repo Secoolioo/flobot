@@ -35,6 +35,7 @@ Host/Port: WEBPANEL_HOST / WEBPANEL_PORT (Standard 0.0.0.0:9123).
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import re
@@ -183,6 +184,7 @@ class WebPanel(FeatureBasis):
     def _build_app(self):
         """Baut die aiohttp-App mit allen Routen (auch von Tests genutzt)."""
         app = web.Application(middlewares=[self._protokoll_middleware])
+        app.on_shutdown.append(self._leitungen_schliessen)
         app.add_routes([
             web.get("/", self._index),
             web.get("/panel", self._index),
@@ -322,7 +324,7 @@ class WebPanel(FeatureBasis):
             return
         self._client = client
         app = self._build_app()
-        self._runner = web.AppRunner(app)
+        self._runner = self._runner_bauen(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         try:
@@ -341,13 +343,49 @@ class WebPanel(FeatureBasis):
                 pass
             self._runner = None
 
+    #: So lange wartet stop() hoechstens auf Anfragen, die gerade laufen
+    #: (Sekunden). aiohttp wartet von Haus aus 60 s - und das zweimal.
+    STOP_FRIST = 2.0
+
+    @classmethod
+    def _runner_bauen(cls, app):
+        # Erst aiohttp 3.9 nimmt die Frist am Runner an; aeltere reichten das
+        # Wort bis in jede Verbindung durch und scheiterten erst dort.
+        if "shutdown_timeout" in inspect.signature(web.BaseRunner.__init__).parameters:
+            return web.AppRunner(app, shutdown_timeout=cls.STOP_FRIST)
+        return web.AppRunner(app)
+
     async def stop(self):
+        """Haelt das Panel an - beim Beenden und vor jedem Neustart."""
         if self._runner is not None:
             try:
                 await self._runner.cleanup()
             except Exception:  # noqa: BLE001
                 pass
             self._runner = None
+
+    async def _leitungen_schliessen(self, _app=None):
+        """Macht beim Anhalten die BotSicht-Leitungen zu (on_shutdown).
+
+        Ihr Handler wartet auf den Browser (async for ... in ws), und aiohttp
+        wartet beim Aufraeumen auf jeden Handler. Mit EINEM offenen BotSicht-
+        Tab dauerte stop() so 46 s - so lange war Flo nach SIGTERM noch bei
+        Discord angemeldet, und 'flo restart' hing. Laeuft, wenn keine neuen
+        Verbindungen mehr angenommen werden; ein toter Browser, der das
+        Schliessen nicht bestaetigt, bekommt hoechstens STOP_FRIST."""
+        leitungen = list(self._sicht_ws)
+        self._sicht_ws.clear()
+        if leitungen:
+            try:
+                await asyncio.wait_for(asyncio.gather(
+                    *(ws.close(code=1001, message=b"Flo faehrt herunter")
+                      for ws in leitungen),
+                    return_exceptions=True), self.STOP_FRIST)
+            except Exception:  # noqa: BLE001 - Leitung ohnehin tot, egal
+                pass
+        # Sende-Tasks und eine laufende DM-Suche - deren Leitung ist jetzt zu.
+        for aufgabe in list(self._sicht_tasks):
+            aufgabe.cancel()
 
     # --- Auth -------------------------------------------------------------
     _TOKEN_MAX = 50         # so viele Sitzungen gleichzeitig reichen dicke

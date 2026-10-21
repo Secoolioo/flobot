@@ -198,10 +198,18 @@ sudo timedatectl set-local-rtc 1                   # Hardware-Uhr läuft auf Ort
 sudo systemctl enable systemd-time-wait-sync       # Flo startet erst mit gestellter Uhr
 ```
 
-`flobot.service` wartet dafür auf `time-sync.target` (nach einem Update die
-Datei neu kopieren, siehe `k alles`). `k alles` prüft die Uhr mit und meldet,
-wenn eins von beidem fehlt. Flo selbst nimmt Zeitstempel, die Stunden in der
-Zukunft liegen, nicht mehr ernst: Raub- und Schicht-Cooldown laufen dann
+`flobot.service` wartet dafür auf `time-sync.target`. Ein Update (`k n`, der
+Update-Knopf, `git pull`) bringt die Dienstdatei aber **nicht** an ihren Platz
+— nach diesem Update also einmal:
+
+```bash
+sudo cp /opt/flobot/flobot.service /etc/systemd/system/ && sudo systemctl daemon-reload
+```
+
+`k alles` prüft die Uhr mit und meldet, wenn etwas davon fehlt: Hardware-Uhr,
+NTP, ob der eingerichtete Dienst wirklich auf `time-sync.target` wartet und ob
+`systemd-time-wait-sync` an ist. Flo selbst nimmt Zeitstempel, die Stunden in
+der Zukunft liegen, nicht mehr ernst: Raub- und Schicht-Cooldown laufen dann
 einmal normal lang, und der Aktien-Analyst fragt sofort neu.
 
 ### Wirtschaft zurücksetzen

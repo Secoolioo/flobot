@@ -100,8 +100,10 @@ logging.basicConfig(
 # Hintergrundjob. Die echten Fehler gingen darin unter; was wirklich schiefgeht,
 # meldet ai.py ohnehin selbst als "KI-Fehler: ...". Warnungen kommen weiter durch.
 # Neuere openai-Pakete bringen httpx als 'httpx2'/'httpcore2' mit - mit anderem
-# Logger-Namen, aber derselben Zeile.
-for _laut in ("httpx", "httpcore", "httpx2", "httpcore2", "openai"):
+# Logger-Namen, aber derselben Zeile. Dasselbe beim Web-Panel: aiohttp schreibt
+# jeden Abruf ('"GET /api/overview HTTP/1.1" 200'), und die offene Uebersicht
+# fragt alle 6 s nach, die BotSicht alle 2,5 s - bis zu 1400 Zeilen pro Stunde.
+for _laut in ("httpx", "httpcore", "httpx2", "httpcore2", "openai", "aiohttp.access"):
     logging.getLogger(_laut).setLevel(logging.WARNING)
 log = logging.getLogger("dcbot")
 
@@ -1114,7 +1116,9 @@ class FloBot(discord.Client):
         einmal - jeder weitere wartet auf den ersten."""
         if self._schliessen is None:
             self._schliessen = asyncio.create_task(self._herunterfahren())
-        await self._schliessen
+        # shield: bricht jemand SEIN Warten ab (etwa einen abgebrochenen
+        # Neustart-Task), laeuft das Herunterfahren fuer alle anderen weiter.
+        await asyncio.shield(self._schliessen)
 
     async def __aexit__(self, *_fehler):
         # discord.py wartet hier nur auf SEINEN Schliess-Task, und der ist
@@ -1124,22 +1128,35 @@ class FloBot(discord.Client):
         # geschuetzt - hier also einfach auf das GANZE Herunterfahren warten.
         await self.close()
 
+    #: So lange darf das Web-Panel beim Beenden hoechstens brauchen (Sekunden).
+    #: Haengt es, bleibt Flo sonst angemeldet und nimmt Nachrichten an, ein
+    #: Neustart wartet, und docker stop schiesst vor dem Abmelden.
+    PANEL_FRIST = 5.0
+
     async def _herunterfahren(self):
         """Die Reihenfolge ist Absicht:
         1. sichern - solange noch alles lebt (haengt das Abmelden, ist das
            Wichtige trotzdem auf der Platte; docker stop wartet nur 10 s),
         2. Web-Panel zu - von dort kommen keine neuen Buchungen mehr,
         3. Discord ab - Voice, Gateway, HTTP,
-        4. nachsichern - was beim Abmelden noch gebucht wurde (Voice-Ende),
+        4. nachsichern - was beim Abmelden noch gebucht wurde (Voice-Ende,
+           eine letzte Tilgung): ALLES, nicht nur economy - Schulden & Co.
+           haengen sonst in einem Sammel-Task, den asyncio.run abbricht,
         5. KI-Verbindungen zu - erst jetzt, damit eine Nachricht aus den
            letzten Millisekunden nicht an einem geschlossenen Client scheitert.
         Gesichert wird nur im Dauerbetrieb: --check/--once laufen womoeglich
         NEBEN dem Dienst und duerften dessen Dateien nie ueberschreiben."""
         if MODE == "loop":
-            await self._alles_sichern()
+            try:
+                await self._alles_sichern()
+            except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
+                log.exception("Sichern beim Beenden fehlgeschlagen")
         try:
-            await webpanel.stop()
-        except Exception:  # noqa: BLE001 - einer darf die anderen nie aufhalten
+            await asyncio.wait_for(webpanel.stop(), self.PANEL_FRIST)
+        except asyncio.TimeoutError:
+            log.warning("Web-Panel hielt nach %.0f s noch nicht an - beende trotzdem.",
+                        self.PANEL_FRIST)
+        except Exception:  # noqa: BLE001
             log.exception("Web-Panel liess sich beim Beenden nicht anhalten")
         try:
             await super().close()
@@ -1147,7 +1164,7 @@ class FloBot(discord.Client):
             log.exception("Abmelden bei Discord fehlgeschlagen")
         if MODE == "loop":
             try:
-                await store.alle_sichern()
+                await self._alles_sichern()
             except Exception:  # noqa: BLE001
                 log.exception("Nachsichern beim Beenden fehlgeschlagen")
         try:

@@ -359,6 +359,7 @@ def test_beenden_sichert_alles_auch_schulden_und_handel():
 
     async def zu(_self):
         geschlossen.append(True)
+        gesichert.append("discord")
 
     try:
         with mock.patch.object(discord.Client, "close", zu), \
@@ -374,6 +375,11 @@ def test_beenden_sichert_alles_auch_schulden_und_handel():
     assert "schulden" in gesichert and "handel" in gesichert, gesichert
     assert geschlossen == [True], geschlossen
     assert gesichert.count("panel") == 1 and gesichert.count("ki") == 1, gesichert
+    # Und NACH dem Abmelden noch einmal alles - nicht nur economy. Eine Tilgung,
+    # die beim Abmelden noch durchlief, stand sonst in economy.json, ihr Posten
+    # in schulden.json hing aber im Sammel-Task, den asyncio.run abbricht.
+    nachher = gesichert[gesichert.index("discord"):]
+    assert "schulden" in nachher and "handel" in nachher, gesichert
     # Und der Signal-Weg ist wirklich angeschlossen.
     quelle = inspect.getsource(bot.FloBot.setup_hook)
     assert "SIGTERM" in quelle and "add_signal_handler" in quelle
@@ -388,19 +394,21 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
     Sichern noch gebucht wurde, hing in save_soon und starb mit dem Loop.
 
     Jetzt: sichern -> Panel -> Discord -> nachsichern -> KI, genau einmal -
-    auch wenn Signal und das Ende von run() gleichzeitig close() rufen, und
-    auch wenn ein Schritt scheitert."""
+    auch wenn Signal und das Ende von run() gleichzeitig close() rufen, auch
+    wenn ein Schritt scheitert, das Panel haengt oder ein Wartender
+    abgebrochen wird."""
     import ai
     import bot
     import discord
-    import store
     import webpanel
     from unittest import mock
     schritte = []
 
-    def schritt(name, fehler=False):
+    def schritt(name, fehler=False, dauer=0.0):
         async def ausfuehren(*_a):
             schritte.append(name)
+            if dauer:
+                await asyncio.sleep(dauer)
             if fehler:
                 raise RuntimeError(f"{name} kaputt")
         return ausfuehren
@@ -418,10 +426,10 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
         with mock.patch.object(bot.client, "_alles_sichern", schritt("sichern")), \
                 mock.patch.object(webpanel, "stop", schritt("panel", fehler=True)), \
                 mock.patch.object(discord.Client, "close", schritt("discord")), \
-                mock.patch.object(store, "alle_sichern", schritt("nachsichern")), \
                 mock.patch.object(ai, "aclose", schritt("ki")):
             herunterfahren()
-            assert schritte == ["sichern", "panel", "discord", "nachsichern", "ki"], schritte
+            # Nachgesichert wird ALLES (Schulden, Handel, ...), nicht nur economy.
+            assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
 
             # --check/--once laufen womoeglich NEBEN dem Dienst - dort wird
             # nichts geschrieben, geschlossen aber schon.
@@ -430,6 +438,51 @@ def test_close_faehrt_alles_herunter_und_nur_einmal():
             bot.MODE = "check"
             herunterfahren()
             assert schritte == ["panel", "discord", "ki"], schritte
+        bot.MODE = alt_modus
+
+        # Scheitert schon das erste Sichern, wird trotzdem abgemeldet und
+        # geschlossen - sonst wartete der Prozess auf SIGKILL.
+        schritte.clear()
+        bot.client._schliessen = None
+        with mock.patch.object(bot.client, "_alles_sichern",
+                               schritt("sichern", fehler=True)), \
+                mock.patch.object(webpanel, "stop", schritt("panel")), \
+                mock.patch.object(discord.Client, "close", schritt("discord")), \
+                mock.patch.object(ai, "aclose", schritt("ki")):
+            herunterfahren()
+        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+
+        # Ein haengendes Web-Panel (offene BotSicht-Leitung: gemessen 46 s)
+        # haelt das Abmelden nicht auf - nach PANEL_FRIST geht es weiter.
+        schritte.clear()
+        bot.client._schliessen = None
+        start = time.monotonic()
+        with mock.patch.object(bot.client, "_alles_sichern", schritt("sichern")), \
+                mock.patch.object(webpanel, "stop", schritt("panel", dauer=60)), \
+                mock.patch.object(discord.Client, "close", schritt("discord")), \
+                mock.patch.object(ai, "aclose", schritt("ki")), \
+                mock.patch.object(bot.FloBot, "PANEL_FRIST", 0.05):
+            herunterfahren()
+        assert time.monotonic() - start < 5, "haengendes Panel blockiert das Beenden"
+        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
+
+        # Bricht jemand SEIN Warten ab (etwa ein abgebrochener Neustart-Task),
+        # laeuft das Herunterfahren trotzdem bis zum Ende durch.
+        schritte.clear()
+        bot.client._schliessen = None
+
+        async def abgebrochen():
+            wartender = asyncio.ensure_future(bot.client.close())
+            await asyncio.sleep(0.01)          # steckt jetzt im ersten Sichern
+            wartender.cancel()
+            await asyncio.gather(wartender, return_exceptions=True)
+            await bot.client.close()           # der Rest wartet auf dasselbe Ende
+        with mock.patch.object(bot.client, "_alles_sichern", schritt("sichern", dauer=0.1)), \
+                mock.patch.object(webpanel, "stop", schritt("panel")), \
+                mock.patch.object(discord.Client, "close", schritt("discord")), \
+                mock.patch.object(ai, "aclose", schritt("ki")):
+            asyncio.run(abgebrochen())
+        assert schritte == ["sichern", "panel", "discord", "sichern", "ki"], schritte
     finally:
         bot.MODE = alt_modus
         bot.client._schliessen = None
@@ -452,7 +505,7 @@ def test_ki_und_netz_session_werden_beim_testende_geschlossen():
     async def anlegen():
         return ai.instance.http_session()
 
-    alt = ai.instance._http
+    alt = ai.instance._http, ai.instance._geschlossen
     ai.instance._http = None
     try:
         sitzung = asyncio.run(anlegen())          # ihr Loop ist danach zu
@@ -461,7 +514,7 @@ def test_ki_und_netz_session_werden_beim_testende_geschlossen():
         assert sitzung.closed and ai.instance._http is None
         lauf.Lauf._aufraeumen()                   # zweimal: kein Fehler
     finally:
-        ai.instance._http = alt
+        ai.instance._http, ai.instance._geschlossen = alt
 
 
 
@@ -515,10 +568,13 @@ def test_selbsttests_laufen_nur_einmal_pro_prozess():
 def test_http_bibliotheken_fluten_das_log_nicht():
     """httpx schrieb JEDE Anfrage ab INFO ins Journal ('HTTP Request: POST
     https://api.groq.com/... 200 OK') - eine Zeile pro KI-Antwort und pro
-    Hintergrundjob. Die echten Fehler gingen darin unter."""
+    Hintergrundjob. Die echten Fehler gingen darin unter. Dasselbe beim
+    Web-Panel: jeder Abruf eine Zeile, und die offene Uebersicht fragt alle
+    6 s nach, die BotSicht alle 2,5 s."""
     import logging
     import bot                                                    # noqa: F401
-    for name in ("httpx", "httpcore", "httpx2", "httpcore2", "openai"):
+    for name in ("httpx", "httpcore", "httpx2", "httpcore2", "openai",
+                 "aiohttp.access"):
         stufe = logging.getLogger(name).getEffectiveLevel()
         assert stufe >= logging.WARNING, (name, logging.getLevelName(stufe))
     # Warnungen und Fehler kommen weiterhin durch.
@@ -534,10 +590,12 @@ def test_arzt_meldet_die_falsch_gehende_uhr():
     Der Arzt muss das sehen - und darf dabei nie abstuerzen."""
     import tools_check
 
-    def befund(werte, rtc):
+    def befund(werte, rtc, systemd=None):
         arzt = tools_check.GesamtCheck()
         arzt._timedatectl = lambda: werte
         arzt._rtc_sekunden = lambda: rtc
+        # systemctl: {(Befehl, Einheit): Ausgabe} - nie das echte des Rechners.
+        arzt._systemctl = lambda *args: (systemd or {}).get(args[:2], "")
         puffer = io.StringIO()
         alt_aus = sys.stdout
         sys.stdout = puffer
@@ -565,9 +623,44 @@ def test_arzt_meldet_die_falsch_gehende_uhr():
     text, rat = befund({"LocalRTC": "no", "NTPSynchronized": "no"}, None)
     assert "NTP" in text and "systemd-time-wait-sync" in rat, (text, rat)
 
+    # Kein timedatectl, die Hardware-Uhr aber sichtbar: so laeuft 'k alles'
+    # unter Docker im Container. Nach 'set-local-rtc 1' auf dem Host geht die
+    # RTC GEWOLLT auf Ortszeit - ohne LocalRTC ist das nicht zu unterscheiden,
+    # also keine Warnung, die den schon befolgten Rat wiederholt.
+    text, rat = befund({}, int(jetzt + 7200))
+    assert not rat and "nicht pruefbar" in text, (text, rat)
+
+    # Ein Update bringt die neue Dienstdatei nicht an ihren Platz: gefragt wird
+    # systemd selbst, ob der EINGERICHTETE Dienst auf die Uhr wartet.
+    gut = {"LocalRTC": "no", "NTPSynchronized": "yes"}
+    alt_dienst = {("show", "flobot"): "LoadState=loaded\n"
+                  "After=network-online.target basic.target"}
+    text, rat = befund(gut, int(jetzt), alt_dienst)
+    assert "time-sync.target" in text, text
+    assert "daemon-reload" in rat and "flobot.service" in rat, rat
+    neu_dienst = {("show", "flobot"): "LoadState=loaded\n"
+                  "After=network-online.target time-sync.target basic.target",
+                  ("is-enabled", "systemd-timesyncd"): "enabled",
+                  ("is-enabled", "systemd-time-wait-sync"): "enabled"}
+    _text, rat = befund(gut, int(jetzt), neu_dienst)
+    assert not rat, rat
+    # time-sync.target ist ohne systemd-time-wait-sync sofort erreicht.
+    _text, rat = befund(gut, int(jetzt), {
+        **neu_dienst, ("is-enabled", "systemd-time-wait-sync"): "disabled"})
+    assert rat == "systemctl enable systemd-time-wait-sync", rat
+    # chrony statt timesyncd: der hat seinen eigenen Warte-Dienst - kein Befund.
+    _text, rat = befund(gut, int(jetzt), {
+        **neu_dienst, ("is-enabled", "systemd-timesyncd"): "disabled",
+        ("is-enabled", "systemd-time-wait-sync"): "disabled"})
+    assert not rat, rat
+    # Kein Dienst eingerichtet (Entwicklungsrechner): dazu schweigt die Uhr.
+    _text, rat = befund(gut, int(jetzt), {("show", "flobot"): "LoadState=not-found"})
+    assert not rat, rat
+
     # Nichts davon da (Container, kein systemd) oder Muell: leise, nie ein Absturz.
     for werte, rtc in (({}, None), (None, "quatsch"), ({"LocalRTC": 3}, True)):
         befund(werte, rtc)
+    befund(gut, None, {("show", "flobot"): "Quatsch ohne Gleich"})
     arzt = tools_check.GesamtCheck()
     arzt._timedatectl = lambda: 1 / 0
     arzt.uhr()

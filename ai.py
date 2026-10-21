@@ -492,6 +492,8 @@ class FloAI:
         # haelt Verbindungen offen (Keep-Alive). Alle Module holen sie sich hier.
         # Geschlossen wird sie in aclose() - bot.FloBot.close() ruft das beim Beenden.
         self._http = None
+        # Nach aclose() gibt es keine neue Session mehr (siehe http_session).
+        self._geschlossen = False
         # Ersetzte LLM-Clients, deren Verbindungspool noch geschlossen wird:
         # Task -> Client (siehe _alten_client_schliessen). Festgehalten, weil
         # asyncio von einem Task nur eine schwache Referenz behaelt.
@@ -799,6 +801,9 @@ class FloAI:
         session' im Journal. Darf mehrfach laufen und wirft nie; eine Session
         aus einem laengst beendeten Loop (Testlauf) schliesst aiohttp ohne
         Netzverkehr."""
+        # ZUERST: waehrend unten geschlossen wird, laufen andere Tasks weiter
+        # (Hintergrund-Loops bis zum Ende von asyncio.run).
+        self._geschlossen = True
         http, self._http = self._http, None
         if http is not None and not getattr(http, "closed", True):
             try:
@@ -1313,6 +1318,11 @@ class FloAI:
     def http_session(self):
         """Liefert die geteilte aiohttp-Session (lazy erstellt, Prozess-Lebensdauer).
         Timeout bitte pro Anfrage setzen: session.get(url, timeout=ClientTimeout(...))."""
+        if self._geschlossen:
+            # Flo faehrt herunter (aclose lief). Eine neue Session schloesse
+            # niemand mehr - das Journal meldete dann wieder 'Unclosed client
+            # session'. Ein Netzfehler ist das, was jeder Aufrufer abfaengt.
+            raise aiohttp.ClientConnectionError("Flo faehrt herunter - kein Netz mehr")
         if self._http is None or self._http.closed:
             self._http = aiohttp.ClientSession()
         return self._http
@@ -1320,8 +1330,8 @@ class FloAI:
     async def get_weather(self, city):
         """Holt aktuelles Wetter + heutige Vorhersage von Open-Meteo (ohne API-Key)."""
         timeout = aiohttp.ClientTimeout(total=12)
-        session = self.http_session()   # geteilte Session (Keep-Alive) statt eigener pro Abruf
         try:
+            session = self.http_session()   # geteilte Session (Keep-Alive) statt eigener pro Abruf
             # 1) Geocoding: Ortsname -> Koordinaten
             async with session.get(
                 "https://geocoding-api.open-meteo.com/v1/search",

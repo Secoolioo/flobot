@@ -972,6 +972,45 @@ def test_botsicht_live_strom_haelt_die_reihenfolge():
 
 
 
+def test_panel_haelt_trotz_offener_botsicht_sofort_an():
+    """Seit FloBot.close() das Panel anhaelt, hing das Beenden an jedem offenen
+    BotSicht-Tab: der Handler der Live-Leitung wartet auf den Browser, und
+    aiohttp wartete beim Aufraeumen auf genau diesen Handler - gemessen 46 s.
+    So lange war Flo nach SIGTERM noch angemeldet, 'flo restart' hing, und
+    docker stop (30 s) schoss vor dem Abmelden. Jetzt macht das Panel seine
+    Leitungen selbst zu (der Browser sieht 1001 'going away')."""
+    import socket
+    import aiohttp
+    import webpanel
+    wp, _g, _o, _l = _botsicht_umgebung()
+    with socket.socket() as frei:
+        frei.bind(("127.0.0.1", 0))
+        wp._host, wp._port = "127.0.0.1", frei.getsockname()[1]
+
+    async def lauf():
+        await wp.start(wp._client)
+        assert wp._runner is not None, "Panel startete nicht"
+        async with aiohttp.ClientSession() as sitzung:
+            ws = await sitzung.ws_connect(f"http://127.0.0.1:{wp._port}/api/sicht/ws")
+            assert (await ws.receive_json())["art"] == "hallo"
+            start = time.monotonic()
+            await asyncio.wait_for(wp.stop(), 30)
+            dauer = time.monotonic() - start
+            zu = await asyncio.wait_for(ws.receive(), 5)
+        return dauer, zu
+
+    dauer, zu = asyncio.run(lauf())
+    assert dauer < 1.5, f"stop() brauchte {dauer:.1f} s"
+    assert zu.type == aiohttp.WSMsgType.CLOSE and zu.data == 1001, zu
+    assert wp._runner is None and wp._sicht_ws == {} and not wp._sicht_tasks
+    # Auch eine Anfrage, die gerade laeuft, haelt das Anhalten nur kurz auf.
+    if "shutdown_timeout" in inspect.signature(webpanel.web.BaseRunner.__init__).parameters:
+        runner = wp._runner_bauen(wp._build_app())
+        assert runner._shutdown_timeout == wp.STOP_FRIST <= 5, runner._shutdown_timeout
+
+
+
+
 def test_botsicht_dm_gedaechtnis():
     """Discord verraet einem Bot seine DM-Kanaele nicht - Flo fuehrt die Liste
     selbst. Hier: merken, doppelt zaehlen, Deckel, und wer bei einer DM

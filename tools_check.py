@@ -238,6 +238,20 @@ class GesamtCheck(Arzt):
         except (OSError, ValueError):
             return None
 
+    @staticmethod
+    def _systemctl(*args):
+        """Was 'systemctl ...' ausgibt - oder '' (kein systemd, Container, keine
+        Antwort). Der Rueckgabecode zaehlt hier nicht: 'is-enabled' meldet
+        'disabled' mit Code 1."""
+        if not shutil.which("systemctl"):
+            return ""
+        try:
+            fertig = subprocess.run(["systemctl", *args], capture_output=True,
+                                    text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return (fertig.stdout or "").strip()
+
     def uhr(self):
         """Geht die Uhr des Servers richtig - und zwar schon beim Booten?
 
@@ -262,7 +276,7 @@ class GesamtCheck(Arzt):
         rat = ("timedatectl set-local-rtc 1   (die Hardware-Uhr laeuft auf "
                "Ortszeit) und  systemctl enable systemd-time-wait-sync   (Flo "
                "startet erst mit gestellter Uhr)")
-        if rtc is not None and lokal != "yes":
+        if rtc is not None and lokal == "no":
             # Mit LocalRTC=yes ist die Abweichung gewollt (genau die Zeitzone).
             abweichung = rtc - time.time()
             if abs(abweichung) >= self.RTC_GRENZE:
@@ -272,6 +286,12 @@ class GesamtCheck(Arzt):
                 self.merke("Uhr springt nach dem Booten", rat)
             else:
                 self.ok("Hardware-Uhr passt zur Systemzeit")
+        elif rtc is not None and not lokal:
+            # Ohne timedatectl (etwa im Container, in dem 'k alles' unter Docker
+            # laeuft) ist offen, ob die Hardware-Uhr auf Ortszeit laufen SOLL -
+            # nach 'set-local-rtc 1' waere die Abweichung genau richtig.
+            self.info("Hardware-Uhr nicht pruefbar (kein timedatectl, z. B. im "
+                      "Container)")
         if ntp == "no":
             self.warn("Systemuhr ist NICHT per NTP gestellt - Zeiten koennen "
                       "falsch sein.")
@@ -280,6 +300,38 @@ class GesamtCheck(Arzt):
                        "systemd-time-wait-sync")
         elif ntp == "yes":
             self.ok("Systemuhr per NTP gestellt")
+        try:
+            self._dienst_wartet_auf_uhr()
+        except Exception:  # noqa: BLE001 - Diagnose darf nie abbrechen
+            pass
+
+    def _dienst_wartet_auf_uhr(self):
+        """Wartet der EINGERICHTETE Dienst wirklich auf die gestellte Uhr?
+
+        Ein Update bringt die neue flobot.service nicht an ihren Platz, und
+        ohne daemon-reload kennt systemd sie nicht - dann startet Flo weiter
+        vor NTP. Gefragt wird deshalb systemd selbst, nicht die Datei. Und
+        time-sync.target ist ohne systemd-time-wait-sync sofort erreicht."""
+        werte = dict(z.split("=", 1) for z in self._systemctl(
+            "show", "flobot", "-p", "LoadState", "-p", "After").splitlines()
+            if "=" in z)
+        if werte.get("LoadState") != "loaded":
+            return   # kein Dienst hier (Entwicklungsrechner, Container)
+        if "time-sync.target" in werte.get("After", "").split():
+            self.ok("flobot startet erst nach time-sync.target")
+        else:
+            self.warn("Der eingerichtete flobot-Dienst wartet nicht auf die "
+                      "gestellte Uhr (time-sync.target fehlt).")
+            self.merke("Dienst startet vor der Uhr",
+                       f"cp {os.path.join(HIER, 'flobot.service')} "
+                       "/etc/systemd/system/ && systemctl daemon-reload")
+        # Nur mit systemd-timesyncd: chrony & Co. bringen eigene Warte-Dienste.
+        if (self._systemctl("is-enabled", "systemd-timesyncd") == "enabled"
+                and self._systemctl("is-enabled", "systemd-time-wait-sync") == "disabled"):
+            self.warn("systemd-time-wait-sync ist aus - time-sync.target wartet "
+                      "dann nicht auf NTP.")
+            self.merke("Start wartet nicht auf NTP",
+                       "systemctl enable systemd-time-wait-sync")
 
     # --- Die einzelnen Aerzte -----------------------------------------------
     def unterarzt(self, name, bauen):

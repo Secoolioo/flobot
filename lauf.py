@@ -80,6 +80,9 @@ WACHE_TIEF = (
     ("ai", "instance._RE_CACHE"),
     ("ai", "instance._LEAD_CACHE"),
     ("ai", "instance._client"),
+    # Nach aclose() gibt ai keine HTTP-Session mehr heraus - bliebe das stehen,
+    # scheiterte jeder spaetere Test, der etwas aus dem Netz holt.
+    ("ai", "instance._geschlossen"),
     ("music", "_resolve_track"),
     ("music", "_send_panel"),
     ("music", "_retire_panel"),

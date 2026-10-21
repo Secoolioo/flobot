@@ -612,6 +612,24 @@ def test_ki_aclose_schliesst_alles_und_wirft_nie():
     sitzung = asyncio.run(lauf())
     assert sitzung.closed and flo._http is None
 
+    # Danach gibt es KEINE neue Session mehr: Hintergrund-Loops laufen bis zum
+    # Ende von asyncio.run weiter, und eine dort frisch angelegte Session
+    # schloesse niemand - das Journal meldete wieder 'Unclosed client session'.
+    # Stattdessen ein Netzfehler, den jeder Aufrufer ohnehin abfaengt.
+    import aiohttp
+
+    async def danach():
+        try:
+            flo.http_session()
+        except aiohttp.ClientError:
+            fehler = True
+        else:
+            fehler = False
+        return fehler, await flo.get_weather("Berlin")
+    fehler, wetter = asyncio.run(danach())
+    assert fehler and flo._http is None
+    assert "error" in wetter, wetter        # get_weather wirft dabei nicht
+
     # Ohne Client und ohne Session: nichts zu tun, auch kein Fehler.
     asyncio.run(ai.FloAI().aclose())
     # Die Modul-API kennt es (bot.FloBot.close ruft ai.aclose).
