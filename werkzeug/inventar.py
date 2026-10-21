@@ -484,9 +484,34 @@ class Probe:
                     trifft.sort(key=lambda n: (rang.get(n, 999), n))
                     gefunden[wort] = {"module": trifft, "gewinner": trifft[0]}
             finally:
-                self._loop.close()
+                loop_schliessen(self._loop)
                 asyncio.set_event_loop(None)
         return gefunden
+
+
+def loop_schliessen(loop):
+    """Schliesst einen Probe-Loop, ohne offene Tasks zurueckzulassen.
+
+    Die Probe ruft echte Handler, und die legen sich Hintergrund-Tasks an:
+    gesammeltes Speichern (store.py, handel.py), Quiz- und Rate-Zeitlimits
+    (games.py). Ein nacktes loop.close() liess sie haengen, und beim Aufraeumen
+    des Interpreters kam fuer jeden ein "Task was destroyed but it is pending!"
+    - das war die Quelle ALLER dieser Zeilen in den Werkzeuglaeufen. Wer sie
+    jeden Tag sieht, liest sie irgendwann nicht mehr, auch nicht die eine
+    echte.
+
+    Abgebrochen, nicht zu Ende laufen gelassen: ein Rate-Zeitlimit wartet
+    90 Sekunden und schreibt danach in einen Attrappen-Kanal - beides gehoert
+    nicht zur Probe und darf an ihrem Ergebnis nichts aendern."""
+    try:
+        offen = [t for t in asyncio.all_tasks(loop) if not t.done()]
+        for task in offen:
+            task.cancel()
+        if offen:
+            loop.run_until_complete(asyncio.gather(*offen, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+    finally:
+        loop.close()
 
 
 class KeinNetz:

@@ -250,6 +250,17 @@ KI_MAX_ALTER = float(os.getenv("FLOAKTIE_KI_TTL", "2400") or "2400")   # nach 40
 # So oft fasst der Kurs-Takt im Log zusammen (Sekunden) - der Takt selbst loggt
 # nur auf DEBUG.
 BILANZ_SEK = 3600.0
+
+# Der Analyst bekommt einen RICHTWERT mit und darf nur so weit davon abweichen.
+# Ohne diesen Anker war er im Betrieb 14 Tage am Stueck Baer: jede Einschaetzung
+# -12 % bis -30 %, der Kommentar fast woertlich das einzige (negative) Beispiel
+# aus dem Prompt. Der Bericht sagte ihm "Kurs steht UEBER seinem Wert" - und das
+# stimmt bei wenig Aktivitaet praktisch immer, weil der Grundwert den Kurs weit
+# ueber den Zielkurs der aktuellen Aktivitaet traegt. Siehe _ki_richtwert().
+KI_SPIELRAUM = max(0, int(os.getenv("FLOAKTIE_KI_SPIELRAUM", "15") or "15"))  # +/- 15 um den Richtwert
+RICHT_ABSTAND = 15.0   # Kurs weit unter/ueber seinem Ziel -> bis +/- 15
+RICHT_LEBEN = 15.0     # Call voller/leerer als an einem normalen Abend -> bis +/- 15
+RICHT_WENDE = 10.0     # zu steil gestiegen/gefallen -> bis -/+ 10 (Gegenbewegung)
 # Sofort-Impulse fuer Ereignisse (unabhaengig vom Niveau, pro Minute gedeckelt).
 PULSE_STREAM = float(os.getenv("FLOAKTIE_PULSE_STREAM", "0.004") or "0.004")   # Livestream geht an: +0,4 %
 PULSE_JOIN = float(os.getenv("FLOAKTIE_PULSE_JOIN", "0.0015") or "0.0015")     # jemand kommt in den Call: +0,15 %
@@ -1249,41 +1260,162 @@ class FloAktie(FeatureBasis):
             return 0.0
         return basis.glaubhafte_zeit(stempel, jetzt, ersatz=0.0)
 
-    def _ki_lage(self, people, streams, video, msgs):
+    def _ki_ziel_abstand(self, aktiv):
+        """Wie weit steht der Kurs von dem Niveau weg, auf das er GERADE zulaeuft?
+
+        Gemessen in Spannen (eine Spanne = CEIL_FACTOR, also eine Verdopplung):
+        -1 heisst eine ganze Spanne darunter - Luft nach oben -, +1 eine darueber,
+        0 heisst: er steht dort, wo er hinwill.
+
+        Bewusst NICHT 'Kurs gegen Zielkurs': der Zielkurs der aktuellen
+        Aktivitaet ist nur die UNTERKANTE des Bereichs, in dem der Kurs bei
+        besetztem Call laeuft - er steigt planmaessig bis zum Deckel, und der
+        Grundwert traegt ihn ohnehin darueber. 'Ueber dem Zielkurs' ist damit der
+        Normalfall und kein Zeichen von Ueberhitzung; genau daraus wurde der
+        Dauer-Baer. Das Ziel ist deshalb bei besetztem Call der Deckel (dorthin
+        steigt er) und bei leerem Call der Grundwert (dorthin faellt er)."""
+        ziel = self._deckel_base() if aktiv else self.boden_base()
+        base = self._base()
+        if ziel <= 0 or base <= 0:
+            return 0.0
+        spanne = math.log(max(1.01, CEIL_FACTOR))
+        return max(-1.0, min(1.0, math.log(base / ziel) / spanne))
+
+    def _ki_richtwert(self, people, streams, video, msgs):
+        """Der Richtwert (-40..+40) aus denselben Zahlen, die die KI im Bericht
+        sieht. Faellt hier etwas um, ist er 0 - der Analyst haelt die Boerse nie auf."""
+        try:
+            akt = self.activity_of(people, streams, video, msgs)
+            return self._richtwert_aus(self._ki_ziel_abstand(akt > 0), akt,
+                                       GRUND_FAKTOR * self.grund_akt(),
+                                       self._change_pct(1), self._change_pct(7))
+        except Exception:  # noqa: BLE001 - die Boerse laeuft auch ohne Analyst
+            log.exception("FloCorp Analyst: Richtwert nicht berechenbar")
+            return 0
+
+    @staticmethod
+    def _richtwert_aus(abstand, akt, normal, aenderung_1, aenderung_7):
+        """Der Richtwert aus fertigen Zahlen - getrennt, damit er sich ueber ein
+        ganzes Raster von Lagen pruefen laesst.
+
+        Drei Teile, jeder SYMMETRISCH um seinen Ruhepunkt - keiner hat eine
+        eingebaute Richtung:
+        - Abstand (_ki_ziel_abstand): Luft nach oben -> plus, ueber dem Ziel ->
+          minus, am Ziel 0.
+        - Leben: mehr los als an einem normalen Abend (GRUND_FAKTOR x Grundwert-
+          Aktivitaet, wie beim Boden) -> plus, weniger -> minus. NUR bei
+          besetztem Call: der leere Call steckt schon im Abstand (das Ziel ist
+          dann der Grundwert, der Kurs faellt dorthin). Ihn hier ein zweites Mal
+          abzuziehen, machte den Analysten in jeder ruhigen Stunde zum Baeren -
+          und ruhig ist es die meiste Zeit des Tages.
+        - Wende: ueber Tag und Woche steil gestiegen -> eher zurueck, steil
+          gefallen -> eher wieder rauf. Tag UND Woche je verdoppelt: rund -8.
+
+        Nachgemessen ueber 6 x 20 simulierte Tage (Tagesplan aus
+        tools_aktien_sim.py, alle 10 Minuten ein Richtwert): Mittel -2, 35 %
+        positiv, 54 % negativ - bei besetztem Call 37 % / 55 %, bei leerem
+        34 % / 54 %. Im Betrieb vorher: zwei Wochen lang nur negativ."""
+        abstand = max(-1.0, min(1.0, float(abstand)))
+        wert = -RICHT_ABSTAND * abstand
+        if akt > 0:
+            wert += RICHT_LEBEN * math.tanh(
+                math.log((1.0 + float(akt)) / (1.0 + max(0.0, float(normal)))))
+        lauf = (float(aenderung_1) + float(aenderung_7)) / 2.0
+        wert -= RICHT_WENDE * math.tanh(lauf / 100.0)
+        if wert != wert:                           # NaN
+            return 0
+        return max(-40, min(40, int(round(wert))))
+
+    def _ki_lage(self, people, streams, video, msgs, richtwert=None, zuletzt=""):
         """Kurzer Marktbericht als Text - das bekommt die KI zu sehen."""
         st = self._state()
         akt = float(st.get("act_ema", 0.0) or 0.0)
         kurs = self.price()
-        ziel = self.ziel_kurs(akt)
+        grund = max(MIN_PRICE, int(round(
+            self.boden_base() * (1.0 + self.total_shares() / LIQUIDITY))))
         deckel = self._deckel_kurs()
-        stand = "unter" if kurs < ziel else "ueber"
-        return (f"Kurs {kurs} Coins. Zielkurs {ziel} (Kurs steht {stand} seinem Wert). "
-                f"Deckel {deckel}. Aenderung 1 Tag {self._change_pct(1):+.1f}%, "
+        aktiv = self.activity_of(people, streams, video, msgs) > 0
+        if richtwert is None:
+            richtwert = self._ki_richtwert(people, streams, video, msgs)
+        # WOHIN es geht, nicht "ueber/unter seinem Wert" - das war der Dauer-Baer
+        # (siehe _ki_ziel_abstand).
+        abstand = self._ki_ziel_abstand(aktiv)
+        if abstand < -0.1:
+            stand = ("hat Luft nach oben bis zum Deckel" if aktiv
+                     else "steht unter dem Grundwert und zieht wieder hin")
+        elif abstand > 0.1:
+            stand = ("steht ueber dem Deckel und kommt eher runter" if aktiv
+                     else "faellt Richtung Grundwert, der Call ist leer")
+        else:
+            stand = "steht am Deckel" if aktiv else "steht am Grundwert"
+        text = (f"Kurs {kurs} Coins, {stand}. Grundwert {grund}, Deckel {deckel}. "
+                f"Aenderung 1 Tag {self._change_pct(1):+.1f}%, "
                 f"7 Tage {self._change_pct(7):+.1f}%. "
                 f"Gerade im Call: {people} Leute, {streams} Livestreams, {video} Kameras, "
                 f"{msgs} Chat-Nachrichten im letzten Takt. "
                 f"Aktivitaet {akt:.1f} Punkte. "
                 f"Ausgegebene Anteile: {self.total_shares()}, "
-                f"Aktionaere: {self.holders_count()}.")
+                f"Aktionaere: {self.holders_count()}. "
+                f"Richtwert: {int(richtwert):+d}.")
+        if zuletzt:
+            text += (f" Dein letzter Kommentar war: {zuletzt[:120]} - "
+                     f"schreib diesmal einen ANDEREN Satz.")
+        return text
+
+    # Drei Beispiele in drei Richtungen und mit verschiedenem Satzbau. Mit einem
+    # einzigen (negativen) Beispiel hat das Modell zwei Wochen lang fast nur
+    # dieses eine abgeschrieben - die Zahl gleich mit.
+    _KI_BEISPIELE = (
+        "+18|Der Call brummt, da kaufen sogar die Zweifler nach.",
+        "0|Seitwaerts wie ein Kreisverkehr - keiner traut sich, keiner rennt.",
+        "-14|Leerer Call, volle Depots. Das geht nicht lange gut.",
+    )
 
     _KI_SYSTEM = (
         "Du bist der Chef-Analyst der Discord-Boerse 'FloCorp'. Du bekommst einen "
-        "kurzen Marktbericht und entscheidest, ob die aktuelle Kursbewegung "
-        "VERSTAERKT oder GEDAEMPFT wird.\n"
+        "kurzen Marktbericht und gibst deine Einschaetzung ab.\n"
         "Antworte in GENAU EINER Zeile in diesem Format:\n"
         "ZAHL|Kommentar\n"
         "ZAHL ist eine ganze Zahl von -40 bis +40 (Prozent, um die die Bewegung "
-        "angepasst wird). Positiv = Rally, negativ = Bremse/Korrektur.\n"
+        "angepasst wird). Positiv = Rally, negativ = Bremse/Korrektur, 0 = seitwaerts.\n"
+        "Im Bericht steht ein RICHTWERT, der aus den Zahlen gerechnet ist. Nimm ihn "
+        f"als Anker und weiche hoechstens {KI_SPIELRAUM} davon ab - mehr wird abgeschnitten. "
+        "Mehr los als sonst oder Luft nach oben -> eher drueber, Kurs ueber dem "
+        "Deckel oder auf dem Weg nach unten -> eher drunter.\n"
         "Kommentar ist EIN kurzer, frecher Boersen-Satz auf Deutsch, hoechstens "
-        "90 Zeichen, ohne Anfuehrungszeichen.\n"
-        "Regeln fuer die Zahl:\n"
-        "- viele Leute im Call, viele Streams, reger Chat -> eher positiv\n"
-        "- Kurs steht schon weit UEBER seinem Zielkurs -> eher negativ (Korrektur)\n"
-        "- Kurs steht weit UNTER seinem Wert und es ist was los -> deutlich positiv\n"
-        "- leerer Server -> negativ\n"
-        "- sei nicht immer gleich: mal 0, mal deutlich, das macht den Markt lebendig.\n"
-        "Beispiel: -15|Zu heiss gelaufen, die Anleger nehmen Gewinne mit."
+        "90 Zeichen, ohne Anfuehrungszeichen. Jedes Mal ein NEUER Satz: nie den "
+        "letzten wiederholen und kein Beispiel abschreiben.\n"
+        "Beispiele (nur fuers Format):\n" + "\n".join(_KI_BEISPIELE)
     )
+
+    # Wenn das Modell zwar antwortet, aber ohne brauchbare Zahl - oder nur den
+    # letzten Satz bzw. ein Beispiel abschreibt. Bewusst ohne Richtung: die
+    # steckt im Richtwert, und ein "Rally!" ueber einer roten Zahl waere Unsinn.
+    _KI_ERSATZ = (
+        "Mein Analyst lallt heute. Ich hab's mit dem Taschenrechner gemacht.",
+        "Kein Kommentar. Die Zahlen reden, und zwar lauter als ihr.",
+        "Analyst in der Mittagspause. Rechnet halt selber, ihr Zocker.",
+        "Ich sag nix. Ihr kauft ja eh, was ihr wollt.",
+        "Der Analyst hat gekuendigt. Die Formel macht weiter, die ist billiger.",
+    )
+
+    @classmethod
+    def _ki_ersatz(cls, zuletzt=""):
+        """Ein Ersatz-Kommentar - nie derselbe wie der letzte."""
+        frei = [s for s in cls._KI_ERSATZ if s != zuletzt] or list(cls._KI_ERSATZ)
+        return random.choice(frei)
+
+    @classmethod
+    def _ki_abgeschrieben(cls, text, zuletzt=""):
+        """True, wenn der Kommentar nur der letzte oder ein Beispielsatz ist
+        (Gross-/Kleinschreibung und Satzzeichen zaehlen nicht)."""
+        def kern(s):
+            return re.sub(r"[^a-z0-9äöüß]+", "", str(s or "").lower())
+        eigen = kern(text)
+        if not eigen:
+            return False
+        vorlagen = [b.split("|", 1)[1] for b in cls._KI_BEISPIELE] + [zuletzt]
+        return any(eigen == kern(v) for v in vorlagen)
 
     async def ki_tick(self, guild):
         """Holt eine frische Einschaetzung von der KI. Ruft bot.py seltener auf als
@@ -1308,16 +1440,19 @@ class FloAktie(FeatureBasis):
             return None
         people, streams, video = self._measure_alle(guild)
         msgs = max(0, int(st.get("msg_count", 0)) - int(st.get("last_msg_count", 0)))
+        richtwert = self._ki_richtwert(people, streams, video, msgs)
+        zuletzt = str(st.get("ki_text", "") or "")
         try:
             # hintergrund=True: eigenes Modell/Kontingent, kein Wiederholen, und
             # nach einem 429 haelt der Analyst die Klappe - der Chat geht vor.
-            antwort = await ai.generate(self._ki_lage(people, streams, video, msgs),
-                                        system=self._KI_SYSTEM, temperature=0.9,
-                                        max_tokens=80, hintergrund=True)
+            antwort = await ai.generate(
+                self._ki_lage(people, streams, video, msgs, richtwert, zuletzt),
+                system=self._KI_SYSTEM, temperature=0.9,
+                max_tokens=80, hintergrund=True)
         except Exception:  # noqa: BLE001 - die Boerse laeuft auch ohne Analyst
             log.exception("KI-Einschaetzung fehlgeschlagen")
             antwort = None
-        faktor, text = self._ki_parse(antwort)
+        faktor, text = self._ki_parse(antwort, richtwert)
         if faktor is None:
             # Den VERSUCH zaehlen, nicht nur den Erfolg: 10 min, dann 20, 40,
             # hoechstens eine Stunde Pause. Die alte Einschaetzung laeuft nach
@@ -1325,24 +1460,39 @@ class FloAktie(FeatureBasis):
             self._ki_fehlschlaege += 1
             pause = min(3600.0, KI_ALLE_SEK * (2 ** (self._ki_fehlschlaege - 1)))
             self._ki_naechster_versuch = jetzt + pause
-            log.info("FloCorp Analyst: keine brauchbare Einschaetzung - naechster "
-                     "Versuch in %.0f s.", pause)
-            return None
-        self._ki_fehlschlaege = 0
-        self._ki_naechster_versuch = 0.0
+            if not str(antwort or "").strip():
+                log.info("FloCorp Analyst: keine brauchbare Einschaetzung - naechster "
+                         "Versuch in %.0f s.", pause)
+                return None
+            # Sie HAT geantwortet, nur ohne Zahl (Fliesstext statt Format). Dann
+            # gilt der Richtwert - er ist aus denselben Zahlen gerechnet. Gezaehlt
+            # wird es trotzdem als Fehlschlag: die Pause oben bleibt.
+            faktor = max(-KI_MAX, min(KI_MAX, richtwert / 100.0))
+            text = self._ki_ersatz(zuletzt)
+            log.info("FloCorp Analyst: Antwort ohne Zahl - nehme den Richtwert %+d, "
+                     "naechster Versuch in %.0f s.", richtwert, pause)
+        else:
+            self._ki_fehlschlaege = 0
+            self._ki_naechster_versuch = 0.0
+            if self._ki_abgeschrieben(text, zuletzt):
+                text = self._ki_ersatz(zuletzt)
         st["ki_faktor"] = faktor
         st["ki_text"] = text
         st["ki_zeit"] = jetzt
-        log.info("FloCorp Analyst: %+.0f %% - %s", faktor * 100, text or "(ohne Kommentar)")
+        log.info("FloCorp Analyst: %+.0f %% (Richtwert %+d) - %s", faktor * 100,
+                 richtwert, text or "(ohne Kommentar)")
         self._save_bald()
         return faktor, text
 
     @staticmethod
-    def _ki_parse(antwort):
+    def _ki_parse(antwort, richtwert=None):
         """'-15|Zu heiss gelaufen' -> (-0.15, 'Zu heiss gelaufen').
 
         Sehr nachsichtig: die KI haelt sich nicht immer ans Format. Findet sich
-        keine brauchbare Zahl, wird gar nichts uebernommen (None)."""
+        keine brauchbare Zahl, wird gar nichts uebernommen (None).
+
+        Mit 'richtwert' wird die Zahl auf richtwert +/- KI_SPIELRAUM geklemmt:
+        die KI darf wuerzen, aber nicht wieder in eine Richtung wegrennen."""
         zeilen = str(antwort or "").strip().splitlines()
         if not zeilen:
             return None, ""          # leer oder nur Leerzeichen (war ein IndexError)
@@ -1359,6 +1509,9 @@ class FloAktie(FeatureBasis):
         except ValueError:
             return None, ""
         prozent = max(-100, min(100, prozent))
+        if richtwert is not None:
+            anker = int(richtwert)
+            prozent = max(anker - KI_SPIELRAUM, min(anker + KI_SPIELRAUM, prozent))
         text = re.sub(r"\s+", " ", text).strip().strip('"').strip("'")[:120]
         return max(-KI_MAX, min(KI_MAX, prozent / 100.0)), text
 

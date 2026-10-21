@@ -22,6 +22,7 @@ Rueckgabecode 0 = alles gruen, 1 = mindestens ein Fehler.
 
 import argparse
 import asyncio
+import copy
 import importlib
 import os
 import random
@@ -76,7 +77,20 @@ WACHE_TIEF = (
     ("handel", "instance._store"),
     ("words", "instance._store"),
     ("guildcfg", "instance._store"),
-    ("features", "_store"),
+    # Stand hier als ("features", "_store") - das gibt es auf Modulebene nicht,
+    # die Wache fand es nie und schwieg. Der Store haengt an der Instanz.
+    ("features", "instance._store"),
+    ("features", "is_on"),
+    ("features", "is_on_in"),
+    # Die Sendepause. admin.is_locked() fragt NUR dieses Flag ab - nicht
+    # _enabled -, und bot.py verwirft bei aktiver Sendepause jede Nachricht
+    # ausser denen des Besitzers. test_webpanel_api schaltete sie ueber das
+    # Panel an und liess sie stehen; mit 'lauf.py --misch 576651' kam danach
+    # test_bot_reicht_nur_flos_eigene_umfrage_ergebnisse_weiter dran und sah
+    # sein Umfrage-Ergebnis nie. Die Wache hat es nicht gemerkt, weil sie nur
+    # admin._enabled kannte.
+    ("admin", "instance._locked"),
+    ("admin", "instance._store"),
     ("ai", "instance._RE_CACHE"),
     ("ai", "instance._LEAD_CACHE"),
     ("ai", "instance._client"),
@@ -91,6 +105,17 @@ WACHE_TIEF = (
     ("laufzeit", "client"),
     ("webpanel", "instance._auth"),
     ("webpanel", "instance._log_store"),
+)
+
+#: Schalter, die nicht ERSETZT, sondern an Ort und Stelle veraendert werden
+#: (set.add, dict.pop). Ein 'is'-Vergleich sieht dabei immer dasselbe Objekt
+#: und meldet nie etwas - deshalb wird hier eine Kopie gemerkt und der INHALT
+#: verglichen. features.set()/set_guild() schalten genau so: ein Test, der das
+#: ohne eigenen Store aufruft, haette eine Funktion fuer den Rest des Laufs
+#: abgeschaltet - global oder nur auf einem Server.
+WACHE_INHALT = (
+    ("features", "instance._disabled"),
+    ("features", "instance._per_guild"),
 )
 
 
@@ -180,11 +205,16 @@ class Lauf:
             inst = getattr(modul, "instance", None) if modul else None
             if inst is not None and hasattr(inst, "_enabled"):
                 stand[f"{modulname}._enabled"] = (modulname, "instance._enabled",
-                                                  inst._enabled)
+                                                  inst._enabled, False)
         for modulname, pfad in WACHE_TIEF:
             wert, da = Lauf._hole(modulname, pfad)
             if da:
-                stand[f"{modulname}.{pfad}"] = (modulname, pfad, wert)
+                stand[f"{modulname}.{pfad}"] = (modulname, pfad, wert, False)
+        for modulname, pfad in WACHE_INHALT:
+            wert, da = Lauf._hole(modulname, pfad)
+            if da:
+                stand[f"{modulname}.{pfad}"] = (modulname, pfad,
+                                                copy.deepcopy(wert), True)
         return stand
 
     @staticmethod
@@ -206,12 +236,12 @@ class Lauf:
         Verglichen wird mit 'is' und nicht mit '==': ein _store ist ein Objekt,
         und zwei verschiedene Stores koennen gleich aussehen und trotzdem auf
         verschiedene Dateien zeigen. Bei den Schaltern (True/False) ist 'is'
-        genauso richtig.
+        genauso richtig. Nur WACHE_INHALT vergleicht den Inhalt (siehe dort).
         """
         verstellt = []
-        for schluessel, (modulname, pfad, wert) in vorher.items():
+        for schluessel, (modulname, pfad, wert, inhalt) in vorher.items():
             jetzt, da = Lauf._hole(modulname, pfad)
-            if not da or jetzt is wert:
+            if not da or (jetzt == wert if inhalt else jetzt is wert):
                 continue
             verstellt.append(schluessel)
             ziel = sys.modules.get(modulname)
@@ -221,7 +251,9 @@ class Lauf:
                 if ziel is None:
                     break
             if ziel is not None:
-                setattr(ziel, stuecke[-1], wert)
+                # Bei Inhalt-Wachen eine frische Kopie: der Schnappschuss selbst
+                # soll nicht das lebende Objekt des naechsten Tests werden.
+                setattr(ziel, stuecke[-1], copy.deepcopy(wert) if inhalt else wert)
         return verstellt
 
     def einer(self, name, fn, erg):

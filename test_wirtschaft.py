@@ -60,25 +60,33 @@ def test_roulette_stuerzt_nicht_bei_ungueltigem_tipp():
 # --- Steal (Coin-Raub) ---------------------------------------------------------
 def test_steal_heist():
     """steal.handle: kein Ziel -> Hinweis; Erfolg klaut (Topf konstant); Cooldown
-    greift; Misserfolg kostet Strafe; Selbst-/Bot-/Arm-Ziel abgefangen."""
+    greift; Misserfolg kostet Strafe; Selbst-/Bot-/Arm-Ziel abgefangen.
+
+    Und JEDER Raub landet auf der Platte. Die eigene Attrappe hier kannte kein
+    save_soon - economy.flush() warf darauf jedes Mal, steal fing das ab und
+    schrieb "Speichern nach dem Raub fehlgeschlagen" ins Log. Der Test war
+    trotzdem gruen; ob gespeichert wird, hat er nie geprueft."""
+    import logging
     import steal
 
-    class FakeStore:
-        def __init__(self, data):
-            self.data = data
-
-        async def save(self):
-            pass
-
     alt_eco = (economy.instance._store, economy.instance._enabled)
-    economy.instance._store = FakeStore({"users": {}})
+    economy.instance._store = _FakeStore({"users": {}})
     economy.instance._enabled = True
     economy.instance._profile(1)["coins"] = 10000   # Opfer
     economy.instance._profile(2)["coins"] = 5000    # Raeuber
     alt_steal = (steal.instance._store, steal.instance._enabled,
                  steal.instance._success_chance)
-    steal.instance._store = FakeStore({"cooldowns": {}})
+    steal.instance._store = _FakeStore({"cooldowns": {}})
     steal.instance._enabled = True
+    eco_store, steal_store = economy.instance._store, steal.instance._store
+    fehler = []
+
+    class _Fang(logging.Handler):
+        def emit(self, record):
+            fehler.append(record.getMessage())
+
+    fang = _Fang(level=logging.ERROR)
+    steal.log.addHandler(fang)
 
     def cd_clear():
         steal.instance._store.data["cooldowns"].clear()
@@ -99,9 +107,13 @@ def test_steal_heist():
         assert not isinstance(emb, str)
         assert economy.get_coins(1) < vo and economy.get_coins(2) > vr
         assert economy.get_coins(1) + economy.get_coins(2) == vo + vr
-        # Cooldown greift jetzt.
+        # Gespeichert: der Cooldown sofort, die Coins ueber economy.flush().
+        assert steal_store.gespeichert == 1 and "2" in steal_store.data["cooldowns"]
+        assert eco_store.angemeldet == 1, eco_store.angemeldet
+        # Cooldown greift jetzt - und ein abgewiesener Versuch schreibt nichts.
         r = asyncio.run(steal.handle(mk(raeuber, "steal <@1>", [opfer])))
         assert isinstance(r, str) and "Min" in r
+        assert steal_store.gespeichert == 1 and eco_store.angemeldet == 1
         # Misserfolg: neuer Raeuber zahlt Strafe.
         steal.instance._success_chance = 0.0
         cd_clear()
@@ -110,6 +122,7 @@ def test_steal_heist():
         v3 = economy.get_coins(3)
         asyncio.run(steal.handle(mk(pech, "steal <@1>", [opfer])))
         assert economy.get_coins(3) < v3
+        assert steal_store.gespeichert == 2 and eco_store.angemeldet == 2
         # Selbst-Klau, Bot-Ziel, armes Ziel -> jeweils Hinweistext, kein Raub.
         cd_clear()
         assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal <@2>", [raeuber]))), str)
@@ -121,7 +134,11 @@ def test_steal_heist():
         assert isinstance(asyncio.run(steal.handle(mk(raeuber, "steal <@9>", [arm]))), str)
         # Kein Steal-Befehl -> None.
         assert asyncio.run(steal.handle(mk(raeuber, "wie gehts", []))) is None
+        # Hinweise schreiben nichts, und kein einziges Speichern ist geplatzt.
+        assert steal_store.gespeichert == 2 and eco_store.angemeldet == 2
+        assert not fehler, fehler
     finally:
+        steal.log.removeHandler(fang)
         steal.instance._store, steal.instance._enabled, steal.instance._success_chance = alt_steal
         economy.instance._store, economy.instance._enabled = alt_eco
 

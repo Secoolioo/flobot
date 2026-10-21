@@ -11,7 +11,6 @@ from testhilfe import (  # noqa: F401 - die privaten Helfer
     _FakeStore, _embed_text, _with_economy)
 
 
-
 def test_floaktie_market():
     """Kauf hebt/Verkauf senkt den Kurs (arb-frei), Markt-Tick reagiert auf Voice-
     Aktivitaet, Dividende ist proportional (Groesster doppelt), Leaderboard sortiert."""
@@ -228,8 +227,6 @@ def test_floaktie_market():
         restore_eco()
 
 
-
-
 def test_aktie_sagt_wenn_dieser_server_gar_nicht_zaehlt():
     """Gemeldet mit Screenshot: acht Leute im Call, mehrere mit Kamera und
     Livestream - und das Panel sagt "Niemand im Call", Aktivitaet 0.0.
@@ -290,8 +287,6 @@ def test_aktie_sagt_wenn_dieser_server_gar_nicht_zaehlt():
         a._store, a._enabled = alt_store, alt_on
 
 
-
-
 def test_aktie_steigt_auch_auf_einem_lebendigen_server():
     """Gemeldet: "10 Leute im Call und sie steigt nur 0,05 %".
 
@@ -338,8 +333,6 @@ def test_aktie_steigt_auch_auf_einem_lebendigen_server():
         assert 0 < einer < zehn / 5, (einer, zehn)
     finally:
         a._store, a._enabled = alt_store, alt_on
-
-
 
 
 def test_floaktie_aktivitaet_treibt_den_kurs():
@@ -599,8 +592,6 @@ def test_floaktie_aktivitaet_treibt_den_kurs():
         fa._store, fa._enabled, floaktie.TICK_NOISE = alt
 
 
-
-
 def test_floaktie_chart_zeitraeume_und_bild():
     """REGRESSION (Chart): '7 Tage', '30 Tage' und 'Gesamt' zeigten dieselbe Reihe,
     sobald die Minuten-Ticks nur ein paar Tage zurueckreichten - die Tages-Historie
@@ -651,8 +642,6 @@ def test_floaktie_chart_zeitraeume_und_bild():
         fa._store, fa._enabled = alt
 
 
-
-
 def test_floaktie_chart_serie():
     """REGRESSION (Dashboard-Chart war falsch): Die Kurs-Reihe muss aus den FEINEN
     Intraday-Ticks kommen (nicht nur aus den Tages-Schlusskursen) und IMMER auf dem
@@ -695,8 +684,6 @@ def test_floaktie_chart_serie():
     finally:
         fa._store, fa._enabled = alt
         restore()
-
-
 
 
 def test_floaktie_grenzen_gegen_hyperinflation():
@@ -822,8 +809,6 @@ def test_floaktie_grenzen_gegen_hyperinflation():
         fa._store, fa._enabled, floaktie.TICK_NOISE, fa._today = alt
 
 
-
-
 def test_floaktie_bots_zaehlen_nie():
     """Der Bot (und jeder andere) darf die Aktie NICHT beeinflussen. Gemeldet aus
     dem Betrieb: der Kurs sank nie. Ursache: gezaehlt wurde ueber voice_states, und
@@ -881,8 +866,6 @@ def test_floaktie_bots_zaehlen_nie():
     g = Guild(chan, {1: m_mensch})
     g.afk_channel = SimpleNamespace(id=5)
     assert fa._measure(g) == (0, 0, 0)
-
-
 
 
 def test_bilder_blockieren_den_bot_nicht():
@@ -985,8 +968,6 @@ def test_bilder_blockieren_den_bot_nicht():
                              + ", ".join(verdaechtig))
 
 
-
-
 def test_floaktie_chat_haengt_nicht_am_takt():
     """Derselbe Chat-Verkehr muss dieselbe Aktivitaet ergeben - egal wie schnell
     der Loop taktet.
@@ -1031,8 +1012,6 @@ def test_floaktie_chat_haengt_nicht_am_takt():
         assert aktivitaet_bei(20.0, 30) > aktivitaet_bei(20.0, 0) + 5
     finally:
         fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
-
-
 
 
 def test_floaktie_steht_nie_still():
@@ -1136,8 +1115,6 @@ def test_floaktie_steht_nie_still():
          floaktie.VOL_SPREAD) = alt
 
 
-
-
 def test_floaktie_grundwert_traegt_den_boden():
     """Der Boden ist BEWEGLICH: die Aktie ist so viel wert, wie der Server im
     Schnitt lebendig ist.
@@ -1228,8 +1205,6 @@ def test_floaktie_grundwert_traegt_den_boden():
         fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
-
-
 def test_floaktie_ist_streng_aber_ein_markt():
     """Die Vorgabe: man kann schnell viel gewinnen UND schnell viel verlieren.
 
@@ -1277,8 +1252,6 @@ def test_floaktie_ist_streng_aber_ein_markt():
         assert hoch / max(1, morgen) < 30, (hoch, morgen)
     finally:
         fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
-
-
 
 
 def test_floaktie_chart_klebt_keine_tage_doppelt():
@@ -1349,8 +1322,6 @@ def test_floaktie_chart_klebt_keine_tage_doppelt():
         fa._store, fa._enabled = alt
 
 
-
-
 def test_floaktie_kurs_ist_nie_veraltet():
     """price() muss IMMER zur Kurve passen - auch wenn jemand den gespeicherten
     Stand von Hand verbiegt oder ein Schreibweg _sync_price() vergisst.
@@ -1396,8 +1367,6 @@ def test_floaktie_kurs_ist_nie_veraltet():
         fa._store, fa._enabled = alt
 
 
-
-
 def test_floaktie_volatilitaet_ist_symmetrisch():
     """Die Volatilitaet macht den Kurs lebendig - sie darf ihn aber weder
     systematisch heben noch druecken. Der einzige Test, der sie EINSCHALTET
@@ -1438,8 +1407,6 @@ def test_floaktie_volatilitaet_ist_symmetrisch():
         assert abs(schnitt - ruhig) < ruhig * 0.15, (schnitt, ruhig)
     finally:
         fa._store, fa._enabled, floaktie.TICK_NOISE, floaktie.VOL_SPREAD = alt
-
-
 
 
 def test_floaktie_leerlauf_faellt_ab_der_ersten_minute():
@@ -1497,8 +1464,6 @@ def test_floaktie_leerlauf_faellt_ab_der_ersten_minute():
         fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
-
-
 def test_floaktie_reset_befehl():
     """'flo aktie reset' setzt den Kurs auf den Start zurueck - nur fuer den Chef."""
     import floaktie
@@ -1544,8 +1509,6 @@ def test_floaktie_reset_befehl():
     finally:
         fa._store, fa._enabled, fa._today = alt
         restore()
-
-
 
 
 def _aktie_frisch(coins):
@@ -1631,8 +1594,6 @@ def test_verkauf_als_erstes_wort_erreicht_die_aktie():
     assert music._ist_verlauf_wort("verlauf") and music._ist_verlauf_wort("verluaf")
 
 
-
-
 def test_aktien_knoepfe_ueberleben_den_neustart():
     """Nach JEDEM Neustart waren das Aktien-Panel und die Chart-Knoepfe tot -
     obwohl das Panel weiter live nachgezogen wird und zum Klicken einlaedt. Und
@@ -1688,8 +1649,6 @@ def test_aktien_knoepfe_ueberleben_den_neustart():
     finally:
         vars(fa).pop("_chart_file", None)
         restore()
-
-
 
 
 def test_floaktie_faellt_auf_jedem_niveau():
@@ -1771,8 +1730,6 @@ def test_floaktie_faellt_auf_jedem_niveau():
         fa._store, fa._enabled, fa._today, floaktie.TICK_NOISE = alt
 
 
-
-
 def test_floaktie_panel_zeigt_echten_deckel():
     """Das Panel muss den WIRKLICH bindenden Deckel zeigen, nicht nur den der
     Aktivitaet. Aus dem Betrieb gemeldet: Panel sagte 'Deckel 888.674', die
@@ -1846,8 +1803,6 @@ def test_floaktie_panel_zeigt_echten_deckel():
         restore()
 
 
-
-
 def test_floaktie_impuls_respektiert_deckel():
     """REGRESSION (Gegenpruefung des Umbaus): Der Sofort-Impuls _puls() kannte den
     Aktivitaets-Deckel NICHT - er lief nur durch _clamp_base (Boden, MAX_PRICE,
@@ -1901,8 +1856,6 @@ def test_floaktie_impuls_respektiert_deckel():
         fa._store, fa._enabled, fa._today = alt
 
 
-
-
 def test_webpanel_zeigt_aktien_aktivitaet():
     """Das Terminal muss LIVE zeigen, ob gerade jemand gezaehlt wird - sonst ist
     "die Aktie sinkt nicht" nicht nachpruefbar. Aktivitaet, Tempo pro Stunde und
@@ -1951,8 +1904,6 @@ def test_webpanel_zeigt_aktien_aktivitaet():
         fa._store, fa._enabled, fa._zuletzt_mess, fa._zuletzt_gezaehlt = alt
 
 
-
-
 def test_tests_fassen_die_echten_daten_nicht_an():
     """Sicherung gegen den gefaehrlichsten Testfehler ueberhaupt.
 
@@ -1981,8 +1932,6 @@ def test_tests_fassen_die_echten_daten_nicht_an():
             assert not pfad.exists() or pfad.stat().st_size > 0, pfad
 
 
-
-
 def test_aktie_laesst_sich_je_server_abschalten():
     """Das Panel schreibt den Funktions-Schalter JE SERVER (features.set_guild),
     die Aktie fragte aber nur den globalen ab. Ein Server, der die Aktie im
@@ -2002,8 +1951,6 @@ def test_aktie_laesst_sich_je_server_abschalten():
         assert floaktie.instance.is_off(88) is True, "der globale Not-Aus greift nicht"
     finally:
         features.is_on, features.is_on_in = alt_on, alt_in
-
-
 
 
 def test_aktie_takt_flutet_das_journal_nicht():
@@ -2051,8 +1998,6 @@ def test_aktie_takt_flutet_das_journal_nicht():
         restore()
 
 
-
-
 def test_aktie_analyst_glaubt_keinem_stempel_aus_der_zukunft():
     """Die Server-Uhr springt ~15 s nach dem Booten zwei Stunden zurueck. Ein
     ki_zeit aus diesen Sekunden lag danach zwei Stunden in der Zukunft: die alte
@@ -2093,6 +2038,177 @@ def test_aktie_analyst_glaubt_keinem_stempel_aus_der_zukunft():
     finally:
         fa._ki_naechster_versuch, fa._ki_fehlschlaege = alt
         restore()
+
+# --- Flo als Analyst: kein Dauer-Baer mehr --------------------------------------
+def _analyst_frisch(fa, base, act_ema=1.0, grund_akt=0.7):
+    """Ein Aktien-Stand wie auf einem ruhigen Server: wenig Aktivitaet, ein
+    Grundwert aus ein paar Abenden - genau dort war der Analyst zwei Wochen Baer."""
+    fa._store = _FakeStore({"price": 1000, "base": float(base), "day": "d",
+                            "act_ema": act_ema, "grund_akt": grund_akt,
+                            "msg_count": 0, "last_msg_count": 0, "mom": 0.0,
+                            "holdings": {}, "history": [], "ticks": []})
+    fa._sync_price()
+
+
+def test_aktien_analyst_richtwert_ist_symmetrisch():
+    """Im Betrieb lieferte der Analyst 14 Tage lang NUR -12 % bis -30 %. Der
+    Richtwert, an den er jetzt gebunden ist, hat keine eingebaute Richtung:
+    ueber ein Raster typischer Lagen liegt er im Mittel bei 0, und beide
+    Vorzeichen kommen kraeftig vor."""
+    import statistics
+    import floaktie
+    rw = floaktie.FloAktie._richtwert_aus
+    werte = []
+    for abstand in (-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0):
+        for normal in (0.0, 2.8, 8.0):
+            # Aktivitaet symmetrisch um den normalen Abend - und der leere Call.
+            for faktor in (None, 1 / 3, 1 / 1.5, 1.0, 1.5, 3.0):
+                akt = 0.0 if faktor is None else (1.0 + normal) * faktor - 1.0
+                if faktor is not None and akt <= 0:
+                    continue                  # gibt es nicht: besetzt heisst > 0
+                for c1 in (-60.0, -20.0, 0.0, 20.0, 60.0):
+                    for c7 in (-60.0, 0.0, 60.0):
+                        werte.append(rw(abstand, akt, normal, c1, c7))
+    assert all(isinstance(w, int) and -40 <= w <= 40 for w in werte)
+    mittel = statistics.mean(werte)
+    assert abs(mittel) < 1.5, mittel
+    positiv = sum(w > 0 for w in werte) / len(werte)
+    negativ = sum(w < 0 for w in werte) / len(werte)
+    assert positiv > 0.35 and negativ > 0.35, (positiv, negativ)
+    assert max(werte) >= 30 and min(werte) <= -30, (min(werte), max(werte))
+    # Jeder Teil zieht in die erwartete Richtung.
+    assert rw(-1.0, 0, 0, 0, 0) > 0 > rw(1.0, 0, 0, 0, 0)          # Luft / zu hoch
+    assert rw(0.0, 12.0, 2.8, 0, 0) > 0 > rw(0.0, 1.0, 2.8, 0, 0)  # voller / leerer als sonst
+    assert rw(0.0, 0, 0, 150, 150) < 0 < rw(0.0, 0, 0, -60, -60)   # heiss / ausverkauft
+    assert rw(0.0, 0, 0, 0, 0) == 0
+    # Kaputte Zahlen kippen nichts um.
+    assert rw(float("nan"), 0, 0, 0, 0) in range(-40, 41)
+    assert rw(0.0, 0, 0, float("nan"), 0) == 0
+
+
+def test_aktien_analyst_ist_auf_ruhigem_server_kein_dauer_baer():
+    """Die Ursache im Betrieb: der Bericht sagte "Kurs steht UEBER seinem Wert",
+    und bei wenig Aktivitaet traegt der Grundwert den Kurs IMMER ueber den
+    Zielkurs - also immer "ueber", also immer negativ. Jetzt zaehlt, wohin der
+    Kurs gerade laeuft: bei besetztem Call zum Deckel, bei leerem zum Grundwert."""
+    import floaktie
+    fa = floaktie.instance
+    alt = (fa._store, fa._enabled)
+    fa._enabled = True
+    try:
+        _analyst_frisch(fa, 1.0)
+        boden = fa.boden_base()
+        werte = {}
+        for name, mal in (("am boden", 1.0), ("halb", 1.4), ("am deckel", 2.0),
+                          ("drueber", 3.0)):
+            _analyst_frisch(fa, boden * mal)
+            # Die alte Bedingung gilt ueberall: der Kurs steht UEBER dem Zielkurs.
+            assert fa.price() > fa.ziel_kurs(), (name, fa.price(), fa.ziel_kurs())
+            werte[name] = fa._ki_richtwert(1, 0, 0, 0)
+            lage = fa._ki_lage(1, 0, 0, 0)
+            assert "seinem Wert" not in lage, lage
+            assert f"Richtwert: {werte[name]:+d}" in lage, lage
+        # Ein Zuhoerer bei Kurs am Grundwert: Luft nach oben -> positiv. Ueber
+        # dem Deckel -> negativ. Vorher war beides "ueber seinem Wert".
+        assert werte["am boden"] > 0 > werte["drueber"], werte
+        assert werte["am boden"] > werte["halb"] > werte["am deckel"] > werte["drueber"]
+        # Leerer Call, Kurs auf dem Grundwert: nichts mehr zu verlieren - kein Baer.
+        _analyst_frisch(fa, boden, act_ema=0.0)
+        assert abs(fa._ki_richtwert(0, 0, 0, 0)) <= 2, fa._ki_richtwert(0, 0, 0, 0)
+        assert "steht am Grundwert" in fa._ki_lage(0, 0, 0, 0)
+        # Leerer Call, Kurs weit drueber: der faellt jetzt - DAS ist negativ.
+        _analyst_frisch(fa, boden * 3.0, act_ema=0.0)
+        assert fa._ki_richtwert(0, 0, 0, 0) < -10
+        # Voller Call (12 Leute, 2 Streams) bei Kurs am Grundwert: deutlich positiv.
+        _analyst_frisch(fa, boden)
+        assert fa._ki_richtwert(12, 2, 0, 10) >= 25
+    finally:
+        fa._store, fa._enabled = alt
+
+
+def test_aktien_analyst_bleibt_beim_richtwert_und_schreibt_nicht_ab():
+    """Die Zahl der KI wird auf Richtwert +/- KI_SPIELRAUM geklemmt, der Prompt
+    hat drei Beispiele in drei Richtungen, und ein abgeschriebener Satz (das
+    letzte Mal oder ein Beispiel) wird nicht noch einmal angezeigt."""
+    import time as _t
+    import ai
+    import floaktie
+    fa = floaktie.instance
+    p = fa._ki_parse
+    raum = floaktie.KI_SPIELRAUM
+    # 1) Klemmen - ohne Richtwert bleibt der Parser, wie er war.
+    assert p("+35|Rally", richtwert=-10) == ((-10 + raum) / 100, "Rally")
+    assert p("-40|Crash", richtwert=20)[0] == (20 - raum) / 100
+    assert p("-12|Na gut", richtwert=-5)[0] == -0.12           # innerhalb: bleibt
+    assert p("+35|Rally")[0] == 0.35
+    assert p("99|Mond", richtwert=40)[0] == floaktie.KI_MAX     # KI_MAX gilt weiter
+    for muell in (None, "", "keine Zahl", "   "):
+        assert p(muell, richtwert=12)[0] is None, muell
+
+    # 2) Drei Beispiele: eins rauf, eins seitwaerts, eins runter - verschieden.
+    system = fa._KI_SYSTEM
+    assert "RICHTWERT" in system and "Zu heiss gelaufen" not in system
+    zahlen = sorted(p(b)[0] for b in fa._KI_BEISPIELE)
+    assert len(fa._KI_BEISPIELE) == 3 and zahlen[0] < 0 == zahlen[1] < zahlen[2]
+    assert all(b in system for b in fa._KI_BEISPIELE)
+    assert len({p(b)[1] for b in fa._KI_BEISPIELE}) == 3
+
+    # 3) ki_tick von vorne bis hinten - mit Richtwert im Bericht.
+    alt = (fa._store, fa._enabled, ai.generate, ai.is_enabled,
+           fa._ki_naechster_versuch, fa._ki_fehlschlaege)
+    gesehen = []
+    antworten = []
+
+    async def generate(lage, **_k):
+        gesehen.append(lage)
+        return antworten.pop(0)
+
+    fa._enabled = True
+    ai.generate = generate
+    ai.is_enabled = lambda: True
+    fa._measure_alle = lambda g: (1, 0, 0)
+    try:
+        _analyst_frisch(fa, 1.0)
+        _analyst_frisch(fa, fa.boden_base() * 3.0)          # weit ueber dem Deckel
+        rw = fa._ki_richtwert(1, 0, 0, 0)
+        assert rw < -raum, rw
+
+        def nochmal(antwort, letzter=""):
+            fa._store.data.update({"ki_zeit": 0, "ki_text": letzter})
+            fa._ki_naechster_versuch = 0.0
+            antworten.append(antwort)
+            asyncio.run(fa.ki_tick([]))
+            return fa._store.data.get("ki_faktor"), fa._store.data.get("ki_text")
+
+        # Die KI will +40 - bekommt hoechstens Richtwert + Spielraum.
+        faktor, text = nochmal("+40|Zum Mond, ihr Laeuse!", letzter="Alles faellt.")
+        assert faktor == (rw + raum) / 100 and faktor < 0, (faktor, rw)
+        assert text == "Zum Mond, ihr Laeuse!"
+        assert f"Richtwert: {rw:+d}" in gesehen[-1]
+        assert "Alles faellt." in gesehen[-1] and "ANDEREN" in gesehen[-1]
+        # Den letzten Satz oder ein Beispiel abgeschrieben -> Ersatzsatz.
+        _f, text = nochmal("-20|Alles faellt!", letzter="Alles faellt.")
+        assert text in fa._KI_ERSATZ, text
+        _f, text = nochmal("-14|leerer call, volle depots - das geht nicht lange gut")
+        assert text in fa._KI_ERSATZ, text
+        assert fa._ki_fehlschlaege == 0
+        # Antwort OHNE Zahl: der Richtwert gilt - aber gezaehlt wird es als
+        # Fehlschlag, die Pause bleibt.
+        faktor, text = nochmal("Boerse? Keine Ahnung, Digga.", letzter="Alt.")
+        assert faktor == max(-floaktie.KI_MAX, rw / 100), (faktor, rw)
+        assert text in fa._KI_ERSATZ
+        assert fa._ki_fehlschlaege == 1
+        assert fa._ki_naechster_versuch > _t.time() + 500
+        # GAR keine Antwort: wie bisher - nichts wird uebernommen.
+        fa._store.data.update({"ki_faktor": 0.11, "ki_text": "vorher", "ki_zeit": 0})
+        fa._ki_naechster_versuch = 0.0
+        antworten.append(None)
+        assert asyncio.run(fa.ki_tick([])) is None
+        assert fa._store.data["ki_faktor"] == 0.11 and fa._ki_fehlschlaege == 2
+    finally:
+        (fa._store, fa._enabled, ai.generate, ai.is_enabled,
+         fa._ki_naechster_versuch, fa._ki_fehlschlaege) = alt
+        del fa._measure_alle
 
 
 if __name__ == "__main__":

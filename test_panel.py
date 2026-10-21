@@ -71,12 +71,15 @@ def test_webpanel_api():
     economy.instance._profile(1)["name"] = "Alice"
     economy.instance._profile(2)["name"] = "Bob"
     import admin
-    alt_admin = (admin.instance._enabled, admin.instance._store)
+    # _locked gehoert dazu: der Test schaltet die Sendepause ueber das Panel an.
+    # Stehen gelassen, verwarf bot.py danach jede Nachricht ausser denen des
+    # Besitzers - 'lauf.py --misch 576651' liess daran einen Umfrage-Test fallen.
+    alt_admin = (admin.instance._enabled, admin.instance._store, admin.instance._locked)
     admin.instance._enabled = True
     admin.instance._store = _FakeStore({"sendepause": False})
 
     wp = webpanel.instance
-    alt = (wp._enabled, wp._user, wp._pass, dict(wp._tokens), wp._client)
+    alt = (wp._enabled, wp._user, wp._pass, dict(wp._tokens), wp._client, wp._auth)
     wp._enabled = True
     wp._user, wp._pass = "Secoolio", "Secoolio"
     wp._tokens = {}
@@ -136,10 +139,13 @@ def test_webpanel_api():
             j = await (await cli.get("/api/servers", headers=H)).json()
             assert j["ok"] and j["guilds"] == []
 
-            # Sendepause schalten.
+            # Sendepause schalten - und wieder aus.
             j = await (await cli.post("/api/server/sendepause",
                        json={"on": True}, headers=H)).json()
             assert j["ok"] and j["sendepause"] is True and admin.is_locked() is True
+            j = await (await cli.post("/api/server/sendepause",
+                       json={"on": False}, headers=H)).json()
+            assert j["ok"] and j["sendepause"] is False and admin.is_locked() is False
 
             # --- Profilbilder für die Nutzer-Liste (/api/avatar/<id>) -------
             alt_res = economy.instance._resolve_avatar_user
@@ -208,10 +214,13 @@ def test_webpanel_api():
             finally:
                 floaktie.instance._store, floaktie.instance._enabled = alt_fa
 
-    asyncio.run(run_it())
-    wp._enabled, wp._user, wp._pass, wp._tokens, wp._client = alt
-    admin.instance._enabled, admin.instance._store = alt_admin
-    restore_eco()
+    try:
+        asyncio.run(run_it())
+    finally:
+        # Auch wenn eine Pruefung oben scheitert: nichts davon darf stehen bleiben.
+        wp._enabled, wp._user, wp._pass, wp._tokens, wp._client, wp._auth = alt
+        admin.instance._enabled, admin.instance._store, admin.instance._locked = alt_admin
+        restore_eco()
 
 
 

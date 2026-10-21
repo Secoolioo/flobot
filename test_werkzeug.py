@@ -219,6 +219,79 @@ def test_lauf_kennt_jede_testdatei():
 
 
 
+def test_lauf_wache_sieht_sendepause_und_funktions_schalter():
+    """Die Wache in lauf.py kannte von admin nur _enabled. test_webpanel_api
+    schaltete die Sendepause an und liess sie stehen - mit 'lauf.py --misch
+    576651' fiel danach ein Umfrage-Test, weil bot.py jede Nachricht verwarf.
+    Die Funktions-Schalter (features) werden an Ort und Stelle veraendert, das
+    sieht ein 'is'-Vergleich nie. Und ("features", "_store") stand zwar in der
+    Liste, gab es aber gar nicht - eine Wache, die nichts findet, schweigt."""
+    import importlib
+    import features
+    import lauf
+    for modulname, pfad in lauf.WACHE_TIEF + lauf.WACHE_INHALT:
+        importlib.import_module(modulname)
+        _wert, da = lauf.Lauf._hole(modulname, pfad)
+        assert da, f"Wache {modulname}.{pfad} findet nichts - sie schweigt fuer immer"
+
+    f = features.instance
+    alt_lock = admin.instance._locked
+    alt_inhalt = (set(f._disabled), {g: set(k) for g, k in f._per_guild.items()})
+    schluessel = next(k["key"] for k in features.CATALOG if k["key"] not in f._disabled)
+    vorher = lauf.Lauf._zustand()
+    try:
+        admin.instance._locked = not alt_lock
+        f._disabled.add(schluessel)                          # an Ort und Stelle
+        f._per_guild.setdefault(4711, set()).add(schluessel)
+        verstellt = lauf.Lauf._zustand_zurueck(vorher)
+        for name in ("admin.instance._locked", "features.instance._disabled",
+                     "features.instance._per_guild"):
+            assert name in verstellt, (name, verstellt)
+        assert admin.instance._locked is alt_lock
+        assert schluessel not in f._disabled and 4711 not in f._per_guild
+        # Nichts verstellt -> nichts gemeldet (auch nicht durch die Kopien).
+        assert lauf.Lauf._zustand_zurueck(lauf.Lauf._zustand()) == []
+    finally:
+        admin.instance._locked = alt_lock
+        f._disabled, f._per_guild = alt_inhalt
+
+
+
+
+def test_werkzeuge_lassen_keine_tasks_haengen():
+    """Inventar und Abdruck schlossen ihren Event-Loop mit noch laufenden
+    Hintergrund-Tasks der Handler (gesammeltes Speichern, Quiz-/Rate-Zeitlimits).
+    Jeder davon kam am Ende als "Task was destroyed but it is pending!" ins Log
+    - in jedem Werkzeuglauf, also auch in jedem Testlauf."""
+    from werkzeug import abdruck, inventar
+    aufgeraeumt = []
+
+    async def zeitlimit():
+        try:
+            await asyncio.sleep(90)            # wie games._guess_timeout
+        finally:
+            aufgeraeumt.append(True)
+
+    async def anlegen():
+        return asyncio.get_running_loop().create_task(zeitlimit())
+
+    loop = asyncio.new_event_loop()
+    task = loop.run_until_complete(anlegen())
+    assert not task.done()
+    inventar.loop_schliessen(loop)
+    assert loop.is_closed() and task.cancelled() and aufgeraeumt == [True]
+    # Ein Loop ohne offene Tasks geht genauso zu.
+    leer = asyncio.new_event_loop()
+    inventar.loop_schliessen(leer)
+    assert leer.is_closed()
+    # Und BEIDE Werkzeuge schliessen ihren Loop auf diesem Weg.
+    for quelle in (inspect.getsource(inventar.Probe.laufen),
+                   inspect.getsource(abdruck.Abdrucknahme.aufnehmen)):
+        assert "loop_schliessen(" in quelle and ".close()" not in quelle
+
+
+
+
 def test_abdruck_flo_antwortet_noch_genauso():
     """Die Bedingung des Betreibers, nachpruefbar gemacht.
 

@@ -253,7 +253,8 @@ class Abdrucknahme:
                     self._sagen(f"  Durchlauf {i + 1}/{runden} ...")
                     laeufe.append(self.durchlauf(loop, worte))
         finally:
-            loop.close()
+            # Offene Hintergrund-Tasks der Handler erst abbrechen (siehe dort).
+            inventar.loop_schliessen(loop)
             asyncio.set_event_loop(None)
 
         stabil, wackelig = {}, []
