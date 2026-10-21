@@ -480,15 +480,21 @@ class Merchant(FeatureBasis):
         economy.grant_title(member.id, e["text"], e["label"], e["rarity"], wear=True)
         if str(member.id) not in sold:
             sold.append(str(member.id))
+        # Klemmt die Rolle, sagt sync_role es (Text fuer den Kaeufer) - dann
+        # wird sie nicht versprochen, sondern der Hinweis haengt dran. Vorher
+        # hiess es hier immer "hast die Rolle bekommen", auch wenn Discord
+        # sie verweigert hatte. Geld zurueck gibt es nicht - wie im Shop.
+        hinweis = ""
         try:
-            await economy.sync_role(member)
+            hinweis = await economy.sync_role(member)
         except Exception:  # noqa: BLE001 - Rolle ist Deko, Kauf darf nie platzen
             log.exception("Rollen-Sync nach Haendler-Kauf fehlgeschlagen")
         await self._save_all()
         meta = titles.RARITY.get(e["rarity"], titles.RARITY["normal"])
-        return (f"🎉 Gekauft! Du trägst jetzt **{e['label']}** "
-                f"({meta['emoji']} {meta['label']}) und hast die Rolle "
-                f"**{meta['role']}** bekommen. Ein Schnäppchen! 🤝")
+        rolle = "" if hinweis else f" und hast die Rolle **{meta['role']}** bekommen"
+        text = (f"🎉 Gekauft! Du trägst jetzt **{e['label']}** "
+                f"({meta['emoji']} {meta['label']}){rolle}. Ein Schnäppchen! 🤝")
+        return f"{text}\n{hinweis}" if hinweis else text
 
     def eligible_gives(self, member, min_rarity, max_rarity=None):
         """Titel im Inventar, die als Tausch-Einsatz taugen.
@@ -552,15 +558,17 @@ class Merchant(FeatureBasis):
             economy.add_coins(member.id, -surcharge, reason="haendler-tausch")
         economy.grant_title(member.id, t["reward_text"], t["reward_label"],
                             t["reward_rarity"], wear=True)
+        hinweis = ""
         try:
-            await economy.sync_role(member)
+            hinweis = await economy.sync_role(member)
         except Exception:  # noqa: BLE001
             log.exception("Rollen-Sync nach Haendler-Tausch fehlgeschlagen")
         await self._save_all()
         rew_meta = titles.RARITY.get(t["reward_rarity"], titles.RARITY["normal"])
-        return (f"🤝 Tausch perfekt! **{besitz.get('label', give_text)}** ist weg - "
+        text = (f"🤝 Tausch perfekt! **{besitz.get('label', give_text)}** ist weg - "
                 f"dafür trägst du jetzt **{t['reward_label']}** "
                 f"({rew_meta['emoji']} {rew_meta['label']}). Guter Deal! ✨")
+        return f"{text}\n{hinweis}" if hinweis else text
 
     async def _save_all(self):
         """Haendler-Zustand + economy zusammen persistieren."""

@@ -1308,5 +1308,49 @@ def test_wordle_knopf_bei_ausgeschalteter_arbeit():
         arbeit.instance._enabled, arbeit.instance._store = alt
 
 
+def test_flo_wordle_kommt_auch_ohne_leserecht_an():
+    """'Flo wordle' schickte das Brett mit channel.send(reference=message) -
+    dasselbe wie ein nacktes reply(): ohne 'Nachrichtenverlauf lesen' (160002)
+    oder bei geloeschter Frage kamen Brett und Knopf nie an, nur "Ging gerade
+    nicht.". Jetzt ueber basis.antworte: notfalls ohne Bezug, mit dem Bild
+    zurueckgespult."""
+    import io
+    import discord
+    arbeit, restore = _arbeit_frisch({1: 0})
+    alt_bild = arbeit._wordle_bild
+
+    async def bild(*_a, **_k):
+        return discord.File(io.BytesIO(b"BRETT"), filename="brett.png"), "brett.png"
+    arbeit._wordle_bild = bild
+    versuche = []
+
+    def nachricht(gar_nichts=False):
+        async def senden(content=None, **kw):
+            datei = kw.get("file")
+            versuche.append((dict(kw), datei.fp.read() if datei else None))
+            if gar_nichts or kw.get("reference") is not None:
+                raise discord.HTTPException(SimpleNamespace(status=400, reason="x"),
+                                            {"code": 160002, "message": "history"})
+            return SimpleNamespace(id=1)
+        return SimpleNamespace(guild=SimpleNamespace(id=904), author=SimpleNamespace(
+            id=1, mention="<@1>"), channel=SimpleNamespace(send=senden),
+            to_reference=lambda **_k: SimpleNamespace(message_id=1))
+    try:
+        arbeit.instance.raetsel(904).starten()
+        assert asyncio.run(arbeit.instance._tages_zeigen(nachricht())) is arbeit.HANDLED
+        assert len(versuche) == 2, versuche
+        kw, roh = versuche[1]
+        assert "reference" not in kw and isinstance(kw["view"], arbeit.TagesView)
+        assert kw["embed"] is not None and roh == b"BRETT", "Bild nicht zurueckgespult"
+
+        # Kommt gar nichts an: dann (und nur dann) die Absage.
+        versuche.clear()
+        assert asyncio.run(arbeit.instance._tages_zeigen(
+            nachricht(gar_nichts=True))) == "Ging gerade nicht."
+    finally:
+        arbeit._wordle_bild = alt_bild
+        restore()
+
+
 if __name__ == "__main__":
     run(globals())

@@ -2024,10 +2024,10 @@ class FloBot(discord.Client):
             description=("Soll ich den **ganzen Bot** neu starten? "
                          "Laufende Musik/Voice wird dabei getrennt."),
             color=discord.Color.orange())
-        try:
-            view.message = await message.reply(embed=emb, view=view, mention_author=False)
-        except discord.HTTPException:
-            log.exception("Restart-Abfrage konnte nicht gesendet werden")
+        # basis.antworte: kommt auch ohne die Frage an (geloescht, kein Leserecht) -
+        # die Abfrage laeuft auch im Server, nicht nur in der DM. Ein Fehlschlag
+        # steht dort schon im Log (dann bleibt view.message None).
+        view.message = await basis.antworte(message, embed=emb, view=view)
 
     async def _handle_owner_dm(self, message):
         """Privatnachrichten des BESITZERS: Admin-Befehle, Restart, Hilfe und
@@ -2801,9 +2801,9 @@ class FloBot(discord.Client):
         if SCHULDEN_ENABLED and not self.schulden_mahn_loop.is_running():
             self.schulden_mahn_loop.start()
         if GIVEAWAY_ENABLED:
-            # Mitmach-Knoepfe laufender Giveaways nach einem Neustart wieder
-            # klickbar machen (persistente Views). Nur EINMAL pro Prozess -
-            # on_ready feuert auch bei jedem Reconnect erneut.
+            # Client merken und den Mitmach-Knopf (DynamicItem, meldet
+            # setup_hook schon an - doppelt ist harmlos) anmelden. Nur EINMAL
+            # pro Prozess - on_ready feuert auch bei jedem Reconnect erneut.
             if not self._giveaway_views_ready:
                 try:
                     giveaway.register_views(self)
@@ -2813,8 +2813,8 @@ class FloBot(discord.Client):
             if not self.giveaway_loop.is_running():
                 self.giveaway_loop.start()
         if ARBEIT_ENABLED:
-            # Rate-Knoepfe einer laufenden Wordle-Runde nach einem Neustart
-            # wieder klickbar machen (persistente Views, feste custom_id).
+            # Rate-Knopf laufender Wordle-Runden: DynamicItem mit fester
+            # custom_id (meldet setup_hook schon an); hier Client merken.
             if not self._arbeit_views_ready:
                 try:
                     arbeit.register_views(self)

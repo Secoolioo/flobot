@@ -1584,13 +1584,14 @@ class Arbeit(FeatureBasis):
                 f"mindestens **{self.min_voice(gid)} Leute** im Voice sind.",
                 discord.Color.orange())
         embed, datei = await self.tages_ansage(gid)
-        try:
-            kwargs = {"embed": embed, "view": TagesView(gid),
-                      "reference": message, "mention_author": False}
-            if datei is not None:
-                kwargs["file"] = datei
-            await message.channel.send(**kwargs)
-        except discord.HTTPException:
+        kwargs = {"embed": embed, "view": TagesView(gid)}
+        if datei is not None:
+            kwargs["file"] = datei
+        # basis.antworte statt channel.send(reference=message): das scheiterte
+        # ohne 'Nachrichtenverlauf lesen' (160002) oder an einer schon
+        # geloeschten Frage - Brett und Knopf kamen nie an. antworte faellt auf
+        # eine Nachricht ohne Bezug zurueck und spult das Bild dafuer zurueck.
+        if await basis.antworte(message, **kwargs) is None:
             return "Ging gerade nicht."
         return HANDLED
 

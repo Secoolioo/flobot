@@ -49,12 +49,22 @@ HANDLED = basis.HANDLED   # ein Sentinel fuer alle, siehe basis.py
 # Woerter, mit denen man den getragenen Titel ablegt ('titel ab', 'trage aus').
 _TITEL_AB = ("ab", "aus", "weg", "kein", "keinen", "none", "off")
 
-# Wenn die Titel-Rolle nach einem Kauf nicht ankommt (Rechte/Rollen-Reihenfolge).
-# Einmal je Kauf - der Titel ist bezahlt und gehoert ihm trotzdem. "Korrektur",
-# weil die Kauf-Antwort die Rolle schon versprochen hat.
-_ROLLE_KLEMMT = ("⚠️ Korrektur: Die Rolle krieg ich dir doch nicht drauf – die Admins "
-                 "haben mir die Rechte dafür nicht gegeben. Der Titel gehört dir "
-                 "trotzdem. Beschwer dich bei denen, nicht bei mir.")
+# Wenn die GEWOLLTE Titel-Rolle nach einem Kauf nicht ankommt. Einmal je Kauf -
+# der Titel ist bezahlt und gehoert ihm trotzdem. Je nach Ursache: Recht oder
+# Rollen-Reihenfolge kann nur ein Admin richten; eine Discord-Stoerung oder das
+# Rollen-Limit des Servers ist nicht deren Schuld. "Nur die Rolle", damit es
+# auch als zweite Nachricht nach "Gekauft!" passt (Shop-Knopf).
+_ROLLE_KLEMMT = ("⚠️ Nur die Rolle krieg ich dir nicht drauf – die Admins haben mir "
+                 "die Rechte dafür nicht gegeben. Der Titel gehört dir trotzdem. "
+                 "Beschwer dich bei denen, nicht bei mir.")
+_ROLLE_HAKT = ("⚠️ Nur die Rolle krieg ich dir gerade nicht drauf – Discord stellt "
+               "sich quer, nicht ich. Der Titel gehört dir trotzdem.")
+
+
+def _rolle_bekommen(rolle):
+    """Der Satzteil, mit dem eine Kauf-Antwort die Rolle verspricht. An EINER
+    Stelle, damit _do_buy ihn wieder herausnimmt, wenn die Rolle klemmt."""
+    return f" und hast die Rolle **{rolle}** bekommen"
 
 
 class Economy(FeatureBasis):
@@ -633,8 +643,12 @@ class Economy(FeatureBasis):
 
     async def sync_role(self, member):
         """Oeffentlicher Wrapper: gibt dem Mitglied genau die Rolle seiner hoechsten
-        besessenen Seltenheit (andere Module rufen das nach grant/remove auf)."""
-        await self._sync_role(member)
+        besessenen Seltenheit (andere Module rufen das nach grant/remove auf).
+
+        Rueckgabe wie _sync_role: "" oder der Hinweis fuer den Kaeufer, wenn
+        seine Rolle klemmt. Vorher warf der Wrapper das weg - der Haendler
+        versprach die Rolle dann trotzdem."""
+        return await self._sync_role(member)
 
     def rolle_spaeter(self, member, *, melden=None):
         """Rollen-Sync im HINTERGRUND - fuer Knoepfe, NACHDEM geantwortet wurde.
@@ -647,9 +661,9 @@ class Economy(FeatureBasis):
         spaeter kommen, die Antwort nicht.
 
         Fehler landen im Log statt im Nichts (ein vergessener Task schluckt
-        seine Ausnahme sonst still). 'melden' (async, bekommt einen Text) sagt
-        dem Kaeufer EINMAL Bescheid, wenn die Rolle nicht vergeben werden konnte.
-        Rueckgabe: der Task (oder None ohne Loop)."""
+        seine Ausnahme sonst still). 'melden' (async, bekommt den Hinweis-Text)
+        sagt dem Kaeufer EINMAL Bescheid, wenn seine Rolle nicht vergeben werden
+        konnte. Rueckgabe: der Task (oder None ohne Loop)."""
         uid = getattr(member, "id", 0)
 
         async def lauf():
@@ -665,15 +679,15 @@ class Economy(FeatureBasis):
                         ziel = await member.guild.fetch_member(uid)
                     except Exception:  # noqa: BLE001 - dann eben der alte Stand
                         ziel = member
-                problem = ""
+                hinweis = ""
                 try:
-                    problem = await self._sync_role(ziel)
+                    hinweis = await self._sync_role(ziel)
                 except Exception:  # noqa: BLE001 - Deko darf nichts sprengen
                     log.exception("Rollen-Sync im Hintergrund fehlgeschlagen (%s)", uid)
                 self._rollen_zuletzt[uid] = time.monotonic()
-            if problem and melden is not None:
+            if hinweis and melden is not None:
                 try:
-                    await melden(_ROLLE_KLEMMT)
+                    await melden(hinweis)
                 except Exception:  # noqa: BLE001 - der Hinweis ist Kuer
                     log.debug("Rollen-Hinweis nicht zustellbar (%s)", uid, exc_info=True)
         try:
@@ -930,28 +944,38 @@ class Economy(FeatureBasis):
     @staticmethod
     def _rollen_grund(guild, rollen, exc=None):
         """Warum Flo diese Rollen nicht geben/nehmen darf - fuers Log, so konkret
-        wie moeglich: fehlendes Recht, Rollen-Reihenfolge oder Discords Antwort."""
+        wie moeglich: fehlendes Recht, Rollen-Reihenfolge oder Discords Antwort.
+
+        Rueckgabe: (grund, admins). 'admins': Recht oder Reihenfolge - das kann
+        nur ein Admin richten. Sonst war es Discord selbst (Stoerung, Rollen-
+        Limit des Servers ...), und dafuer koennen die Admins nichts."""
         ich = getattr(guild, "me", None)
         rechte = getattr(ich, "guild_permissions", None)
         if rechte is not None and getattr(rechte, "manage_roles", True) is False:
-            return "Flo fehlt das Recht 'Rollen verwalten'"
+            return "Flo fehlt das Recht 'Rollen verwalten'", True
         oben = getattr(ich, "top_role", None)
         if oben is not None:
             zu_hoch = [getattr(r, "name", "?") for r in rollen
                        if getattr(r, "position", 0) >= getattr(oben, "position", 0)]
             if zu_hoch:
                 return (f"Rollen-Reihenfolge: {', '.join(zu_hoch)} steht nicht unter "
-                        f"Flos hoechster Rolle '{getattr(oben, 'name', '?')}'")
-        return f"Discord sagt nein ({exc})" if exc is not None else "Grund unbekannt"
+                        f"Flos hoechster Rolle '{getattr(oben, 'name', '?')}'"), True
+        if isinstance(exc, discord.Forbidden):
+            return f"Discord verweigert es ({exc})", True
+        return (f"Discord sagt nein ({exc})" if exc is not None else "Grund unbekannt"), False
 
     async def _sync_role(self, member):
         """Gibt dem Mitglied genau EINE Flo-Rarity-Rolle: die seiner hoechsten
         besessenen Seltenheit (die anderen werden entfernt). Alles fehlertolerant –
         ein Rechteproblem darf den Kauf nie sprengen.
 
-        Rueckgabe: "" wenn alles sitzt, sonst der Grund (steht schon im Log).
-        Vorher wurde ein Fehler hier still geschluckt: der Kaeufer hatte bezahlt,
-        bekam keine Rolle, und niemand erfuhr, warum."""
+        Rueckgabe: "" wenn die GEWOLLTE Rolle sitzt (oder keine noetig ist),
+        sonst der Hinweis fuer den Kaeufer - je nach Ursache _ROLLE_KLEMMT oder
+        _ROLLE_HAKT. Der Grund steht im Log. Bleibt nur eine ALTE Rolle haengen,
+        ist das Aufraeumen: das steht im Log, aber der Kaeufer hat seine Rolle
+        und bekommt keinen falschen "krieg ich nicht drauf"-Hinweis.
+        Vorher wurde jeder Fehler hier still geschluckt: der Kaeufer hatte
+        bezahlt, bekam keine Rolle, und niemand erfuhr, warum."""
         guild = getattr(member, "guild", None)
         if guild is None:
             return ""
@@ -960,37 +984,43 @@ class Economy(FeatureBasis):
         flo_roles = {titles.RARITY[r]["role"] for r in titles.RARITY_ORDER}
         have = list(getattr(member, "roles", []))
         to_remove = [r for r in have if r.name in flo_roles and r.name != want]
-        probleme = []
         try:
             if to_remove:
                 await member.remove_roles(*to_remove, reason="Flo Titel-Update")
         except (discord.Forbidden, discord.HTTPException) as exc:
-            probleme.append("alte Rolle bleibt: " + self._rollen_grund(guild, to_remove, exc))
-        if want and not any(r.name == want for r in have):
-            role = await self._find_or_create_role(guild, best)
-            if role is None:
-                # Das Anlegen selbst hat _find_or_create_role schon geloggt.
-                probleme.append(f"'{want}' fehlt und liess sich nicht anlegen: "
-                                + self._rollen_grund(guild, []))
-            else:
-                try:
-                    await member.add_roles(role, reason="Flo Titel gekauft")
-                except (discord.Forbidden, discord.HTTPException) as exc:
-                    probleme.append(f"'{want}' nicht vergeben: "
-                                    + self._rollen_grund(guild, [role], exc))
-        if not probleme:
+            grund, _admins = self._rollen_grund(guild, to_remove, exc)
+            log.warning("Alte Titel-Rolle von %s in '%s' bleibt haengen - %s.",
+                        getattr(member, "id", "?"), getattr(guild, "name", "?"), grund)
+        if not want or any(r.name == want for r in have):
             return ""
-        grund = "; ".join(probleme)
+        role = await self._find_or_create_role(guild, best)
+        if role is None:
+            # Das Anlegen selbst hat _find_or_create_role schon geloggt.
+            grund, admins = self._rollen_grund(guild, [])
+            grund = f"'{want}' fehlt und liess sich nicht anlegen: {grund}"
+        else:
+            try:
+                await member.add_roles(role, reason="Flo Titel gekauft")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                grund, admins = self._rollen_grund(guild, [role], exc)
+                grund = f"'{want}' nicht vergeben: {grund}"
+            else:
+                return ""
         log.warning("Titel-Rolle fuer %s in '%s' klemmt - %s.",
                     getattr(member, "id", "?"), getattr(guild, "name", "?"), grund)
-        return grund
+        return _ROLLE_KLEMMT if admins else _ROLLE_HAKT
 
     async def _do_buy(self, member, item):
         """Kauft (oder legt an) den Titel 'item' fuer 'member', vergibt die Rolle und
         gibt eine Antwort als Text zurueck."""
         text, rolle_noetig = await self._kaufen(member, item)
-        if rolle_noetig and await self._sync_role(member):
-            text = f"{text}\n{_ROLLE_KLEMMT}"
+        if rolle_noetig:
+            hinweis = await self._sync_role(member)
+            if hinweis:
+                # Die Antwort ist hier noch nicht raus: die Rolle also gar nicht
+                # erst versprechen, statt sie in derselben Nachricht zu widerrufen.
+                rolle = titles.RARITY[item["rarity"]]["role"]
+                text = f"{text.replace(_rolle_bekommen(rolle), '')}\n{hinweis}"
         return text
 
     async def _kaufen(self, member, item):
@@ -1036,8 +1066,8 @@ class Economy(FeatureBasis):
                  if titles.RANK.get(item["rarity"], -1) >= titles.RANK.get("mythisch", 99)
                  else "Flo spricht dich ab jetzt damit an")
         return (f"🎉 Gekauft! Du trägst jetzt **{item['label']}** "
-                f"({meta['emoji']} {meta['label']}) und hast die Rolle "
-                f"**{meta['role']}** bekommen – {chill}.", True)
+                f"({meta['emoji']} {meta['label']}){_rolle_bekommen(meta['role'])} "
+                f"– {chill}.", True)
 
     # --- Passiver Hook: XP pro Nachricht -------------------------------------
     async def on_message(self, message):

@@ -3843,11 +3843,13 @@ def test_titel_rolle_die_nicht_ankommt_wird_gemeldet():
             "price": 1_000}
     try:
         e._enabled = True
-        # 1) Textbefehl: kein Recht 'Rollen verwalten'.
+        # 1) Textbefehl: kein Recht 'Rollen verwalten'. Die Antwort ist noch
+        #    nicht raus - sie verspricht die Rolle also gar nicht erst.
         frisch()
         text = asyncio.run(e._do_buy(_rollen_person(1, manage_roles=False), item))
         assert e.owns_title(1, "Fuchs") and e.get_coins(1) == 9_000, "Kauf gekippt"
-        assert text.count("doch nicht drauf") == 1, text
+        assert text.count("nicht drauf") == 1 and "Admins" in text, text
+        assert "hast die Rolle" not in text, "Rolle versprochen UND widerrufen"
         assert any("Rollen verwalten" in z for z in merker.zeilen), merker.zeilen
 
         # 2) Shop-Knopf: Rolle steht ueber Flos hoechster Rolle -> nach der
@@ -3862,7 +3864,7 @@ def test_titel_rolle_die_nicht_ankommt_wird_gemeldet():
             await asyncio.gather(*list(e._hintergrund))
         asyncio.run(klicken())
         assert klick.arten() == ["send", "followup"], klick.protokoll
-        assert "doch nicht drauf" in klick.protokoll[1][1]
+        assert "nicht drauf" in klick.protokoll[1][1]
         assert klick.protokoll[1][2]["ephemeral"]
         assert any("Reihenfolge" in z for z in merker.zeilen), merker.zeilen
         assert e.get_coins(1) == 9_000, "automatisch erstattet?"
@@ -3877,12 +3879,126 @@ def test_titel_rolle_die_nicht_ankommt_wird_gemeldet():
         person.add_roles = geben
         assert asyncio.run(e._sync_role(person)) == ""   # nichts besessen, nichts zu tun
         text = asyncio.run(e._do_buy(person, item))
-        assert gegeben and "doch nicht drauf" not in text, text
+        assert gegeben and "nicht drauf" not in text, text
+        assert "hast die Rolle" in text, text
     finally:
         logging.getLogger("dcbot.economy").removeHandler(merker)
         e._store, e._enabled = alt[0], alt[1]
         e._rollen_zuletzt.clear()
         e._rollen_zuletzt.update(alt[2])
+
+
+def test_titel_rolle_hinweis_nur_fuer_die_gewollte_rolle():
+    """Aus der Pruefung: Aufraeumen und Vergeben galten als dasselbe Problem.
+    Hing nur eine ALTE Flo-Rolle ueber Flos hoechster Rolle fest, die neue kam
+    aber an, hiess es trotzdem "krieg ich dir nicht drauf" - falsch. Und der
+    Hinweis schob es immer auf fehlende Admin-Rechte, auch bei einer Discord-
+    Stoerung. Jetzt: Aufraeumen nur ins Log, Hinweis nur fuer die gewollte
+    Rolle, Text nach Ursache."""
+    import logging
+    import titles
+    from testhilfe import _http_fehler
+    e = economy.instance
+    alt = (e._store, e._enabled)
+
+    class Merker(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.zeilen = []
+
+        def emit(self, record):
+            self.zeilen.append(record.getMessage())
+    merker = Merker()
+    logging.getLogger("dcbot.economy").addHandler(merker)
+    item = {"n": 1, "label": "🦊 Fuchs", "text": "Fuchs", "rarity": "normal",
+            "price": 1_000}
+
+    def frisch():
+        e._store = _FakeStore({"users": {"1": {
+            "coins": 10_000, "xp": 0, "owned": [], "name": "T", "title": "",
+            "title_rarity": "", "voice_secs": 0, "msgs": 0, "streak": 0,
+            "last_daily": ""}}, "shop": {}})
+        merker.zeilen.clear()
+    try:
+        e._enabled = True
+        # 1) Alte Rolle klemmt (steht ueber Flo), die neue sitzt: kein Hinweis.
+        frisch()
+        person = _rollen_person(1)
+        alte = SimpleNamespace(name=titles.RARITY["selten"]["role"], position=20)
+        person.roles = [alte]
+        gegeben = []
+
+        async def geben(*rollen, **_k):
+            gegeben.extend(rollen)
+        person.add_roles = geben
+        text = asyncio.run(e._do_buy(person, item))
+        assert gegeben, "gewollte Rolle nicht vergeben"
+        assert "nicht drauf" not in text and "hast die Rolle" in text, text
+        assert any("bleibt haengen" in z and "Reihenfolge" in z
+                   for z in merker.zeilen), merker.zeilen
+
+        # 2) Discord-Stoerung beim Vergeben: Hinweis, aber ohne die Admins
+        #    zu beschuldigen - die koennen nichts dafuer.
+        frisch()
+        person = _rollen_person(1)
+
+        async def stoerung(*_a, **_k):
+            raise _http_fehler("Discord kaputt")
+        person.add_roles = stoerung
+        text = asyncio.run(e._do_buy(person, item))
+        assert e.owns_title(1, "Fuchs") and e.get_coins(1) == 9_000
+        assert text.count("nicht drauf") == 1 and "Discord" in text, text
+        assert "Admins" not in text and "Rechte" not in text, text
+        assert "hast die Rolle" not in text, text
+        assert any("klemmt" in z for z in merker.zeilen), merker.zeilen
+    finally:
+        logging.getLogger("dcbot.economy").removeHandler(merker)
+        e._store, e._enabled = alt
+
+
+def test_haendler_verspricht_keine_rolle_die_klemmt():
+    """Aus der Pruefung: der Haendler rief economy.sync_role, und der Wrapper
+    warf das Ergebnis weg. Danach stand immer "...und hast die Rolle X
+    bekommen" da - auch wenn Discord sie verweigert hatte, nach einem bezahlten
+    Kauf. Jetzt gibt sync_role den Hinweis weiter; Kauf und Tausch sagen es
+    dem Kaeufer. Geld zurueck gibt es nicht - wie im Shop."""
+    import merchant
+    restore_eco = _with_economy({1: 60_000})
+    m = merchant.instance
+    alt = (m._store, m._enabled)
+    m._enabled = True
+    stock = [{"id": "haendler:schatzsucher", "text": "Schatzsucher",
+              "label": "🧭 Schatzsucher", "rarity": "selten", "price": 5000, "limit": 0}]
+    trades = [{
+        "id": "trade:haendler:sternenjaeger", "need_rarity": "selten",
+        "surcharge": 3000, "reward_id": "haendler:sternenjaeger",
+        "reward_text": "Sternenjäger", "reward_label": "🌠 Sternenjäger",
+        "reward_rarity": "mythisch"}]
+    m._store = _FakeStore({"arrived": True, "departed": False, "depart_at": 9e18,
+                           "stock": stock, "trades": trades, "sold": {}})
+    try:
+        person = _rollen_person(1, manage_roles=False)
+        r = asyncio.run(m.buy(person, "haendler:schatzsucher"))
+        assert "Gekauft" in r and economy.get_coins(1) == 55_000, r
+        assert "hast die Rolle" not in r, "Rolle versprochen, obwohl sie klemmt"
+        assert r.count("nicht drauf") == 1 and "Admins" in r, r
+
+        r = asyncio.run(m.trade(person, "trade:haendler:sternenjaeger", "Schatzsucher"))
+        assert "Tausch perfekt" in r and economy.owns_title(1, "Sternenjäger"), r
+        assert r.count("nicht drauf") == 1, r
+
+        # Klappt die Rolle, bleibt alles wie gehabt.
+        economy.instance._profile(2)["coins"] = 60_000
+        person = _rollen_person(2)
+
+        async def geben(*_r, **_k):
+            return None
+        person.add_roles = geben
+        r = asyncio.run(m.buy(person, "haendler:schatzsucher"))
+        assert "hast die Rolle" in r and "nicht drauf" not in r, r
+    finally:
+        m._store, m._enabled = alt
+        restore_eco()
 
 
 def test_thron_bestaetigt_vor_dem_speichern():

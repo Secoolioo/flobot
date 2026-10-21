@@ -1527,7 +1527,11 @@ def test_antworten_laufen_ueber_basis_antworte():
     lesen' fehlt (Discord 160002) oder die Frage schon geloescht ist - und dann
     sagt Flo gar nichts, auch wenn das Geld schon gebucht ist. 33 solche
     Stellen gab es; jetzt gehen sie ueber basis.antworte. Uebrig sind nur die,
-    die selbst einen Rueckfall haben - neue sollen gar nicht erst dazukommen."""
+    die selbst einen Rueckfall haben - neue sollen gar nicht erst dazukommen.
+
+    Dasselbe unter anderem Namen: channel.send(reference=message) - Discord
+    verlangt auch dort die beantwortete Nachricht (fail_if_not_exists ist
+    voreingestellt True). Das 'Flo wordle'-Brett kam so nie an."""
     import ast
     import pathlib
     erlaubt = {
@@ -1535,24 +1539,63 @@ def test_antworten_laufen_ueber_basis_antworte():
         "fun.py": 1,     # Gegenrede: faellt selbst auf channel.send zurueck
         "food.py": 1,    # _deliver: erst Reply, dann channel.send
         "games.py": 1,   # Wortsalat: IST schon der Rueckfall nach channel.send
-        "bot.py": 1,     # Neustart-Abfrage des Besitzers (meist in der DM)
     }
+
+    def ist_message(knoten):
+        return isinstance(knoten, ast.Name) and knoten.id == "message"
+
+    def nackt(knoten):
+        if isinstance(knoten, ast.Call):
+            if (isinstance(knoten.func, ast.Attribute) and knoten.func.attr == "reply"
+                    and ist_message(knoten.func.value)):
+                return True
+            return any(kw.arg == "reference" and ist_message(kw.value)
+                       for kw in knoten.keywords)
+        if isinstance(knoten, ast.Dict):        # kwargs = {"reference": message}
+            return any(isinstance(k, ast.Constant) and k.value == "reference"
+                       and ist_message(v) for k, v in zip(knoten.keys, knoten.values))
+        return False
     wurzel = pathlib.Path(__file__).resolve().parent
     gefunden = {}
     for datei in sorted(wurzel.glob("*.py")):
         if datei.name.startswith(("test_", "testhilfe", "lauf")):
             continue
         baum = ast.parse(datei.read_text(encoding="utf-8"))
-        n = sum(1 for knoten in ast.walk(baum)
-                if isinstance(knoten, ast.Call)
-                and isinstance(knoten.func, ast.Attribute)
-                and knoten.func.attr == "reply"
-                and isinstance(knoten.func.value, ast.Name)
-                and knoten.func.value.id == "message")
+        n = sum(1 for knoten in ast.walk(baum) if nackt(knoten))
         if n:
             gefunden[datei.name] = n
     assert gefunden == erlaubt, (
-        f"message.reply() ohne Rueckfall - bitte basis.antworte nehmen: {gefunden}")
+        f"Antwort ohne Rueckfall - bitte basis.antworte nehmen: {gefunden}")
+
+
+def test_neustart_abfrage_kommt_auch_ohne_leserecht_an():
+    """_send_restart_prompt antwortete mit einem nackten message.reply() - auch
+    im Server, nicht nur in der DM. Fehlte Flo dort 'Nachrichtenverlauf lesen'
+    (160002) oder war 'Flo restart' schon geloescht, kam die Abfrage nie an,
+    nur eine Zeile im Log. Jetzt ueber basis.antworte, und die Knoepfe kennen
+    ihre Nachricht (fuer den Timeout)."""
+    import bot
+    gesendet = []
+
+    async def senden(content=None, **kw):
+        if kw.get("reference") is not None:
+            raise discord.HTTPException(SimpleNamespace(status=400, reason="x"),
+                                        {"code": 160002, "message": "history"})
+        gesendet.append((content, kw))
+        return SimpleNamespace(id=31)
+
+    async def reply(*_a, **_k):
+        raise AssertionError("nacktes message.reply()")
+    msg = SimpleNamespace(channel=SimpleNamespace(send=senden), reply=reply,
+                          author=SimpleNamespace(mention="<@1>"),
+                          to_reference=lambda **_k: SimpleNamespace(message_id=1))
+    asyncio.run(bot.client._send_restart_prompt(msg))
+    assert len(gesendet) == 1, gesendet
+    kw = gesendet[0][1]
+    assert "Neustart" in kw["embed"].title
+    view = kw["view"]
+    assert isinstance(view, bot.RestartConfirmView)
+    assert view.message is not None and view.message.id == 31
 
 
 def test_antworte_traegt_ansicht_datei_und_rueckfall():
