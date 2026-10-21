@@ -47,6 +47,10 @@ TESTDATEIEN = (
     "test_moderation", "test_module", "test_musik", "test_panel",
     "test_profil", "test_schulden", "test_spiele",
     "test_werkzeug", "test_wirtschaft",
+    # Das Fundament und je eine Datei fuer die Teile, die darauf aufbauen.
+    # Jede kann RAUCHPROBEN fuehren (siehe test_fundament.py).
+    "test_fundament", "test_playlists", "test_musikplus", "test_flo_lebt",
+    "test_serverleben",
 )
 
 
@@ -59,7 +63,11 @@ TESTDATEIEN = (
 #: "Attribut gibt es nicht" - None geht nicht, denn None ist ein gueltiger Wert.
 _FEHLT = object()
 
-WACHE = ("economy", "features", "guildcfg", "admin", "music", "words")
+WACHE = ("economy", "features", "guildcfg", "admin", "music", "words",
+         # Die Module aus dem Fundament - ein Test, der eins anschaltet und
+         # stehen laesst, soll nicht die Tests der anderen Teile faerben.
+         "playlists", "musikzustand", "musikstats", "laune", "nachhaken",
+         "zitate", "geburtstage")
 
 #: Auch der Panel-Login: ein Test, der ihn abschaltet und stehen laesst, macht
 #: den naechsten Panel-Test gruen, ohne dass der seine Anmeldung geprueft haette.
@@ -105,6 +113,14 @@ WACHE_TIEF = (
     ("laufzeit", "client"),
     ("webpanel", "instance._auth"),
     ("webpanel", "instance._log_store"),
+    # Die Uhr: Tests stellen sie gern (Uhrsprung, "nach der Startgnade"). Blieb
+    # eine gestellte Uhr stehen, saehe jeder spaetere Test einen Sprung - und
+    # alles, was nach der Wanduhr plant, schwiege fuenf Minuten lang.
+    ("uhr", "instance._zeit"),
+    ("uhr", "instance._mono"),
+    ("uhr", "instance._start"),
+    ("uhr", "instance._versatz"),
+    ("uhr", "instance._sprung_um"),
 )
 
 #: Schalter, die nicht ERSETZT, sondern an Ort und Stelle veraendert werden

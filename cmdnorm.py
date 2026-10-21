@@ -187,6 +187,13 @@ class CmdNorm:
         "boirisch", "dialekt", "servus", "servas", "sers", "seas", "habidere",
         "griasdi", "griaßdi", "griasgod", "griaseich", "zefix", "pfiadi",
         "pfiati", "griaß", "griass", "pfiat", "pfiad",
+        # playlists, Radio, Musik-Wrapped (die Musik-Erweiterungen)
+        "playlist", "playlists", "wiedergabeliste", "radio", "endlosradio",
+        "autoplay", "wrapped", "musikwrapped",
+        # laune, nachhaken (Flo lebt), zitate + geburtstage (Server-Leben).
+        # 'zitat' steht schon bei media.
+        "laune", "mood", "nachhaken", "zitate", "geburtstag", "geburtstage",
+        "birthday", "bday",
     }
 
     # Fremdsprachige Synonyme -> anerkanntes Befehlswort. Bewusst ein eigener
@@ -387,6 +394,9 @@ class CmdNorm:
         # Aus derselben Messung (inventar.py --cmdnorm, Abschnitt FEHLGRIFF):
         # echte Woerter auf Raub, Ratespiel, Blackjack-Ziehen, Coins, Kredit.
         "hist", "ratten", "zehen", "zahlte", "verlieh", "quip",
+        # Nachgemessen nach dem Fundament (neue Befehle 'wrapped', 'laune' ...):
+        # 'rapped' landete auf dem Musik-Wrapped.
+        "rapped",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
@@ -460,6 +470,8 @@ class CmdNorm:
         "giveaway", "gewinnspiel", "verlosung", "verlosen", "raffle", "gw",
         "umfrage", "poll", "abstimmung", "voting",
         "work", "arbeit", "arbeiten", "job", "schicht", "malochen",
+        # playlists spielt ab, radio schaltet die Musik, geburtstag traegt ein
+        "playlist", "radio", "endlosradio", "autoplay", "geburtstag",
     }
 
     def _one_typo(self, a, b):

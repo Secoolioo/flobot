@@ -30,6 +30,25 @@ def test_attrappe_kann_alles_was_der_store_kann():
         f"_FakeStore fehlen Methoden, die store.JsonStore hat: {fehlt}. "
         f"Attrappe nachziehen, nicht den Store beschneiden.")
 
+    # Und keine Testdatei baut sich ihre eigene, kleinere Attrappe. Vier Tests
+    # hatten eine lokale 'class FakeStore' nur mit save(): sobald economy
+    # gesammelt speichert (save_soon), platzte das Speichern - im Log stand
+    # "Speichern nach dem Raub fehlgeschlagen", und der Test war trotzdem gruen.
+    import ast
+    import pathlib
+    zu_klein = []
+    for pfad in sorted(pathlib.Path(".").glob("test*.py")):
+        for knoten in ast.walk(ast.parse(pfad.read_text(encoding="utf-8"))):
+            if not (isinstance(knoten, ast.ClassDef) and "store" in knoten.name.lower()):
+                continue
+            kann = {k.name for k in knoten.body
+                    if isinstance(k, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            if not {"save_soon", "flush_now"} <= kann:
+                zu_klein.append(f"{pfad.name}:{knoten.lineno} class {knoten.name}")
+    assert not zu_klein, (
+        "Diese Store-Attrappen koennen weniger als der echte Store - "
+        "testhilfe._FakeStore nehmen:\n  " + "\n  ".join(zu_klein))
+
 
 
 

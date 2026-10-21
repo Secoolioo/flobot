@@ -380,6 +380,33 @@ async def _fall(bot, ai, anbieter, nr, fall):
     return name, dauer, n, text_raus, probleme
 
 
+async def _faelle_fahren(bot, ai, anbieter, filter_worte):
+    """Alle Faelle der Reihe nach. None = die KI ist gar nicht an."""
+    # Nur der Chat-Weg zaehlt: Zufalls-Einwuerfe, Gegenrede, Web-Panel und
+    # Gedaechtnis wuerden eigene Anfragen stellen und die Zaehlung verwackeln.
+    bot.FUN_ENABLED = False
+    bot.WEBPANEL_ENABLED = False
+    bot.GEHIRN_ENABLED = False
+    if not ai.is_enabled():
+        await anbieter.stoppen()
+        return None
+    global DECKEL
+    if SCHNELL and hasattr(ai.instance, "KI_FRIST"):
+        ai.instance.KI_FRIST = 3.0
+        ai.instance.ZEITLIMIT = 1.5
+        ai.instance._client = ai.instance._client_bauen(ai.instance._signatur)
+        DECKEL = 25.0
+    ergebnisse = []
+    try:
+        for nr, fall in enumerate(FAELLE):
+            if filter_worte and not any(w in fall[0] for w in filter_worte):
+                continue
+            ergebnisse.append(await _fall(bot, ai, anbieter, nr, fall))
+    finally:
+        await anbieter.stoppen()
+    return ergebnisse
+
+
 async def _alle(filter_worte):
     anbieter = Anbieter()
     basis = await anbieter.starten()
@@ -392,26 +419,16 @@ async def _alle(filter_worte):
         pass
     import bot
     import ai
-    # Nur der Chat-Weg zaehlt: Zufalls-Einwuerfe, Gegenrede, Web-Panel und
-    # Gedaechtnis wuerden eigene Anfragen stellen und die Zaehlung verwackeln.
-    bot.FUN_ENABLED = False
-    bot.WEBPANEL_ENABLED = False
-    bot.GEHIRN_ENABLED = False
-    if not ai.is_enabled():
+    try:
+        ergebnisse = await _faelle_fahren(bot, ai, anbieter, filter_worte)
+    finally:
+        # Wie FloBot.close() beim Beenden: geteilte HTTP-Session und LLM-Client
+        # zu. Sonst endet die Probe mit 'Unclosed client session' - sobald ein
+        # Fall die Session braucht (Wetter, Terraria-Erkennung).
+        await ai.aclose()
+    if ergebnisse is None:
         print("KI ist nach dem Start aus - die Probe kann nichts pruefen.")
         return 3
-    global DECKEL
-    if SCHNELL and hasattr(ai.instance, "KI_FRIST"):
-        ai.instance.KI_FRIST = 3.0
-        ai.instance.ZEITLIMIT = 1.5
-        ai.instance._client = ai.instance._client_bauen(ai.instance._signatur)
-        DECKEL = 25.0
-    ergebnisse = []
-    for nr, fall in enumerate(FAELLE):
-        if filter_worte and not any(w in fall[0] for w in filter_worte):
-            continue
-        ergebnisse.append(await _fall(bot, ai, anbieter, nr, fall))
-    await anbieter.stoppen()
 
     rot = 0
     print()

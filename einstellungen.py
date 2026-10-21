@@ -59,7 +59,8 @@ log = logging.getLogger("dcbot.einstellungen")
 #: Test haelt sie gegen die beiden Kataloge, damit hier nichts verwaist, wenn
 #: jemand einen Schluessel hinzufuegt oder umbenennt.
 ZUORDNUNG = {
-    "music": ("lautstaerke", "musik_max_queue"),
+    "music": ("lautstaerke", "musik_max_queue", "wrapped_channel", "dj_belohnung",
+              "dj_rolle"),
     "casino": ("casino_max_einsatz",),
     "mod": ("modlog_channel", "warn_limit", "warn_timeout", "timeout_standard",
             "purge_max"),
@@ -71,6 +72,8 @@ ZUORDNUNG = {
     "floaktie": ("aktie_zaehlt",),
     "voice": ("soundboard", "join_sounds"),
     "bayern": ("bayern",),
+    "zitate": ("zitat_channel",),
+    "geburtstage": ("geburtstag_channel", "geburtstag_coins", "geburtstag_rolle"),
 }
 
 #: Die Einstellwerte, zu denen es keinen Funktionsschalter gibt - sie gelten

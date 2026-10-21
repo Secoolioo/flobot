@@ -141,8 +141,15 @@ class Messung:
         from werkzeug.attrappe import rauch_nachricht
 
         async def lauf():
+            # EINE Nachricht fuer die ganze Kette - genau so reicht on_message
+            # sie durch. Frueher baute jedes Modul seine eigene Attrappe, und
+            # dann kostete ein neues Modul in der Kette vor allem den Bau dieser
+            # Attrappe: sechs Geruest-Module (Fundament) machten 'kette' um 14 %
+            # langsamer, gut 11 Punkte davon Attrappenbau - so gemessen, wie
+            # on_message arbeitet, waren es 3 %.
+            nachricht = rauch_nachricht(text)
             for _name, modul in self.kette:
-                if await modul.handle(rauch_nachricht(text)) is not None:
+                if await modul.handle(nachricht) is not None:
                     return
         self.loop.run_until_complete(lauf())
 

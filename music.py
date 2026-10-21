@@ -977,6 +977,29 @@ _VOLUME_WORDS = {
 _VOLUME_CANON = ("lautstärke", "lautstaerke", "lautstarke", "volume")
 
 
+# --- Neustartfeste Warteschlange (musikzustand.py) ------------------------
+# Lazy importiert: musikzustand braucht dieses Modul zum Zurueckholen, ein
+# Import hier oben gaebe einen Ring. Beide Haken laufen mitten in der
+# Wiedergabe - sie duerfen nie werfen, und ein Fehler ist nur eine Debug-Zeile
+# (wie verlauf_notieren).
+def _zustand_merken(player):
+    """Den Stand dieses Players fuer einen Neustart merken."""
+    try:
+        import musikzustand
+        musikzustand.merken(player)
+    except Exception:  # noqa: BLE001 - Mitschreiben darf nie die Musik kippen
+        log.debug("Musik-Zustand konnte nicht gemerkt werden", exc_info=True)
+
+
+def _zustand_vergessen(gid):
+    """'Flo stop': fuer diesen Server gibt es nichts mehr zurueckzuholen."""
+    try:
+        import musikzustand
+        musikzustand.vergessen(gid)
+    except Exception:  # noqa: BLE001
+        log.debug("Musik-Zustand konnte nicht vergessen werden", exc_info=True)
+
+
 # --- Track + Player ------------------------------------------------------
 @dataclass
 class Track:
@@ -1007,6 +1030,15 @@ class Track:
     # Ab hier weiterspielen, wenn der Song das naechste Mal startet. Nur ein
     # GEPARKTER Song hat das (GuildPlayer._parken); es gilt fuer genau einen Start.
     weiter_ab: float = 0.0
+    # Wer ihn gewuenscht hat, als ID - requested_by ist nur der Anzeigename, und
+    # der taugt weder fuer 'den eigenen Wunsch skippen' noch fuer den DJ des
+    # Monats. 0 = niemand Bestimmtes (Radio, alte Staende).
+    requested_by_id: int = 0
+    # Vom Endlos-Radio angehaengt, nicht gewuenscht.
+    radio: bool = False
+    # Nach einem Neustart aus musikzustand.json zurueckgeholt - laeuft schon
+    # zum zweiten Mal an und zaehlt in der Musik-Statistik nicht noch einmal.
+    wiederhergestellt: bool = False
 
     # Kopfzeilen, die ffmpeg selbst setzen muss - die durchzureichen bricht die
     # Verbindung (Range/Host gehoeren zur Anfrage, nicht zum Client).
@@ -1130,6 +1162,15 @@ class GuildPlayer:
     # das naechste 'spiel' machen dort weiter. Belegt den Kanal nicht
     # (is_voice_busy). Weg, sobald wieder etwas spielt oder jemand stoppt.
     _geparkt: bool = False
+    # Endlos-Radio: ist die Warteschlange leer, haengt Flo Aehnliches an.
+    radio: bool = False
+    # Video-IDs, die das Radio in dieser Sitzung schon angehaengt hat (nicht
+    # dieselben Songs im Kreis).
+    _radio_gesehen: list = field(default_factory=list)
+    # Wer fuer 'skip' gestimmt hat (Nutzer-IDs) - gilt nur fuer den laufenden Song.
+    _skip_stimmen: set = field(default_factory=set)
+    # Hat das Radio in dieser Sitzung schon gesagt, dass es uebernimmt?
+    _radio_hinweis: bool = False
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1409,6 +1450,9 @@ class GuildPlayer:
             # Und schon mal den naechsten holen (nur bei einem NEUEN Song -
             # ein Tempo-Neustart aendert an der Warteschlange nichts).
             self._vorladen_planen()
+        # Fuer einen Neustart merken, was jetzt laeuft (auch nach einem
+        # Neustart DESSELBEN Songs: die Stelle hat sich geaendert).
+        _zustand_merken(self)
 
     def position(self):
         """Aktuelle Song-Position in Sekunden (best effort, tempo-/pausen-bewusst)."""
@@ -1439,6 +1483,7 @@ class GuildPlayer:
             self.voice.pause()
         self._clock_pause()
         self.pausiert = True
+        _zustand_merken(self)
 
     def fortsetzen(self):
         """Weiterspielen: Wiedergabe, Uhr und Absicht an einer Stelle."""
@@ -1446,6 +1491,7 @@ class GuildPlayer:
             self.voice.resume()
         self._clock_resume()
         self.pausiert = False
+        _zustand_merken(self)
 
     def ist_pausiert(self):
         """True, wenn jemand bewusst pausiert hat ODER der Client pausiert ist."""
@@ -1667,6 +1713,9 @@ class GuildPlayer:
                 return
         finally:
             self._advancing = False
+            # Egal wie der Wechsel ausging (neuer Song, Schlange leer, Song
+            # zurueckgelegt): der Stand fuer einen Neustart ist ein anderer.
+            _zustand_merken(self)
 
     async def disconnect(self):
         self._vorladen_stoppen()
@@ -1687,6 +1736,8 @@ class GuildPlayer:
         self._last_frames = -1
         self.pausiert = False
         self._play_gen += 1             # alte after-Callbacks entwerten
+        # Bewusst raus - nach einem Neustart soll Flo hier NICHT zurueckkommen.
+        _zustand_vergessen(self.guild_id)
         await _retire_panel(self)
         if self.voice is not None:
             try:
@@ -2241,6 +2292,9 @@ class GuildPlayer:
         self._reconnect_fails = 0
         self._leer_seit = None
         self._geparkt = bool(self.queue)
+        # Auch eine geparkte Schlange soll einen Neustart ueberleben - mit dem
+        # Song vorne, der gerade lief, und seiner Stelle.
+        _zustand_merken(self)
         log.error("Voice-Reconnect in '%s' nach %d Versuchen aufgegeben - "
                   "Warteschlange (%d) GEPARKT, 'weiter' oder 'spiel' machen dort weiter.",
                   channel.name, VOICE_RECONNECT_MAX_FAILS, len(self.queue))
@@ -2487,6 +2541,7 @@ class QueuePositionView(discord.ui.View):
         if target_index != idx:
             t = self.player.queue.pop(idx)
             self.player.queue.insert(target_index, t)
+            _zustand_merken(self.player)
         return _added_embed(
             self.track, target_index + 1, len(self.player.queue),
             title="📍  Position aktualisiert",
@@ -2898,14 +2953,27 @@ class Music(FeatureBasis):
         """Einen gestarteten Song dauerhaft festhalten. Synchron und billig.
 
         Wird aus GuildPlayer.start() gerufen - das ist kein async-Kontext, also
-        wird hier nur die Liste angefasst und das Speichern verzoegert."""
-        if self._store is None or not gid or track is None:
+        wird hier nur die Liste angefasst und das Speichern verzoegert.
+
+        Nebenbei zaehlt die Musik-Statistik mit (musikstats) - ausser bei einem
+        Song, der nach einem Neustart nur weiterlaeuft: der lief schon einmal."""
+        if not gid or track is None:
+            return
+        if not getattr(track, "wiederhergestellt", False):
+            try:
+                import musikstats      # lazy: musikstats liest Tracks aus diesem Modul
+                musikstats.notieren(gid, track)
+            except Exception:  # noqa: BLE001 - Zaehlen darf nie die Musik kippen
+                log.debug("Musik-Statistik konnte nicht zaehlen", exc_info=True)
+        if self._store is None:
             return
         eintrag = {
             "t": (getattr(track, "title", "") or "Unbekannter Titel")[:150],
             "u": (getattr(track, "webpage_url", "") or "")[:400],
             "q": (getattr(track, "query", "") or "")[:200],
             "w": (getattr(track, "requested_by", "") or "")[:64],
+            # Wer, als ID - der Name oben kann sich aendern (fuer 'meine Songs').
+            "wid": int(getattr(track, "requested_by_id", 0) or 0),
             "d": getattr(track, "duration", None),
             "ts": time.time(),
         }
@@ -3878,6 +3946,11 @@ class Music(FeatureBasis):
         Spotify-Songs die Metadaten fuer die Best-Match-Auswahl mit."""
         resolved = await self._resolve_input(track.query, track.match_hint)
         resolved.requested_by = track.requested_by
+        # Wer, woher und ob nach einem Neustart: gehoert zum Wunsch, nicht zur
+        # Stream-Adresse - ein Aufloesen darf es nicht verlieren.
+        resolved.requested_by_id = track.requested_by_id
+        resolved.radio = track.radio
+        resolved.wiederhergestellt = track.wiederhergestellt
         resolved.query = track.query
         # Den Hint MITNEHMEN. Ohne ihn waehlt das naechste Aufloesen desselben
         # Tracks (Watchdog-Neustart, Auffrischung) wieder blind den ersten
@@ -3896,30 +3969,36 @@ class Music(FeatureBasis):
             vorladen = getattr(player, "_vorladen_planen", None)
             if vorladen is not None:
                 vorladen()
+        _zustand_merken(player)
 
-    def _lazy_track(self, extract_input, title, requested_by, hint=None):
+    def _lazy_track(self, extract_input, title, requested_by, hint=None,
+                    requested_by_id=0):
         """Noch nicht aufgeloester Track (wird erst beim Abspielen geladen).
         extract_input = yt-dlp-Eingabe (URL oder 'ytsearch1:...'), title = Anzeigename,
         hint = optionale Spotify-Metadaten fuer die Best-Match-Auswahl."""
         return Track(
             title=title, stream_url="", query=extract_input, requested_by=requested_by,
-            match_hint=hint,
+            match_hint=hint, requested_by_id=int(requested_by_id or 0),
         )
 
-    async def _flache_playlist(self, url, *, quelle="Playlist"):
+    async def _flache_playlist(self, url, *, quelle="Playlist", ende=None):
         """Playlist/Set -> Liste (track_url, titel), OHNE die einzelnen Tracks
         schon aufzuloesen (extract_flat) - das passiert erst beim Abspielen.
 
         Gilt fuer YouTube UND SoundCloud: yt-dlp liefert bei beiden dieselbe
         flache Struktur. Der einzige Unterschied ist, dass YouTube pro Eintrag
         manchmal nur die Video-ID mitschickt - daraus bauen wir die volle URL.
-        SoundCloud liefert immer die komplette Track-Adresse."""
+        SoundCloud liefert immer die komplette Track-Adresse.
+
+        ende = hoechstens so viele Eintraege holen (Standard: MAX_QUEUE). Wer
+        nur drei braucht (Radio) oder nur noch Platz fuer zwanzig hat (Playlist-
+        Assistent), laesst yt-dlp nicht die ganze Liste abklappern."""
         opts = dict(_YDL_OPTS)
         opts.update(self._cookie_optionen())
         opts.update(self._netz_optionen())
         opts["noplaylist"] = False
         opts["extract_flat"] = "in_playlist"
-        opts["playlistend"] = MAX_QUEUE
+        opts["playlistend"] = ende or MAX_QUEUE
         opts["ignoreerrors"] = True  # einzelne kaputte Tracks ueberspringen, nicht crashen
 
         def work(client):
@@ -4452,6 +4531,7 @@ class Music(FeatureBasis):
                 f"nicht mehr: {satz}", color=_COL_ERR))
             return
         track.requested_by = interaction.user.display_name
+        track.requested_by_id = interaction.user.id
         try:
             await player.connect(voice_state.channel)
         except VOICE_CONNECT_FEHLER as exc:
@@ -4515,6 +4595,7 @@ class Music(FeatureBasis):
                 color=_COL_ERR))
             return
         track.requested_by = interaction.user.display_name
+        track.requested_by_id = interaction.user.id
         try:
             await player.connect(voice_state.channel)
         except VOICE_CONNECT_FEHLER as exc:
@@ -4672,11 +4753,12 @@ class Music(FeatureBasis):
         requested_by,
         label,
         reply_to = None,
+        requested_by_id = 0,
     ):
         """Spielt mehrere Songs: ersten sofort, Rest lazy in die Warteschlange.
 
         items = Liste (yt-dlp-Eingabe, Anzeigetitel[, Match-Hint]),
-        label z. B. 'aus dem Album'.
+        label z. B. 'aus dem Album', requested_by_id = wer es wollte (ID).
         Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
         """
         try:
@@ -4696,7 +4778,8 @@ class Music(FeatureBasis):
         if player.is_active() or geparkt:
             for item in items:
                 inp, title, hint = self._unpack_item(item)
-                self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
+                self._einreihen(player, self._lazy_track(
+                    inp, title, requested_by, hint, requested_by_id=requested_by_id))
             if geparkt:
                 # Geparkt: erst die alte Schlange weiter, die neuen hinten dran.
                 await player._advance()
@@ -4727,6 +4810,7 @@ class Music(FeatureBasis):
                     break
                 continue
             track.requested_by = requested_by
+            track.requested_by_id = int(requested_by_id or 0)
             track.query = first_inp
             track.match_hint = first_hint
             break
@@ -4736,7 +4820,8 @@ class Music(FeatureBasis):
                 "gesperrt?). Versuch's gleich nochmal.", color=_COL_ERR)
         for item in rest:
             inp, title, hint = self._unpack_item(item)
-            self._einreihen(player, self._lazy_track(inp, title, requested_by, hint))
+            self._einreihen(player, self._lazy_track(
+                inp, title, requested_by, hint, requested_by_id=requested_by_id))
         try:
             await player._warte_bis_still()
             player.start(track)
@@ -5409,6 +5494,7 @@ class Music(FeatureBasis):
             return await self._play_many(
                 player, voice_state.channel, items,
                 message.author.display_name, "aus dem Album", reply_to=message,
+                requested_by_id=message.author.id,
             )
 
         if action == "spotify_playlist":
@@ -5425,6 +5511,7 @@ class Music(FeatureBasis):
             return await self._play_many(
                 player, voice_state.channel, items,
                 message.author.display_name, "aus der Playlist", reply_to=message,
+                requested_by_id=message.author.id,
             )
 
         if action == "yt_playlist":
@@ -5435,6 +5522,7 @@ class Music(FeatureBasis):
             return await self._play_many(
                 player, voice_state.channel, entries,
                 message.author.display_name, "aus der Playlist", reply_to=message,
+                requested_by_id=message.author.id,
             )
 
         if action == "sc_playlist":
@@ -5446,6 +5534,7 @@ class Music(FeatureBasis):
             return await self._play_many(
                 player, voice_state.channel, entries,
                 message.author.display_name, "aus dem SoundCloud-Set", reply_to=message,
+                requested_by_id=message.author.id,
             )
 
         deckel = max_queue(player.guild_id)
@@ -5575,7 +5664,7 @@ class Music(FeatureBasis):
                         return await self._play_many(
                             player, voice_state.channel, eintraege,
                             message.author.display_name, "aus dem SoundCloud-Set",
-                            reply_to=message,
+                            reply_to=message, requested_by_id=message.author.id,
                         )
                 track = await self._extract(arg)
             else:  # search
@@ -5591,6 +5680,7 @@ class Music(FeatureBasis):
             return self._embed(satz, color=_COL_ERR)
 
         track.requested_by = message.author.display_name
+        track.requested_by_id = message.author.id
         # Merken, WOMIT dieser Track aufgeloest wurde. Ohne das kann Flo eine
         # tote Stream-Adresse spaeter nicht erneuern: die Wiederbelebung nach
         # einem Abbruch und die Auffrischung veralteter Adressen brauchen beide

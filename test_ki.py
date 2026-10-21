@@ -1799,6 +1799,9 @@ def test_kiprobe_flo_antwortet_in_jedem_fall():
                           capture_output=True, text=True, timeout=300, env=umgebung,
                           cwd=wurzel)
     assert lauf.returncode == 0, lauf.stdout[-3000:] + lauf.stderr[-2000:]
+    # Am Ende schliesst die Probe, was Flo beim Beenden schliesst (ai.aclose) -
+    # sonst stand 'Unclosed client session' unter jedem Lauf.
+    assert "Unclosed client session" not in lauf.stdout + lauf.stderr, lauf.stderr[-2000:]
 
 
 if __name__ == "__main__":

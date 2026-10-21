@@ -997,3 +997,50 @@ def run(raum=None):
         raum[name]()
         print(f"ok  {name}")
     print(f"\n{len(namen)} Tests bestanden.")
+
+
+# --- Voice mit Leuten drin (Abstimmung, Radio, Wiederherstellen) -------------
+def _voice_kanal(menschen=2, bots=1, *, cid=42, name="Musik"):
+    """Ein ECHTER discord.VoiceChannel (ohne __init__) mit Leuten drin.
+
+    Wie _VoiceChannelStub - heal() & Co. pruefen per isinstance -, nur dass
+    'members' hier 'menschen' Menschen und 'bots' Bots liefert. Die echte
+    Eigenschaft liest Discords Voice-Cache, den es im Test nicht gibt."""
+    import discord
+
+    class _KanalMitLeuten(discord.VoiceChannel):
+        @property
+        def members(self):
+            return list(self._leute)
+
+    kanal = object.__new__(_KanalMitLeuten)
+    kanal.id = cid
+    kanal.name = name
+    kanal._leute = (
+        [SimpleNamespace(id=1000 + i, bot=False, display_name=f"Mensch{i}",
+                         mention=f"<@{1000 + i}>") for i in range(menschen)]
+        + [SimpleNamespace(id=900 + i, bot=True, display_name=f"Bot{i}",
+                           mention=f"<@{900 + i}>") for i in range(bots)])
+    return kanal
+
+
+def _klick_im_voice(uid, kanal, *, mod=False, gid=1):
+    """Ein Klick (_Klick) von jemandem, der in 'kanal' sitzt - ohne Mod-Rechte,
+    ausser mod=True (dann alle, die die Musik-Knoepfe als Mod zaehlen)."""
+    person = _fake_person(uid, name=f"u{uid}", global_name=f"U{uid}")
+    person.guild_permissions = SimpleNamespace(
+        administrator=mod, manage_guild=mod, manage_channels=mod,
+        move_members=mod, manage_messages=mod, manage_roles=mod)
+    person.voice = SimpleNamespace(channel=kanal)
+    return _Klick(uid, gid=gid, member=person)
+
+
+# --- Die Uhr laeuft im Test schon lange ---------------------------------------
+# uhr.stabil() traut der Wanduhr erst UHR_START_GNADE (5 min) nach dem Start.
+# Im Testlauf hiesse das: ob ein Test die Lotto-Ziehung sieht, haengt daran,
+# ob er in den ersten fuenf Minuten des Laufs drankommt - mit --misch mal so,
+# mal so. Der Testprozess gilt deshalb als laengst gestartet. Wer die
+# Startgnade selbst pruefen will, baut sich eine eigene uhr.Uhr.
+import uhr                                      # noqa: E402
+
+uhr.instance._start = float("-inf")

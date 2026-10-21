@@ -37,6 +37,7 @@ import economy
 import basis
 import laufzeit
 import numfmt
+import uhr
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -1780,8 +1781,11 @@ class FloAktie(FeatureBasis):
                                                        video, dt=dt)
             self._record_tick()
             # Einmal pro Tag den Schlusskurs fuer den Langzeit-Chart festhalten.
+            # NUR VORWAERTS (uhr.py): mit '!=' schrieb der Uhrsprung beim
+            # Booten denselben Tag zweimal in den Chart, und zwar in falscher
+            # Reihenfolge (morgen, heute, morgen).
             today = self._today()
-            if st.get("day") != today:
+            if uhr.spaeter_als(today, st.get("day")):
                 st["day"] = today
                 if not isinstance(st.get("history"), list):
                     st["history"] = []

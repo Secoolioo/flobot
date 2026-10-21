@@ -311,8 +311,9 @@ def _alles_an(bot):
 
 
 def test_rechtsklick_befehle_sind_richtig_gebaut():
-    """Zwei Eintraege im Apps-Menue: einer an Nachrichten, einer an Personen,
-    beide nur auf Servern. Angemeldet wird im Hintergrund (_spawn)."""
+    """Drei Eintraege im Apps-Menue: zwei an Nachrichten (sag was dazu, als
+    Zitat speichern), einer an Personen, alle nur auf Servern. Angemeldet wird
+    im Hintergrund (_spawn)."""
     bot = _rechtsklick_bot()
     gestartet = []
     baum = bot.client.tree
@@ -327,8 +328,9 @@ def test_rechtsklick_befehle_sind_richtig_gebaut():
         bot.client._rechtsklick_anmelden()
         bot.client._rechtsklick_anmelden()   # zweimal (Reconnect): kein Absturz
     befehle = {b.name: b for b in baum.get_commands()}
-    assert set(befehle) == {"Flo, sag was dazu", "Roasten"}
+    assert set(befehle) == {"Flo, sag was dazu", "Als Zitat speichern", "Roasten"}
     assert befehle["Flo, sag was dazu"].type is discord.AppCommandType.message
+    assert befehle["Als Zitat speichern"].type is discord.AppCommandType.message
     assert befehle["Roasten"].type is discord.AppCommandType.user
     for befehl in befehle.values():
         assert befehl.to_dict(baum)["contexts"] == [0]   # nur Server
@@ -631,8 +633,9 @@ def test_alle_dauerhaften_knoepfe_ueberschneiden_sich_nie():
     import music
     import voicegags
     alle = [bot.HilfeAuswahl]
-    for modul in (bot.lotto, bot.floaktie, bot.merchant, music, voicegags,
-                  bot.giveaway, bot.arbeit):
+    # Dieselbe Liste, die setup_hook anmeldet - ein neues Modul mit Knoepfen
+    # steht dann automatisch auch hier drin.
+    for modul in bot.DYNAMISCHE_MODULE:
         alle.extend(getattr(modul, "DYNAMISCHE_KNOEPFE", ()))
     assert len(set(alle)) == len(alle)
     player = music.GuildPlayer(loop=None)
@@ -1695,11 +1698,15 @@ def test_giveaway_und_wordle_knoepfe_werden_beim_start_angemeldet():
     alten persistenten Views per register_views verhindert hatten."""
     import inspect
     import bot
+    # setup_hook meldet alles aus bot.DYNAMISCHE_MODULE an - die Liste steht
+    # seit dem Fundament auf Modulebene (der Knopf-Test sieht dieselbe).
     quelle = inspect.getsource(bot.FloBot.setup_hook)
     zeile = next(z for z in quelle.splitlines() if "for modul in" in z)
+    assert "DYNAMISCHE_MODULE" in zeile, zeile
+    namen = {modul.__name__ for modul in bot.DYNAMISCHE_MODULE}
     for name in ("giveaway", "arbeit", "lotto", "floaktie", "merchant", "music",
                  "voicegags"):
-        assert name in zeile, (name, zeile)
+        assert name in namen, (name, namen)
 
 
 if __name__ == "__main__":

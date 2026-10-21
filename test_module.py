@@ -8,7 +8,7 @@ testhilfe.py; von dort kommt auch der umgebogene Datenordner.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _fake_msg, _rauch_nachricht)
+    _FakeStore, _fake_msg, _rauch_nachricht)
 
 
 
@@ -166,15 +166,8 @@ def test_admin_sendepause_toggle():
     erreicht den Befehl ueberhaupt (admin.handle gibt Fremden None)."""
     admin.setup()
     # Ohne Store (Test): Persistenz-Aufruf darf nicht crashen -> Fake-Store.
-    class FakeStore:
-        def __init__(self):
-            self.data = {"sendepause": False}
-
-        async def save(self):
-            self.data["sendepause_saved"] = self.data["sendepause"]
-
     alt = admin.instance._store
-    admin.instance._store = FakeStore()
+    admin.instance._store = _FakeStore({"sendepause": False})
     admin.instance._locked = False
     try:
         assert admin.is_locked() is False
@@ -185,7 +178,9 @@ def test_admin_sendepause_toggle():
         antwort = asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause")))
         assert antwort is not None and not isinstance(antwort, str)
         assert admin.is_locked() is True
-        assert admin.instance._store.data["sendepause_saved"] is True
+        # ... und auf die Platte geschrieben (nicht nur im Speicher umgelegt).
+        assert admin.instance._store.data["sendepause"] is True
+        assert admin.instance._store.gespeichert >= 1
         # Toggle zurueck.
         asyncio.run(admin.handle(_fake_msg(admin.OWNER_ID, "sendepause")))
         assert admin.is_locked() is False

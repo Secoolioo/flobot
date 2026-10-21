@@ -1983,9 +1983,13 @@ def test_aktie_takt_flutet_das_journal_nicht():
             z for z in zeilen if z.startswith("INFO")][:3]
 
         # Nach einer Stunde (monotonic, nicht Wanduhr): genau EINE Bilanz ...
+        # (Eine Sekunde drueber, nicht genau auf der Grenze: (seit + 3600) - seit
+        # ist in Gleitkomma je nach Betriebszeit mal 3599,9999999999995 - der
+        # Test fiel dann in jedem vierten Lauf.)
         seit = fa._bilanz["seit"]
         kurs = fa._bilanz["kurs"]
-        assert fa._stundenbilanz(kurs, kurs * 1.1, 2.0, jetzt=seit + floaktie.BILANZ_SEK)
+        assert fa._stundenbilanz(kurs, kurs * 1.1, 2.0,
+                                 jetzt=seit + floaktie.BILANZ_SEK + 1.0)
         bilanz = [z for z in puffer.getvalue().splitlines() if z.startswith("INFO")]
         assert len(bilanz) == 1 and "FloCorp Stunde" in bilanz[0], bilanz
         assert "+10.00 %" in bilanz[0] and "181 Takten" in bilanz[0], bilanz[0]

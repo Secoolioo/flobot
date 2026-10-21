@@ -479,6 +479,9 @@ class FloAI:
         # -inf statt 0.0: time.monotonic() zaehlt ab Systemstart, und kurz nach
         # einem Neustart des Servers waere "0.0" noch "gerade eben".
         self._hintergrund_pause_bis = float("-inf")
+        # Fuer welche Pause "Hintergrund-Aufruf ausgelassen" schon auf INFO im
+        # Journal steht - danach nur noch DEBUG (siehe generate).
+        self._pause_gemeldet = float("-inf")
         # Modell -> bis wann es gesperrt ist (Tageslimit erreicht). Solange wird
         # gar nicht erst gefragt - jede Anfrage wuerde nur einen 429 kassieren.
         self._gesperrt_bis = {}
@@ -1248,7 +1251,7 @@ class FloAI:
         return re.sub(r"^\W+", "", title or "").strip()
 
     def _system_prompt(self, author = "", title = "", tone = "",
-                       bavarian = False, gid = None, uid = None):
+                       bavarian = False, gid = None, uid = None, notlage = False):
         persona = os.getenv("BOT_PERSONA", "").strip() or self._DEFAULT_PERSONA.format(name=self._bot_name)
         # Reihenfolge ist Absicht: Die Grenze kommt DIREKT hinter die Persona und
         # nicht ans Ende. Ganz hinten wirkt sie wie das letzte Wort und faerbt
@@ -1300,6 +1303,16 @@ class FloAI:
                 import gehirn
                 base += gehirn.kontext_fuer(gid, uid)
             except Exception:  # noqa: BLE001 - ohne Gedaechtnis redet er trotzdem
+                pass
+        # Flos Tageslaune (laune.py) faerbt nur den TON. Sie steht hinter der
+        # Grenze und vor dem Schlusswort, beides gewinnt also - und in einer
+        # Notlage kommt sie gar nicht erst mit: wer am Boden ist, kriegt keinen
+        # gereizten Flo. Lazy importiert wie gehirn (laune importiert ai).
+        if gid and not notlage:
+            try:
+                import laune
+                base += laune.prompt_zeile(gid)
+            except Exception:  # noqa: BLE001 - ohne Laune redet er trotzdem
                 pass
         if bavarian:
             try:
@@ -1484,8 +1497,16 @@ class FloAI:
         if self._client is None:
             return None
         if hintergrund and time.monotonic() < self._hintergrund_pause_bis:
-            log.info("KI: Hintergrund-Aufruf ausgelassen - nach einem 429 hat der "
-                     "Chat Vorrang.")
+            # EINMAL je Pause ins Journal: Gedaechtnis, Analyst und jeder neue
+            # Takt fragen in der Pause alle paar Sekunden - das waren Dutzende
+            # gleiche Zeilen um eine einzige Ursache herum.
+            if self._pause_gemeldet != self._hintergrund_pause_bis:
+                self._pause_gemeldet = self._hintergrund_pause_bis
+                log.info("KI: Hintergrund-Aufruf ausgelassen - nach einem 429 hat der "
+                         "Chat Vorrang (noch %.0f s, weitere nur im Debug-Log).",
+                         self._hintergrund_pause_bis - time.monotonic())
+            else:
+                log.debug("KI: Hintergrund-Aufruf ausgelassen (429-Pause).")
             return None
         messages = []
         if system:
@@ -1628,7 +1649,8 @@ class FloAI:
                                skip_content=(verlauf_frage or user_message).strip())
         messages = [
             {"role": "system",
-             "content": self._system_prompt(author, title, tone, bavarian, gid, uid)},
+             "content": self._system_prompt(author, title, tone, bavarian, gid, uid,
+                                            notlage=notlage)},
             *history,
             {"role": "user", "content": text},
         ]
@@ -1781,7 +1803,8 @@ class FloAI:
         history = self._recent(channel_id, skip_content=(user_message or "").strip())
         messages = [
             {"role": "system",
-             "content": self._system_prompt(author, title, tone, bavarian, gid, uid)},
+             "content": self._system_prompt(author, title, tone, bavarian, gid, uid,
+                                            notlage=self.ist_notlage(user_message))},
             *history,
             {"role": "user", "content": [
                 {"type": "text", "text": text},

@@ -39,6 +39,7 @@ import economy
 import basis
 import laufzeit
 import numfmt
+import uhr
 from basis import FeatureBasis
 from store import JsonStore
 
@@ -236,8 +237,18 @@ class Lotto(FeatureBasis):
             self._start_month()
             await self._save()
             return None
-        if st["month"] == self._month_str():
+        # NUR VORWAERTS. Mit '==' zaehlte jede Abweichung als neuer Monat -
+        # auch ein Monat aus der Zukunft: springt die Uhr kurz nach dem Booten
+        # zwei Stunden zurueck und liegt dazwischen ein Monatswechsel, wurde
+        # derselbe Monat zwei- bis dreimal ausgelost (uhr.py).
+        if not uhr.spaeter_als(self._month_str(), st["month"]):
             return None  # noch derselbe Monat - nichts auszulosen
+        # ... und erst, wenn man der Uhr wieder traut. Der naechste Takt holt
+        # die Ziehung nach (LOTTO_TICK_SECONDS) - verschoben, nicht verloren.
+        if not uhr.stabil():
+            log.info("Lotto: Monatswechsel erkannt, die Uhr ist aber noch nicht "
+                     "stabil - Ziehung beim naechsten Takt.")
+            return None
         # Monat ist rum -> ziehen.
         result = self._draw()
         if result.won:

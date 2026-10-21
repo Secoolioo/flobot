@@ -295,14 +295,16 @@ zwei Wörter, manchmal drei Sätze. Aktuell zielt er auf gleichmäßige Absätze
 das ist das Erkennungszeichen einer Maschine.
 *klein · `ai.py`*
 
-**[36] Flo hat Launen.** Ein Zustand, der sich langsam ändert und den Ton färbt:
+**[36] Flo hat Launen.** 🔧 **Im Bau** — Gerüst steht (`laune.py`).
+Ein Zustand, der sich langsam ändert und den Ton färbt:
 gut gelaunt, genervt, müde, überdreht. Gespeist aus echten Signalen — Uhrzeit,
 wie viel im Chat los war, ob der $FLO-Kurs gefallen ist, ob ihn jemand seit einer
 Stunde vollspamt. Drei Zeilen Zusatz im System-Prompt, aber Flo wirkt dadurch
 wie jemand, der einen Tag hat, statt wie eine Funktion mit Eingabe und Ausgabe.
 *klein · `ai.py`, `floaktie.py`*
 
-**[37] Er hält nach.** Sagt jemand „mach ich später", fragt Flo Stunden später
+**[37] Er hält nach.** 🔧 **Im Bau** — Gerüst steht (`nachhaken.py`).
+Sagt jemand „mach ich später", fragt Flo Stunden später
 nach. Ein kleiner Notizzettel mit Zeitstempel reicht.
 *mittel · `gedaechtnis.py`*
 
@@ -331,24 +333,29 @@ wer selten schreibt, bekommt eine normale Antwort. Die Zahlen liegen schon in
 
 ## Musik
 
-**[41] Warteschlange, die Neustarts überlebt.** Aktuell ist nach einem Update
+**[41] Warteschlange, die Neustarts überlebt.** 🔧 **Im Bau** — Gerüst steht (`musikzustand.py`).
+Aktuell ist nach einem Update
 alles weg. Warteschlange und Position auf Platte, beim Start wieder rein
 (fragen, nicht einfach losspielen).
 *mittel · `music.py`*
 
-**[42] Wer hat's gewünscht.** Steht in `Track` schon halb drin, wird nur nicht
+**[42] Wer hat's gewünscht.** 🔧 **Im Bau** — Gerüst steht (`Track.requested_by_id`).
+Steht in `Track` schon halb drin, wird nur nicht
 angezeigt. Dazu „wer hat diesen Monat am meisten Musik gespielt".
 *klein · `music.py`*
 
-**[43] Abstimmung zum Überspringen.** Ab drei Leuten im Kanal braucht das
+**[43] Abstimmung zum Überspringen.** 🔧 **Im Bau** — Gerüst steht (`GuildPlayer._skip_stimmen`).
+Ab drei Leuten im Kanal braucht das
 Überspringen Mehrheit — außer beim Wünschenden und bei Admins.
 *klein · `music.py`*
 
-**[44] Endlos-Radio.** Läuft die Warteschlange leer, hängt Flo einen ähnlichen
+**[44] Endlos-Radio.** 🔧 **Im Bau** — Gerüst steht (`GuildPlayer.radio`).
+Läuft die Warteschlange leer, hängt Flo einen ähnlichen
 Titel an, statt zu gehen. Verwandte Titel liefert `yt-dlp` mit.
 *mittel · `music.py`*
 
-**[45] Gespeicherte Wiedergabelisten je Server.** `flo liste speichern zocken`,
+**[45] Gespeicherte Wiedergabelisten je Server.** 🔧 **Im Bau** — Gerüst steht (`playlists.py`).
+`flo liste speichern zocken`,
 `flo liste zocken` — das eigene kleine Spotify.
 *mittel · neu `playlists.py`*
 
@@ -360,7 +367,8 @@ Rauf- und Runterdrehen zwischen Songs auf.
 raus. Spart Bandbreite und wirkt aufmerksam.
 *klein · `music.py`*
 
-**[48] Musik-Statistik zum Jahresende.** Meistgespielte Titel, wer welchen
+**[48] Musik-Statistik zum Jahresende.** 🔧 **Im Bau** — Gerüst steht (`musikstats.py`).
+Meistgespielte Titel, wer welchen
 Geschmack hat, längste Sitzung — als Bild aus `render.py`.
 *mittel · `music.py`, `render.py`*
 
@@ -400,7 +408,8 @@ dem Ganzen die unangenehme Ecke und ist in 20 Zeilen gebaut.
 
 ## Server-Leben
 
-**[57] Zitat der Woche.** Flo sammelt die besten Sätze (Reaktion mit einem
+**[57] Zitat der Woche.** 🔧 **Im Bau** — Gerüst steht (`zitate.py`).
+Flo sammelt die besten Sätze (Reaktion mit einem
 bestimmten Emoji reicht als Stimme) und postet sonntags das Gewinnerzitat als
 gerendertes Bild mit Profilbild — wie ein echtes Zitat-Meme. Braucht die
 Reaktions-Intents, `render.py` kann den Rest.
@@ -420,7 +429,8 @@ nie neu gepostet. Ein Server-Armaturenbrett, das keiner öffnen muss.
 Reaktion, Erinnerung 15 Minuten vorher per DM an alle, die zugesagt haben.
 *mittel · neu `termine.py`*
 
-**[61] Geburtstage.** Einmal eintragen, Flo denkt dran. Simpel, kommt gut an.
+**[61] Geburtstage.** 🔧 **Im Bau** — Gerüst steht (`geburtstage.py`).
+Einmal eintragen, Flo denkt dran. Simpel, kommt gut an.
 *klein · `profil.py`*
 
 **[62] Jahresrückblick.** Einmal im Dezember: die Zahlen des Servers als

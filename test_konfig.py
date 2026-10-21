@@ -610,13 +610,19 @@ def test_cmdnorm_kennt_die_befehle_aller_module():
     import cmdnorm
     import arbeit
     import floaktie
+    import geburtstage
     import giveaway
     import guildcfg
+    import laune
     import lotto
     import merchant
+    import musikstats
+    import nachhaken
+    import playlists
     import profil
     import schulden
     import steal
+    import zitate
     listen = (
         arbeit._CMDS + arbeit._LOHN_CMDS + arbeit._TOP_CMDS
         + arbeit._WORDLE_CMDS + arbeit._TAGES_CMDS
@@ -624,6 +630,9 @@ def test_cmdnorm_kennt_die_befehle_aller_module():
         + giveaway._CMDS + guildcfg.GuildConfig._CMDS + lotto._CMDS
         + merchant._CMDS + profil._CHECK_CMDS + profil._AVATAR_CMDS
         + profil._BANNER_CMDS + schulden._CMDS + steal._CMDS
+        # die Module aus dem Fundament (Playlists, Wrapped, Flo lebt, Server-Leben)
+        + playlists._CMDS + musikstats._CMDS + laune._CMDS + nachhaken._CMDS
+        + zitate._CMDS + geburtstage._CMDS
     )
     fehlt = sorted({w for w in listen if w not in cmdnorm.KNOWN})
     assert not fehlt, f"fehlt in cmdnorm.KNOWN: {fehlt}"

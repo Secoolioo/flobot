@@ -64,6 +64,38 @@ def echte_erwaehnungen(message):
     return raus
 
 
+#: 'hey flo ...', 'ok flo ...' - so faengt Ansprache im Chat auch an.
+_ANREDE_VORNE_RE = re.compile(r"(?i)^\s*(?:hey|hei|ok|okay|yo|ey|na|hallo)\s*,?\s+")
+_ERWAEHNUNG_VORNE_RE = re.compile(r"\s*<@([!&]?)(\d+)>")
+
+
+def an_flo(message, text):
+    """Ist die Nachricht an Flo gerichtet statt an einen laufenden Assistenten?
+
+    Dieselbe Pruefung wie im Giveaway-Assistenten (giveaway._an_flo), hier fuer
+    alle, die so einen Assistenten bauen (Playlists): der Lead dieses Servers
+    (ai.lead_re - eigener Praefix, 'Florian', ...) oder eine fuehrende
+    Erwaehnung von Flo selbst bzw. seiner Bot-Rolle. Eine woertliche 'flo'-
+    Pruefung schluckte auf einem Server mit eigenem Praefix jede Nachricht."""
+    guild = getattr(message, "guild", None)
+    text = _ANREDE_VORNE_RE.sub("", text or "")
+    try:
+        if ai.lead_re(getattr(guild, "id", 0)).match(text):
+            return True
+    except Exception:  # noqa: BLE001 - lieber durchlassen als abstuerzen
+        log.debug("Lead-Pruefung fehlgeschlagen", exc_info=True)
+    m = _ERWAEHNUNG_VORNE_RE.match(text)
+    if not m:
+        return False
+    ziel = int(m.group(2))
+    if m.group(1) == "&":
+        rolle = getattr(guild, "self_role", None)
+        return rolle is not None and getattr(rolle, "id", None) == ziel
+    ich = (getattr(getattr(guild, "me", None), "id", None)
+           or getattr(getattr(laufzeit.client, "user", None), "id", None))
+    return ich is not None and int(ich) == ziel
+
+
 def erstes_ziel(message, *, ohne_bots=True, ohne=()):
     """Die erste getippte Erwaehnung, die als Ziel taugt - oder None."""
     verboten = {int(x) for x in ohne if x is not None}

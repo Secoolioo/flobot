@@ -34,6 +34,7 @@ import leaderboard_img
 import numfmt
 import render
 import titles
+import uhr
 from store import JsonStore
 
 # Kurz-Alias: deutsche Tausenderpunkte fuer alle Zahlen in Nachrichten.
@@ -720,9 +721,15 @@ class Economy(FeatureBasis):
 
     def refresh_shop(self, force = False):
         """Wuerfelt die Tagesauswahl neu, falls noetig (neuer Tag, leer oder force).
-        Speichert NICHT selbst – Aufrufer ruft danach flush()."""
+        Speichert NICHT selbst – Aufrufer ruft danach flush().
+
+        'Neuer Tag' heisst SPAETER als der gespeicherte, nicht bloss anders: nach
+        dem Uhrsprung beim Booten (uhr.py) laege der gespeicherte Tag sonst in
+        der Zukunft, und jeder Start wuerfelte den Shop noch einmal neu. Den
+        Tag danach holt der 2-Uhr-Takt (force) ohnehin."""
         st = self._shop_state()
-        if not force and st.get("date") == self._shop_tag() and st.get("items"):
+        if (not force and st.get("items")
+                and not uhr.spaeter_als(self._shop_tag(), st.get("date"))):
             return st
         items = titles.random_titles(self.SHOP_SIZE)
         for i, e in enumerate(items, 1):

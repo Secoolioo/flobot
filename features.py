@@ -47,11 +47,15 @@ CATALOG = [
     {"key": "food",     "label": "Kalorien",          "emoji": "🍕", "desc": "Essensfotos automatisch analysieren"},
     {"key": "words",    "label": "Wörter-Zähler",     "emoji": "📊", "desc": "Zählt & rankt gesagte Wörter"},
     {"key": "gehirn",   "label": "Gedächtnis",        "emoji": "🧠", "desc": "Flo merkt sich, wer ihr seid – 'flo gedaechtnis' zeigt es, 'flo vergiss mich' löscht es"},
+    {"key": "launen",   "label": "Launen",            "emoji": "🌦️", "desc": "Flo hat eine Tageslaune – Status + Ton (flo laune)"},
+    {"key": "nachhaken", "label": "Nachhaken",        "emoji": "🕵️", "desc": "merkt sich 'morgen Prüfung' und fragt nach – flo nachhaken aus"},
     {"key": "voice",    "label": "Voice-Gags",        "emoji": "🔊", "desc": "Soundboard, Text-to-Speech & Join-Sounds"},
     {"key": "chaos",    "label": "Chaos & Fun",       "emoji": "😈", "desc": "Roast, Hype, Reactions, DM-Konter, Bot-Hass"},
     {"key": "mod",      "label": "Moderation",        "emoji": "🛡️", "desc": "Löschen, Warnen, Timeout, Kick, Ban"},
     {"key": "bayern",   "label": "Bayrisch-Modus",    "emoji": "🥨", "desc": "Flo antwortet auf Boarisch"},
     {"key": "umfrage",  "label": "Umfragen",          "emoji": "🗳️", "desc": "flo umfrage <Thema> – echte Discord-Umfrage, Flo kommentiert das Ergebnis"},
+    {"key": "zitate",   "label": "Zitat der Woche",   "emoji": "💬", "desc": "Rechtsklick → Als Zitat speichern, sonntags Abstimmung"},
+    {"key": "geburtstage", "label": "Geburtstage",    "emoji": "🎂", "desc": "flo geburtstag 12.03. – Flo gratuliert, mit Coins"},
     {"key": "profil",   "label": "Profil-Lookup",     "emoji": "🔎", "desc": "flo check @wer – Profilbild in 4096 px, Badges, Namensverlauf"},
 ]
 _KEYS = {f["key"] for f in CATALOG}

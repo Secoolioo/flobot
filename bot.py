@@ -55,10 +55,12 @@ import floaktie
 import fun
 import food
 import games
+import geburtstage
 import guildcfg
 import handel
 import giveaway
 import laufzeit
+import laune
 import lotto
 import schulden
 import luxus
@@ -66,7 +68,11 @@ import media
 import merchant
 import moderation
 import music
+import musikstats
+import musikzustand
+import nachhaken
 import numfmt
+import playlists
 import profil
 import titles
 import umfrage
@@ -75,10 +81,12 @@ import schedule_logic
 import steal
 import store
 import terraria
+import uhr
 import voicegags
 import webpanel
 import gehirn
 import words
+import zitate
 
 # WICHTIG: Der Bot laeuft als 'python bot.py' - dieses Modul heisst dann
 # '__main__'. Die Feature-Module (admin, casino, games, economy) machen aber
@@ -106,6 +114,11 @@ logging.basicConfig(
 for _laut in ("httpx", "httpcore", "httpx2", "httpcore2", "openai", "aiohttp.access"):
     logging.getLogger(_laut).setLevel(logging.WARNING)
 log = logging.getLogger("dcbot")
+# Die relativen tasks.loop (alle 'seconds=...') planen ab jetzt statt ab der
+# letzten Soll-Zeit - sonst schlafen sie nach dem Uhrsprung zurueck kurz nach
+# dem Booten zwei Stunden lang (siehe uhr.py). Vor dem Bau des Clients, also
+# bevor der erste Loop startet.
+uhr.zeitsprungfest_machen()
 
 # Laeuft Flo in Docker? (docker/Dockerfile setzt FLO_LAUFZEIT=docker)
 IN_DOCKER = (os.getenv("FLO_LAUFZEIT", "").strip().lower() == "docker"
@@ -309,6 +322,23 @@ PROFIL_ENABLED = profil.setup()
 # Umfragen ('Flo umfrage <Thema>'): echte Discord-Umfragen, die KI denkt sich die
 # Antworten aus; ist eine vorbei, sagt Flo, was er vom Ergebnis haelt.
 UMFRAGE_ENABLED = umfrage.setup()
+# Playlists ('Flo playlist neu zocken'): eigene Wiedergabelisten je Server, per
+# Assistent zusammengestellt. Gehoeren zur Musik (Schalter 'music').
+PLAYLISTS_ENABLED = playlists.setup() if MUSIC_ENABLED else False
+# Warteschlange, die einen Neustart ueberlebt: Flo kommt nach einem Update von
+# selbst zurueck in den Kanal und spielt weiter, wo er war.
+MUSIKZUSTAND_ENABLED = musikzustand.setup() if MUSIC_ENABLED else False
+# Musik-Wrapped ('Flo wrapped'): Monatsstatistik und DJ des Monats.
+MUSIKSTATS_ENABLED = musikstats.setup() if MUSIC_ENABLED else False
+# Flos Launen ('Flo laune'): eine Tagesstimmung, die Status und Ton faerbt.
+LAUNEN_ENABLED = laune.setup()
+# Er haelt nach: "morgen Pruefung" -> Flo fragt hinterher nach. Wer was ist,
+# entscheidet die KI - ohne sie gibt es das nicht.
+NACHHAKEN_ENABLED = nachhaken.setup() if AI_ENABLED else False
+# Zitat der Woche: Rechtsklick -> "Als Zitat speichern", sonntags Abstimmung.
+ZITATE_ENABLED = zitate.setup()
+# Geburtstage ('Flo geburtstag 12.03.'): Flo gratuliert, mit Coins.
+GEBURTSTAGE_ENABLED = geburtstage.setup()
 # Laufzeit-Schalter: einzelne Funktionen per Panel an/aus (ueberlebt Neustarts).
 features.setup()
 # Einstellungen JE SERVER (Kanaele, Lautstaerke, Bayrisch, ...). Flo laeuft auf
@@ -327,6 +357,9 @@ FEATURE_LOADED = {
     "gehirn": GEHIRN_ENABLED, "words": WORDS_ENABLED, "voice": VOICE_GAGS_ENABLED, "chaos": FUN_ENABLED,
     "mod": MOD_ENABLED, "bayern": BAYERN_ENABLED, "profil": PROFIL_ENABLED,
     "arbeit": ARBEIT_ENABLED, "umfrage": UMFRAGE_ENABLED,
+    # Playlists, Radio, Abstimmung und Wrapped haengen am Schalter 'music'.
+    "launen": LAUNEN_ENABLED, "nachhaken": NACHHAKEN_ENABLED,
+    "zitate": ZITATE_ENABLED, "geburtstage": GEBURTSTAGE_ENABLED,
 }
 
 # Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle.
@@ -343,7 +376,8 @@ _HANDLED_SENTINELS = (basis.HANDLED,) + tuple(
     getattr(modul, "HANDLED") for modul in (
         moderation, music, casino, games, economy, media, food, words, luxus,
         voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
-        steal, bayern, guildcfg, profil, arbeit, umfrage)
+        steal, bayern, guildcfg, profil, arbeit, umfrage, playlists, musikstats,
+        laune, nachhaken, zitate, geburtstage)
     if getattr(modul, "HANDLED", None) is not None
     and getattr(modul, "HANDLED") is not basis.HANDLED
 )
@@ -381,6 +415,16 @@ GIVEAWAY_TICK_SECONDS = float(os.getenv("GIVEAWAY_TICK_SECONDS", "15"))
 # Takt, in dem die Kreide-Tafel nach offenen Posten schaut. Gemahnt wird pro
 # Person trotzdem nur einmal am Tag (SCHULDEN_MAHN_ABSTAND).
 SCHULDEN_MAHN_SECONDS = float(os.getenv("SCHULDEN_MAHN_SECONDS", "3600"))
+# Takt fuer das Server-Leben (Launen, Nachhaken, Zitat der Woche, Geburtstage,
+# Musik-Wrapped). Jedes Modul entscheidet selbst, ob etwas faellig ist - eine
+# Minute reicht, damit nichts merklich zu spaet kommt.
+ALLTAG_TAKT = float(os.getenv("ALLTAG_TAKT", "60") or "60")
+
+# Module mit Knoepfen, die einen Neustart ueberleben (DYNAMISCHE_KNOEPFE) - in
+# setup_hook angemeldet. Steht als Liste hier, damit der Test, der die Vorlagen
+# auf Ueberschneidungen prueft, genau dieselben Module sieht.
+DYNAMISCHE_MODULE = (lotto, floaktie, merchant, music, voicegags, giveaway, arbeit,
+                     playlists, zitate)
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -424,7 +468,9 @@ _NEED_MESSAGES = any(
      VOICE_GAGS_ENABLED, CASINO_ENABLED, MOD_ENABLED, MEDIA_ENABLED, FOOD_ENABLED,
      WORDS_ENABLED, ADMIN_ENABLED, LUXUS_ENABLED, HANDEL_ENABLED,
      STEAL_ENABLED, TERRARIA_ENABLED,
-     MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED, ARBEIT_ENABLED]
+     MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED, ARBEIT_ENABLED,
+     PLAYLISTS_ENABLED, MUSIKSTATS_ENABLED, LAUNEN_ENABLED, NACHHAKEN_ENABLED,
+     ZITATE_ENABLED, GEBURTSTAGE_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -600,6 +646,19 @@ _HELP_DATA = {
         ("flo lautstärke 50", "Lautstärke setzen"),
         ("flo join · leave", "Voice rein / raus"),
     ]),
+    # Eigene Kategorie statt noch mehr Zeilen bei Musik: die Musik-Karte soll
+    # nicht hoeher werden, und 'playlist' ist ein Befehl - deshalb auch kein
+    # Kategorie-Alias (siehe _HELP_CATEGORY_ALIASES).
+    "playlist": ("Playlists & Radio", 0x1ABC9C, [
+        ("flo playlist neu <name>", "Playlist bauen – Songs & Links reinkippen, dann 'fertig'"),
+        ("flo playlist <name>", "abspielen (· mix = gemischt)"),
+        ("flo playlists", "alle Playlists des Servers"),
+        ("flo playlist <name> dazu · löschen", "erweitern / wegwerfen (Ersteller & Mods)"),
+        ("flo queue speichern <name>", "aktuelle Warteschlange als Playlist"),
+        ("flo radio · radio aus", "📻 Endlos-Radio: Schlange leer → Flo spielt Ähnliches"),
+        ("flo skip", "ab 3 Leuten wird abgestimmt (Wünscher & Mods direkt)"),
+        ("flo wrapped", "🎧 Top-Songs des Monats & DJ des Monats"),
+    ]),
     "spiele": ("Spiele", 0xE67E22, [
         ("flo quiz", "Quizfrage - Erster gewinnt 50 Coins"),
         ("flo zahlenraten", "1-100 erraten, schnell = mehr Coins"),
@@ -687,6 +746,16 @@ _HELP_DATA = {
         ("flo gedaechtnis", "was Flo ueber dich weiss"),
         ("flo vergiss mich", "loescht alles davon"),
     ]),
+    # Wie 'playlist': eine eigene Karte, und kein Alias - 'zitate' und
+    # 'geburtstage' sind selbst Befehle.
+    "leben": ("Server-Leben", 0xE84393, [
+        ("flo laune", "wie Flo heute drauf ist – und wer schuld ist"),
+        ("flo nachhaken aus · an", "Flo merkt sich 'morgen Prüfung' und fragt nach"),
+        ("Rechtsklick → Apps → Als Zitat speichern", "Kandidat fürs Zitat der Woche"),
+        ("flo zitate · zitat der woche", "sonntags wird abgestimmt – Sieger als Bild"),
+        ("flo geburtstag 12.03.", "eintragen – Flo gratuliert, mit Coins"),
+        ("flo geburtstage", "die nächsten Geburtstage hier"),
+    ]),
     "arbeit": ("Arbeit", 0x2E86C1, [
         ("flo work", "Schicht antreten - Können statt Glück"),
         ("flo work liste", "welche Schichten es gibt"),
@@ -708,13 +777,16 @@ _HELP_DATA = {
 }
 # Kurz-Hinweise fuer die Uebersichts-Karte.
 _HELP_HINTS = {
-    "musik": "spiel · skip · queue · history", "spiele": "quiz · mathe · duelle",
+    "musik": "spiel · skip · queue · history",
+    "playlist": "playlist · radio · wrapped",
+    "spiele": "quiz · mathe · duelle",
     "economy": "level · daily · shop · händler · lotto", "casino": "13 Spiele · stats",
     "wörter": "wörter <wort>",
     "terraria": "alles aus dem Wiki",
     "chaos": "roast · rate · umfrage",
     "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
     "mod": "lösch · warn · ban", "ki": "einfach fragen · gedächtnis",
+    "leben": "laune · zitate · geburtstag",
     "arbeit": "work · lohnzettel · wordle", "profil": "check · avatar · banner",
     "einstellungen": "nur Admins",
 }
@@ -871,6 +943,19 @@ def _rolle_erwaehnt(message, content):
     return f"<@&{rolle.id}>" in (content or "")
 
 
+def _ist_notlage(content):
+    """Ein Notsignal in der Nachricht? (ai.FloAI._NOTLAGE_RE)
+
+    Darauf reagiert keine Automatik - weder eine Laune noch eine Nachfrage.
+    Im Zweifel (die Pruefung selbst scheitert) gilt es als Notlage: dann
+    schweigt die Automatik lieber einmal zu viel."""
+    try:
+        return ai.instance.ist_notlage(content)
+    except Exception:  # noqa: BLE001
+        log.exception("Notlagen-Pruefung fehlgeschlagen - Automatik bleibt still")
+        return True
+
+
 @contextlib.asynccontextmanager
 async def _tippen(channel):
     """'Flo tippt ...' - aber so, dass es nie eine Antwort verhindert.
@@ -961,6 +1046,12 @@ class FloBot(discord.Client):
         self._arbeit_views_ready = False
         # Und fuer die Selbsttests von KI und Musik (siehe _selbsttests_starten).
         self._selbsttest_gelaufen = False
+        # Die gesicherte Warteschlange wird nur nach dem START zurueckgeholt,
+        # nicht nach jedem Reconnect (on_ready feuert dann erneut).
+        self._musik_wiederhergestellt = False
+        # Welche Laune der Status gerade zeigt (siehe _launen_status) - aendert
+        # sie sich, wechselt der Status sofort statt erst nach einer Minute.
+        self._laune_im_status = ""
         # Der EINE Herunterfahr-Task (siehe close) - jeder weitere Aufruf wartet
         # auf ihn, statt ein zweites Mal zu sichern und abzumelden.
         self._schliessen = None
@@ -998,7 +1089,7 @@ class FloBot(discord.Client):
 
         Giveaway- und Wordle-Knopf stehen auch hier: sie waren normale Knoepfe
         in Views ohne Timeout, und discord.py hielt jede davon fuer immer fest."""
-        for modul in (lotto, floaktie, merchant, music, voicegags, giveaway, arbeit):
+        for modul in DYNAMISCHE_MODULE:
             knoepfe = getattr(modul, "DYNAMISCHE_KNOEPFE", ()) or ()
             if knoepfe:
                 self.add_dynamic_items(*knoepfe)
@@ -1096,6 +1187,16 @@ class FloBot(discord.Client):
                 continue
             speichern = getattr(inst, "_save", None) or inst._store.save
             schritte.append((name, speichern))
+        # Die laufende Warteschlange (Position, Pause, Radio) - sie soll den
+        # Neustart ueberleben. sichern() merkt sich dabei, dass Flo herunter-
+        # faehrt: das Trennen vom Voice beim Abmelden loescht den Stand dann
+        # nicht mehr.
+        if MUSIKZUSTAND_ENABLED:
+            schritte.append(("Musik-Zustand", musikzustand.sichern))
+        # Playlist-Assistenten mit Songs, die noch keiner mit 'fertig'
+        # abgeschlossen hat - sonst waeren die eingefuegten Songs weg.
+        if PLAYLISTS_ENABLED:
+            schritte.append(("Playlist-Assistenten", playlists.offene_sichern))
         # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
         # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
         schritte.append(("Speicher", store.alle_sichern))
@@ -1212,6 +1313,7 @@ class FloBot(discord.Client):
         """Liefert (key, emoji, label) je AKTIVEM Bereich - Reihenfolge = Button-Reihenfolge."""
         cats = [
             ("musik", "🎵", "Musik", MUSIC_ENABLED),
+            ("playlist", "🎶", "Playlists & Radio", MUSIC_ENABLED and PLAYLISTS_ENABLED),
             ("spiele", "🎮", "Spiele", GAMES_ENABLED),
             ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
             ("casino", "🎰", "Casino", CASINO_ENABLED),
@@ -1222,6 +1324,8 @@ class FloBot(discord.Client):
             ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
             ("mod", "🛡️", "Moderation", MOD_ENABLED),
             ("ki", "💬", "KI", AI_ENABLED),
+            ("leben", "🎂", "Server-Leben", LAUNEN_ENABLED or NACHHAKEN_ENABLED
+             or ZITATE_ENABLED or GEBURTSTAGE_ENABLED),
             ("arbeit", "🧰", "Arbeit", ARBEIT_ENABLED),
             ("profil", "🔎", "Profil", PROFIL_ENABLED),
             ("einstellungen", "⚙️", "Einstellungen", True),
@@ -1400,6 +1504,10 @@ class FloBot(discord.Client):
         """Wechselt den Status-Text (Bot bleibt 'idle') - hoechstens alle
         STATUS_WECHSEL_SEKUNDEN - und schreibt den Namensverlauf weg."""
         jetzt = time.monotonic()
+        # Hat Flo eine neue Laune, zeigt der Status sie im naechsten Takt -
+        # nicht erst, wenn der Spruch sowieso dran waere.
+        if LAUNEN_ENABLED and self._laune_gewechselt():
+            self._status_gewechselt = float("-inf")
         # Ohne Gateway gibt es niemanden, dem man den Status sagen koennte:
         # change_presence schreibt in den sterbenden Websocket ("Cannot write
         # to closing transport", 45x in einer Minute Netz-Wackler). Sobald die
@@ -1409,6 +1517,8 @@ class FloBot(discord.Client):
             self._status_gewechselt = jetzt
             weisheit = WEISHEITEN[self._weisheit_index % len(WEISHEITEN)]
             self._weisheit_index += 1
+            if LAUNEN_ENABLED:
+                weisheit = self._launen_status(weisheit)
             try:
                 await self.change_presence(
                     status=discord.Status.idle,
@@ -1429,6 +1539,41 @@ class FloBot(discord.Client):
                 await profil.flush()
             except Exception:
                 log.exception("Namensverlauf-Speichern fehlgeschlagen")
+
+    # --- Flos Laune im Status -------------------------------------------------
+    def _heim_gid(self):
+        """Wessen Laune der Status zeigt: die des Hauptservers, ohne GUILD_ID
+        die des ersten. Der Status gilt fuer Flo als Ganzes, nicht je Server."""
+        if GUILD_ID:
+            return GUILD_ID
+        return self.guilds[0].id if self.guilds else 0
+
+    def _heim_laune(self):
+        """(gid, an, Laune als kurzes Wort) des Heim-Servers - "" = keine."""
+        gid = self._heim_gid()
+        if not gid or not features.is_on_in(gid, "launen"):
+            return gid, False, ""
+        return gid, True, laune.stand(gid) or ""
+
+    def _laune_gewechselt(self):
+        """Ist die Laune eine andere als die, die der Status gerade zeigt?"""
+        try:
+            _gid, _an, stand = self._heim_laune()
+        except Exception:  # noqa: BLE001 - ein Spruch ist nie wichtig
+            log.debug("Launen-Stand nicht lesbar", exc_info=True)
+            return False
+        return stand != self._laune_im_status
+
+    def _launen_status(self, weisheit):
+        """Der Spruch fuer den Status - von Flos Laune, wenn sie etwas zu sagen
+        hat, sonst der normale. Hoechstens 128 Zeichen (Discords Grenze)."""
+        try:
+            gid, an, self._laune_im_status = self._heim_laune()
+            zeile = laune.status_zeile(gid, weisheit) if an else None
+        except Exception:  # noqa: BLE001
+            log.exception("Launen-Status fehlgeschlagen - nehme den normalen Spruch")
+            return weisheit
+        return (zeile or weisheit)[:128]
 
     @tasks.loop(seconds=economy.VOICE_TICK_SECONDS)
     async def voice_xp_loop(self):
@@ -1460,6 +1605,50 @@ class FloBot(discord.Client):
                 await music.heal_voice(guild)
             except Exception:
                 log.exception("Voice-Heal-Loop Fehler (%s) - laeuft weiter", guild.name)
+        # Im selben Takt: Playlist-Assistenten (Frist, Status-Nachricht) und
+        # der Schnappschuss der Warteschlangen. Getrennte try-Bloecke - der
+        # eine darf den anderen nie mitnehmen.
+        if PLAYLISTS_ENABLED:
+            try:
+                await playlists.tick(self)
+            except Exception:
+                log.exception("Playlist-Takt fehlgeschlagen - laeuft weiter")
+        if MUSIKZUSTAND_ENABLED:
+            try:
+                await musikzustand.takt()
+            except Exception:
+                log.exception("Musik-Zustand-Takt fehlgeschlagen - laeuft weiter")
+
+    @tasks.loop(seconds=ALLTAG_TAKT)
+    async def alltag_loop(self):
+        """Der Takt fuer das Server-Leben: Launen, Nachhaken, Zitat der Woche,
+        Geburtstage, Musik-Wrapped.
+
+        Was faellig ist, entscheidet jedes Modul selbst - und auf welchen
+        Servern es an ist (features.is_on_in). Wer nach der Wanduhr plant,
+        fragt uhr.stabil() und merkt sich, was er erledigt hat, als Schluessel,
+        der nur vorwaerts laeuft: so feuert nach einem Uhrsprung nichts doppelt,
+        und das Nachhol-Fenster sorgt dafuer, dass kein Tag ausfaellt."""
+        # Bei jedem Takt einmal auf die Uhr schauen - so faellt ein Sprung auch
+        # dann auf, wenn gerade kein Modul nach ihr fragt.
+        uhr.stabil()
+        if not self.gateway_stabil():
+            # Gerade neu verbunden oder weg: Server und Kanaele sind noch nicht
+            # wieder einsortiert. Die naechste Runde holt es nach.
+            return
+        for name, geladen, modul in (
+            ("Launen", LAUNEN_ENABLED, laune),
+            ("Nachhaken", NACHHAKEN_ENABLED, nachhaken),
+            ("Zitate", ZITATE_ENABLED, zitate),
+            ("Geburtstage", GEBURTSTAGE_ENABLED, geburtstage),
+            ("Musik-Wrapped", MUSIKSTATS_ENABLED, musikstats),
+        ):
+            if not geladen:
+                continue
+            try:
+                await modul.tick(self)
+            except Exception:
+                log.exception("%s-Takt fehlgeschlagen - laeuft weiter", name)
 
     @tasks.loop(seconds=EVENT_INTERVAL_SECONDS)
     async def event_loop(self):
@@ -2104,6 +2293,12 @@ class FloBot(discord.Client):
 
         if message.author.bot:
             if message.type is discord.MessageType.poll_result:
+                # Flos eigene Zitat-Abstimmung gehoert dem Zitate-Modul - die
+                # normale Umfrage wuerde sonst ueber das Ergebnis laestern, statt
+                # den Sieger zu kueren. Erst danach alle anderen Umfragen.
+                if self._zitat_ergebnis(message):
+                    self._spawn(zitate.ergebnis(message))
+                    return
                 self._umfrage_vorbei(message)
                 return
             # Flo verachtet fremde Bots: postet ein ANDERER Bot (nicht Flo selbst),
@@ -2128,6 +2323,12 @@ class FloBot(discord.Client):
         # Alle Schalter ab hier gelten fuer GENAU DIESEN Server: was der
         # Nachbarserver abgeschaltet hat, geht hier trotzdem.
         _on = features.fuer(message.guild.id)
+        # Was Flo von sich aus tut (Launen, Nachhaken), sieht eine Notlage NIE:
+        # wer am Boden ist, bekommt keine Laune ab und keine Nachfrage, nur die
+        # KI mit ihrer Notlagen-Regel. Gerechnet nur, wenn hier eins davon laeuft.
+        mit_nachhaken = NACHHAKEN_ENABLED and _on("nachhaken")
+        mit_laune = LAUNEN_ENABLED and _on("launen")
+        notlage = (mit_nachhaken or mit_laune) and _ist_notlage(content)
 
         # Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat (auch ohne direkt
         # angesprochen zu sein), damit er dem Gespraech folgen kann, wenn man ihn fragt.
@@ -2159,6 +2360,13 @@ class FloBot(discord.Client):
                 gehirn.note_message(message)
             except Exception:
                 log.exception("Gedaechtnis-Hook fehlgeschlagen")
+        # Er haelt nach: kuendigt hier jemand etwas an ("morgen Pruefung")?
+        # Synchron und billig - die KI fragt erst gebuendelt im Alltags-Takt.
+        if mit_nachhaken and not notlage:
+            try:
+                nachhaken.note_message(message)
+            except Exception:
+                log.exception("Nachhaken-Hook fehlgeschlagen")
         # Kalorien-Channel: Essensfoto -> automatische Naehrwert-Analyse (nebenher).
         if FOOD_ENABLED and _on("food"):
             self._spawn(food.on_message_passive(message))
@@ -2170,6 +2378,16 @@ class FloBot(discord.Client):
                     return
             except Exception:
                 log.exception("Giveaway-Hook fehlgeschlagen")
+        # Playlist-Assistent: wer gerade eine Playlist baut, kippt hier Songs
+        # und Links rein - keine Befehle, kein KI-Futter. Steht VOR der
+        # Ansprache, damit 'flo fertig'/'flo stop' den Assistenten abschliesst
+        # statt die Musik zu stoppen.
+        if MUSIC_ENABLED and PLAYLISTS_ENABLED and _on("music"):
+            try:
+                if await playlists.on_message_passive(message):
+                    return
+            except Exception:
+                log.exception("Playlist-Hook fehlgeschlagen")
         # Laufende Spiele/Events (Counting, Quiz-Antwort, Zahlenraten, Schnell-Event).
         # Gibt True zurueck, wenn die Nachricht ein Spielzug war -> dann sind wir fertig.
         if GAMES_ENABLED and _on("games"):
@@ -2195,7 +2413,19 @@ class FloBot(discord.Client):
             if (isinstance(ref, discord.Message) and self.user is not None
                     and ref.author.id == self.user.id):
                 angesprochen = True
+        # Flos Laune zaehlt mit: wer ihn zuspammt, wer ihn links liegen laesst.
+        if mit_laune and not notlage:
+            try:
+                laune.nachricht(message, angesprochen)
+            except Exception:
+                log.exception("Launen-Hook fehlgeschlagen")
         if not angesprochen:
+            # Er haelt nach: ist bei dieser Person etwas faellig, fragt Flo
+            # jetzt nach - nebenher. In der Sendepause nicht: das waere Flo,
+            # der von sich aus redet.
+            if (mit_nachhaken and not notlage
+                    and not (ADMIN_ENABLED and admin.is_locked())):
+                self._spawn(nachhaken.vielleicht_nachfragen(message))
             # Normale Chat-Nachricht (kein Befehl an Flo): zaehlt als Server-
             # Aktivitaet fuer den Aktienkurs. Nur die HAUPT-Guild - Nachrichten aus
             # fremden Servern haben den Kurs vorher mitbewegt.
@@ -2258,6 +2488,10 @@ class FloBot(discord.Client):
             (MOD_ENABLED and _on("mod"), moderation.handle),
             (ADMIN_ENABLED, admin.handle),
             (True, guildcfg.handle),
+            # Vor der Musik: 'flo playlist zocken' ist eine gespeicherte Liste,
+            # keine YouTube-Suche nach "zocken".
+            (MUSIC_ENABLED and PLAYLISTS_ENABLED and _on("music"), playlists.handle),
+            (MUSIKSTATS_ENABLED and _on("music"), musikstats.handle),
             (MUSIC_ENABLED and _on("music"), music.handle),
             (VOICE_GAGS_ENABLED and _on("voice"), voicegags.handle),
             (GAMES_ENABLED and _on("games"), games.handle),
@@ -2275,6 +2509,12 @@ class FloBot(discord.Client):
             (FLOAKTIE_ENABLED and not _on("floaktie"), floaktie.handle_aus),
             (PROFIL_ENABLED and _on("profil"), profil.handle),
             (UMFRAGE_ENABLED and _on("umfrage"), umfrage.handle),
+            # Server-Leben. Zitate MUSS vor media stehen: dessen Quote-Meme
+            # machte aus 'flo zitat der woche' sonst ein Bild.
+            (ZITATE_ENABLED and _on("zitate"), zitate.handle),
+            (GEBURTSTAGE_ENABLED and _on("geburtstage"), geburtstage.handle),
+            (LAUNEN_ENABLED and _on("launen"), laune.handle),
+            (NACHHAKEN_ENABLED and _on("nachhaken"), nachhaken.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
             (GEHIRN_ENABLED and _on("gehirn"), gehirn.handle),
             (WORDS_ENABLED and _on("words"), words.handle),
@@ -2428,6 +2668,23 @@ class FloBot(discord.Client):
         return bool(gid) and guildcfg.an(gid, "aktie_zaehlt") \
             and features.is_on_in(gid, "floaktie")
 
+    def _zitat_ergebnis(self, message):
+        """Ist dieses Umfrage-Ergebnis Flos Abstimmung zum Zitat der Woche?
+
+        Nur Flos EIGENE Umfragen (das Ergebnis kommt im Namen dessen, der sie
+        gestartet hat). Der Funktionsschalter wird hier bewusst NICHT gefragt:
+        schaltet ein Server die Zitate ab, waehrend die Abstimmung laeuft,
+        entscheidet das Modul, was mit dem Ergebnis passiert - an die normale
+        Umfrage faellt es trotzdem nicht."""
+        if not (ZITATE_ENABLED and message.guild is not None
+                and self.user is not None and message.author.id == self.user.id):
+            return False
+        try:
+            return bool(zitate.ist_eigene_umfrage(message))
+        except Exception:  # noqa: BLE001 - dann eben wie jede andere Umfrage
+            log.exception("Zitat-Abstimmung nicht erkennbar")
+            return False
+
     def _umfrage_vorbei(self, message):
         """Eine Umfrage ist abgelaufen -> Flo kommentiert das Ergebnis.
 
@@ -2444,13 +2701,17 @@ class FloBot(discord.Client):
     RECHTSKLICK_ABKUEHLEN = 20   # Sekunden je Nutzer - ein Rechtsklick kostet KI
 
     def _rechtsklick_anmelden(self):
-        """'Flo, sag was dazu' (Nachricht) und 'Roasten' (Person) anmelden.
+        """'Flo, sag was dazu' und 'Als Zitat speichern' (Nachricht) und
+        'Roasten' (Person) anmelden.
 
         Nur auf Servern (in DMs gibt es dort nichts zu kommentieren). Bei
         Discord angemeldet wird im Hintergrund und nur, wenn sich die Befehle
-        geaendert haben - siehe _befehle_abgleichen."""
+        geaendert haben - siehe _befehle_abgleichen. Angemeldet wird immer,
+        auch wenn ein Teil gerade aus ist: sonst gaebe jedes An- und Abschalten
+        einen neuen Abgleich mit Discord (_rk_darf sagt dann "abgeschaltet")."""
         nur_server = app_commands.AppCommandContext(guild=True)
         for name, rueckruf in (("Flo, sag was dazu", self._rk_sag_was),
+                               ("Als Zitat speichern", self._rk_zitat),
                                ("Roasten", self._rk_roasten)):
             try:
                 self.tree.add_command(app_commands.ContextMenu(
@@ -2567,6 +2828,25 @@ class FloBot(discord.Client):
             await interaction.followup.send(f"-# zu {nachricht.jump_url}\n{antwort}"[:2000])
         except discord.HTTPException:
             log.exception("KI-Fehler: Rechtsklick-Antwort konnte nicht gesendet werden")
+
+    async def _rk_zitat(self, interaction, nachricht: discord.Message):
+        """Rechtsklick auf eine Nachricht -> Kandidat fuers Zitat der Woche."""
+        if not await self._rk_darf(interaction, "zitate", ZITATE_ENABLED):
+            return
+        log.info("Rechtsklick 'Als Zitat speichern' von %s auf %s",
+                 interaction.user.display_name, nachricht.id)
+        try:
+            with ai.guild_kontext(interaction.guild_id):
+                await zitate.rechtsklick(interaction, nachricht)
+        except Exception:  # noqa: BLE001 - die Interaktion bekommt trotzdem ein Wort
+            log.exception("Rechtsklick 'Als Zitat speichern' fehlgeschlagen")
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "Da ist was schiefgelaufen. Das Zitat ist nicht gespeichert.",
+                        ephemeral=True)
+            except discord.HTTPException:
+                pass
 
     async def _rk_roasten(self, interaction, person: discord.Member):
         """Rechtsklick auf eine Person -> Flo roastet sie oeffentlich."""
@@ -2792,6 +3072,15 @@ class FloBot(discord.Client):
             self.voice_xp_loop.start()
         if MUSIC_ENABLED and not self.voice_heal_loop.is_running():
             self.voice_heal_loop.start()
+        # Die Warteschlange von vor dem Neustart zurueckholen - nur einmal je
+        # Prozess, ein Reconnect ist kein Neustart.
+        if MUSIKZUSTAND_ENABLED and not self._musik_wiederhergestellt:
+            self._musik_wiederhergestellt = True
+            self._spawn(musikzustand.wiederherstellen(self))
+        if (any((LAUNEN_ENABLED, NACHHAKEN_ENABLED, ZITATE_ENABLED,
+                 GEBURTSTAGE_ENABLED, MUSIKSTATS_ENABLED))
+                and not self.alltag_loop.is_running()):
+            self.alltag_loop.start()
         if GAMES_ENABLED and not self.event_loop.is_running():
             self.event_loop.start()
         if MERCHANT_ENABLED and not self.merchant_loop.is_running():

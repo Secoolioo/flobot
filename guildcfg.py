@@ -148,6 +148,16 @@ KATALOG = [
                 "MUSIC_MAX_QUEUE",
                 "So viele Songs dürfen hier gleichzeitig warten.", "Musik",
                 minimum=1, maximum=500),
+    Einstellung("wrapped_channel", "Musik-Wrapped-Kanal", "channel", 0, "",
+                "Wohin Flo am Monatsanfang das Musik-Wrapped postet. Aus = in "
+                "den Ansagen-Kanal.", "Musik"),
+    Einstellung("dj_belohnung", "DJ des Monats: Coins", "zahl", 5000, "",
+                "So viel bekommt, wer im Monat die meisten Songs gewünscht hat. "
+                "0 = nur die Ehre.", "Musik", minimum=0, maximum=1_000_000),
+    Einstellung("dj_rolle", "DJ des Monats: Rolle", "an_aus", False, "",
+                "Flo gibt dem DJ des Monats die Rolle „🎧 DJ des Monats“ (und "
+                "nimmt sie dem vorigen). Braucht „Rollen verwalten“.", "Musik",
+                nur_haupt=True),
 
     # --- Arbeit & Wort des Tages -----------------------------------------
     # Standard ist der gigachat des Heimatservers - dort soll das Wort des
@@ -197,6 +207,19 @@ KATALOG = [
                 "Ab 14 Tagen Verzug eine neutrale Notiz im Ansagen-Kanal – "
                 "ohne Beträge, nur „X hat einen überfälligen Posten bei Y“. "
                 "Standard: aus.", "Verhalten"),
+
+    # --- Server-Leben ----------------------------------------------------
+    Einstellung("zitat_channel", "Zitat-der-Woche-Kanal", "channel", 0, "",
+                "Wohin sonntags die Abstimmung und das Siegerzitat gehen. Aus = "
+                "in den Ansagen-Kanal.", "Server-Leben"),
+    Einstellung("geburtstag_channel", "Geburtstags-Kanal", "channel", 0, "",
+                "Wo Flo gratuliert. Aus = im Ansagen-Kanal.", "Server-Leben"),
+    Einstellung("geburtstag_coins", "Geburtstags-Geschenk", "zahl", 2500, "",
+                "So viele Coins gibt es zum Geburtstag. 0 = nur der Glückwunsch.",
+                "Server-Leben", minimum=0, maximum=1_000_000),
+    Einstellung("geburtstag_rolle", "Geburtstags-Rolle", "an_aus", False, "",
+                "Am Geburtstag die Rolle „🎂 Geburtstagskind“ – einen Tag lang. "
+                "Braucht „Rollen verwalten“.", "Server-Leben", nur_haupt=True),
 
     # --- Voice -----------------------------------------------------------
     # Lagen bis eben in voicegags.py in einem EIGENEN Speicher und galten fuer

@@ -3537,7 +3537,6 @@ def test_musik_panel_ist_v2_und_ueberlebt_neustarts():
     """Vorher war jedes Panel nach einem Neustart tot ("Interaktion
     fehlgeschlagen"), obwohl die Musik weiterlief. Jetzt: V2-Nachricht, alle
     Knoepfe DynamicItems mit fester custom_id, angemeldet in setup_hook."""
-    import inspect
     import discord
     import bot
     import music
@@ -3555,7 +3554,7 @@ def test_musik_panel_ist_v2_und_ueberlebt_neustarts():
         assert ids == {f"flo:musik:{a}" for a in
                        ("pause", "skip", "stop", "queue", "lyrics", "loop", "tempo")}, ids
         assert set(music.DYNAMISCHE_KNOEPFE) == {music.MusikKnopf, music.MusikTempo}
-        assert "music" in inspect.getsource(bot.FloBot.setup_hook)
+        assert music in bot.DYNAMISCHE_MODULE            # setup_hook meldet sie an
         # Aus der Nachricht zurueck: der Knopf weiss wieder, was er ist.
         knopf = asyncio.run(music.MusikKnopf.from_custom_id(
             None, discord.ui.Button(label="Skip", custom_id="flo:musik:skip"),

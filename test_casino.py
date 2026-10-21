@@ -298,15 +298,8 @@ def test_keno_tabelle():
 def test_casino_bilanz_gewonnen_verloren():
     """record() zaehlt Brutto-Gewinne und -Verluste getrennt; Alt-Profile ohne
     die neuen Felder werden aus dem Netto geseedet; die Karte rendert damit."""
-    class FakeStore:
-        def __init__(self):
-            self.data = {"stats": {}}
-
-        async def save(self):
-            pass
-
     alt_stats, alt_enabled = casino.instance._stats, casino.instance._enabled
-    casino.instance._stats, casino.instance._enabled = FakeStore(), True
+    casino.instance._stats, casino.instance._enabled = _FakeStore({"stats": {}}), True
     try:
         asyncio.run(casino.record(1, "slots", 100, 250))   # +150 gewonnen
         asyncio.run(casino.record(1, "slots", 100, 0))     # -100 verloren

@@ -270,15 +270,8 @@ def test_handel_buchhaltung():
     economy.add_coins bucht mit echtem Delta und erkanntem Quell-Modul."""
     import handel
 
-    class FakeStore:
-        def __init__(self, data):
-            self.data = data
-
-        async def save(self):
-            pass
-
     alt = (handel.instance._store, handel.instance._enabled)
-    handel.instance._store, handel.instance._enabled = FakeStore({"users": {}}), True
+    handel.instance._store, handel.instance._enabled = _FakeStore({"users": {}}), True
     try:
         handel.record(7, +150, "casino", 1150)
         handel.record(7, -100, "casino", 1050)
@@ -295,7 +288,7 @@ def test_handel_buchhaltung():
 
         # economy-Integration: echtes Delta + Quelle (Aufrufer-Modul) landen hier.
         alt_eco = (economy.instance._store, economy.instance._enabled)
-        economy.instance._store = FakeStore({"users": {}})
+        economy.instance._store = _FakeStore({"users": {}})
         economy.instance._enabled = True
         try:
             economy.add_coins(8, 500)
@@ -3458,10 +3451,24 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
         terraria: ("terraria",),
         handel: ("handel",),
     }
+    import ai
     for modul in mit_argumenten:
         modul.setup()
 
     abstuerze = []
+    # Kein echtes Netz: 'terraria <boese eingabe>' fragte bisher das ECHTE
+    # Terraria-Wiki - 47 Anfragen je Lauf, und die geteilte HTTP-Session, die
+    # dabei entstand, schloss niemand ("Unclosed client session" am Ende von
+    # lauf.py). Der Test prueft Eingaben, nicht das Wiki.
+    wiki_fragen = []
+
+    async def kein_wiki(params):
+        wiki_fragen.append(dict(params))
+        return None
+
+    alt_wiki = terraria.instance._api_get
+    terraria.instance._api_get = kein_wiki
+    session_vorher = ai.instance._http
 
     async def alles_durchspielen():
         for modul, befehle in mit_argumenten.items():
@@ -3475,7 +3482,13 @@ def test_kein_befehl_stuerzt_bei_feindlicher_eingabe_ab():
                             f"{modul.__name__} '{befehl}' mit {eingabe[:30]!r}: "
                             f"{type(exc).__name__}: {str(exc)[:100]}")
 
-    asyncio.run(alles_durchspielen())
+    try:
+        asyncio.run(alles_durchspielen())
+    finally:
+        terraria.instance._api_get = alt_wiki
+    assert wiki_fragen, "der Terraria-Befehl hat das Wiki gar nicht gefragt"
+    # Und keine neue HTTP-Session, die hinterher offen bliebe.
+    assert ai.instance._http is session_vorher, "ein Befehl hat doch ins Netz gegriffen"
     # Doppelte Meldungen zusammenfassen - sonst steht derselbe Fehler 47-mal da.
     eindeutig = sorted(set(abstuerze))
     assert not eindeutig, (f"{len(abstuerze)} Abstuerze bei feindlicher Eingabe:\n  "
@@ -3665,7 +3678,13 @@ def test_ein_sentinel_fuer_alle():
 
 def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
     """Der Rauchtest nuetzt nichts, wenn er ein Modul vergisst, das bot.py
-    aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten."""
+    aufruft. Deshalb: die Liste hier gegen die echte Kette in bot.py halten.
+
+    Neue Module tragen ihre Rauch-Befehle nicht hier ein, sondern in ihrer
+    eigenen Testdatei (RAUCHPROBEN, gefahren von test_rauchproben_der_neuen_
+    module) - auch die zaehlen als abgedeckt."""
+    import importlib
+    import lauf
     quelle = open("bot.py", encoding="utf-8").read()
     # Anker bewusst nur auf den NAMEN, nicht auf die Schreibweise dahinter:
     # als _HANDLED_SENTINELS von 'tuple(' auf '(basis.HANDLED,) + tuple(' wechselte,
@@ -3687,8 +3706,13 @@ def test_rauchtest_deckt_die_kette_aus_bot_py_ab():
         "admin",      # nur Besitzer, veraendert fremde Konten
         "bayern",     # schaltet eine Server-Einstellung um
     }
+    in_dateien = {modul.__name__
+                  for datei in lauf.TESTDATEIEN
+                  for modul, _befehle in getattr(importlib.import_module(datei),
+                                                 "RAUCHPROBEN", ()) or ()}
     fehlt = sorted(m for m in kette
-                   if m not in ausgenommen and f"({m}, (" not in eigen)
+                   if m not in ausgenommen and f"({m}, (" not in eigen
+                   and m not in in_dateien)
     assert not fehlt, (f"bot.py ruft diese Module auf, der Rauchtest kennt sie "
                        f"aber nicht: {fehlt}")
 

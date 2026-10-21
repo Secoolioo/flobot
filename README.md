@@ -212,6 +212,26 @@ NTP, ob der eingerichtete Dienst wirklich auf `time-sync.target` wartet und ob
 der Zukunft liegen, nicht mehr ernst: Raub- und Schicht-Cooldown laufen dann
 einmal normal lang, und der Aktien-Analyst fragt sofort neu.
 
+Und falls die Uhr doch springt, während Flo schon läuft (`uhr.py`):
+
+* **Kein Takt schläft zwei Stunden.** discord.py plant seine Loops nach der
+  Wanduhr — nach dem Sprung zurück lag die nächste Runde von Giveaways,
+  Voice-Wächter, Status und Aktie zwei Stunden in der Zukunft. `bot.py` flickt
+  das beim Start (`uhr.zeitsprungfest_machen`): relative Loops planen ab
+  *jetzt*. Ändert eine neue discord.py-Version das Innenleben, steht eine
+  Warnung im Log, und es bleibt beim alten Verhalten — kein Absturz.
+* **Nichts passiert zweimal.** Wer nach der Uhr plant (Lotto-Ziehung, Shop,
+  Aktien-Chart, alles aus dem Server-Leben), merkt sich, was erledigt ist, als
+  Schlüssel (`2026-10-21`, `2026-10`, `2026-W43`), der nur **vorwärts** zählt
+  (`uhr.spaeter_als`, nie `!=`). Vorher wurde bei einem Sprung über den
+  Monatswechsel derselbe Lotto-Monat zwei- bis dreimal ausgelost.
+* **Erst planen, wenn die Uhr stimmt.** `uhr.stabil()` ist in den ersten fünf
+  Minuten nach dem Start (`UHR_START_GNADE`) und fünf Minuten nach einem Sprung
+  falsch; so lange wartet, wer nach der Uhr plant, und holt danach nach.
+
+Die Loops mit fester Uhrzeit (2-Uhr-Shop, 18-Uhr-Erinnerung) regelt discord.py
+selbst: wachen sie zu früh auf, legen sie sich bis zur Uhrzeit wieder hin.
+
 ### Wirtschaft zurücksetzen
 
 ```bash
@@ -407,6 +427,19 @@ Taktrate über `GEHIRN_TICK_SECONDS` (Standard 600).
 > alle 10 Minuten dieselben 120 Zeilen und der Puffer nimmt nie wieder etwas
 > Neues auf.
 
+### Flos Launen
+
+*Im Bau* — das Gerüst steht (`laune.py`, Schalter `launen`). Fest ist schon:
+die Laune färbt nur den Ton und steht im Prompt **hinter** der Grenze und vor
+dem Schlusswort; bei einer Notlage kommt sie gar nicht erst mit, und keine
+Laune reagiert auf eine Notlage. Der Status zeigt die Laune des Hauptservers.
+
+### Er hält nach
+
+*Im Bau* — das Gerüst steht (`nachhaken.py`, Schalter `nachhaken`, an — wer
+nicht will: `flo nachhaken aus`). Fest ist schon: Notlagen sieht er nie, und in
+der Sendepause fragt er nicht nach.
+
 ---
 
 ## Musik
@@ -506,6 +539,30 @@ bekannte „Queue voll, spielt aber nicht". Dagegen jetzt zweierlei:
 
 Dazu heilt der Wächter zwei weitere Sackgassen: ein Song, der während eines
 Voice-Ausfalls endet, und ein Geister-Track nach `stop`.
+
+### Playlists
+
+*Im Bau* — das Gerüst steht (`playlists.py`, `musikquellen.py`; Hilfe-Seite
+„Playlists & Radio").
+
+### Endlos-Radio
+
+*Im Bau.*
+
+### Neustartfeste Warteschlange
+
+*Im Bau* — das Gerüst steht (`musikzustand.py`): die Musik meldet schon jede
+Änderung (Start, Pause, Einreihen, Songwechsel, Parken), `flo stop` löscht den
+Stand, und beim Beenden wird er gesichert.
+
+### Abstimmung zum Überspringen
+
+*Im Bau.*
+
+### Musik-Wrapped
+
+*Im Bau* — das Gerüst steht (`musikstats.py`). Jeder Song trägt dafür jetzt
+mit, **wer** ihn gewünscht hat (ID, nicht nur der Name — auch im Verlauf).
 
 ---
 
@@ -666,15 +723,36 @@ Das sind **echte Discord-Umfragen**: Discord zählt, jeder hat eine Stimme, und 
 laufen auch weiter, wenn Flo neu startet. Ist eine vorbei, sagt Flo, was er vom
 Ergebnis hält. Über Hetze lässt er nicht abstimmen.
 
-**Rechtsklick** (Apps-Menü) an einer Nachricht: *Flo, sag was dazu* — an einer
-Person: *Roasten*. Flo antwortet öffentlich; dieselben Schalter wie im Chat
-(KI bzw. Chaos, Sendepause), 20 s Abkühlzeit je Person. Angemeldet wird beim
-Start, aber nur, wenn sich die Befehle geändert haben (`data/befehle.json`).
+**Rechtsklick** (Apps-Menü) an einer Nachricht: *Flo, sag was dazu* und *Als
+Zitat speichern* — an einer Person: *Roasten*. Dieselben Schalter wie im Chat
+(KI, Zitate bzw. Chaos, Sendepause), 20 s Abkühlzeit je Person. Angemeldet wird
+beim Start, aber nur, wenn sich die Befehle geändert haben (`data/befehle.json`)
+— alle drei immer, auch wenn ein Teil aus ist: sonst gäbe jedes An- und
+Abschalten einen neuen Abgleich mit Discord.
 
 **Rechte:** Umfragen brauchen „Umfragen erstellen“, der Rechtsklick den Scope
 `applications.commands`. Den Einladungslink mit allen Rechten schreibt Flo ins
 Log, wenn er auf keinem Server ist (`bot.invite_url()`). Wer Flo früher
 eingeladen hat, lädt ihn einfach noch einmal ein — das ergänzt nur Rechte.
+
+---
+
+## Server-Leben
+
+Was Flo von sich aus für den Server tut. Alles läuft über einen gemeinsamen
+Takt (`alltag_loop`, `ALLTAG_TAKT`, Standard eine Minute); was fällig ist,
+entscheidet jedes Modul selbst, nach der Uhr nur, wenn `uhr.stabil()` ist.
+Hilfe-Seite: „Server-Leben" (`flo hilfe`).
+
+### Zitat der Woche
+
+*Im Bau* — das Gerüst steht (`zitate.py`, Schalter `zitate`, Rechtsklick *Als
+Zitat speichern*). Das Ergebnis der Sonntags-Abstimmung geht an `zitate`, nicht
+an den normalen Umfrage-Kommentar.
+
+### Geburtstage
+
+*Im Bau* — das Gerüst steht (`geburtstage.py`, Schalter `geburtstage`).
 
 ---
 
@@ -1210,7 +1288,7 @@ handle = instance.handle          # Modul-Aliase danach
 
 `bot.py` hält die Handler-Kette (der erste, der nicht `None` liefert, gewinnt),
 die Hintergrund-Loops und die Feature-Schalter. `features.py`, `FEATURE_LOADED`
-und die Handler-Kette führen dieselben 22 Schlüssel — `test_feature_schluessel_
+und die Handler-Kette führen dieselben 29 Schlüssel — `test_feature_schluessel_
 passen_ueberall_zusammen` prüft das in beide Richtungen und findet auch einen
 Schalter, den niemand abfragt.
 
@@ -1254,6 +1332,12 @@ Avatar-Wege laufen bereits über REST-Fallbacks.
 | `basis.py` | `FeatureBasis` — die Ansprache, an EINER Stelle |
 | `store.py` | JSON-Speicher, atomar + Sicherung |
 | `numfmt.py` | Zahlen-Formatierung und `ist_zahl()` |
+| `uhr.py` | Uhr, die Sprünge übersteht: Schlüssel, `stabil()`, zeitsprungfeste Loops |
+| `playlists.py` / `musikquellen.py` | Playlists je Server, eingefügte Links und Zeilen |
+| `musikzustand.py` | Warteschlange über den Neustart retten |
+| `musikstats.py` | Musik-Wrapped, DJ des Monats |
+| `laune.py` / `nachhaken.py` | Flos Launen, „er hält nach" |
+| `zitate.py` / `geburtstage.py` | Zitat der Woche, Geburtstage |
 
 ### Daten
 
@@ -1262,6 +1346,11 @@ Alles unter `data/` (nicht im Git). `store.JsonStore` schreibt atomar
 `.bak` mit. Ist eine Datei unlesbar, wird sie als `.kaputt-<Zeitstempel>`
 beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 überschrieben**.
+
+Neu dazu kommen mit den Teilen auf dem Fundament: `playlists.json`,
+`musikzustand.json`, `musikstats.json`, `launen.json`, `nachhaken.json`,
+`zitate.json` und `geburtstage.json` — alle je Server, nichts wandert zwischen
+Servern.
 
 ---
 
@@ -1296,6 +1385,8 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 | `MUSIC_VORLADEN` | `1` | nächsten Song schon während des aktuellen auflösen (keine Stille dazwischen) |
 | `MUSIC_IDLE_SEKUNDEN` | `300` | so lange bleibt Flo ohne Musik oder allein im Voice (`0` = für immer) |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
+| `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
+| `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |
 
 Alle weiteren stehen als `os.getenv(...)` bei den Konstanten im jeweiligen Modul,
 jeweils mit Kommentar, warum der Wert so gewählt ist.
