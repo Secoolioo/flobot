@@ -21,7 +21,9 @@ WAS BEWUSST NICHT PASSIERT
     Adresse, Links). Ein Bot, der heimlich Dossiers anlegt, waere genau das
     Gegenteil von einem Spass-Feature.
   - Nichts Unsichtbares. Jeder kann sehen, was Flo ueber ihn weiss, und es
-    loeschen:  'Flo gedaechtnis'  und  'Flo vergiss mich'.
+    loeschen:  'Flo gedaechtnis'  und  'Flo vergiss mich'. Dazu gehoert auch,
+    worauf Flo noch wartet ('morgen hab ich Pruefung', nachhaken.py) - das
+    zeigt 'gedaechtnis' mit, und 'vergiss mich' loescht es mit.
 
 Persistenz: data/gehirn.json ueber JsonStore, Speichern debounced.
 """
@@ -367,7 +369,8 @@ class Gehirn(FeatureBasis):
         return self._sortiert((self._person(gid, uid).get("fakten") or []))
 
     def vergiss(self, gid, uid):
-        """Loescht alles ueber eine Person. Gibt zurueck, wie viel weg ist."""
+        """Loescht alles ueber eine Person. Gibt zurueck, wie viel weg ist -
+        samt dem, worauf Flo bei ihr noch wartet (nachhaken)."""
         if not self.is_enabled():
             return 0
         leute = self._guild(gid)["leute"]
@@ -379,7 +382,29 @@ class Gehirn(FeatureBasis):
         self._guild(gid)["puffer"] = [m for m in puffer if m.get("wer") != int(uid)]
         if weg:
             self._merken()
-        return weg
+        return weg + self._nachhaken_vergessen(gid, uid)
+
+    # --- Was 'nachhaken' ueber die Person weiss -----------------------------
+    # Ein Teil von "was Flo ueber dich weiss": 'morgen hab ich Pruefung' liegt
+    # dort, bis Flo nachgefragt hat. 'gedaechtnis' zeigt es, 'vergiss mich'
+    # loescht es mit. nachhaken wird erst hier importiert (es importiert gehirn).
+    @staticmethod
+    def _warte_zeilen(gid, uid):
+        try:
+            import nachhaken
+            return list(nachhaken.zeilen_fuer(gid, uid) or [])
+        except Exception:  # noqa: BLE001 - ohne Nachhaken eben nichts
+            log.exception("Gedaechtnis: Nachhaken nicht lesbar")
+            return []
+
+    @staticmethod
+    def _nachhaken_vergessen(gid, uid):
+        try:
+            import nachhaken
+            return int(nachhaken.vergiss(gid, uid) or 0)
+        except Exception:  # noqa: BLE001
+            log.exception("Gedaechtnis: Nachhaken nicht geloescht")
+            return 0
 
     # --- Befehle ------------------------------------------------------------
     async def handle(self, message):
@@ -416,6 +441,11 @@ class Gehirn(FeatureBasis):
             emb.add_field(name="Ueber diesen Server",
                           value="\n".join(f"• {f}" for f in server[:8]),
                           inline=False)
+        warte = self._warte_zeilen(gid, uid)
+        if warte:
+            emb.add_field(name="Worauf ich noch warte",
+                          value="\n".join(f"• {z}" for z in warte[:8])[:1024],
+                          inline=False)
         emb.set_footer(text=f"{self._bot_name} vergiss mich · loescht alles davon")
         return emb
 
@@ -440,8 +470,8 @@ class Gehirn(FeatureBasis):
                         f"`{self._bot_name} vergiss mich`.")
             ziel = fremd
         wen = "dich" if ziel.id == message.author.id else f"**{ziel.display_name}**"
-        fakten = self.weiss_ueber(gid, ziel.id)
-        if not fakten:
+        sachen = len(self.weiss_ueber(gid, ziel.id)) + len(self._warte_zeilen(gid, ziel.id))
+        if not sachen:
             # Nichts, was verloren gehen koennte - den Puffer raeumen schadet
             # niemandem, dafuer braucht es keine Rueckfrage.
             self.vergiss(gid, ziel.id)
@@ -449,7 +479,7 @@ class Gehirn(FeatureBasis):
         view = VergessenView(gid, message.author.id, ziel.id, wen)
         gesendet = await basis.antworte(
             message,
-            f"Ich weiss {len(fakten)} Sache(n) ueber {wen}. Echt alles loeschen? "
+            f"Ich weiss {sachen} Sache(n) ueber {wen}. Echt alles loeschen? "
             f"Ueberleg's dir, du hast {BESTAETIGEN_TIMEOUT} Sekunden.",
             view=view)
         if gesendet is None:

@@ -36,6 +36,7 @@ import ai
 import basis
 from basis import FeatureBasis, erstes_ziel
 import economy
+import laune
 import numfmt
 import render
 from store import JsonStore
@@ -379,6 +380,7 @@ class Casino(FeatureBasis):
             g = prof["per"].setdefault(game, {"n": 0, "net": 0})
             g["n"] += 1
             g["net"] += net
+            laune.jackpot(uid, net, bet)      # dicker Gewinn -> Flo dreht durch
             await self._stats.save()
         except Exception:
             log.exception("Casino-Bilanz konnte nicht gespeichert werden")

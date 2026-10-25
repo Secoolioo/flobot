@@ -38,6 +38,7 @@ import discord
 import economy
 import basis
 import laufzeit
+import laune
 import numfmt
 import uhr
 from basis import FeatureBasis
@@ -325,6 +326,7 @@ class Lotto(FeatureBasis):
                 economy.add_coins(int(uid), anteil, reason="lotto")
             except Exception:  # noqa: BLE001
                 log.exception("Jackpot-Gutschrift fehlgeschlagen")
+            laune.jackpot(int(uid), anteil)   # Lotto geknackt -> Flo dreht durch
         hist = {"month": month, "jackpot": jackpot,
                 "winner_ids": [int(u) for u in winners], "winner_names": namen,
                 "per_winner": anteil, "total_tickets": total, "players": len(entries)}

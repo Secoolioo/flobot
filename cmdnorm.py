@@ -484,6 +484,8 @@ class CmdNorm:
         # sonst 'neuer rekord' und 'neues spiel' an sich gezogen.
         "playlist", "radio", "endlosradio", "autoplay", "endlos", "geburtstag",
         "neue",
+        # nachhaken schaltet je Person an/aus ('flo nachhaken aus').
+        "nachhaken",
     }
 
     def _one_typo(self, a, b):

@@ -2419,10 +2419,20 @@ class FloBot(discord.Client):
         _on = features.fuer(message.guild.id)
         # Was Flo von sich aus tut (Launen, Nachhaken), sieht eine Notlage NIE:
         # wer am Boden ist, bekommt keine Laune ab und keine Nachfrage, nur die
-        # KI mit ihrer Notlagen-Regel. Gerechnet nur, wenn hier eins davon laeuft.
+        # KI mit ihrer Notlagen-Regel. Gerechnet nur, wenn hier eins davon laeuft
+        # - Nachhaken zaehlt schon, wenn das Modul laeuft (siehe unten).
         mit_nachhaken = NACHHAKEN_ENABLED and _on("nachhaken")
         mit_laune = LAUNEN_ENABLED and _on("launen")
-        notlage = (mit_nachhaken or mit_laune) and _ist_notlage(content)
+        notlage = (NACHHAKEN_ENABLED or mit_laune) and _ist_notlage(content)
+        # Und die Person selbst: tagelang keine Nachfrage, egal in welchem
+        # Kanal und wie lange der Verlauf dort reicht (nachhaken.notlage) -
+        # auch wo Nachhaken gerade aus ist: wird es wieder angeschaltet,
+        # liegt sonst ihr Offenes von vorher noch da.
+        if notlage and NACHHAKEN_ENABLED:
+            try:
+                nachhaken.notlage(message.guild.id, message.author.id)
+            except Exception:
+                log.exception("Nachhaken-Notlage fehlgeschlagen")
 
         # Kurzzeit-Gedaechtnis: Flo merkt sich den laufenden Chat (auch ohne direkt
         # angesprochen zu sein), damit er dem Gespraech folgen kann, wenn man ihn fragt.

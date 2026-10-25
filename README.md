@@ -443,18 +443,147 @@ Taktrate über `GEHIRN_TICK_SECONDS` (Standard 600).
 
 ### Flos Launen
 
-*Im Bau* — das Gerüst steht (`laune.py`, Schalter `launen`). Fest ist schon:
-die Laune färbt nur den Ton und steht im Prompt **hinter** der Grenze und vor
-dem Schlusswort; bei einer Notlage — in der Frage oder im Chatverlauf, der mit
-in den Prompt geht — kommt sie gar nicht erst mit, und keine Laune reagiert auf
-eine Notlage. Ist der Schalter auf einem Server aus, färbt sie dort weder Ton
-noch Status. Der Status zeigt die Laune des Hauptservers.
+```
+flo laune        wie Flo drauf ist – seit wann, warum, wie lange noch
+```
+
+Flo hat einen Tag. Einmal täglich würfelt er seine **Tageslaune** (30 % gut
+gelaunt, 50 % normal genervt, 20 % mit dem falschen Fuß aufgestanden — der
+hält aber nur bis Mittag), und was auf dem Server passiert, schiebt sie herum:
+
+| Laune | Auslöser | hält |
+|---|---|---|
+| 😏 gut gelaunt | Tageslaune | den Tag |
+| 🙄 normal genervt | Tageslaune (der Normalfall) | – |
+| 😤 gereizt | ≥ 15 Ansprachen in 5 min · eine Person ≥ 6 in einer Minute · eine Ansprache mit Beleidigung · Tageslaune (falscher Fuß) | 45 min, weiterer Spam verlängert · der falsche Fuß 7–12 Uhr |
+| 🤪 überdreht | Casino-Gewinn ≥ max(10 × Einsatz, 50.000) netto · Lotto-Jackpot · $FLO +15 % in 24 h | 60 min |
+| 😒 beleidigt | 4 h schreibt keiner (gezählt nur 9–23 Uhr) · oder alle quatschen (≥ 20 Nachrichten), aber 8 h spricht ihn keiner an | bis ihn jemand anspricht (höchstens 12 h) |
+| 🥱 müde | 1–7 Uhr | bis 7 Uhr |
+
+Vorrang: ein Ereignis vor der Nacht vor der Tageslaune; überdreht schlägt
+gereizt, gereizt schlägt beleidigt. Wer Flo aus dem Beleidigtsein holt — auch
+mit `flo laune` —, bekommt es aufs Brot geschmiert („Bis eben war ich übrigens
+beleidigt … Jetzt bist ja du da. Toll."). Und die KI-Antwort auf genau diese
+Ansprache lässt es auch noch raushängen: im Prompt klingt „beleidigt — und
+jetzt redet endlich mal einer mit dir" zwei Minuten nach (vor Nacht und
+Tageslaune, nie vor einem neuen Ereignis). Ohne das wäre die Zeile nie bei
+einer Antwort angekommen: bot.py zählt die Ansprache, bevor die KI antwortet.
+
+**Was die Laune ändert — und was nicht.** Sie färbt nur den **Ton**: eine Zeile
+im System-Prompt („kürzer angebunden, null Geduld"), hinter der Grenze und vor
+dem Schlusswort, ohne Namen — und sie endet immer mit dem Satz, dass Grenze und
+Notlagen-Regel trotzdem gelten. Flo bleibt in jeder Laune derselbe
+passiv-aggressive Flo; gut gelaunt heißt fast gnädig, nicht nett. Bei einer
+Notlage (in der Frage oder im Verlauf) kommt die Zeile gar nicht erst mit, und
+keine Notlage zählt für eine Laune — weder als Spam noch als „hier ist was los".
+
+**Status.** Der Bot-Status zeigt die Laune des Hauptservers im Wechsel mit den
+Weisheiten („😤 Gereizt. Wer mich pingt, kriegt eine gedrückt."), eine neue
+Laune gleich im nächsten Status-Takt. Normal genervt lässt die Weisheiten in
+Ruhe. Jeder Wechsel steht genau einmal im Log (INFO).
+
+**Uhr und Neustart.** Tageslaune und Nacht nur bei verlässlicher Uhr
+(`uhr.stabil()`), der Tag läuft nur vorwärts — nach dem Sprung beim Booten wird
+nicht zweimal gewürfelt. Das Ende eines Ereignisses steht als Zeitstempel in der
+Datei; liegt es nach dem Sprung zu weit vorn, wird es auf die normale Dauer
+gekappt. Die Zähler (Spam, Funkstille, wer wo zuletzt geschrieben hat) leben nur
+im Speicher — nach einem Neustart fängt die Zählung neu an, und ein Jackpot von
+jemandem, den Flo seit dem Start noch nicht gesehen hat, bleibt ohne Folgen
+(gezählt wird auf dem Server, auf dem die Person zuletzt geschrieben hat).
+
+Je Server abschaltbar (`flo features` / Panel, Schalter `launen`): dann weder
+Ton noch Status. Daten: `data/launen.json` — Tageslaune, laufendes Ereignis und
+höchstens ein Anzeigename als Schuldiger. Die Haken stecken in `casino.record`
+und `lotto._draw` (je eine Zeile).
 
 ### Er hält nach
 
-*Im Bau* — das Gerüst steht (`nachhaken.py`, Schalter `nachhaken`, an — wer
-nicht will: `flo nachhaken aus`). Fest ist schon: Notlagen sieht er nie, und in
-der Sendepause fragt er nicht nach.
+```
+flo nachhaken          worauf Flo bei dir gerade wartet
+flo nachhaken aus      nie wieder nachfragen – räumt alles Offene weg
+flo nachhaken an       wieder einschalten
+```
+
+Wer „morgen schreib ich die Mathe-Klausur" sagt, wird hinterher gefragt —
+einmal, passiv-aggressiv, als hätte Flo tagelang auf den Bericht gewartet:
+„Na Anna, wie lief die Mathe-Klausur? Oder reden wir nicht drüber, weil's
+wieder nix war?" Standardmäßig **an**; wer nicht will, schaltet es für sich ab
+(je Server).
+
+1. **Vorfilter** (jede Nachricht, synchron, ein paar Mikrosekunden): ein
+   Zeitwort und ein Ich (ich, hab, muss, bin, wir …), 12–300 Zeichen, keine
+   Frage, kein Bot, nur auf dem Server. Was durchkommt, ist ein **Kandidat** —
+   nur im Speicher, höchstens 30 je Server, nach 6 Stunden weg. Ist auf dem
+   Server der KI-Chat aus (Schalter `ki`), sammelt er keine Kandidaten — dann
+   geht auch keine Chatzeile an die KI.
+2. **Einordnen** (Alltags-Takt): je Server höchstens alle 10 Minuten **ein**
+   KI-Aufruf mit bis zu 10 Zeilen, ohne Namen, als Hintergrund-Aufruf (nach
+   einem 429 wartet er) mit der Grenze im System-Prompt. Die KI sagt je Zeile:
+   echte Ankündigung? Thema („die Mathe-Klausur")? Heikel? Gespeichert wird
+   **nur das Thema** — nie die Nachricht.
+3. **Nachfragen:** ist der Termin da und schreibt die Person wieder etwas (nicht
+   an Flo), antwortet Flo darauf mit **einem** Satz von der KI (taugt der nicht —
+   Verweigerung, zu lang, Hilfe-Text, private Daten —, einer aus dem
+   Ersatz-Pool), ohne Ping. Höchstens **einmal je Person und Tag** und **dreimal
+   je Server und Tag** (der Server-Deckel zählt ohne Namen und hält auch, wenn
+   jemand `flo vergiss mich` sagt); drei Tage nach dem Termin verfällt es. Nicht
+   in einem Aufräum-Kanal (dort wäre die Frage nach einer Minute weg — und mit
+   ihr die eine Nachfrage des Tages) und nicht, wo Flo nicht schreiben darf:
+   dann fragt die nächste Nachricht in einem normalen Kanal. Geht das Senden
+   trotzdem schief, liegt die Sache wieder da. Die Frage landet im Chatverlauf
+   der KI — wer darauf antwortet („war gut, ne 2"), redet mit einem Flo, der
+   weiß, was er gefragt hat.
+
+| gesagt | Flo fragt ab |
+|---|---|
+| morgen · übermorgen · in 3 Tagen · am 12.03. | dem Tag, 17 Uhr |
+| am Freitag (auch: Freitagabend) | dem nächsten Freitag, 17 Uhr — an einem Freitag gesagt: in einer Woche |
+| diesen Freitag | diesem Freitag — auch heute, wenn heute Freitag ist |
+| nächsten Freitag · nächste Woche Freitag | Freitag der **nächsten Kalenderwoche** |
+| nächste Woche | Mittwoch der nächsten Woche, 17 Uhr |
+| am Wochenende | dem kommenden Samstag (samstags: Sonntag; sonntags ab 15 Uhr: das nächste Wochenende) |
+| heute abend · heute nacht | dem nächsten Tag, 10 Uhr |
+| später · nachher | in drei Stunden |
+
+Steht mehr als ein Zeitwort drin, gilt das **genaueste** — ein Datum vor einem
+Tag („am Freitag, den 13.11." ist der 13.11., nicht dieser Freitag), ein Tag vor
+„nächste Woche"/„am Wochenende", die vor „später" —, und unter gleich genauen
+der **späteste**: lieber einen Tag zu spät fragen als vor dem Ereignis. Ein
+Wochentag nah bei „nächste Woche" liegt in der nächsten Woche. Ein Datum ohne Jahr, das
+dieses Jahr schon vorbei ist, gilt fürs nächste (am 30.12. ist „am 02.01."
+der Januar); mit Jahr in der Vergangenheit gilt nichts. Nie früher als zwei
+Stunden nach der Ankündigung, nichts mehr als 60 Tage voraus. „Guten Morgen",
+„heute morgen", „bis später", „letzten Freitag", „seit dem 12.03." und
+„freitags" sind keine Termine.
+
+**Was er nie tut.** Notlagen (`_NOTLAGE_RE`) weder merken noch nachfragen —
+auch nicht, wenn im Kanal gerade jemand am Boden ist. Und wer selbst ein
+Notsignal schreibt — egal in welchem Kanal, egal ob Nachhaken dort an ist —,
+dessen offene Sachen sind sofort weg (auf jedem Server), und **72 Stunden**
+lang merkt Flo sich nichts von ihm und fragt ihn nichts. Nicht nur „im Kanal
+steht gerade was": der Kanalverlauf reicht 20 Minuten, ein „na, wie lief die
+Prüfung?" am nächsten Tag wäre genauso falsch. Die Sperre lebt nur im Speicher;
+auf der Platte steht nirgends, wer am Boden war. Heikles (Krankheit, Arzt,
+OP, Therapie, Tod, Beerdigung, Trennung, Schwangerschaft, Polizei, Gericht,
+Schulden, Jobverlust, Sex, Drogen, „mir geht's schlecht") lässt schon der
+Vorfilter liegen; die KI sortiert nach (im Zweifel heikel — fehlt ihr Urteil,
+zählt es als heikel), und ihr Thema wird noch einmal geprüft (private Daten wie
+im Gedächtnis, Hetze). Nicht in der Sendepause, nicht bei Ansprache, nicht kurz
+nach dem Start (die Uhr muss stimmen — sonst weiß er nicht, welcher Tag
+„morgen" ist).
+
+**Gedächtnis.** `flo gedaechtnis` zeigt unter „Worauf ich noch warte", was
+offen ist; `flo vergiss mich` zählt es mit und löscht es. Kandidaten (noch nicht
+eingeordnete Zeilen, nur im Speicher) gehen mit, zählen aber nicht — wie der
+Puffer des Gedächtnisses; auch eine Zeile, die gerade bei der KI liegt, wird
+danach nicht mehr gemerkt. Die
+Abmeldung bleibt dabei stehen — sie ist ein Wunsch, kein Wissen über dich. Ist
+das Gedächtnis auf einem Server abgeschaltet, räumt `flo nachhaken aus` genauso.
+
+Braucht die KI (ohne sie lädt das Modul nicht). Schalter `nachhaken`. Daten:
+`data/nachhaken.json` — je Server die offenen Sachen (Person, Anzeigename, Thema,
+Zeitwort, Kanal, fällig ab, verfällt), wer heute schon gefragt wurde, wie oft
+der Server heute schon dran war (ohne Namen), wer abgemeldet ist.
 
 ---
 

@@ -295,18 +295,30 @@ zwei Wörter, manchmal drei Sätze. Aktuell zielt er auf gleichmäßige Absätze
 das ist das Erkennungszeichen einer Maschine.
 *klein · `ai.py`*
 
-**[36] Flo hat Launen.** 🔧 **Im Bau** — Gerüst steht (`laune.py`).
-Ein Zustand, der sich langsam ändert und den Ton färbt:
-gut gelaunt, genervt, müde, überdreht. Gespeist aus echten Signalen — Uhrzeit,
-wie viel im Chat los war, ob der $FLO-Kurs gefallen ist, ob ihn jemand seit einer
-Stunde vollspamt. Drei Zeilen Zusatz im System-Prompt, aber Flo wirkt dadurch
-wie jemand, der einen Tag hat, statt wie eine Funktion mit Eingabe und Ausgabe.
-*klein · `ai.py`, `floaktie.py`*
+**[36] Flo hat Launen.** ✅ **Erledigt** (25.10.2026).
+Sechs Launen, die nur den Ton färben: gut gelaunt, normal genervt (Tageslaune,
+einmal am Tag gewürfelt), gereizt (Spam, Dauerpinger, Beleidigung; als
+Tageslaune nur morgens bis 12 Uhr), überdreht
+(Casino-Jackpot, Lotto, $FLO +15 %), beleidigt (Funkstille oder keiner redet mit
+ihm), müde (1–7 Uhr). Eine Zeile im System-Prompt hinter der Grenze, die immer
+damit endet, dass Grenze und Notlagen-Regel gelten; der Status zeigt sie im
+Wechsel mit den Weisheiten; `flo laune` sagt, seit wann und wer schuld ist.
+„Beleidigt" klingt in der Antwort auf die erlösende Ansprache noch nach.
+Notlagen zählen nie. README „Flos Launen".
+*klein · `laune.py`, je eine Zeile in `casino.py`, `lotto.py`*
 
-**[37] Er hält nach.** 🔧 **Im Bau** — Gerüst steht (`nachhaken.py`).
-Sagt jemand „mach ich später", fragt Flo Stunden später
-nach. Ein kleiner Notizzettel mit Zeitstempel reicht.
-*mittel · `gedaechtnis.py`*
+**[37] Er hält nach.** ✅ **Erledigt** (25.10.2026).
+„Morgen schreib ich Mathe" → Flo fragt hinterher nach, einmal und
+passiv-aggressiv. Vorfilter in Python (Zeitwort + Ich, Datum samt Jahreswechsel
+und Wochentags-Kanten), die KI ordnet gebündelt im Hintergrund ein und wirft
+Heikles weg; gespeichert wird nur das Thema. Höchstens einmal je Person und Tag,
+dreimal je Server; nie bei Notlagen, Ansprache oder Sendepause, nie im
+Aufräum-Kanal. Wer selbst ein Notsignal schreibt, dessen Offenes ist weg, und 72
+Stunden lang fragt Flo ihn nichts. Bei mehreren Zeitwörtern gilt das genaueste
+(Datum vor Wochentag). `flo nachhaken aus|an` je Person, `flo gedaechtnis` zeigt
+es, `flo vergiss mich` löscht es.
+README „Er hält nach".
+*mittel · `nachhaken.py`, `gehirn.py`*
 
 **[38] Er nutzt Discord wie ein Mensch.** Antwort-Bezug statt Anrede, Reaktion
 statt Nachricht, wenn's nur Zustimmung ist, gelegentlich zwei kurze Nachrichten
