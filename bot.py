@@ -1371,10 +1371,10 @@ class FloBot(discord.Client):
         """Liefert (key, emoji, label) je AKTIVEM Bereich - Reihenfolge = Button-Reihenfolge."""
         cats = [
             ("musik", "🎵", "Musik", MUSIC_ENABLED),
-            # Die Seite, sobald eins ihrer Module laeuft - welche Zeilen darauf
-            # stehen, entscheidet _hilfe_eintraege (Radio & Abstimmung sind Musik).
-            ("playlist", "🎶", "Playlists & Radio",
-             MUSIC_ENABLED and (PLAYLISTS_ENABLED or MUSIKSTATS_ENABLED)),
+            # Die Seite, sobald die Musik laeuft: Radio und die Abstimmung beim
+            # Skip gehoeren zur Musik selbst. Welche Zeilen sonst noch darauf
+            # stehen (Playlists, Wrapped), entscheidet _hilfe_eintraege.
+            ("playlist", "🎶", "Playlists & Radio", MUSIC_ENABLED),
             ("spiele", "🎮", "Spiele", GAMES_ENABLED),
             ("economy", "📈", "Level & Coins", ECONOMY_ENABLED),
             ("casino", "🎰", "Casino", CASINO_ENABLED),

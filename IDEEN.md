@@ -344,14 +344,23 @@ Steht in `Track` schon halb drin, wird nur nicht
 angezeigt. Dazu „wer hat diesen Monat am meisten Musik gespielt".
 *klein · `music.py`*
 
-**[43] Abstimmung zum Überspringen.** 🔧 **Im Bau** — Gerüst steht (`GuildPlayer._skip_stimmen`).
-Ab drei Leuten im Kanal braucht das
-Überspringen Mehrheit — außer beim Wünschenden und bei Admins.
+**[43] Abstimmung zum Überspringen.** ✅ **Erledigt** (25.10.2026).
+Ab drei Menschen im Kanal braucht Skip `Menschen // 2 + 1` Stimmen — per ⏭️-Knopf
+oder `flo skip`, der Stand steht im Panel („⏭️ 2/3 wollen weg"). Direkt skippen
+der Wünschende (`Track.requested_by_id`) und Mods; wer nicht zuhört, stimmt nicht
+mit. Die Stimmen gelten nur für den laufenden Song, die Schwelle sinkt mit, wenn
+jemand geht, und ein Klick im Wechsel wirft nicht gleich den nächsten mit raus.
+README „Abstimmung zum Überspringen".
 *klein · `music.py`*
 
-**[44] Endlos-Radio.** 🔧 **Im Bau** — Gerüst steht (`GuildPlayer.radio`).
-Läuft die Warteschlange leer, hängt Flo einen ähnlichen
-Titel an, statt zu gehen. Verwandte Titel liefert `yt-dlp` mit.
+**[44] Endlos-Radio.** ✅ **Erledigt** (25.10.2026).
+`flo radio` (oder 📻 am Panel): läuft die Warteschlange leer, hängt Flo drei
+Songs aus dem YouTube-Mix (`RD<id>`, flach über `yt-dlp`) des letzten Wunsches
+an — jeder dritte Nachschub vom letzten Radio-Song aus, gefiltert gegen
+Wiederholungen, Verlauf und Stunden-Loops. Kein Nachschub ohne Zuhörer, bei
+geparkter Schlange, in der Sendepause oder wenn Discord wackelt (dann holt der
+Wächter ihn nach); zwei Fehlschläge (ein Ladefehler wird einmal nachgeholt) oder
+150 Songs je Sitzung, und es ist aus. README „Endlos-Radio".
 *mittel · `music.py`*
 
 **[45] Gespeicherte Wiedergabelisten je Server.** ✅ **Erledigt** (25.10.2026).

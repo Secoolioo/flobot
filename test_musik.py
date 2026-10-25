@@ -3495,7 +3495,7 @@ def _panel_als_nachricht(view):
 def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
     """(1) Laeuft ein Loop, muss das im Panel stehen - sonst sieht niemand,
         warum derselbe Song wiederkommt und die Warteschlange steht.
-    (2) Fuenf Knoepfe oben, Loop darunter, Tempo-Menue in einer eigenen
+    (2) Fuenf Knoepfe oben, Loop und Radio darunter, Tempo-Menue in einer eigenen
         Reihe - auch im klassischen Notweg-Panel, wo discord.py sonst 'item
         would not fit at row 1' wirft und gar kein Panel mehr kaeme."""
     import discord
@@ -3519,7 +3519,7 @@ def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
                   if isinstance(r, discord.ui.ActionRow)]
         inhalt = [[getattr(k, "aktion", type(k).__name__) for k in r.children]
                   for r in reihen]
-        assert inhalt == [["pause", "skip", "stop", "queue", "lyrics"], ["loop"],
+        assert inhalt == [["pause", "skip", "stop", "queue", "lyrics"], ["loop", "radio"],
                           ["MusikTempo"]], inhalt
 
         alt = music._klassisches_panel(player)
@@ -3527,7 +3527,7 @@ def test_loop_panel_zeigt_den_zustand_und_hat_platz_fuer_den_knopf():
         for k in alt.children:
             zeilen.setdefault(k._rendered_row if k._rendered_row is not None else k.row,
                               []).append(type(k).__name__)
-        assert len(zeilen[0]) == 5 and zeilen[1] == ["MusikKnopf"], zeilen
+        assert len(zeilen[0]) == 5 and zeilen[1] == ["MusikKnopf", "MusikKnopf"], zeilen
         assert zeilen[2] == ["MusikTempo"], zeilen
     finally:
         aufraeumen()
@@ -3552,7 +3552,8 @@ def test_musik_panel_ist_v2_und_ueberlebt_neustarts():
         assert klickbar and all(isinstance(k, discord.ui.DynamicItem) for k in klickbar)
         ids = {k.item.custom_id for k in klickbar}
         assert ids == {f"flo:musik:{a}" for a in
-                       ("pause", "skip", "stop", "queue", "lyrics", "loop", "tempo")}, ids
+                       ("pause", "skip", "stop", "queue", "lyrics", "loop", "radio",
+                        "tempo")}, ids
         assert set(music.DYNAMISCHE_KNOEPFE) == {music.MusikKnopf, music.MusikTempo}
         assert music in bot.DYNAMISCHE_MODULE            # setup_hook meldet sie an
         # Aus der Nachricht zurueck: der Knopf weiss wieder, was er ist.

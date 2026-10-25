@@ -474,9 +474,10 @@ Dazu die normalen Sätze: „mach mal *X* an", „leg *X* auf", „hau *X* raus"
 
 **Das Panel:** Cover, Titel, Fortschritt mit „endet in …" (zählt Discord selbst
 live herunter), die nächsten drei Songs, Knöpfe und Tempo-Menü. Die Knöpfe
-**funktionieren auch nach einem Neustart** von Flo. Pause, Skip, Stop, Loop und
-Tempo darf nur, wer mit im Sprachkanal sitzt (Mods immer); Queue und Lyrics
-jeder. Den Titel schreibt Flo als Status an den Sprachkanal, wenn er das Recht
+**funktionieren auch nach einem Neustart** von Flo. Pause, Skip, Stop, Loop,
+Radio und Tempo darf nur, wer mit im Sprachkanal sitzt (Mods immer); Queue und
+Lyrics jeder. Skip ab drei Zuhörern per Abstimmung (siehe unten). Den Titel
+schreibt Flo als Status an den Sprachkanal, wenn er das Recht
 „Sprachkanal-Status festlegen" hat. Panels von vor dem Update räumt das
 Auto-Löschen weg.
 
@@ -649,7 +650,56 @@ eine YouTube-Suche). `Flo playlist <link>` erklärt, dass ein Link kein Name ist
 
 ### Endlos-Radio
 
-*Im Bau.*
+```
+Flo radio            Flo radio an · radio aus     Flo endlos
+Flo autoplay off     Flo mach mal das radio an    📻 am Panel
+```
+
+Läuft die Warteschlange leer, hört Flo nicht auf, sondern legt Ähnliches nach:
+den **YouTube-Mix** (`RD<id>`) zum letzten Song, den ein **Mensch** gewünscht
+hat — jeder dritte Nachschub geht vom letzten Radio-Song aus, sonst kreiste das
+Radio ewig um denselben Mix. Ohne YouTube-ID (SoundCloud, Datei) sucht Flo den
+Titel erst flach auf YouTube. Frisch nach einem Neustart, wenn der Player noch
+nichts weiß, nimmt er den neuesten Song aus dem Verlauf.
+
+Je Nachschub kommen **drei Songs**, lazy (aufgelöst wird erst beim Abspielen),
+mit 📻 statt Namen als „gewünscht von". Rausgefiltert wird: der Ausgangssong,
+alles, was das Radio in dieser Sitzung schon hatte (die letzten 200 Video-IDs),
+jeder Titel, der gerade lief oder unter den letzten 50 im Verlauf steht (auch als
+anderes Upload — „Official Video", „HD", „Lyrics" zählen nicht), Stunden-Loops,
+Mixe, Zusammenschnitte und die schweren Varianten (Nightcore, Sped-Up, Cover,
+Karaoke …) — außer der Ausgangssong ist selbst so einer.
+
+* **Nacktes Wort schaltet um.** Drehen darf, wer mit im Voice sitzt, und jeder
+  Mod. `Flo radio an`, wenn gar nichts läuft: Flo kommt in deinen Kanal, fängt
+  sofort an und antwortet auf den Befehl. Kommt gerade nichts durch (YouTube
+  oder Discord zickt), bleibt er drin und versucht es selbst noch einmal. Sagen
+  zwei Leute gleichzeitig `radio an`, startet trotzdem nur einer. `Flo mach das
+  radio aus` stoppt — wie eh und je — die ganze Musik; nur das Radio aus heißt
+  `Flo radio aus` (oder 📻 am Panel).
+* **Am Panel:** zweite Reihe 🔁 Loop · 📻 Radio (grün, wenn an). Die Kopfzeile
+  zeigt „📻 Radio" (bei einem Radio-Song statt des Wünschers; „📻 vom Radio",
+  wenn es inzwischen aus ist), das Notweg-Panel ein Feld „Radio". Radio-Songs
+  tragen unter „Als Nächstes" und in der Queue ein 📻.
+* **Kein Nachschub**, wenn nur noch Bots im Kanal sitzen (dann geht Flo nach der
+  Leerlauf-Frist), die Schlange geparkt ist, Sendepause ist, die Musik auf dem
+  Server aus ist — oder Discord gerade wackelt: dann holt der Wächter den
+  Nachschub nach, sobald die Verbindung wieder steht. Ist dabei auch die
+  Voice-Verbindung gerissen, holt er erst die zurück und legt dann nach.
+* **Fehlschläge:** je Nachschub zwei Versuche, der zweite vom anderen
+  Ausgangssong. Bringen beide nichts Neues, ist das Radio aus, mit Ansage (noch
+  mal fragen brächte dasselbe). Ließ sich der Mix gar nicht laden — ein kurzer
+  yt-dlp- oder DNS-Aussetzer —, versucht es der Wächter im nächsten Takt noch
+  einmal; erst wenn auch das scheitert, ist Schluss.
+* **Deckel:** höchstens `MUSIC_RADIO_MAX` (150) Radio-Songs je Sitzung, dann ist
+  es aus. Der Leerlauf-Wächter sieht einen leeren Kanal nur, wenn Discords Cache
+  ihn kennt — ohne Deckel spielte Flo dort sonst bis zum nächsten Neustart.
+* Das Radio gehört zur **Sitzung**: `Flo stop`, ein Rauswurf oder der Leerlauf
+  schalten es aus. Jede Änderung geht an die neustartfeste Warteschlange.
+* Beim ersten Nachschub einer Sitzung sagt Flo es an. Eigene Wünsche landen
+  hinter den (höchstens drei) Radio-Songs, die schon warten.
+* In der Hilfe steht das Radio auf der Seite **Playlists & Radio** — die gibt
+  es, sobald die Musik läuft, auch ohne Playlists.
 
 ### Neustartfeste Warteschlange
 
@@ -659,7 +709,28 @@ Stand, und beim Beenden wird er gesichert.
 
 ### Abstimmung zum Überspringen
 
-*Im Bau.*
+Ab **drei Menschen** im Sprachkanal (Bots zählen nicht) braucht Skip eine
+Mehrheit: `Menschen // 2 + 1` Stimmen — bei drei also zwei, bei vier drei. Gilt
+für den ⏭️-Knopf am Panel und für `Flo skip` gleichermaßen.
+
+* **Direkt** skippt, wer den Song **selbst gewünscht** hat („skippt den eigenen
+  Wunsch. Peinlich, aber ehrlich."), jeder **Mod** (Admin, Server oder Kanäle
+  verwalten, Leute verschieben — wie an den Knöpfen; „Mod-Hammer") und jeder,
+  solange höchstens zwei zuhören. Kann Discords Mitgliederliste nicht gelesen
+  werden oder ist sie leer, wird im Zweifel auch direkt geskippt.
+* **Abstimmen** darf nur, wer im Voice sitzt — alle anderen bekommen eine Abfuhr.
+  Jede Stimme zeigt sich im Panel („⏭️ 2/3 wollen weg"), am Knopf gibt's dazu
+  einen Zettel nur für dich („Stimme gezählt. Noch 1."). Zweimal zählt nicht.
+  Gezählt werden nur Stimmen von Leuten, die noch im Kanal sitzen.
+* **Reicht es**, fliegt der Song raus, und Flo sagt es öffentlich: „Demokratie
+  hat gesprochen: … {Wünscher}, dein Geschmack wurde gerade öffentlich
+  abgewählt." Ein Klick, der in den Wechsel fällt, wirft nicht gleich den
+  nächsten Song mit raus. Geht jemand, sinkt die Schwelle mit: reichen die
+  Stimmen danach schon, genügt es, dass ein Wähler noch mal klickt.
+* Verpasst Flo Discords 3-Sekunden-Frist für die Antwort auf den Knopf, gilt der
+  Skip trotzdem — entschieden ist entschieden.
+* Die Stimmen gelten **nur für den laufenden Song** — ein neuer Song fängt bei
+  null an, ein Tempo-Wechsel oder Neustart desselben Songs nicht.
 
 ### Musik-Wrapped
 
@@ -1493,6 +1564,7 @@ Servern.
 | `PLAYLIST_WIZARD_TIMEOUT` | `300` | so lange wartet der Playlist-Assistent auf Songs (Sekunden) |
 | `PLAYLISTS_ENABLED` | `1` | `0` schaltet die Playlists ab (die Musik bleibt) |
 | `MUSIKQUELLEN_FRIST` | `5` | so lange darf ein Titel-Abruf (oEmbed, Spotify-Einbettung) dauern (Sekunden; Alben/Playlists mindestens 15) |
+| `MUSIC_RADIO_MAX` | `150` | so viele Songs legt das Endlos-Radio je Sitzung höchstens nach |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
 | `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
 | `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |

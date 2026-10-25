@@ -190,7 +190,7 @@ class CmdNorm:
         # playlists, Radio, Musik-Wrapped (die Musik-Erweiterungen).
         # 'neue' wie in 'neue playlist zocken'.
         "playlist", "playlists", "wiedergabeliste", "radio", "endlosradio",
-        "autoplay", "wrapped", "musikwrapped", "neue",
+        "autoplay", "endlos", "wrapped", "musikwrapped", "neue",
         # laune, nachhaken (Flo lebt), zitate + geburtstage (Server-Leben).
         # 'zitat' steht schon bei media.
         "laune", "mood", "nachhaken", "zitate", "geburtstag", "geburtstage",
@@ -402,6 +402,10 @@ class CmdNorm:
         # sieht nur Repo-Woerter): 'laue luft heute' wurde 'laune luft heute',
         # 'launen hast du' die Laune, 'zitaten von goethe' die Zitate.
         "laue", "lauen", "launen", "moods", "zitaten", "zitates",
+        # Seit 'radio' und 'endlos' etwas tun (Endlos-Radio): 'adio' (Tschuess),
+        # 'radi' (Rettich), 'rado' wurden 'radio', 'endlose' wurde 'endlos' -
+        # 'Flo, adio!' haette das Radio angeworfen.
+        "adio", "radi", "rado", "endlose",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN
@@ -478,7 +482,8 @@ class CmdNorm:
         # playlists spielt ab, radio schaltet die Musik, geburtstag traegt ein.
         # 'neue' oeffnet einen Assistenten - und als Tippfehler-Ziel haette es
         # sonst 'neuer rekord' und 'neues spiel' an sich gezogen.
-        "playlist", "radio", "endlosradio", "autoplay", "geburtstag", "neue",
+        "playlist", "radio", "endlosradio", "autoplay", "endlos", "geburtstag",
+        "neue",
     }
 
     def _one_typo(self, a, b):

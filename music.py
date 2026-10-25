@@ -976,6 +976,100 @@ _VOLUME_WORDS = {
 _VOLUME_CANON = ("lautstärke", "lautstaerke", "lautstarke", "volume")
 
 
+# --- Endlos-Radio -----------------------------------------------------------
+# Laeuft die Warteschlange leer, haengt Flo Aehnliches an: den YouTube-Mix
+# (RD<id>) zum letzten gewuenschten Song, gefiltert, drei Songs je Nachschub.
+#
+# "flo radio", "flo radio an/aus", "flo endlos", "flo autoplay off". Hinter dem
+# Wort darf nur EIN An/Aus stehen (Fuellwoerter egal) - 'radio ist langweilig'
+# oder 'endlos langweilig hier' beantwortet die KI. 'endlosschleife' gehoert
+# dem Loop (\b nach 'endlos').
+_RADIO_KOPF_RE = re.compile(r"^(?:radio|endlos(?:radio)?|autoplay)\b(?P<rest>.*)$",
+                            re.I | re.S)
+_RADIO_AN = frozenset(("an", "ein", "on", "einschalten", "anschalten", "anmachen"))
+_RADIO_AUS = frozenset(("aus", "off", "stop", "stopp", "ausschalten", "ausmachen",
+                        "abschalten"))
+_RADIO_SCHALTER = _RADIO_AN | _RADIO_AUS
+# 'mach (mal) (das) radio an'. Das Gegenstueck 'mach das radio aus' stoppt wie
+# eh und je die ganze Musik (_NAT_STOP_RE) - wer das sagt, will Ruhe.
+_NAT_RADIO_RE = re.compile(
+    r"^(?:mach|schalt|dreh)\s+(?:mal\s+)?(?:(?:das|dein|den|ein)\s+)?"
+    r"(?:radio|endlosradio|autoplay)\s+(?:(?:mal|wieder|bitte)\s+)*(?:an|ein)$", re.I)
+
+# So viele Radio-Songs je Sitzung (bis 'stop' oder Flo geht), dann ist das Radio
+# aus. Der Leerlauf-Waechter erkennt einen leeren Kanal nur, wenn Discords Cache
+# ihn kennt - ohne Deckel spielte Flo dort sonst bis zum naechsten Neustart.
+MUSIC_RADIO_MAX = max(1, int(_env_sekunden("MUSIC_RADIO_MAX", 150)))
+RADIO_NACHSCHUB = 3          # Songs je Nachschub (lazy - aufgeloest wird beim Abspielen)
+RADIO_MIX_ENDE = 20          # so viele Eintraege des Mixes holt yt-dlp
+RADIO_GESEHEN_MAX = 200      # so viele Video-IDs merkt sich das Radio je Sitzung
+RADIO_VERLAUF_BLICK = 50     # so weit zurueck zaehlt ein Titel im Verlauf als "lief schon"
+RADIO_VERSUCHE = 2           # Fehlschlaege am Stueck, dann ist das Radio aus
+RADIO_WUNSCH = "📻 Radio"    # steht als "gewuenscht von" an jedem Radio-Song
+# Was das Radio NIE anhaengt: die schweren Varianten aus _YT_BAD_VARIANTS
+# (Nightcore, Sped-Up, Cover, Karaoke, Stunden-Loops ...) und Zusammenschnitte.
+# Ein YouTube-Mix ist voll davon, und 'Song - 10 Hours' ist kein Radio.
+_RADIO_MUELL = tuple(w for w, strafe in _YT_BAD_VARIANTS if strafe >= 30) + (
+    "mix", "megamix", "compilation", "full album", "nonstop")
+# '2 Hours', '3 Stunden', '8 hrs' - aber nicht 'Hours' als Songtitel.
+_RADIO_STUNDEN_RE = re.compile(r"\b[0-9]+\s*(?:hours?|hrs?|stunden?|std)\b")
+
+_RADIO_HINWEIS = ("📻 Warteschlange leer. Ich spiel einfach weiter – irgendwer muss "
+                  "hier ja Geschmack haben.")
+_RADIO_AUFGEGEBEN = "📻 Mir fällt auch nix mehr ein. Radio aus – wünscht euch selber was."
+
+
+def _yt_id(adresse):
+    """Die Video-ID aus einer YouTube-Adresse (watch?v=, youtu.be/, /shorts/,
+    /live/) - leer, wenn keine drinsteht (SoundCloud, Suchtext)."""
+    treffer = _YT_VIDEO_RE.search(adresse or "")
+    return re.split(r"[=/]", treffer.group(0))[-1] if treffer else ""
+
+
+def _titelkern(titel):
+    """Ein Titel fuer 'lief das schon?': klein, ohne YouTube-Deko ('Official
+    Video', 'HD', 'Lyrics') - sonst kaeme derselbe Song als anderes Upload
+    gleich noch mal."""
+    s = _LYRICS_NOISE_RE.sub(" ", (titel or "").lower())
+    s = re.sub(r"[^a-z0-9äöüß]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _radio_muell(titel, saat_titel=""):
+    """Gehoert dieser Titel nicht ins Radio (Loop, Mix, Nightcore ...)? Ein Wort,
+    das schon im Ausgangssong steht, zaehlt nicht - wer ein Cover wuenscht,
+    bekommt auch Covers."""
+    norm = re.sub(r"[^a-z0-9äöüß]+", " ", (titel or "").lower())
+    saat = re.sub(r"[^a-z0-9äöüß]+", " ", (saat_titel or "").lower())
+    if _RADIO_STUNDEN_RE.search(norm) and not _RADIO_STUNDEN_RE.search(saat):
+        return True
+    for wort in _RADIO_MUELL:
+        muster = rf"\b{re.escape(wort)}\b"
+        if re.search(muster, norm) and not re.search(muster, saat):
+            return True
+    return False
+
+
+def _radio_darf(gid):
+    """Darf das Radio auf diesem Server gerade von sich aus nachlegen? Nicht in
+    der Sendepause und nicht, wenn die Musik dort abgeschaltet wurde. Lazy
+    importiert wie _zustand_merken; im Zweifel ja - die Musik laeuft ja schon."""
+    try:
+        import admin
+        import features
+        if admin.is_locked():
+            return False
+        return bool(features.is_on_in(gid, "music"))
+    except Exception:  # noqa: BLE001 - eine kaputte Abfrage stoppt die Musik nicht
+        log.debug("Radio-Freigabe nicht pruefbar", exc_info=True)
+        return True
+
+
+# --- Abstimmung zum Ueberspringen -------------------------------------------
+_SKIP_DOPPELT = "Du hast schon abgestimmt. Zweimal zählt nicht, du Wahlbetrüger."
+_SKIP_LAEUFT = "Der fliegt doch schon raus. Geduld, du Hektiker."
+
+
 # --- Neustartfeste Warteschlange (musikzustand.py) ------------------------
 # Lazy importiert: musikzustand braucht dieses Modul zum Zurueckholen, ein
 # Import hier oben gaebe einen Ring. Beide Haken laufen mitten in der
@@ -1171,6 +1265,21 @@ class GuildPlayer:
     _skip_stimmen: set = field(default_factory=set)
     # Hat das Radio in dieser Sitzung schon gesagt, dass es uebernimmt?
     _radio_hinweis: bool = False
+    # Wie viele Songs das Radio in dieser Sitzung angehaengt hat (Deckel
+    # MUSIC_RADIO_MAX) und wie oft es nachgelegt hat - jeder dritte Nachschub
+    # geht vom letzten Radio-Song aus statt vom letzten Wunsch, sonst dreht es
+    # sich ewig um denselben Song.
+    _radio_zahl: int = 0
+    _radio_runden: int = 0
+    # Der Nachschub fiel aus, weil Discord gerade wackelte oder der Mix nicht
+    # ladbar war: der Watchdog holt ihn nach, sobald die Verbindung wieder
+    # steht (_radio_nachholen). _radio_fehler zaehlt die Nachschuebe am Stueck,
+    # die am Laden scheiterten - beim zweiten ist das Radio aus.
+    _radio_verschoben: bool = False
+    _radio_fehler: int = 0
+    # Der Song, den eine Abstimmung (oder ein Mod) gerade rauswirft. Ein Klick,
+    # der in den Songwechsel faellt, skippt so nicht gleich den naechsten mit.
+    _abgewaehlt: "Track | None" = None
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1442,6 +1551,10 @@ class GuildPlayer:
             # Effekt-/Tempo-Neustarts (keep_speed) zaehlen nicht als neuer Song.
             self.history.append(track)
             del self.history[:-30]   # nur die letzten 30 behalten
+            # Eine Abstimmung gilt nur fuer den Song, bei dem sie lief - ein
+            # Tempo-/Watchdog-Neustart (keep_speed) ist derselbe Song.
+            self._skip_stimmen.clear()
+            self._abgewaehlt = None
             # UND dauerhaft: der Verlauf oben ist nach einem Neustart weg.
             try:
                 instance.verlauf_notieren(self.guild_id, track)
@@ -1623,6 +1736,17 @@ class GuildPlayer:
             while True:
                 if gen is not None and gen != self._play_gen:
                     return          # jemand hat inzwischen selbst gestartet
+                if (self.radio and not self.queue and self.voice is not None
+                        and self.voice.is_connected() and self._session_gen == sitzung):
+                    # Endlos-Radio: Schlange leer -> Aehnliches anhaengen. Unter
+                    # dem Lock und mit _advancing, der Watchdog bleibt draussen.
+                    vorher = self._play_gen
+                    await self._radio_nachlegen(sitzung)
+                    if self._play_gen != vorher:
+                        # Waehrend des Abrufs hat jemand selbst gestartet (oder
+                        # geskippt - dessen _advance wartet am Lock und spielt
+                        # dann den ersten Radio-Song). Nichts doppelt starten.
+                        return
                 if not self.voice or not self.voice.is_connected() or not self.queue:
                     self.current = None
                     await _retire_panel(self)
@@ -1736,6 +1860,16 @@ class GuildPlayer:
         self._last_frames = -1
         self.pausiert = False
         self._play_gen += 1             # alte after-Callbacks entwerten
+        # Radio und Abstimmung gehoeren zur Sitzung: die naechste startet ohne.
+        self.radio = False
+        self._radio_gesehen.clear()
+        self._radio_hinweis = False
+        self._radio_zahl = 0
+        self._radio_runden = 0
+        self._radio_verschoben = False
+        self._radio_fehler = 0
+        self._skip_stimmen.clear()
+        self._abgewaehlt = None
         # Bewusst raus - nach einem Neustart soll Flo hier NICHT zurueckkommen.
         _zustand_vergessen(self.guild_id)
         await _retire_panel(self)
@@ -1807,6 +1941,229 @@ class GuildPlayer:
             return False
         self.loop_rest = anzahl
         self.loop_key = _loop_key(self.current)
+        return True
+
+    # --- Endlos-Radio -------------------------------------------------------
+    def radio_setzen(self, an):
+        """Radio an oder aus. True = es hat sich etwas geaendert - dann ist auch
+        der Stand fuer einen Neustart ein anderer (musikzustand)."""
+        an = bool(an)
+        if self.radio == an:
+            return False
+        self.radio = an
+        self._radio_verschoben = False
+        self._radio_fehler = 0
+        _zustand_merken(self)
+        return True
+
+    @staticmethod
+    def _saat_aus_track(track):
+        """(Adresse, Titel) eines Songs als Ausgangspunkt fuer den Mix."""
+        query = str(getattr(track, "query", "") or "")
+        adresse = (getattr(track, "webpage_url", "")
+                   or (query if query.startswith("http") else ""))
+        return (adresse, getattr(track, "title", "") or "")
+
+    def _radio_saaten(self):
+        """Wovon das Radio ausgeht - in der Reihenfolge der Versuche.
+
+        Normal der letzte Song, den ein MENSCH gewuenscht hat (requested_by_id),
+        ersatzweise der letzte, der kein Radio-Song war. Jeder dritte Nachschub
+        geht vom letzten Radio-Song aus: sonst kaeme immer derselbe Mix, und
+        nach ein paar Runden waere daraus alles schon gelaufen. Das jeweils
+        andere ist der zweite Versuch. Ist der Verlauf im Speicher leer (frisch
+        nach einem Neustart), der dauerhafte - neuester zuerst."""
+        verlauf = list(reversed(self.history))
+        wunsch = next((t for t in verlauf
+                       if getattr(t, "requested_by_id", 0) and not getattr(t, "radio", False)),
+                      None)
+        mensch = wunsch or next((t for t in verlauf if not getattr(t, "radio", False)), None)
+        funk = next((t for t in verlauf if getattr(t, "radio", False)), None)
+        reihe = [funk, mensch] if (self._radio_runden + 1) % 3 == 0 else [mensch, funk]
+        saaten = []
+        for track in reihe:
+            if track is not None:
+                saat = self._saat_aus_track(track)
+                if any(saat) and saat not in saaten:
+                    saaten.append(saat)
+        if saaten:
+            return saaten
+        try:
+            eintraege = instance.verlauf(self.guild_id)[:2]
+        except Exception:  # noqa: BLE001 - ohne Verlauf eben kein Radio
+            eintraege = []
+        for e in eintraege:
+            query = str(e.get("q") or "")
+            saat = (str(e.get("u") or "") or (query if query.startswith("http") else ""),
+                    str(e.get("t") or ""))
+            if any(saat) and saat not in saaten:
+                saaten.append(saat)
+        return saaten
+
+    def _radio_filtern(self, eintraege, saat_id, saat_titel, anzahl=RADIO_NACHSCHUB):
+        """Aus dem Mix die Songs, die wirklich neu sind: nicht der Ausgangssong,
+        nichts, was das Radio in dieser Sitzung schon hatte, kein Titel, der
+        gerade lief oder im Verlauf steht, und keine Loops/Mixe/Nightcore.
+        Rueckgabe: [(adresse, titel, video_id), ...], hoechstens 'anzahl'."""
+        bekannt = {_titelkern(saat_titel)}
+        bekannt.update(_titelkern(t.title) for t in self.history)
+        bekannt.update(_titelkern(t.title) for t in self.queue)
+        try:
+            bekannt.update(_titelkern(e.get("t"))
+                           for e in instance.verlauf(self.guild_id)[:RADIO_VERLAUF_BLICK])
+        except Exception:  # noqa: BLE001 - dann filtert eben nur der Speicher
+            log.debug("Radio: Verlauf nicht lesbar", exc_info=True)
+        bekannt.discard("")
+        gesehen = set(self._radio_gesehen)
+        gesehen.add(saat_id)
+        raus = []
+        for adresse, titel in eintraege or ():
+            titel = str(titel or "")
+            vid = _yt_id(adresse)
+            kern = _titelkern(titel)
+            if not vid or vid in gesehen or not kern or kern in bekannt:
+                continue
+            if re.fullmatch(r"\[(?:private|deleted|unavailable)[^\]]*\]", titel.strip(), re.I):
+                continue        # tote Eintraege, die yt-dlp flach trotzdem listet
+            if _radio_muell(titel, saat_titel):
+                continue
+            gesehen.add(vid)
+            bekannt.add(kern)
+            raus.append((adresse, titel, vid))
+            if len(raus) >= anzahl:
+                break
+        return raus
+
+    async def _radio_holen(self, saat, anzahl):
+        """Den YouTube-Mix zu einem Song holen und filtern. Ohne Video-ID
+        (SoundCloud, Suchtext) erst eine flache Suche nach dem Titel.
+
+        Rueckgabe: die neuen Songs (siehe _radio_filtern) - [] heisst "geladen,
+        aber nichts Neues dabei", None "nichts geladen" (Netz, yt-dlp, YouTube
+        liefert nichts). Das zweite kann eine Minute spaeter schon anders sein."""
+        adresse, titel = saat
+        try:
+            vid = _yt_id(adresse)
+            if not vid and titel:
+                treffer = await _flache_playlist(f"ytsearch1:{titel}", quelle="Radio", ende=1)
+                if treffer is None:
+                    return None
+                vid = _yt_id(treffer[0][0]) if treffer else ""
+            if not vid:
+                return []
+            mix = await _flache_playlist(
+                f"https://www.youtube.com/watch?v={vid}&list=RD{vid}",
+                quelle="Radio", ende=RADIO_MIX_ENDE)
+        except Exception:  # noqa: BLE001 - ein Fehlschlag, kein Absturz
+            log.warning("Radio: Mix zu '%s' nicht ladbar", titel, exc_info=True)
+            return None
+        if mix is None:
+            return None
+        return self._radio_filtern(mix, vid, titel, anzahl)
+
+    async def _radio_nachlegen(self, sitzung):
+        """Endlos-Radio: die leere Warteschlange mit Aehnlichem fuellen.
+
+        Laeuft aus _advance_intern - unter dem Lock und mit _advancing, der
+        Watchdog bleibt also draussen. True = neue Songs liegen in der Schlange.
+
+        Kein Nachschub, wenn die Schlange geparkt ist, Discord wackelt (dann
+        holt der Watchdog ihn nach), Sendepause ist, die Musik dort aus ist oder
+        nur noch Bots im Kanal sitzen (dann geht Flo nach der Leerlauf-Frist).
+        Je Nachschub zwei Versuche (zwei Ausgangssongs). Bringen beide nichts
+        Neues, ist das Radio aus - noch mal fragen braechte dasselbe. Liess
+        sich dabei etwas gar nicht LADEN (kurzer yt-dlp-/DNS-Aussetzer), holt
+        der Watchdog den Nachschub einmal nach; scheitert auch der, ist das
+        Radio aus. Endet die Sitzung waehrend des Abrufs ('stop'), oder
+        schaltet jemand das Radio ab, wird nichts eingereiht."""
+        if self._geparkt:
+            return False
+        if not laufzeit.gateway_stabil():
+            self._radio_verschoben = True
+            log.info("Radio: Discord wackelt - Nachschub kommt, wenn die Verbindung steht.")
+            return False
+        if not _radio_darf(self.guild_id):
+            return False
+        kanal = getattr(self.voice, "channel", None)
+        if kanal is not None and _nur_bots_im_kanal(kanal):
+            log.info("Radio: keiner mehr da, der zuhoert - kein Nachschub.")
+            return False
+        frei = MUSIC_RADIO_MAX - self._radio_zahl
+        if frei <= 0:
+            self.radio_setzen(False)
+            log.info("Radio: %d Songs in dieser Sitzung - Deckel erreicht, Radio aus.",
+                     self._radio_zahl)
+            await self._sag(f"📻 {MUSIC_RADIO_MAX} Songs Radio am Stück reichen. Ich bin "
+                            f"keine Dauerbeschallung – Radio aus.")
+            return False
+        saaten = self._radio_saaten()
+        neue, ladefehler = [], False
+        for versuch in range(RADIO_VERSUCHE if saaten else 0):
+            saat = saaten[min(versuch, len(saaten) - 1)]
+            neue = await self._radio_holen(saat, min(RADIO_NACHSCHUB, frei))
+            if self._session_gen != sitzung or not self.radio:
+                return False    # gestoppt oder abgeschaltet, waehrend YouTube antwortete
+            if neue:
+                break
+            ladefehler = ladefehler or neue is None
+            log.info("Radio: zu '%s' kam %s (Versuch %d/%d).", saat[1],
+                     "nichts an" if neue is None else "nichts Neues",
+                     versuch + 1, RADIO_VERSUCHE)
+        if not neue:
+            if ladefehler and self._radio_fehler + 1 < RADIO_VERSUCHE:
+                # Vielleicht nur ein Aussetzer: nicht gleich aufgeben - der
+                # Watchdog versucht es im naechsten Takt noch einmal.
+                self._radio_fehler += 1
+                self._radio_verschoben = True
+                log.warning("Radio: Mix nicht ladbar - versuche es gleich noch einmal.")
+                return False
+            self.radio_setzen(False)
+            log.warning("Radio: %s - Radio aus.",
+                        "nichts, wovon es ausgehen kann" if not saaten
+                        else "Mix wieder nicht ladbar" if ladefehler
+                        else "zwei Ausgangssongs ohne etwas Neues")
+            await self._sag(_RADIO_AUFGEGEBEN)
+            return False
+        self._radio_fehler = 0
+        for adresse, titel, vid in neue:
+            track = instance._lazy_track(adresse, titel, RADIO_WUNSCH)
+            track.radio = True
+            self.queue.append(track)
+            self._radio_gesehen.append(vid)
+        del self._radio_gesehen[:-RADIO_GESEHEN_MAX]
+        self._radio_zahl += len(neue)
+        self._radio_runden += 1
+        log.info("Radio: %d Songs nachgelegt (%d/%d in dieser Sitzung).",
+                 len(neue), self._radio_zahl, MUSIC_RADIO_MAX)
+        if not self._radio_hinweis:
+            self._radio_hinweis = True
+            await self._sag(_RADIO_HINWEIS)
+        return True
+
+    def _radio_wartet(self):
+        """Steht ein verschobener Nachschub aus (siehe _radio_nachholen)?"""
+        return self.radio and self._radio_verschoben
+
+    async def _radio_nachholen(self, channel):
+        """Watchdog: fiel der Nachschub aus (Discord wackelte, der Mix war nicht
+        ladbar), jetzt das Radio wieder anwerfen. True = angestossen.
+
+        Der Merker faellt nur, wenn wirklich nachgelegt wird - oder wenn es
+        nichts mehr nachzuholen gibt (Radio aus, es laeuft wieder etwas). Ist
+        die Voice-Verbindung noch weg oder sitzt gerade keiner im Kanal, bleibt
+        er stehen: den Reconnect weiter unten in heal() laesst _leerlauf dafuer
+        durch, und ein spaeterer Takt legt nach."""
+        if not self._radio_verschoben:
+            return False
+        if not self.radio or self.queue or not self.nichts_zu_tun():
+            self._radio_verschoben = False   # laeuft die Schlange leer, legt _advance nach
+            return False
+        vc = self.voice
+        if vc is None or not vc.is_connected() or _nur_bots_im_kanal(channel):
+            return False
+        self._radio_verschoben = False
+        log.info("Radio: hole den Nachschub nach.")
+        await self._advance()
         return True
 
     async def skip(self):
@@ -1998,6 +2355,8 @@ class GuildPlayer:
         if not isinstance(channel, discord.VoiceChannel):
             self.active_channel_id = None   # Kanal gibt es nicht mehr -> aufgeben
             return
+        if await self._radio_nachholen(channel):
+            return
         if await self._leerlauf(channel):
             return
         # Realen Voice-Client bestimmen (unser Objekt KANN abgehaengt sein).
@@ -2121,7 +2480,8 @@ class GuildPlayer:
         # AUSSER es wartet eine aufgegebene Warteschlange: die gab _advance auf,
         # weil das Netz weg war - und oft ist dabei auch die Voice-Verbindung
         # gerissen. Der Reconnect holt sie zurueck und versucht die Schlange neu.
-        return leer and not self.queue
+        # Genauso ein verschobener Radio-Nachschub (siehe _radio_nachholen).
+        return leer and not self.queue and not self._radio_wartet()
 
     def _uhr_nachfuehren(self, guild):
         """Die Positions-Uhr laeuft nur, solange auch Ton rausgehen KANN.
@@ -2747,7 +3107,7 @@ class _LoopView(discord.ui.View):
 
 
 class MusikKnopf(discord.ui.DynamicItem[discord.ui.Button],
-                template=r"flo:musik:(?P<aktion>pause|skip|stop|queue|lyrics|loop)"):
+                template=r"flo:musik:(?P<aktion>pause|skip|stop|queue|lyrics|loop|radio)"):
     """Ein Knopf am Musik-Panel. Die feste custom_id (flo:musik:<aktion>) macht
     ihn neustartfest: vorher war jedes Panel nach einem Neustart von Flo tot
     ("Diese Interaktion ist fehlgeschlagen"), obwohl die Musik weiterlief."""
@@ -2781,6 +3141,10 @@ def _knopfreihen(player):
     ]
     unten = [MusikKnopf("loop", label="Loop", emoji="🔁",
                         style=(discord.ButtonStyle.success if player.loop_rest
+                               else discord.ButtonStyle.secondary)),
+             # Endlos-Radio: gruen, solange es an ist.
+             MusikKnopf("radio", label="Radio", emoji="📻",
+                        style=(discord.ButtonStyle.success if player.radio
                                else discord.ButtonStyle.secondary))]
     return oben, unten
 
@@ -2841,7 +3205,8 @@ class MusikPanel(discord.ui.LayoutView):
     def _kopf(player, track):
         kopf = "### ⏸️ Pausiert" if player.ist_pausiert() else "### ▶️ Jetzt läuft"
         meta = []
-        if track.requested_by:
+        funk = getattr(track, "radio", False)
+        if track.requested_by and not funk:     # ein Radio-Song hat keinen Wuenscher
             meta.append(f"🙋 {track.requested_by}")
         if player.speed < 1.0 - 1e-3:
             meta.append(f"🌌 slowed + reverb {player.speed:g}×")
@@ -2850,6 +3215,13 @@ class MusikPanel(discord.ui.LayoutView):
         lt = _loop_text(player.loop_rest)
         if lt:
             meta.append(lt)
+        if player.radio:
+            meta.append("📻 Radio")
+        elif funk:
+            meta.append("📻 vom Radio")         # Radio schon aus, der Song kam noch daher
+        stand = instance._skip_stand(player)
+        if stand is not None:
+            meta.append(f"⏭️ {stand[0]}/{stand[1]} wollen weg")
         text = f"{kopf}\n{instance._title_value(track)}"
         if meta:
             text += "\n-# " + "  ·  ".join(meta)
@@ -2865,7 +3237,9 @@ class MusikPanel(discord.ui.LayoutView):
         zeilen = ["**Als Nächstes**"]
         for i, t in enumerate(player.queue[:3], start=1):
             dur = _fmt_dur(t.duration)
-            zeilen.append(f"`{i}.` {_short(t.title, 60)}" + (f" · `{dur}`" if dur else ""))
+            funk = "📻 " if getattr(t, "radio", False) else ""   # vom Radio, nicht gewuenscht
+            zeilen.append(f"`{i}.` {funk}{_short(t.title, 60)}"
+                          + (f" · `{dur}`" if dur else ""))
         mehr = len(player.queue) - 3
         if mehr > 0:
             zeilen.append(f"-# …und {mehr} weitere")
@@ -4320,7 +4694,7 @@ class Music(FeatureBasis):
 
         Aktionen: play, search, spotify_album, spotify_playlist, spotify_kurz,
                   yt_playlist, sc_playlist,
-                  volume, skip, pause, resume, stop, leave, queue.
+                  volume, skip, pause, resume, stop, leave, queue, radio.
         """
         # 1) Link in der Nachricht? (staerkstes Signal) - aber nur, wenn er
         #    auch zum ABSPIELEN dasteht (siehe _link_ist_befehl).
@@ -4364,6 +4738,20 @@ class Music(FeatureBasis):
         lo = _LOOP_RE.match(cleaned)
         if lo:
             return ("loop", (lo.group(1) or lo.group(2) or "").lower())
+
+        # 2c) Endlos-Radio: 'radio', 'radio an/aus', 'endlos', 'autoplay off' -
+        #     hinter dem Wort hoechstens EIN An/Aus. 'radio ist langweilig' geht
+        #     weiter (und landet bei der KI). Dazu 'mach (mal) das radio an';
+        #     'mach das radio aus' stoppt weiter die Musik (4a).
+        rk = _RADIO_KOPF_RE.match(cleaned)
+        if rk:
+            woerter = [w for w in _restwoerter(rk.group("rest")) if w != "wieder"]
+            if not woerter:
+                return ("radio", "")
+            if len(woerter) == 1 and woerter[0] in _RADIO_SCHALTER:
+                return ("radio", woerter[0])
+        if _NAT_RADIO_RE.match(cleaned):
+            return ("radio", "an")
 
         # 2) Steuerbefehl am Satzanfang - und NUR, wenn dahinter kein Satz steht.
         steuer = _steuerbefehl(cleaned)
@@ -4801,8 +5189,10 @@ class Music(FeatureBasis):
         return f"**{self._short(track.title, 90)}**"
 
     def _now_playing_embed(self, track, queue_len = 0, extra = "",
-                           speed = 1.0, loop = 0):
-        """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail."""
+                           speed = 1.0, loop = 0, radio = False, stand = None):
+        """Schoenes 'Jetzt laeuft'-Embed mit Dauer, Wunsch-Person und Thumbnail.
+        radio/stand: Endlos-Radio an? Laufende Abstimmung (Stimmen, noetig)? -
+        dasselbe, was das V2-Panel in seiner Meta-Zeile zeigt."""
         e = discord.Embed(title=NOWPLAYING_EMBED_TITLE, description=self._title_value(track),
                           color=_COL_PLAY)
         dur = self._fmt_dur(track.duration)
@@ -4822,6 +5212,11 @@ class Music(FeatureBasis):
         lt = _loop_text(loop)
         if lt:
             e.add_field(name="Loop", value=lt, inline=True)
+        if radio:
+            e.add_field(name="Radio", value="📻 an", inline=True)
+        if stand:
+            e.add_field(name="Abstimmung", value=f"⏭️ {stand[0]}/{stand[1]} wollen weg",
+                        inline=True)
         # Fussnote: optionaler Extra-Text und (falls aktiv) die Tempo-/Effekt-Anzeige.
         foot = []
         if extra:
@@ -4872,7 +5267,8 @@ class Music(FeatureBasis):
             lines = []
             for i, t in enumerate(player.queue[:10], start=1):
                 dur = self._fmt_dur(t.duration)
-                line = f"`{i:>2}.`  {self._short(t.title, 55)}"
+                funk = "📻 " if getattr(t, "radio", False) else ""
+                line = f"`{i:>2}.`  {funk}{self._short(t.title, 55)}"
                 if dur:
                     line += f"  ·  `{dur}`"
                 lines.append(line)
@@ -4881,6 +5277,9 @@ class Music(FeatureBasis):
                 lines.append(f"…und **{more}** weitere")
             e.add_field(name=f"⬆️  Als Nächstes  ({len(player.queue)})",
                         value="\n".join(lines), inline=False)
+        elif player.radio:
+            e.set_footer(text="📻 Radio an – ist die Schlange leer, such ich was "
+                              "Ähnliches raus.")
         else:
             e.set_footer(text="Keine weiteren Songs – wirf was rein!")
         if player.current and player.current.thumbnail:
@@ -4966,7 +5365,9 @@ class Music(FeatureBasis):
         versuche = (
             {"view": MusikPanel(player, track, extra=extra)},
             {"embed": self._now_playing_embed(track, len(player.queue), extra=extra,
-                                              speed=player.speed, loop=player.loop_rest),
+                                              speed=player.speed, loop=player.loop_rest,
+                                              radio=player.radio,
+                                              stand=self._skip_stand(player)),
              "view": _klassisches_panel(player)},
         )
         for nr, kw in enumerate(versuche):
@@ -4994,10 +5395,22 @@ class Music(FeatureBasis):
 
         Vorher konnte jeder im Textkanal die Musik stoppen oder skippen,
         waehrend er selbst gar nicht zuhoerte."""
-        wer = interaction.user
+        return Music._person_darf_steuern(interaction.user, player)
+
+    @staticmethod
+    def _ist_mod(wer):
+        """Mod im Sinne der Musik: Admin, Server oder Kanaele verwalten, Leute
+        verschieben. Darf ohne Voice an die Knoepfe und skippt ohne Abstimmung."""
         rechte = getattr(wer, "guild_permissions", None)
-        if rechte is not None and (rechte.administrator or rechte.manage_guild
-                                   or rechte.manage_channels or rechte.move_members):
+        return rechte is not None and any(
+            getattr(rechte, recht, False) for recht in
+            ("administrator", "manage_guild", "manage_channels", "move_members"))
+
+    @staticmethod
+    def _person_darf_steuern(wer, player):
+        """_darf_steuern fuer eine Person - Knopf (interaction.user) und
+        Textbefehl (message.author) pruefen dasselbe."""
+        if Music._ist_mod(wer):
             return True
         kanal = player.active_channel_id or getattr(
             getattr(player.voice, "channel", None), "id", None)
@@ -5005,6 +5418,99 @@ class Music(FeatureBasis):
             return True     # Flo ist gar nicht drin - da gibt es nichts zu schuetzen
         eigener = getattr(getattr(wer, "voice", None), "channel", None)
         return eigener is not None and eigener.id == kanal
+
+    # --- Abstimmung zum Ueberspringen -------------------------------------------
+    @staticmethod
+    def _zuhoerer(player):
+        """Die Menschen in Flos Sprachkanal. None, wenn die Liste nicht lesbar
+        oder leer ist - dann fehlt Discords Cache, nicht die Leute, und es wird
+        nicht abgestimmt (im Zweifel direkt skippen, wie _nur_bots_im_kanal)."""
+        kanal = getattr(player.voice, "channel", None)
+        if kanal is None:
+            return None
+        try:
+            leute = list(kanal.members)
+        except Exception:  # noqa: BLE001 - unbekannt ist nicht leer
+            return None
+        menschen = [m for m in leute if not getattr(m, "bot", False)]
+        return menschen or None
+
+    def _skip_stand(self, player):
+        """(Stimmen, noetig) fuer die Meta-Zeile im Panel - None, solange
+        niemand abgestimmt hat oder gar nicht abgestimmt wird."""
+        if not player._skip_stimmen or player.current is None:
+            return None
+        menschen = self._zuhoerer(player)
+        if menschen is None or len(menschen) <= 2:
+            return None
+        stimmen = len(player._skip_stimmen & {m.id for m in menschen})
+        return (stimmen, len(menschen) // 2 + 1) if stimmen else None
+
+    def _skip_abstimmen(self, player, wer):
+        """Was ein Skip von 'wer' JETZT bewirkt - und die Stimme gleich zaehlen.
+
+        Rueckgabe (art, stimmen, noetig):
+          'direkt'   hoechstens zwei Menschen im Kanal (oder nicht lesbar)
+          'eigen'    der eigene Wunsch (requested_by_id) - raus damit
+          'mod'      Mod-Hammer
+          'erreicht' diese Stimme war die entscheidende (len//2 + 1) - oder
+                     ein zweiter Klick, nachdem Leute gegangen sind und die
+                     Stimmen schon reichen
+          'stimme'   gezaehlt, reicht noch nicht
+          'doppelt'  hat fuer diesen Song schon abgestimmt
+          'laeuft'   der Song ist schon abgewaehlt, der Wechsel laeuft noch
+        Alles synchron, ohne await dazwischen: zwei Klicks im selben Augenblick
+        koennen sich nicht ueberholen und zusammen zwei Songs rauswerfen.
+        Bei eigen/mod/erreicht MUSS der Aufrufer danach skippen - ueber
+        _abwaehlen, das den Merker auch dann wieder loest, wenn es schiefgeht."""
+        track = player.current
+        if track is None:
+            return ("direkt", 0, 0)
+        if player._abgewaehlt is not None and player._abgewaehlt is track:
+            return ("laeuft", 0, 0)
+        menschen = self._zuhoerer(player)
+        if menschen is None or len(menschen) <= 2:
+            return ("direkt", 0, 0)
+        uid = int(getattr(wer, "id", 0) or 0)
+        art = None
+        if uid and uid == track.requested_by_id:
+            art = "eigen"
+        elif self._ist_mod(wer):
+            art = "mod"
+        if art is not None:
+            player._abgewaehlt = track
+            return (art, 0, 0)
+        noetig = len(menschen) // 2 + 1
+        da = {m.id for m in menschen}
+        doppelt = uid in player._skip_stimmen
+        player._skip_stimmen.add(uid)
+        stimmen = len(player._skip_stimmen & da)
+        if doppelt and stimmen < noetig:
+            return ("doppelt", stimmen, noetig)
+        # Auch ein zweiter Klick zaehlt nach: ist inzwischen jemand
+        # gegangen, reichen die Stimmen vielleicht schon ('2/2 wollen weg').
+        if stimmen >= noetig:
+            player._abgewaehlt = track
+            player._skip_stimmen.clear()
+            return ("erreicht", stimmen, noetig)
+        return ("stimme", stimmen, noetig)
+
+    def _skip_text(self, art, track, wer):
+        """Was Flo oeffentlich zu einem besonderen Skip sagt (None = nichts)."""
+        titel = self._short(getattr(track, "title", "") or "Der Song", 80)
+        if art == "eigen":
+            name = getattr(wer, "display_name", "") or "Jemand"
+            return f"⏭️ {name} skippt den eigenen Wunsch. Peinlich, aber ehrlich."
+        if art == "mod":
+            return f"⏭️ Mod-Hammer. **{titel}** ist weg, Diskussion beendet."
+        if art == "erreicht":
+            wunsch = getattr(track, "requested_by", "") or ""
+            if getattr(track, "radio", False) or not wunsch:
+                return (f"⏭️ Demokratie hat gesprochen: **{titel}** ist raus. Sogar "
+                        f"mein Radio wird abgewählt – ich nehm's persönlich.")
+            return (f"⏭️ Demokratie hat gesprochen: **{titel}** ist raus. {wunsch}, "
+                    f"dein Geschmack wurde gerade öffentlich abgewählt.")
+        return None
 
     def ist_panel(self, message):
         """Ist diese Nachricht ein Musik-Panel? (bot.py nimmt es vom Auto-Loeschen
@@ -5019,7 +5525,7 @@ class Music(FeatureBasis):
         if not laeuft:
             await interaction.response.send_message("Gerade läuft nichts.", ephemeral=True)
             return
-        if aktion in ("pause", "skip", "stop", "loop") and not self._darf_steuern(
+        if aktion in ("pause", "skip", "stop", "loop", "radio") and not self._darf_steuern(
                 interaction, player):
             await interaction.response.send_message(random.choice(_ZAUNGAST),
                                                     ephemeral=True)
@@ -5028,9 +5534,17 @@ class Music(FeatureBasis):
             if aktion == "pause":
                 await self._klick_pause(interaction, player)
             elif aktion == "skip":
-                # Genau derselbe Weg wie der Textbefehl (siehe player.skip).
-                await interaction.response.defer()
-                await player.skip()
+                await self._klick_skip(interaction, player)
+            elif aktion == "radio":
+                # Umschalten und das Panel gleich mit dem neuen Zustand zeigen.
+                player.radio_setzen(not player.radio)
+                if player.current is None:
+                    # Die Schlange steht (kein Song zum Zeichnen) - dann ein Zettel.
+                    await interaction.response.send_message(
+                        "📻 Radio an." if player.radio else "📻 Radio aus.", ephemeral=True)
+                    return
+                await interaction.response.edit_message(
+                    **self._panel_neu(player, interaction.message))
             elif aktion == "stop":
                 await self._klick_stop(interaction, player)
             elif aktion == "queue":
@@ -5047,6 +5561,54 @@ class Music(FeatureBasis):
                     f"Wie oft soll **{self._short(player.current.title, 70)}** "
                     f"wiederholt werden?",
                     view=_LoopView(player, interaction.user.id), ephemeral=True)
+
+    async def _klick_skip(self, interaction, player):
+        """Skip-Knopf: ab drei Menschen im Kanal wird abgestimmt (siehe
+        _skip_abstimmen). Danach derselbe Weg wie der Textbefehl (player.skip)."""
+        track = player.current
+        art, stimmen, noetig = self._skip_abstimmen(player, interaction.user)
+        if art == "doppelt":
+            await interaction.response.send_message(_SKIP_DOPPELT, ephemeral=True)
+            return
+        if art == "laeuft":
+            await interaction.response.send_message(_SKIP_LAEUFT, ephemeral=True)
+            return
+        if art == "stimme":
+            # Erst die Antwort (Panel mit "2/3 wollen weg"), dann der Zettel.
+            await interaction.response.edit_message(
+                **self._panel_neu(player, interaction.message))
+            try:
+                await interaction.followup.send(f"Stimme gezählt. Noch {noetig - stimmen}.",
+                                                ephemeral=True)
+            except discord.HTTPException:
+                pass
+            return
+        # Wechseln kann dauern (naechsten Song aufloesen) -> erst defer. Klappt
+        # das nicht (Frist verpasst, Discord hustet), gilt der Skip trotzdem:
+        # entschieden ist entschieden, die Stimmen sind schon verbraucht.
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException as exc:
+            log.info("Skip-Knopf: defer ging nicht (%s) - skippe trotzdem.", exc)
+        text = self._skip_text(art, track, interaction.user)
+        await self._abwaehlen(player, track, text)
+
+    @staticmethod
+    async def _abwaehlen(player, track, text=None):
+        """Der eigentliche Skip nach _skip_abstimmen - fuer Knopf und Text.
+
+        Bei eigen/mod/erreicht steht der Song schon als abgewaehlt da, damit ein
+        Klick waehrend des Wechsels nicht gleich den naechsten mitnimmt. Geht
+        hier etwas schief, darf der Merker NICHT haengenbleiben: sonst hiess
+        jeder weitere Skip 'fliegt doch schon raus', bis der Song von selbst zu
+        Ende ist - bei einem Live-Stream also nie."""
+        try:
+            if text:
+                await player._sag(text)
+            await player.skip()
+        finally:
+            if player._abgewaehlt is track and player.current is track:
+                player._abgewaehlt = None
 
     async def _klick_pause(self, interaction, player):
         v = player.voice
@@ -5067,7 +5629,9 @@ class Music(FeatureBasis):
         if nachricht is not None and getattr(nachricht, "embeds", None):
             return {"embed": self._now_playing_embed(track, len(player.queue),
                                                      speed=player.speed,
-                                                     loop=player.loop_rest),
+                                                     loop=player.loop_rest,
+                                                     radio=player.radio,
+                                                     stand=self._skip_stand(player)),
                     "view": _klassisches_panel(player)}
         return {"view": MusikPanel(player, track)}
 
@@ -5246,10 +5810,32 @@ class Music(FeatureBasis):
             # oder der Skip verpuffte. Es reicht, dass es etwas zu tun gibt.
             if player.current is None and not player.queue:
                 return self._embed("Ich spiele gerade nichts.", color=_COL_ERR)
-            skipped = player.current.title if player.current else ""
-            await player.skip()
+            # Wie der Knopf: nur wer zuhoert (oder Mod), und ab drei Menschen
+            # im Kanal wird abgestimmt.
+            if not self._person_darf_steuern(message.author, player):
+                return self._embed(random.choice(_ZAUNGAST), color=_COL_ERR)
+            track = player.current
+            art, stimmen, noetig = self._skip_abstimmen(player, message.author)
+            if art == "doppelt":
+                return self._embed(_SKIP_DOPPELT, color=_COL_ERR)
+            if art == "laeuft":
+                return self._embed(_SKIP_LAEUFT, color=_COL_INFO)
+            if art == "stimme":
+                await self._panel_auffrischen(player)
+                return self._embed(
+                    f"**{stimmen}/{noetig}** wollen **{self._short(track.title, 80)}** "
+                    f"weg. Stimme gezählt. Noch {noetig - stimmen}.",
+                    title="🗳️  Abstimmung", color=_COL_CTRL)
+            text = self._skip_text(art, track, message.author)
+            skipped = track.title if track else ""
+            await self._abwaehlen(player, track)     # das Urteil ist die Antwort
+            if text:
+                return self._embed(text, color=_COL_CTRL)
             desc = f"**{self._short(skipped, 90)}** übersprungen." if skipped else "Übersprungen."
             return self._embed(desc, title="⏭️  Skip", color=_COL_CTRL)
+
+        if action == "radio":
+            return await self._radio_befehl(player, message, arg)
 
         # --- Loop: den LAUFENDEN Song wiederholen ---------------------------
         if action == "loop":
@@ -5561,6 +6147,96 @@ class Music(FeatureBasis):
             player.fremden_ton_stoppen()
         await player._advance()          # ohne gen -> setzt das Aufgeben zurueck
         return HANDLED if player.current is not None else None
+
+    # --- Endlos-Radio: der Befehl -------------------------------------------------
+    @staticmethod
+    def _musik_unterwegs(player):
+        """Laeuft schon Musik - oder ist sie gerade auf dem Weg (Songwechsel,
+        ein 'spiel', das noch sucht)? Dann legt 'radio an' nur den Schalter um,
+        statt selbst etwas zu starten."""
+        return (player.current is not None or bool(player.queue) or player._advancing
+                or getattr(player, "_laufende_anfragen", 0) > 0)
+
+    async def _radio_befehl(self, player, message, arg):
+        """'flo radio [an|aus]' - das nackte Wort schaltet um. Drehen darf, wer
+        mit im Voice sitzt, und jeder Mod (wie an den Knoepfen)."""
+        if arg in _RADIO_AN:
+            an = True
+        elif arg in _RADIO_AUS:
+            an = False
+        else:
+            an = not player.radio
+        if not self._person_darf_steuern(message.author, player):
+            return self._embed(random.choice(_ZAUNGAST), color=_COL_ERR)
+        if not an:
+            if not player.radio_setzen(False):
+                return self._embed("Radio ist doch aus. Noch ausiger wird's nicht.",
+                                   title="📻  Radio", color=_COL_INFO)
+            await self._panel_auffrischen(player)
+            return self._embed("Radio aus. Ist die Schlange leer, ist Ruhe – ihr wolltet "
+                               "es ja so.", title="📻  Radio aus", color=_COL_CTRL)
+        if self._musik_unterwegs(player):
+            return await self._radio_einschalten(player)
+        return await self._radio_starten(player, message)
+
+    async def _radio_einschalten(self, player):
+        """Nur den Schalter umlegen - die Musik laeuft schon (oder kommt gleich)."""
+        if not player.radio_setzen(True):
+            return self._embed("Läuft doch schon. Mehr Radio geht nicht.",
+                               title="📻  Radio", color=_COL_INFO)
+        await self._panel_auffrischen(player)
+        return self._embed(
+            "Radio an. Läuft die Schlange leer, such ich was Ähnliches raus – "
+            "irgendwer muss hier ja Geschmack haben.",
+            title="📻  Radio an", color=_COL_PLAY)
+
+    async def _radio_starten(self, player, message):
+        """'radio an', und es laeuft nichts: rein in den Kanal der Person und
+        gleich mit dem Radio anfangen - Ausgangspunkt ist der Verlauf."""
+        kanal = getattr(getattr(message.author, "voice", None), "channel", None)
+        if kanal is None:
+            return self._embed("Geh erst in einen Sprachkanal, dann mach ich da Radio.",
+                               color=_COL_ERR)
+        if not player._radio_saaten():
+            return self._embed(
+                "Hier lief noch nie was – woraus soll ich ein Radio machen? Wünsch dir "
+                f"erst was: `{self._bot_name} spiel <Song>`.",
+                title="📻  Radio", color=_COL_ERR)
+        war_drin = player.voice is not None and player.voice.is_connected()
+        try:
+            await player.connect(kanal)
+        except VOICE_CONNECT_FEHLER as exc:
+            return self._voice_kaputt(exc, "radio")
+        player.fremden_ton_stoppen()
+        if self._musik_unterwegs(player) or player.is_active():
+            # Waehrend Flo reinkam, hat schon jemand angefangen: ein zweites
+            # 'radio an' (Doppelpost, zwei Leute gleichzeitig) oder ein 'spiel'.
+            # Ein zweites _advance schnappte dem laufenden Song den naechsten
+            # weg - start() scheiterte an 'Already playing audio.', und nach
+            # zwei solchen Fehlern gab die Warteschlange auf. Nur der Schalter.
+            return await self._radio_einschalten(player)
+        player.radio_setzen(True)
+        player._radio_hinweis = True       # die Antwort unten ist die Ansage
+        await player._advance()            # Schlange leer -> das Radio legt nach
+        if player.current is not None:
+            # _advance hat das Panel gepostet - das hier antwortet dem Befehl.
+            return self._embed("Radio läuft. Ich spiel, was zu eurem Verlauf passt – ob's "
+                               "euch passt, ist mir egal.",
+                               title="📻  Radio an", color=_COL_PLAY)
+        if player._radio_wartet():
+            # Discord wackelt oder der Mix kam nicht: der Watchdog holt den
+            # Nachschub selbst nach (_radio_nachholen) - also drinbleiben.
+            return self._embed("Radio ist an, nur kommt gerade nix durch – YouTube oder "
+                               "Discord zickt. Ich versuch's gleich selbst nochmal, du "
+                               "musst nix tun. Ausnahmsweise.",
+                               title="📻  Radio", color=_COL_INFO)
+        aufgegeben = not player.radio      # dann stand "Mir fällt nix ein" schon da
+        if not war_drin and player.nichts_zu_tun() and not player.queue:
+            await player.disconnect()      # nicht stumm im Kanal sitzen bleiben
+        if aufgegeben:
+            return HANDLED
+        return self._embed("Gerade krieg ich nix rein. Versuch's gleich nochmal.",
+                           title="📻  Radio", color=_COL_ERR)
 
     @staticmethod
     def _vorab_verbinden(player, kanal):
