@@ -2,8 +2,9 @@
 
 Wie tools_ki_check.py, nur fuer die Musik-Strecke: Voraussetzungen (yt-dlp,
 ffmpeg, PyNaCl), Spotify-Zugangsdaten, ein echter Token-Abruf und ein echter
-Track-Abruf. Statt eines Tracebacks im Journal steht danach ein deutscher Satz
-und der naechste Schritt da.
+Track-Abruf, dazu die Strecke OHNE Schluessel (Spotifys Einbettungsseite, wie
+sie der Playlist-Assistent nutzt). Statt eines Tracebacks im Journal steht
+danach ein deutscher Satz und der naechste Schritt da.
 
     /opt/flobot/venv/bin/python /opt/flobot/tools_musik_check.py
     bash k m
@@ -29,6 +30,9 @@ except ImportError:  # pragma: no cover - dann eben ohne .env
 
 # Ein bekannter oeffentlicher Track, an dem sich der Abruf pruefen laesst.
 PROBE_TRACK = "4cOdK2wGLETKBW3PvgPWqT"
+# ... und ein oeffentliches Album fuer die Probe ohne Schluessel (das Beispiel
+# aus Spotifys eigener API-Doku - das verschwindet so schnell nicht).
+PROBE_ALBUM = "4aawyAB9vmqN3uQ7FjRGTy"
 TIMEOUT = 15
 
 
@@ -264,6 +268,96 @@ class MusikCheck(Arzt):
             self.fehler(f"Track-Abruf: HTTP {status}. Spotify sagt: {meldung}")
             self.merke(f"Unerwarteter Status {status}", "Meldung oben lesen.")
 
+    # --- Schritt 2b: Spotify OHNE Schluessel ---------------------------------
+    # Playlists und 'flo spiel <Spotify-Link>' lesen Songs ohne Keys aus der
+    # oeffentlichen Einbettungsseite (musikquellen.py). Deren JSON gehoert
+    # Spotify und aendert sich ohne Ankuendigung - und aus dem Testlauf ist
+    # Spotify nicht erreichbar. Diese Probe ist die einzige Stelle, an der sich
+    # zeigt, ob die Strecke auf dem Server WIRKLICH geht. Bewusst ohne Import
+    # aus dem Bot (siehe arzt.py): dieselbe Suche, nur nachgebaut.
+    def spotify_ohne_keys_pruefen(self):
+        self.titel("2b. Spotify ohne Schluessel (Einbettungsseite)")
+        kopf = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                "Accept-Language": "de,en;q=0.8"}
+        status, body = self._anfrage(
+            f"https://open.spotify.com/embed/track/{PROBE_TRACK}", kopf=kopf)
+        daten = self._embed_json(body) if status == 200 else None
+        entity = self._finde(daten, "entity") if daten is not None else None
+        if isinstance(entity, dict) and (entity.get("name") or entity.get("title")):
+            wer = ", ".join(a.get("name", "") for a in entity.get("artists") or []
+                            if isinstance(a, dict)) or entity.get("subtitle") or "?"
+            dauer = entity.get("duration")
+            zeit = (f"{int(dauer) // 60000}:{int(dauer) // 1000 % 60:02d}"
+                    if isinstance(dauer, (int, float)) else "ohne Dauer")
+            self.ok(f"Song ohne Keys: {wer} - {entity.get('name') or entity.get('title')} "
+                    f"({zeit})")
+        elif status != 200:
+            self.fehler(f"Einbettungsseite: HTTP {status or 'nicht erreichbar'} "
+                        f"({self._meldung(body)[:120]})")
+            self.merke("Spotify-Einbettung nicht erreichbar",
+                       "Ohne Keys gehen Spotify-Links dann nicht. Netz pruefen: "
+                       "curl -sI https://open.spotify.com/embed/track/" + PROBE_TRACK)
+        else:
+            self.fehler("Einbettungsseite kam, aber ohne lesbare Songdaten "
+                        "(__NEXT_DATA__/entity fehlt).")
+            self.merke("Spotify hat die Einbettung umgebaut",
+                       "musikquellen.py (track_aus_embed/liste_aus_embed) an den neuen "
+                       "Aufbau anpassen. Bis dahin gehen Spotify-Links nur mit Keys "
+                       "(oder per oEmbed nur mit dem Titel).")
+        status, body = self._anfrage(
+            f"https://open.spotify.com/embed/album/{PROBE_ALBUM}", kopf=kopf)
+        daten = self._embed_json(body) if status == 200 else None
+        liste = self._finde(daten, "trackList") if daten is not None else None
+        if isinstance(liste, list) and liste:
+            erster = liste[0] if isinstance(liste[0], dict) else {}
+            mit_dauer = sum(1 for t in liste if isinstance(t, dict)
+                            and isinstance(t.get("duration"), (int, float)))
+            self.ok(f"Album ohne Keys: {len(liste)} Songs (erster: "
+                    f"{erster.get('subtitle', '?')} - {erster.get('title', '?')}, "
+                    f"{mit_dauer} mit Dauer)")
+        else:
+            self.warn(f"Album ohne Keys: keine Songliste (HTTP {status}). Playlist-"
+                      "Assistent und 'flo spiel <Album-Link>' brauchen dann Keys.")
+            self.merke("Spotify-Alben ohne Keys gehen nicht",
+                       "musikquellen.liste_aus_embed an den Aufbau anpassen oder "
+                       "SPOTIFY_CLIENT_ID/SECRET setzen.")
+        status, body = self._anfrage(
+            "https://open.spotify.com/oembed?url=https://open.spotify.com/track/"
+            + PROBE_TRACK)
+        try:
+            titel = json.loads(body).get("title") if status == 200 else ""
+        except (ValueError, AttributeError):
+            titel = ""
+        if titel:
+            self.ok(f"oEmbed (Notweg, nur Titel): {titel}")
+        else:
+            self.warn(f"oEmbed liefert nichts (HTTP {status}) - der letzte Notweg fehlt.")
+
+    @staticmethod
+    def _embed_json(html):
+        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "",
+                      re.DOTALL)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _finde(cls, obj, schluessel):
+        """Erster Wert zu 'schluessel' irgendwo im verschachtelten JSON."""
+        if isinstance(obj, dict):
+            if schluessel in obj:
+                return obj[schluessel]
+            obj = list(obj.values())
+        if isinstance(obj, list):
+            for wert in obj:
+                treffer = cls._finde(wert, schluessel)
+                if treffer is not None:
+                    return treffer
+        return None
+
     # --- Schritt 3: YouTube (dort landet ein Spotify-Link am Ende) ----------
     def youtube_pruefen(self):
         self.titel("3. YouTube (dort landen Spotify-Songs am Ende)")
@@ -363,6 +457,7 @@ class MusikCheck(Arzt):
         self._schreib(f"\033[1m{self.NAME}\033[0m", self.NAME)
         self.werkzeuge_pruefen()
         self.spotify_pruefen()
+        self.spotify_ohne_keys_pruefen()
         self.youtube_pruefen()
         return self.bericht()
 

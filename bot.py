@@ -667,9 +667,10 @@ _HELP_DATA = {
     # Kategorie-Alias (siehe _HELP_CATEGORY_ALIASES).
     "playlist": ("Playlists & Radio", 0x1ABC9C, [
         ("flo playlist neu <name>", "Playlist bauen – Songs & Links reinkippen, dann 'fertig'"),
-        ("flo playlist <name>", "abspielen (· mix = gemischt)"),
+        ("flo playlist <name>", "abspielen (· mix = gemischt · zeig = alle Songs)"),
         ("flo playlists", "alle Playlists des Servers"),
-        ("flo playlist <name> dazu · löschen", "erweitern / wegwerfen (Ersteller & Mods)"),
+        ("flo playlist <name> dazu · löschen",
+         "erweitern / wegwerfen – auch raus 3, umbenennen in … (Ersteller & Mods)"),
         ("flo queue speichern <name>", "aktuelle Warteschlange als Playlist"),
         ("flo radio · radio aus", "📻 Endlos-Radio: Schlange leer → Flo spielt Ähnliches"),
         ("flo skip", "ab 3 Leuten wird abgestimmt (Wünscher & Mods direkt)"),

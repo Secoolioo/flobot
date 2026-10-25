@@ -354,10 +354,16 @@ Läuft die Warteschlange leer, hängt Flo einen ähnlichen
 Titel an, statt zu gehen. Verwandte Titel liefert `yt-dlp` mit.
 *mittel · `music.py`*
 
-**[45] Gespeicherte Wiedergabelisten je Server.** 🔧 **Im Bau** — Gerüst steht (`playlists.py`).
-`flo liste speichern zocken`,
-`flo liste zocken` — das eigene kleine Spotify.
-*mittel · neu `playlists.py`*
+**[45] Gespeicherte Wiedergabelisten je Server.** ✅ **Erledigt** (25.10.2026).
+Das eigene kleine Spotify: `flo playlist neu zocken` öffnet einen Assistenten,
+in den man Titel und Links kippt (YouTube, SoundCloud, Spotify – Songs, Alben,
+Playlists, auch ohne Spotify-Schlüssel), `fertig` speichert. Danach eine Karte
+mit neustartfesten Knöpfen (▶ Abspielen · 🔀 Gemischt · ✏️ Songs dazu · 🗑 Löschen),
+`flo playlist zocken` spielt, `flo playlists` zeigt alle, `flo queue speichern
+als abend` sichert die Warteschlange. Nicht `liste` – das Wort gehört schon der
+Warteschlange, der Arbeit, den Giveaways und dem Schuldbuch. Details im README
+„Playlists".
+*mittel · neu `playlists.py`, `musikquellen.py`*
 
 **[46] Lautstärke je Titel angleichen.** ffmpeg kann `loudnorm`. Damit hört das
 Rauf- und Runterdrehen zwischen Songs auf.

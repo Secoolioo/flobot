@@ -558,8 +558,94 @@ Voice-Ausfalls endet, und ein Geister-Track nach `stop`.
 
 ### Playlists
 
-*Im Bau* — das Gerüst steht (`playlists.py`, `musikquellen.py`; Hilfe-Seite
-„Playlists & Radio").
+Eigene Wiedergabelisten **je Server** (`playlists.py`, `musikquellen.py`; Hilfe-
+Seite „Playlists & Radio", `Flo hilfe playlist`). Sie hängen am Schalter `music`.
+
+```
+Flo playlist neu Zocken          Assistent: Songs reinkippen, dann „fertig"
+Flo playlist zocken              abspielen (im Voice)       · auch „spiel die playlist zocken"
+Flo playlist zocken mix          gemischt                    · auch „playlist mix zocken"
+Flo playlists                    alle Playlists des Servers (Name · Songs · von · ×gespielt)
+Flo playlist zocken zeig         Karte mit bis zu 25 Songs
+Flo playlist zocken dazu         Assistent zum Anhängen      (Ersteller & Mods)
+Flo playlist zocken raus 3       Song Nr. 3 rauswerfen       (Ersteller & Mods)
+Flo playlist zocken umbenennen in Chill                      (Ersteller & Mods)
+Flo playlist zocken löschen      mit Rückfrage               (Ersteller & Mods)
+Flo queue speichern als Abend    laufender Song + Warteschlange als Playlist
+```
+
+**Der Assistent.** Nach `playlist neu <name>` (oder „neue playlist …") postet Flo
+**eine** Statusnachricht, die er live mitschreibt (Zähler, die letzten zehn
+Songs, Hinweise – höchstens alle zwei Sekunden bearbeitet). Hineinkippen geht
+alles, gern zehn Zeilen auf einmal, Spiegelstriche und Nummern stören nicht:
+
+* Titel als Text (`Daft Punk - One More Time`) – wird erst beim Abspielen gesucht,
+* YouTube-Videos und -Playlists, SoundCloud-Tracks und -Sets (auch die Kurzlinks
+  `on.soundcloud.com`), direkte Audiodateien,
+* Spotify-Songs, -Alben und -Playlists, auch `spotify.link`-Kurzlinks – **ohne
+  Spotify-Schlüssel** (siehe unten).
+
+Doppeltes fliegt raus, mehrere Links in einer Zeile werden einzeln genommen.
+An jeder Nachricht steht danach ✅ (alles drin), ⚠️ (teilweise, z. B. Dubletten)
+oder ❌ (nichts zu holen – warum, steht in der Statusnachricht). Grenzen:
+**200 Songs** je Liste, **50 Playlists** je Server, **10** je Person, Namen bis
+40 Zeichen und fünf Wörter, höchstens **fünf** ganze Alben/Playlists je
+Assistent mit je höchstens 50 Songs.
+
+Fertig mit `fertig`, `stop`, `das wars`, `passt`, `speichern` … oder dem ✅-Knopf
+– auch mit „Flo" davor: **`flo stop` schließt den Assistenten und stoppt NICHT
+die Musik.** Das geht auch als letzte Zeile eines Pastes (`Song A`, `Song B`,
+`flo fertig` in einer Nachricht); dort bricht `abbrechen` genauso ab. Wegwerfen
+mit `abbrechen`, `vergiss es`, `doch nicht` oder 🗑. Was an Flo gerichtet ist
+(„flo stop die musik", „flo wie spät ist es"), geht ganz normal an Befehle und
+KI. Mehrzeilig mit „Flo" vorn („Flo, hier meine Songs:" + Liste) ist ein Paste,
+wenn ohne diese erste Zeile mindestens zwei Songs übrig bleiben – die
+angesprochene Zeile selbst wird nie ein Song (nur Links darin zählen);
+„Flo" + Zeilenumbruch + „wie spät ist es?" geht an die KI. Künstler, die selbst
+so heißen („Flo Rida - Low"), sind ein Song. Chat-Zeilen (Fragen, Überschriften
+mit Doppelpunkt, lange Sätze, „lol", nur Emojis) bleiben draußen, und ein
+Notsignal wird nie als Song geschluckt. Wer nach `fertig` noch etwas
+hinterherschickt, bekommt ❌ und den Hinweis auf `playlist <name> dazu`.
+Fünf Minuten ohne neue Songs: mit Songs speichert Flo von selbst („⏰ Du
+pennst?"), ohne verwirft er. Ist `music` auf dem Server inzwischen aus, macht er
+den Assistenten still zu (gespeichert wird trotzdem, aber ohne Ping). Beim
+Herunterfahren wird gespeichert, was da ist – geht das nicht (Grenze erreicht),
+steht der Grund in der Statusnachricht. Jeder hat höchstens **einen** offenen
+Assistenten – ein neuer verwirft den alten. In der Sendepause steht er still,
+auch seine Knöpfe.
+
+> ⚠️ Solange ein Assistent offen ist, gewinnt er auch gegen den Blackjack-Tisch:
+> `fertig` schließt dann den Assistenten, nicht die Blackjack-Hand.
+
+**Die Karte.** Gespeichert wird die Statusnachricht zur Karte mit vier Knöpfen –
+▶ Abspielen · 🔀 Gemischt · ✏️ Songs dazu · 🗑 Löschen –, die **auch nach einem
+Neustart** funktionieren. Abspielen braucht einen Sprachkanal; eine **geparkte**
+Warteschlange läuft dabei erst weiter, die Playlist stellt sich hinten an. Passt
+nicht alles unter den Warteschlangen-Deckel, sagt Flo, wie viele reingingen –
+der Rest bleibt in der Liste. Je Server wird immer nur **eine** Playlist auf
+einmal eingereiht: wer klickt oder tippt, während der erste Song noch lädt,
+bekommt „Geduld" statt die Liste doppelt in der Schlange. Im Aufräum-Kanal
+bleibt die Karte zehn Minuten stehen.
+
+**Spotify ohne Schlüssel.** Ohne `SPOTIFY_CLIENT_ID`/`_SECRET` liest Flo Titel,
+Künstler, Dauer und ganze Songlisten aus Spotifys öffentlicher Einbettungsseite
+(`open.spotify.com/embed/…`), notfalls nur den Titel über oEmbed. Das gilt auch
+für `Flo spiel <Spotify-Song/Album>`. Gesucht wird auf YouTube wie mit Schlüssel
+mit dem **Haupt**-Künstler und dem Titel; angezeigt werden alle Künstler. Den
+Aufbau dieser Seite bestimmt Spotify – ob die Strecke auf dem Server geht, zeigt
+`bash k m` (Schritt „Spotify ohne Schlüssel").
+
+Gewollte Änderung an der Musik: `Flo spiel <Spotify-Playlist>` liest die
+Einbettung jetzt über dieselbe Stelle wie der Assistent (`musikquellen`,
+geteilte HTTP-Session, 15 s wie bisher) und bekommt dabei die Songdauer für
+den Best-Match mit; `music._spotify_playlist_via_embed` ist nur noch eine dünne
+Hülle mit der alten Rückgabe.
+
+Daten: `data/playlists.json`. Die Befehlsgrammatik steht in `playlists._parse`:
+nur was eindeutig ist, wird ein Befehl („flo playlist ist doof", „flo playlist
+zocken ist weg" beantwortet die KI, „flo spiel playlist <gibt's nicht>" bleibt
+eine YouTube-Suche). `Flo playlist <link>` erklärt, dass ein Link kein Name ist
+(abspielen: `Flo spiel <link>`).
 
 ### Endlos-Radio
 
@@ -1403,6 +1489,10 @@ Servern.
 | `AUTODELETE_SWEEP_MAX` | `300` | Nachrichten je Aufräum-Runde |
 | `MUSIC_VORLADEN` | `1` | nächsten Song schon während des aktuellen auflösen (keine Stille dazwischen) |
 | `MUSIC_IDLE_SEKUNDEN` | `300` | so lange bleibt Flo ohne Musik oder allein im Voice (`0` = für immer) |
+| `PLAYLIST_MAX_LISTEN` / `_PRO_PERSON` / `_SONGS` | `50` / `10` / `200` | Playlists je Server, je Person, Songs je Liste |
+| `PLAYLIST_WIZARD_TIMEOUT` | `300` | so lange wartet der Playlist-Assistent auf Songs (Sekunden) |
+| `PLAYLISTS_ENABLED` | `1` | `0` schaltet die Playlists ab (die Musik bleibt) |
+| `MUSIKQUELLEN_FRIST` | `5` | so lange darf ein Titel-Abruf (oEmbed, Spotify-Einbettung) dauern (Sekunden; Alben/Playlists mindestens 15) |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
 | `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
 | `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |

@@ -187,9 +187,10 @@ class CmdNorm:
         "boirisch", "dialekt", "servus", "servas", "sers", "seas", "habidere",
         "griasdi", "griaßdi", "griasgod", "griaseich", "zefix", "pfiadi",
         "pfiati", "griaß", "griass", "pfiat", "pfiad",
-        # playlists, Radio, Musik-Wrapped (die Musik-Erweiterungen)
+        # playlists, Radio, Musik-Wrapped (die Musik-Erweiterungen).
+        # 'neue' wie in 'neue playlist zocken'.
         "playlist", "playlists", "wiedergabeliste", "radio", "endlosradio",
-        "autoplay", "wrapped", "musikwrapped",
+        "autoplay", "wrapped", "musikwrapped", "neue",
         # laune, nachhaken (Flo lebt), zitate + geburtstage (Server-Leben).
         # 'zitat' steht schon bei media.
         "laune", "mood", "nachhaken", "zitate", "geburtstag", "geburtstage",
@@ -474,8 +475,10 @@ class CmdNorm:
         "giveaway", "gewinnspiel", "verlosung", "verlosen", "raffle", "gw",
         "umfrage", "poll", "abstimmung", "voting",
         "work", "arbeit", "arbeiten", "job", "schicht", "malochen",
-        # playlists spielt ab, radio schaltet die Musik, geburtstag traegt ein
-        "playlist", "radio", "endlosradio", "autoplay", "geburtstag",
+        # playlists spielt ab, radio schaltet die Musik, geburtstag traegt ein.
+        # 'neue' oeffnet einen Assistenten - und als Tippfehler-Ziel haette es
+        # sonst 'neuer rekord' und 'neues spiel' an sich gezogen.
+        "playlist", "radio", "endlosradio", "autoplay", "geburtstag", "neue",
     }
 
     def _one_typo(self, a, b):
