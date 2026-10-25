@@ -1382,6 +1382,14 @@ class _Logfang(logging.Handler):
         return False
 
 
+def _store_abhaengen(kern, alt):
+    """Den JsonStore, den ein *_frisch-Helfer fuer EINEN Test angelegt hat, aus
+    store.alle_sichern() nehmen (siehe dort)."""
+    neu = vars(kern).get("_store")
+    if neu is not None and neu is not alt.get("_store"):
+        store._ALLE.discard(neu)
+
+
 @contextlib.contextmanager
 def _zustand_frisch(daten=None):
     """musikzustand.setup() mit einem ECHTEN JsonStore im Test-Datenordner -
@@ -1400,6 +1408,12 @@ def _zustand_frisch(daten=None):
             assert musikzustand.setup() is True
         yield kern
     finally:
+        # Den Store DIESES Tests aus store.alle_sichern() nehmen: blieb er mit
+        # etwas Ausstehendem liegen (die Loop von asyncio.run ist zu, der
+        # Sammler abgebrochen), schrieb ein spaeteres alle_sichern() seinen
+        # alten Stand in DIESELBE Datei - und ein anderer Test sah eine fremde
+        # Datei (unter 3.13 je nach Muellabfuhr mal ja, mal nein).
+        _store_abhaengen(kern, alt)
         vars(kern).clear()
         vars(kern).update(alt)
 
@@ -2236,6 +2250,12 @@ def _stats_frisch(daten=None):
             assert musikstats.setup() is True
         yield kern
     finally:
+        # Den Store DIESES Tests aus store.alle_sichern() nehmen: blieb er mit
+        # etwas Ausstehendem liegen (die Loop von asyncio.run ist zu, der
+        # Sammler abgebrochen), schrieb ein spaeteres alle_sichern() seinen
+        # alten Stand in DIESELBE Datei - und ein anderer Test sah eine fremde
+        # Datei (unter 3.13 je nach Muellabfuhr mal ja, mal nein).
+        _store_abhaengen(kern, alt)
         vars(kern).clear()
         vars(kern).update(alt)
         wegraeumen()
