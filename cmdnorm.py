@@ -486,6 +486,9 @@ class CmdNorm:
         "neue",
         # nachhaken schaltet je Person an/aus ('flo nachhaken aus').
         "nachhaken",
+        # 'zitate weg 3' nimmt einen Kandidaten raus - 'zitae weg mit dem Mist'
+        # ist trotzdem kein Befehl.
+        "zitate",
     }
 
     def _one_typo(self, a, b):

@@ -152,9 +152,12 @@ KATALOG = [
     Einstellung("wrapped_channel", "Musik-Wrapped-Kanal", "channel", 0, "",
                 "Wohin Flo am Monatsanfang das Musik-Wrapped postet. Aus = in "
                 "den Ansagen-Kanal.", "Musik"),
+    # Coins gelten fuer ALLE Server. Die Obergrenze verhindert, dass sich der
+    # Admin eines privaten Servers selbst Geld druckt (sich zum DJ waehlt und
+    # eine Million einstellt) - siehe auch geburtstag_coins.
     Einstellung("dj_belohnung", "DJ des Monats: Coins", "zahl", 5000, "",
                 "So viel bekommt, wer im Monat die meisten Songs gewünscht hat. "
-                "0 = nur die Ehre.", "Musik", minimum=0, maximum=1_000_000),
+                "0 = nur die Ehre.", "Musik", minimum=0, maximum=25_000),
     Einstellung("dj_rolle", "DJ des Monats: Rolle", "an_aus", False, "",
                 "Flo gibt dem DJ des Monats die Rolle „🎧 DJ des Monats“ (und "
                 "nimmt sie dem vorigen). Braucht „Rollen verwalten“.", "Musik",
@@ -212,12 +215,15 @@ KATALOG = [
     # --- Server-Leben ----------------------------------------------------
     Einstellung("zitat_channel", "Zitat-der-Woche-Kanal", "channel", 0, "",
                 "Wohin sonntags die Abstimmung und das Siegerzitat gehen. Aus = "
-                "in den Ansagen-Kanal.", "Server-Leben"),
+                "in den Ansagen-Kanal (sonst den System-Kanal) – nie in einen "
+                "Aufräum-Kanal, dort wäre die Umfrage nach einer Minute weg.",
+                "Server-Leben"),
     Einstellung("geburtstag_channel", "Geburtstags-Kanal", "channel", 0, "",
-                "Wo Flo gratuliert. Aus = im Ansagen-Kanal.", "Server-Leben"),
+                "Wo Flo gratuliert. Aus = im Ansagen-Kanal (sonst im System-Kanal) "
+                "– nie in einem Aufräum-Kanal.", "Server-Leben"),
     Einstellung("geburtstag_coins", "Geburtstags-Geschenk", "zahl", 2500, "",
                 "So viele Coins gibt es zum Geburtstag. 0 = nur der Glückwunsch.",
-                "Server-Leben", minimum=0, maximum=1_000_000),
+                "Server-Leben", minimum=0, maximum=10_000),
     Einstellung("geburtstag_rolle", "Geburtstags-Rolle", "an_aus", False, "",
                 "Am Geburtstag die Rolle „🎂 Geburtstagskind“ – einen Tag lang. "
                 "Braucht „Rollen verwalten“.", "Server-Leben", nur_haupt=True),

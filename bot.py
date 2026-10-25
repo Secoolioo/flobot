@@ -769,8 +769,8 @@ _HELP_DATA = {
         ("flo laune", "wie Flo heute drauf ist – und wer schuld ist"),
         ("flo nachhaken aus · an", "Flo merkt sich 'morgen Prüfung' und fragt nach"),
         ("Rechtsklick → Apps → Als Zitat speichern", "Kandidat fürs Zitat der Woche"),
-        ("flo zitate · zitat der woche", "sonntags wird abgestimmt – Sieger als Bild"),
-        ("flo geburtstag 12.03.", "eintragen – Flo gratuliert, mit Coins"),
+        ("flo zitate · zitat der woche", "Kandidaten & letzter Sieger – sonntags Abstimmung"),
+        ("flo geburtstag 12.03.", "eintragen (ohne Datum: zeigen · löschen) – mit Coins"),
         ("flo geburtstage", "die nächsten Geburtstage hier"),
     ]),
     "arbeit": ("Arbeit", 0x2E86C1, [

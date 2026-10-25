@@ -450,12 +450,18 @@ dem Ganzen die unangenehme Ecke und ist in 20 Zeilen gebaut.
 
 ## Server-Leben
 
-**[57] Zitat der Woche.** 🔧 **Im Bau** — Gerüst steht (`zitate.py`).
-Flo sammelt die besten Sätze (Reaktion mit einem
-bestimmten Emoji reicht als Stimme) und postet sonntags das Gewinnerzitat als
-gerendertes Bild mit Profilbild — wie ein echtes Zitat-Meme. Braucht die
-Reaktions-Intents, `render.py` kann den Rest.
-*klein · `bot.py`, `render.py`*
+**[57] Zitat der Woche.** ✅ **Erledigt** (25.10.2026) — ohne Reaktions-
+Intents: gespeichert wird per Rechtsklick (*Als Zitat speichern*) oder `flo zitat
+speichern` als Antwort, abgestimmt mit einer echten Discord-Umfrage sonntags ab
+12 Uhr (bis zu zehn Kandidaten, höchstens zwei je Person). Der Sieger bekommt die
+Zitat-Karte mit Profilbild, zwei fiese Sätze und als Einziger einen Ping; ein
+einziger Kandidat gewinnt konkurrenzlos, Gleichstand entscheidet Flo, ein
+verpasstes Ergebnis holt der Takt selbst. Nicht gespeichert: die eigene
+Nachricht, Bots, Hetze, private Daten, Notsignale und nichts aus Kanälen, die
+nicht jeder lesen kann. Nie in einen Aufräum-Kanal. `flo zitate`, `flo zitat der
+woche`, `flo zitat weg <nr>`; `flo zitat <text>` bleibt das Quote-Meme. README
+„Zitat der Woche".
+*klein · neu `zitate.py`*
 
 **[58] Umfrage aus einem Satz.** `flo frag ob wir heute zocken` → Flo baut die
 Umfrage, setzt die Reaktionen, zählt aus, meldet das Ergebnis. Kein Formular,
@@ -471,9 +477,15 @@ nie neu gepostet. Ein Server-Armaturenbrett, das keiner öffnen muss.
 Reaktion, Erinnerung 15 Minuten vorher per DM an alle, die zugesagt haben.
 *mittel · neu `termine.py`*
 
-**[61] Geburtstage.** 🔧 **Im Bau** — Gerüst steht (`geburtstage.py`).
-Einmal eintragen, Flo denkt dran. Simpel, kommt gut an.
-*klein · `profil.py`*
+**[61] Geburtstage.** ✅ **Erledigt** (25.10.2026). `flo geburtstag 12.03.`
+(auch „12. März", ohne Jahr), `flo geburtstage` zeigt die nächsten zehn. Am Tag
+ab 9 Uhr ein Glückwunsch mit Ping, Coins und optional der Rolle „🎂
+Geburtstagskind" für den Tag; offline verpasst wird bis zu zwei Tage nachgeholt,
+der 29.02. in Nicht-Schaltjahren am 28.02. Gegen Coins auf Zuruf: 14 Tage
+Vorlauf, Datum höchstens alle 30 Tage ändern, gefeiert einmal im Jahr je
+Server, bezahlt einmal im Jahr über alle Server, höchstens 10.000. Nur für sich
+selbst. README „Geburtstage".
+*klein · neu `geburtstage.py`*
 
 **[62] Jahresrückblick.** Einmal im Dezember: die Zahlen des Servers als
 Bildstrecke. Aus `words`, `economy`, `music`, `casino` liegt alles vor.

@@ -937,7 +937,9 @@ einmal pro Minute je Server, ohne Ping und ohne Coins.
 Kanal `wrapped_channel` (`flo einstellung`), sonst in die Ansagen. Wer die
 meisten Songs gewünscht hat (Gleichstand: wessen Songs länger liefen), ist
 **DJ des Monats**: wird als Einziger gepingt, bekommt `dj_belohnung` Coins
-(Standard 5.000, `0` = nur die Ehre) und mit `dj_rolle` (auf dem Hauptserver
+(Standard 5.000, höchstens 25.000 — Coins gelten auf allen Servern, ein Admin
+soll sich auf seinem Privatserver kein Geld drucken; `0` = nur die Ehre) und
+mit `dj_rolle` (auf dem Hauptserver
 von Haus aus an, sonst aus) die Rolle „🎧 DJ des Monats". Wer sie hat, merkt
 sich Flo erst, wenn Discord sie wirklich vergeben hat — abgeben muss sie im
 nächsten Monat genau der, auch wenn dazwischen ein Monat ohne Schalter lag; ein
@@ -1165,15 +1167,164 @@ Hilfe-Seite: „Server-Leben" (`flo hilfe`).
 
 ### Zitat der Woche
 
-*Im Bau* — das Gerüst steht (`zitate.py`, Schalter `zitate`, Rechtsklick *Als
-Zitat speichern*). Das Ergebnis der Sonntags-Abstimmung geht an `zitate`, nicht
-an den normalen Umfrage-Kommentar. `flo zitate` ist jetzt ein eigenes Wort —
-vorher wurde es per Tippfehler-Korrektur zu `zitat` (Quote-Meme); bis der Teil
-steht, antwortet darauf die KI.
+```
+Rechtsklick → Apps → Als Zitat speichern   eine Nachricht wird Kandidat
+flo zitat speichern     (als Antwort auf die Nachricht) dasselbe, auch: zitat merken
+flo zitate              die Kandidaten der nächsten Abstimmung, nummeriert
+flo zitat der woche     der letzte Sieger
+flo zitat weg 3         Kandidat 3 raus
+flo zitat umfrage jetzt nur der Chef: die Abstimmung sofort (Testauslöser)
+```
+
+Wer etwas Dummes sagt, wird gespeichert — **nicht von sich selbst** („Eigenlob
+stinkt. Lass das andere entscheiden."). Bestätigt wird nur dem, der speichert
+(beim Rechtsklick unsichtbar für die anderen), dazu ein 📌 an der Nachricht.
+Abgelehnt werden: Bot-Nachrichten, die eigene, leere (nur Bild/Sticker), unter
+3 oder über 300 Zeichen, schon gespeicherte, Hetze, Links und private Daten
+(Mail, Telefon, Adresse — dieselbe Prüfung wie beim Gedächtnis). Eine
+Nachricht mit **Notsignal** (oder ein Name mit einem) wird neutral abgelehnt,
+ohne Spruch und ohne Grund. **Aus dem Hinterzimmer** kommt nichts: Nachrichten
+aus einem NSFW-Kanal, einem privaten Thread oder einem Kanal, den nicht jeder
+lesen kann, der den Zitat-Kanal liest (Mod-Kanal, privater Kanal) — die
+zitierte Person hat sich ihr Publikum nicht ausgesucht („Was im Hinterzimmer
+gesagt wird, bleibt im Hinterzimmer."). Gemessen wird je Rolle (Bot-Rollen
+zählen nicht), so geht es auch auf Servern, auf denen `@everyone` nichts sieht.
+Dieselbe Prüfung gilt beim Start der Umfrage und in `flo zitate` (dort fehlt so
+ein Kandidat im Wortlaut, seine Nummer bleibt frei). Höchstens 50 offene
+Kandidaten je Server und 10 je Person, die speichert. Rausnehmen (`flo zitat weg <nr>`) darf, wer gespeichert
+hat, **wer zitiert wurde**, und die Mods („Nachrichten verwalten").
+
+**Sonntags ab 12 Uhr** startet Flo im Kanal `zitat_channel` (sonst in den
+Ansagen, sonst im System-Kanal) eine echte Discord-Umfrage, 8 Stunden lang — „🏆 Zitat der Woche – wer
+hat den größten Mist gelabert?". Bis zu **zehn** Kandidaten, höchstens **zwei**
+derselben Person; sind es mehr, eine feste Zufallsauswahl (gleicher Server,
+gleiche Woche, gleiches Ergebnis). Jede Antwort ist nummeriert und auf Discords
+55 Zeichen gekürzt („3 · „Pizza ist ein…“ – Bob"), die vollen Zitate stehen im
+Text darüber. Gibt es nur **einen** Kandidaten, gewinnt er konkurrenzlos (ohne
+Umfrage); gibt es **keinen**, kommt eine derbe Zeile — aber nur, wenn hier in
+den letzten vier Wochen überhaupt etwas gespeichert wurde. Fehlt Flo das Recht
+„Umfragen erstellen", entscheidet er allein. Wer gerade ein Notsignal geschrieben
+hat (das merkt sich „Er hält nach"), kommt nicht zur Wahl.
+
+**Nie in einen Aufräum-Kanal** (`autodelete_channels`): dort löscht Flo auch
+seine eigenen Posts nach einer Minute — die Umfrage wäre weg, bevor einer
+abstimmt, und Discord schickte nie ein Ergebnis. Auf dem Hauptserver ist der
+Ansagen-Kanal ab Werk genau so einer; dann nimmt Flo den System-Kanal, und gibt
+es keinen, läuft keine Umfrage (steht im Log, `flo zitat umfrage jetzt` sagt
+es). Am besten `zitat_channel` einstellen.
+
+**Das Ergebnis.** Ist die Umfrage vorbei, postet Discord eine Ergebnis-Nachricht;
+die geht an `zitate`, nicht an den normalen Umfrage-Kommentar. Den Sieger liest
+Flo aus ihren Feldern; bei **Gleichstand** holt er die Umfrage selbst und
+entscheidet unter den Besten („Gleichstand, ich entscheide: …"), bei null
+Stimmen gewinnt keiner. Der Sieger bekommt eine **Zitat-Karte** (wie das
+Quote-Meme, mit Profilbild), zwei fiese Sätze von der KI (Hintergrund-Aufruf
+mit Grenze; sonst aus dem Ersatz-Pool) und als **Einziger einen Ping**. Hat er
+während der Abstimmung ein Notsignal geschrieben: keine KI, kein Spott, kein
+Ping — nur die Karte und „Glückwunsch. Heute ausnahmsweise ohne Spruch." War Flo
+offline, als das Ergebnis kam, holt der Takt die Umfrage 30 Minuten nach dem
+Ende selbst und wertet sie aus, sobald Discord sie abgeschlossen hat. In der
+**Sendepause** wird der Sieger festgehalten und danach gepostet; lehnt Discord
+den Post ab, versucht Flo es noch ein paar Mal (ohne „Dateien anhängen" eben
+ohne Karte).
+
+**Genau einmal.** Gestartet wird nur bei verlässlicher Uhr, und „diese Woche
+gelaufen" (ISO-Woche) läuft nur vorwärts und steht auf der Platte, **bevor** die
+Umfrage rausgeht — nach dem Uhrsprung beim Booten kommt keine zweite. War Flo
+sonntags weg, holt er die Abstimmung bis Montag 12 Uhr nach; danach wandern die
+Kandidaten in die nächste Runde. Was nach dem Start gespeichert wird, gehört
+schon zur nächsten. `flo zitat umfrage jetzt` zählt als die Runde — sonntags
+kommt für diese Woche keine zweite; ohne Kandidaten verbraucht er nichts. Bleibt
+das Senden der Umfrage **ohne Antwort** (Netz weg, Zeitüberschreitung), weiß
+keiner, ob sie drüben ist: Flo schickt keine zweite, sondern sieht nach fünf
+Minuten im Kanal nach (und nimmt ihr Ergebnis an, falls es vorher kommt). Ist
+sie nicht da, ist die Runde wieder frei; kann er nicht nachsehen, gibt er sie
+nach drei Tagen frei — die Kandidaten wandern dann weiter.
+
+**Was sich für das Quote-Meme geändert hat.** `flo zitat <text>` und `flo zitat`
+als Antwort machen weiter das Bild wie immer — außer, hinter `zitat` (oder
+`zitate`, beide gelten gleich) steht **genau** eine dieser Formen; dann ist es ein
+Befehl des Zitats der Woche, und ein Meme mit diesem Text gibt es nicht mehr.
+Satzzeichen am Rand zählen nicht (`Zitat der Woche?`).
+
+| Hinter `zitat`/`zitate` | Befehl |
+|---|---|
+| `der woche`, `dieser woche`, `letzte woche`, `der letzten woche`, `von letzter woche` | der letzte Sieger |
+| `speichern`, `speicher`, `merken`, `merk` | als Antwort: speichern |
+| `weg`, `raus`, `löschen`/`loeschen`, `entfernen`, `delete` — allein oder mit Nummer (`weg 3`, `löschen #2`) | Kandidat raus (ohne Nummer: „Welche Nummer?") |
+| `umfrage jetzt`, `abstimmung jetzt`, `umfrage starten` | Testauslöser (für alle außer dem Chef: „Den Knopf drückt nur der Chef.") |
+| nur hinter `zitate`: nichts, `liste`, `zeigen`, `anzeigen`, `kandidaten` | die Kandidaten |
+
+Alles andere hinter `flo zitate` (etwa `flo zitate von goethe`) wurde früher per
+Tippfehler-Korrektur zum Meme; heute antwortet darauf die KI.
+
+Je Server abschaltbar (Schalter `zitate`, auch der Rechtsklick). Daten:
+`data/zitate.json` — die Kandidaten der letzten sechs Wochen (Text, Name,
+wer gespeichert hat), die laufende Abstimmung und die letzten 20 Sieger.
 
 ### Geburtstage
 
-*Im Bau* — das Gerüst steht (`geburtstage.py`, Schalter `geburtstage`).
+```
+flo geburtstag 12.03.     eintragen – auch 12.3, 12. März, 1. mai, 29.02.
+flo geburtstag            deinen zeigen (und wie lange noch)
+flo geburtstag löschen    austragen (auch: lösche, entfernen, austragen, weg)
+flo geburtstage           die nächsten zehn auf diesem Server
+```
+
+Ein Jahr dahinter wird ignoriert („Das Jahr will ich gar nicht wissen.").
+**Nur für dich selbst** — mit einer Erwähnung dahinter gibt es eine Abfuhr, und
+gespeichert wird nichts. Je Server getrennt. Gelöscht wird nur auf ein
+eindeutiges Wort — „Flo, Geburtstag vergessen?" ist ein Vorwurf, kein Auftrag,
+und mit Fragezeichen (`geburtstag löschen?`) löscht nichts.
+
+Am Geburtstag **ab 9 Uhr** gratuliert Flo im Kanal `geburtstag_channel` (sonst
+in den Ansagen, sonst im System-Kanal — nie in einem Aufräum-Kanal, dort wäre
+der Glückwunsch samt Ping nach einer Minute weg): ein Ping **nur** für das Geburtstagskind, zwei passiv-aggressive
+Sätze von der KI (Hintergrund-Aufruf mit Grenze; sonst „Alles Gute, Bob. Wieder
+ein Jahr älter und immer noch nix erreicht.") und das Geschenk:
+`geburtstag_coins` (Standard 2.500, höchstens 10.000, `0` = nur der
+Glückwunsch). Mit `geburtstag_rolle` (Standard nur auf dem Hauptserver an, braucht
+„Rollen verwalten") gibt es für den Tag die Rolle „🎂 Geburtstagskind"; Flo nimmt
+sie am nächsten Tag wieder (per `fetch_member`, auch nach einem Neustart — wer
+sie hat, steht in der Datei). Der 29.02. wird in Nicht-Schaltjahren am 28.02.
+gefeiert. War Flo offline, holt er bis zu **zwei Tage** nach („Nachträglich,
+weil ich offline war: …"); in der Sendepause wartet der Glückwunsch. Mit dem
+ersten Eintrag auf einem Server gilt alles bis gestern als erledigt — wer da
+seinen gestrigen Geburtstag einträgt, bekommt kein falsches „nachträglich".
+
+**Coins gibt es nicht auf Zuruf** (sie gelten auf allen Servern):
+
+* **Vorlauf:** bezahlt wird nur, wenn das Datum mindestens **14 Tage** vor dem
+  Geburtstag eingetragen war. Wer es zwei Tage vorher einträgt, bekommt den
+  Glückwunsch — mit einer Bemerkung statt Coins.
+* **Ändern** höchstens alle **30 Tage**. Der erste Eintrag ist frei (ein
+  Tippfehler darf gleich korrigiert werden); jede Änderung danach sperrt, und mit
+  ihr fängt der Vorlauf neu an.
+* **Einmal im Jahr** je Server gefeiert, egal wie oft das Datum wandert — und
+  **einmal im Jahr bezahlt, über alle Server zusammen**: wer auf fünf Servern
+  eingetragen ist, wird fünfmal gefeiert, aber einmal beschenkt („Coins gab's
+  dieses Jahr schon auf einem anderen Server …"). Sonst druckte sich jeder mit
+  ein paar Privatservern Geld.
+* **Löschen hilft nicht:** „gefeiert" und die Sperre bleiben stehen, ein neuer
+  Eintrag nach dem Löschen ist eine Änderung.
+* Ein Server-Admin kann höchstens 10.000 einstellen (und für den DJ des Monats
+  25.000). Ein höherer Wert, der von früher in der Datei steht, gilt nicht — dann
+  der Standard.
+
+Bezahlt wird nach „lock-before-pay": erst „gefeiert" auf die Platte, **dann** die
+Coins — bricht der Takt ab, wird trotzdem zu Ende bezahlt, nie doppelt. Den Post
+holt der Takt nach, wenn Discord ihn ablehnt. Wer nicht mehr auf dem Server ist,
+bekommt nichts und fliegt aus der Liste (gefeiert und die Sperre bleiben). Ohne
+Wirtschaft (Modul oder Schalter `economy` aus) nur der Glückwunsch.
+
+**Nie zu einer Notlage:** ein Name mit Notsignal geht nicht an die KI, eine
+KI-Zeile mit Notsignal fliegt raus, und wer gerade ein Notsignal geschrieben hat
+(das merkt sich „Er hält nach" im Speicher), bekommt einen Glückwunsch ohne
+Spott und ohne KI.
+
+Je Server abschaltbar (Schalter `geburtstage`). Daten: `data/geburtstage.json` —
+Tag, Monat und Anzeigename, nie ein Jahr; dazu, über alle Server, in welchem
+Jahr jemand zuletzt Geburtstags-Coins bekam.
 
 ---
 
@@ -1813,6 +1964,7 @@ Servern.
 | `MUSIC_WIEDERHERSTELLEN_MIN` | `20` | so frisch muss eine Warteschlange sein, damit Flo nach einem Neustart zurückkommt (Minuten) |
 | `MUSIKZUSTAND_ENABLED` / `MUSIKSTATS_ENABLED` | `1` | `0` schaltet die neustartfeste Warteschlange bzw. das Musik-Wrapped ab |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
+| `ZITATE_ENABLED` / `GEBURTSTAGE_ENABLED` | `1` | `0` schaltet das Zitat der Woche bzw. die Geburtstage ab |
 | `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
 | `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |
 
