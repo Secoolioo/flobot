@@ -89,6 +89,8 @@ _HETZE = (
 _KEIN_RECHT = ("Ich darf hier keine Umfragen posten. Gebt mir das Recht "
                "„Umfragen erstellen“, ihr Amateure.")
 _ZU_SCHNELL = "Chill mal, du hast gerade erst eine gemacht. Noch {s} s."
+_NACHGEBAUT = ("Netter Versuch. Die Zitat-der-Woche-Frage stell hier nur ich – "
+               "denk dir gefälligst eine eigene aus.")
 # Wenn die KI nichts Brauchbares liefert, bleibt es trotzdem eine Umfrage.
 _ERSATZ_ANTWORTEN = (
     ("Ja, logisch", "Nein, du Lauch", "Ist mir scheißegal"),
@@ -257,6 +259,22 @@ class Umfrage(FeatureBasis):
         return self.bereinigen(frage[:1].upper() + frage[1:],
                                random.choice(_ERSATZ_ANTWORTEN))
 
+    @staticmethod
+    def _ist_zitatfrage(frage):
+        """Die Frage der Zitat-Abstimmung (zitate.FRAGE) gehoert Flo allein. Ein
+        Ergebnis mit genau dieser Frage haelt zitate fuer seine eigene
+        Abstimmung (bot.py leitet es dorthin, der Kommentar hier fiele weg) -
+        und blieb Flos eigenes Senden ohne Antwort, waere eine nachgebaute
+        Umfrage sonst die echte, und ihr Ersteller suchte den Sieger aus."""
+        try:
+            import zitate
+        except Exception:  # noqa: BLE001 - ohne Zitate keine Verwechslung
+            return False
+
+        def norm(text):
+            return " ".join(str(text or "").split()).casefold()
+        return norm(frage) == norm(zitate.FRAGE)
+
     # --- Befehl --------------------------------------------------------------
     async def handle(self, message):
         """'umfrage ...' -> echte Discord-Umfrage. None = kein Umfrage-Befehl."""
@@ -294,6 +312,8 @@ class Umfrage(FeatureBasis):
         frage, antworten = entwurf
         if self._ist_hetze(" ".join([frage, *antworten])):
             return random.choice(_HETZE)
+        if self._ist_zitatfrage(frage):
+            return _NACHGEBAUT
 
         rechte = self._rechte(message)
         if rechte is not None and not getattr(rechte, "send_polls", True):

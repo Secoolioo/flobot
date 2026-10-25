@@ -157,6 +157,23 @@ def test_umfrage_ueber_hetze_gibt_es_nicht():
             assert not kanal.gesendet
 
 
+def test_umfrage_mit_der_zitat_frage_gibt_es_nicht():
+    """Die Frage der Zitat-Abstimmung stellt nur Flo selbst. Eine nachgebaute
+    Umfrage ('flo umfrage 🏆 Zitat der Woche – … | 1 · „x“ – Bob | …') hielt
+    zitate fuer die eigene (bot.py leitete ihr Ergebnis dorthin) - und blieb
+    Flos eigenes Senden ohne Antwort, nahm zitate sie als die echte, und ihr
+    Ersteller suchte den Sieger aus."""
+    import zitate
+    inst = _umfrage_frisch()
+    for frage in (zitate.FRAGE, "  " + zitate.FRAGE.replace(" ", "  ") + " "):
+        msg, kanal = _umfrage_msg(f"umfrage 1h {frage} | 1 · „x“ – Bob | 2 · „y“ – Cem")
+        antwort = asyncio.run(inst.handle(msg))
+        assert not kanal.gesendet, "keine nachgebaute Zitat-Abstimmung"
+        assert antwort == umfrage._NACHGEBAUT, frage
+    msg, kanal = _umfrage_msg("umfrage Wer war diese Woche der Lauteste? | Bob | Cem")
+    assert asyncio.run(inst.handle(msg)) is umfrage.HANDLED and kanal.gesendet
+
+
 def test_umfrage_ohne_recht_sagt_es_derb():
     inst = _umfrage_frisch()
     msg, kanal = _umfrage_msg("umfrage Frage? | a | b", kanal=_UmfrageKanal(send_polls=False))
@@ -1201,7 +1218,7 @@ def test_vorab_verbindung_bleibt_solange_noch_jemand_sucht():
         def is_active(self):
             return False
 
-        async def disconnect(self):
+        async def disconnect(self, **_kw):
             getrennt.append(1)
 
     async def fertig():

@@ -132,6 +132,10 @@ WACHE_TIEF = (
 WACHE_INHALT = (
     ("features", "instance._disabled"),
     ("features", "instance._per_guild"),
+    # Wer gerade ein Notsignal geschrieben hat (basis.notlage_merken). Liesse ein
+    # Test das stehen, gewaenne dieselbe ID im naechsten Test ihr Zitat 'sanft' -
+    # je nach Reihenfolge.
+    ("basis", "_notlage_seit"),
 )
 
 

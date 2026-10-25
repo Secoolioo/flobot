@@ -12,9 +12,9 @@ Datei mit seinen Tests.
 
 from testhilfe import *        # noqa: F401,F403 - Attrappen und Module
 from testhilfe import (  # noqa: F401 - die privaten Helfer
-    _StallVoice, _dynamisch_klicken, _embed_text, _fake_person, _http_fehler,
-    _klick_im_voice, _musik_umgebung, _track, _verlauf_frisch, _voice_kanal,
-    _with_economy)
+    _StallVoice, _VoiceChannelStub, _dynamisch_klicken, _embed_text, _fake_person,
+    _http_fehler, _klick_im_voice, _musik_umgebung, _track, _verlauf_frisch,
+    _voice_kanal, _with_economy)
 
 import contextlib
 import logging
@@ -1041,6 +1041,195 @@ def test_skip_doppelklick_wirft_nicht_zwei_songs_raus():
         assert player.current.title == "Schlager"
 
 
+@contextlib.contextmanager
+def _langsam_aufloesen(sekunden=0.05):
+    """Aufloesen dauert (yt-dlp) - der naechste Song ist noch nicht vorgeladen."""
+    alt = music._resolve_track
+
+    async def langsam(track):
+        await asyncio.sleep(sekunden)
+        track.stream_url = f"http://s/{track.title}"
+        return track
+    music._resolve_track = langsam
+    try:
+        yield
+    finally:
+        music._resolve_track = alt
+
+
+def _ungeladen(*titel):
+    return [music.Track(title=t, stream_url="", query=f"ytsearch1:{t}") for t in titel]
+
+
+def test_skip_doppelklick_zu_zweit_nimmt_keinen_song_mit():
+    """Zu zweit ist Skip direkt - aber ein zweiter Klick (oder 'flo skip'),
+    waehrend der naechste Song noch geladen wurde, ging gleich in einen zweiten
+    Skip: der wartete am Lock, holte danach den uebernaechsten Song und
+    scheiterte an 'Already playing audio.'. Nach zwei solchen 'Fehlern' gab
+    Flo die Schlange auf - current=None mitten im Song, falsche Netz-Warnung,
+    ein Song weg, und der Leerlauf warf Flo danach aus dem Kanal. Jetzt: 'der
+    fliegt doch schon raus'."""
+    mi = music.instance
+    with _abstimmung(2) as (player, kanal, gesagt), _langsam_aufloesen():
+        player.queue[:] = _ungeladen("B", "C", "D")
+
+        async def klick(uid, warten):
+            await asyncio.sleep(warten)
+            k = _klick_im_voice(uid, kanal)
+            await mi._panel_klick(k, "skip")
+            return k
+
+        async def zwei():
+            return await asyncio.gather(klick(1000, 0), klick(1001, 0.01))
+        k1, k2 = asyncio.run(zwei())
+        assert k1.arten() == ["defer"]
+        assert k2.protokoll == [("send", music._SKIP_LAEUFT, {"ephemeral": True})]
+        assert player.current.title == "B" and player.voice.is_playing()
+        assert [t.title for t in player.queue] == ["C", "D"]
+        assert not player._advance_aufgegeben and not player.nichts_zu_tun()
+        assert gesagt == [], gesagt
+
+        # Per Text genauso.
+        def skip(uid):
+            msg = SimpleNamespace(content="flo skip", guild=SimpleNamespace(id=1),
+                                  channel=SimpleNamespace(id=5),
+                                  author=_klick_im_voice(uid, kanal).user, mentions=[])
+            return mi.handle(msg)
+
+        async def zwei_texte():
+            erst = asyncio.ensure_future(skip(1000))
+            await asyncio.sleep(0.01)
+            return await skip(1001), await erst
+        zweites, erstes = asyncio.run(zwei_texte())
+        assert zweites.description == music._SKIP_LAEUFT
+        assert "**B** übersprungen." == erstes.description
+        assert player.current.title == "C" and [t.title for t in player.queue] == ["D"]
+
+
+def test_skip_fuer_einen_song_der_schon_weg_ist_tut_nichts():
+    """skip(ziel): Wer den Song wegskippen will, der gerade lief, und dabei
+    vom Songende (oder einem anderen Skip) ueberholt wird, nimmt den neuen
+    Song nicht mit - weder wartend am Lock noch, wenn der Wechsel schon durch
+    ist. Und startet waehrend eines Wechsels jemand selbst etwas ('flo spiel'),
+    ist der geladene Song kein 'kaputter Song': er kommt zurueck nach vorn."""
+    player, voice, aufraeumen = _musik_umgebung()
+    gesagt = []
+
+    async def sag(text):
+        gesagt.append(text)
+    player._sag = sag
+    try:
+        with _langsam_aufloesen():
+            a = _track("A")
+            player.start(a)
+            player.queue[:] = _ungeladen("B", "C", "D")
+
+            async def beide():
+                await asyncio.gather(player.skip(ziel=a), player.skip(ziel=a))
+            asyncio.run(beide())
+            assert player.current.title == "B" and [t.title for t in player.queue] == ["C", "D"]
+            asyncio.run(player.skip(ziel=a))         # A ist laengst weg
+            assert player.current.title == "B" and voice.is_playing()
+            assert len(voice.play_calls) == 2
+
+            # 'weiter' (ohne ziel) laedt C - waehrenddessen startet jemand X.
+            echt_warten = player._warte_bis_still
+
+            async def kurz(max_sekunden=2.0):
+                return await echt_warten(max_sekunden=0.1)
+            player._warte_bis_still = kurz
+            voice.stop()
+            player.current = None
+
+            async def dazwischen():
+                weiter = asyncio.ensure_future(player._advance())
+                await asyncio.sleep(0.01)
+                voice.stop()
+                player.start(_track("X"))
+                await weiter
+            asyncio.run(dazwischen())
+            assert player.current.title == "X" and voice.is_playing()
+            assert [t.title for t in player.queue] == ["C", "D"], "nichts verloren"
+            assert not player._advance_aufgegeben and gesagt == [], gesagt
+    finally:
+        aufraeumen()
+
+
+def test_liste_stop_waehrend_des_ladens_laesst_keine_geisterschlange():
+    """▶ auf der Playlist-Karte, und noch waehrend der erste Song laedt, sagt
+    jemand 'flo stop'. Vorher landete der Rest trotzdem in der Schlange - ohne
+    Verbindung: Soundboard und TTS hielten den Kanal fuer belegt, und das
+    naechste 'spiel' spielte die gestoppte Liste hinterher. Jetzt ist die Liste
+    weg. Waehrend sie laedt, zaehlt sie als laufende Anfrage (wie ein
+    einzelnes 'spiel'). Scheitert der Start, bleibt keine halbe Liste liegen;
+    spielt inzwischen etwas anderes, stellt sie sich hinten an."""
+    mi = music.instance
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = 4711
+    unterwegs, stoppen = [], [True]
+
+    async def aufloesen(inp, _hint):
+        unterwegs.append(player._laufende_anfragen)
+        await asyncio.sleep(0)
+        if stoppen[0] and inp == "eins":
+            await player.disconnect()           # 'flo stop' waehrend des Ladens
+        return music.Track(title=inp, stream_url=f"http://s/{inp}", duration=100)
+
+    items = [(n, n.title(), None) for n in ("eins", "zwei", "drei", "vier")]
+
+    def spielen():
+        return asyncio.run(mi._play_many(player, _VoiceChannelStub(), list(items), "Bob",
+                                         "aus „Zocken“", requested_by_id=5))
+    alt = (mi._resolve_input, mi._players.get(4711))
+    mi._resolve_input = aufloesen
+    mi._players[4711] = player
+    try:
+        e = spielen()
+        assert [t.title for t in player.queue] == [], "Geisterschlange nach 'flo stop'"
+        assert e.description.startswith("Gestoppt, bevor"), e.description
+        assert player.current is None and player.voice is None
+        assert not player.sitzung_offen() and not mi.is_voice_busy(4711)
+        assert unterwegs == [1] and player._laufende_anfragen == 0
+        assert voice.play_calls == []
+
+        # Der Start scheitert: keine halbe Liste ohne Song.
+        stoppen[0] = False
+        player.voice = voice
+        echt_start = player.start
+
+        def kaputt(*_a, **_k):
+            raise RuntimeError("Not connected.")
+        player.start = kaputt
+        with _Logfang("dcbot.music"):
+            e = spielen()
+        assert "konnte ich gerade nicht abspielen" in e.description
+        assert player.queue == [] and player._laufende_anfragen == 0
+        player.start = echt_start
+
+        # Inzwischen spielt etwas anderes: die Liste stellt sich hinten an.
+        async def spielt_noch(max_sekunden=2.0):
+            return False
+        player._warte_bis_still = spielt_noch
+        e = spielen()
+        assert "eingereiht" in e.description and "**4**" in e.description, e.description
+        assert [t.title for t in player.queue] == ["eins", "Zwei", "Drei", "Vier"]
+        assert all(t.requested_by_id == 5 for t in player.queue)
+        del player._warte_bis_still
+        player.queue.clear()
+
+        # Normalfall: erster Song laeuft, der Rest wartet.
+        assert spielen() is music.HANDLED
+        assert player.current.title == "eins"
+        assert [t.title for t in player.queue] == ["Zwei", "Drei", "Vier"]
+    finally:
+        mi._resolve_input = alt[0]
+        if alt[1] is None:
+            mi._players.pop(4711, None)
+        else:
+            mi._players[4711] = alt[1]
+        aufraeumen()
+
+
 def test_skip_knopf_ohne_defer_skippt_trotzdem_und_nichts_haengt():
     """Scheitert das defer (3-Sekunden-Frist verpasst, Discord hustet), gilt
     der Skip trotzdem - entschieden ist entschieden. Vorher blieb der Song als
@@ -1058,7 +1247,7 @@ def test_skip_knopf_ohne_defer_skippt_trotzdem_und_nichts_haengt():
     with _abstimmung(4) as (player, kanal, gesagt):
         echt = player.skip
 
-        async def kaputt():
+        async def kaputt(ziel=None):
             raise RuntimeError("Discord hustet")
         player.skip = kaputt
         try:
@@ -1073,7 +1262,7 @@ def test_skip_knopf_ohne_defer_skippt_trotzdem_und_nichts_haengt():
 
     # Dasselbe beim Textbefehl.
     with _abstimmung(4) as (player, kanal, gesagt):
-        async def kaputt():
+        async def kaputt(ziel=None):
             raise RuntimeError("Discord hustet")
         player.skip = kaputt
         msg = SimpleNamespace(content="flo skip", guild=SimpleNamespace(id=1),
@@ -1782,6 +1971,108 @@ def test_zustand_neue_musik_vorher_oder_waehrenddessen_alter_stand_hinten_an():
         assert prot.gezaehlt == [] and prot.connect == []
 
 
+def test_zustand_startet_nicht_vor_einer_ladenden_liste():
+    """Sitzt Flo schon im Kanal, und es laeuft nichts ('flo komm'), geht es
+    gleich mit dem alten Stand los - laedt dort aber gerade eine Playlist oder
+    ein 'spiel' (laufende Anfrage), stellt er sich dahinter an, statt vor ihr
+    loszuspielen."""
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        player.voice = _VoiceImKanal(_voice_kanal(1, 1, cid=50))
+        player.active_channel_id = 50
+        player._laufende_anfragen = 1
+        _zurueckholen(client)
+        assert player.current is None, "nicht vor der ladenden Liste"
+        assert [t.title for t in player.queue] == ["Jetzt", "Danach", "Funk"]
+        assert any("hinten drangehängt" in t for t in prot.gesagt), prot.gesagt
+
+
+def test_zustand_wartender_stand_ueberlebt_takt_und_fehlversuch():
+    """Ein Stand, der noch aufs Zurueckholen wartet (mehrere Server nacheinander,
+    die Uhr nach dem Booten), verschwand bisher still:
+    - spielte dort vorher jemand etwas, ueberschrieb der naechste Takt den
+      Stand mit der neuen Sitzung - wiederherstellen fand ihn nicht mehr: kein
+      'hinten an', keine Logzeile, die alte Schlange war weg;
+    - ein 'flo spiel <Tippfehler>' (vorab verbunden, nichts gefunden, wieder
+      raus) loeschte ihn wie ein 'flo stop'.
+    Jetzt stellt er sich hinten an bzw. kommt ganz normal zurueck - und danach
+    baut der Takt den laufenden Player wie immer."""
+    def neu(player):
+        player.voice = _VoiceImKanal(_voice_kanal(1, 1, cid=50))
+        player.active_channel_id = 50
+        player.text_channel = SimpleNamespace(id=6)
+        player.start(_track("Neu"))
+
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        neu(player)
+        asyncio.run(musikzustand.takt())
+        assert musikzustand.ausstehend(77), "der Takt laesst den wartenden Stand stehen"
+        _zurueckholen(client)
+        assert player.current.title == "Neu"
+        assert [t.title for t in player.queue] == ["Jetzt", "Danach", "Funk"]
+        assert any("hinten drangehängt" in t for t in prot.gesagt), prot.gesagt
+        assert not musikzustand.ausstehend(77)
+        asyncio.run(musikzustand.takt())
+        e = musikzustand.instance._guilds()["77"]
+        assert e["current"]["t"] == "Neu"
+        assert [s["t"] for s in e["queue"]] == ["Jetzt", "Danach", "Funk"]
+
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        async def tippfehler():
+            # 'flo spiel gibtsnicht': vorab verbunden, nichts gefunden - raus.
+            await music.instance._vorab_aufraeumen(
+                player, asyncio.ensure_future(asyncio.sleep(0)))
+        asyncio.run(tippfehler())
+        assert musikzustand.ausstehend(77), "ein Fehlversuch ist kein 'flo stop'"
+        _zurueckholen(client)
+        assert prot.connect and player.current.title == "Jetzt"
+        assert [t.title for t in player.queue] == ["Danach", "Funk"]
+
+
+def test_zustand_sichern_wartet_den_songwechsel_ab():
+    """Herunterfahren mitten im Songwechsel: der naechste Song ist schon aus
+    der Schlange, wird aber noch geladen. Der Schnappschuss verlor ihn (und mit
+    Radio und leerer Schlange kam gar nichts zurueck). Jetzt wartet sichern()
+    kurz, bis der Wechsel durch ist - hoechstens WECHSEL_WARTEN, dann gilt der
+    Stand von jetzt (docker stop wartet nicht ewig)."""
+    mi = music.instance
+    alt = mi._players.get(77)
+
+    def lauf(laden, warten):
+        player, _voice, aufraeumen = _musik_umgebung()
+        player.guild_id = 77
+        mi._players[77] = player
+        try:
+            with _zustand_frisch() as kern, _langsam_aufloesen(laden), \
+                    mock.patch.object(musikzustand, "WECHSEL_WARTEN", warten, create=True):
+                player.start(_track("A"))
+                player.queue.append(_ungeladen("B")[0])
+
+                async def herunterfahren():
+                    wechsel = asyncio.ensure_future(player.skip(ziel=player.current))
+                    await asyncio.sleep(0.02)
+                    assert player.queue == [] and player._advance_lock.locked()
+                    los = time.monotonic()
+                    await musikzustand.sichern()
+                    dauer = time.monotonic() - los
+                    await wechsel
+                    return dauer
+                dauer = asyncio.run(herunterfahren())
+                e = kern._guilds()["77"]
+                return e["current"]["t"], [s["t"] for s in e["queue"]], dauer
+        finally:
+            aufraeumen()
+
+    try:
+        assert lauf(0.1, 3.0)[:2] == ("B", []), "B ist nicht verloren"
+        jetzt, schlange, dauer = lauf(0.4, 0.05)
+        assert jetzt == "A" and dauer < 0.3, (jetzt, schlange, dauer)
+    finally:
+        if alt is None:
+            mi._players.pop(77, None)
+        else:
+            mi._players[77] = alt
+
+
 def test_zustand_ansagen_mit_dem_namen_des_servers():
     """Das Zurueckholen laeuft in einem eigenen Task (aus on_ready) - trotzdem
     heissen Ansagen und Panel nach dem Praefix DIESES Servers, nicht nach der
@@ -2012,6 +2303,59 @@ def test_wrapped_zaehlt_ueber_den_echten_musik_weg():
             player.start(replace(song, wiederhergestellt=True))
             m = kern.daten(77, "2026-10")
             assert m["gesamt"] == 1 and m["wer"]["5"]["n"] == 1
+    finally:
+        aufraeumen()
+        verlauf_zurueck()
+
+
+def test_wrapped_weggeskippt_zaehlt_nicht():
+    """Wer einen Song in den ersten 30 Sekunden wegskippt (bei kurzen Songs:
+    vor der Haelfte), hat ihn nicht gehoert - sein Start zaehlt nicht. Sonst
+    skippte sich jeder in ein paar Minuten durch eine 200-Song-Playlist zum
+    DJ des Monats (den eigenen Wunsch skippt man ohne Abstimmung, zu zweit
+    sowieso). Was laenger lief, zaehlt; zurueckgenommen wird im Monat, in dem
+    der Start gezaehlt wurde."""
+    wand, mono = [_wann(31, 23, 59, monat=10)], [1000.0]
+    _modul, verlauf_zurueck = _verlauf_frisch()
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = 77
+    try:
+        with _stats_frisch() as kern, _uhr_gestellt(wand, mono):
+            # Der Farmer: zwoelf eigene Wuensche, jeder sofort weggeskippt.
+            for i in range(12):
+                player.queue.append(_lauf(f"Farm {i}", 100 + i, wer=5, name="Farmer"))
+            player.start(_lauf("Erster", 99, wer=5, name="Farmer"))
+            for _ in range(12):
+                asyncio.run(player.skip(ziel=player.current))
+            m = kern.daten(77, "2026-10")
+            assert player.current.title == "Farm 11"
+            assert (m["gesamt"], m["wer"]["5"]["n"], len(m["songs"])) == (1, 1, 1), m
+            # Lange genug gehoert: zaehlt (bei 200 s: ab 30 s).
+            player._played = 31.0
+            asyncio.run(player.skip(ziel=player.current))
+            assert player.current is None and kern.daten(77, "2026-10")["gesamt"] == 1
+            # Kurzer Song (40 s): die Haelfte reicht.
+            for gehoert, bleibt in ((19.0, False), (21.0, True)):
+                kurz = _lauf("Kurz", 7, wer=6, name="Bob", dauer=40)
+                musikstats.notieren(77, kurz)
+                musikstats.zuruecknehmen(77, kurz, gehoert)
+                assert ("6" in kern.daten(77, "2026-10")["wer"]) is bleibt, gehoert
+            # Radio: nur die Zahl. Und nur der zuletzt gezaehlte Song, einmal.
+            funk = _lauf("Funk", 8, radio=True)
+            musikstats.notieren(77, funk)
+            musikstats.zuruecknehmen(77, funk, 2.0)
+            musikstats.zuruecknehmen(77, funk, 2.0)
+            musikstats.zuruecknehmen(77, kurz, 2.0)        # laengst nicht mehr der letzte
+            m = kern.daten(77, "2026-10")
+            assert (m["radio"], m["gesamt"], m["wer"]["6"]["n"]) == (0, 2, 1), m
+            # Ueber den Monatswechsel: gezaehlt im Oktober, weg im November.
+            spaet = _lauf("Spaet", 9, wer=7, name="Cem")
+            musikstats.notieren(77, spaet)
+            wand[0] += 120
+            mono[0] += 120
+            musikstats.zuruecknehmen(77, spaet, 5.0)
+            assert "7" not in kern.daten(77, "2026-10")["wer"]
+            assert kern.daten(77, "2026-11") is None
     finally:
         aufraeumen()
         verlauf_zurueck()
@@ -2566,6 +2910,148 @@ def test_wrapped_reagiert_nie_auf_notsignale():
         song = f"**{musikstats._sauber('Rick Astley - Never Gonna Give You Up', 60)}**"
         assert any(spruch == e.format(song=song, dj="**DJ**")
                    for e in musikstats._ERSATZ), spruch
+
+
+def test_wrapped_zahlt_nicht_ohne_lock_auf_der_platte():
+    """Lock-before-pay heisst: der Lock steht WIRKLICH auf der Platte. Ist
+    musikstats.json nicht schreibbar (ein Docker-Lauf hat sie als root
+    angelegt), economy.json aber schon, zahlte sonst jeder Neustart bis zum 7.
+    den DJ noch einmal. Dann gibt es lieber keine Coins - ausgerufen wird er
+    trotzdem, und das Kassenbuch bleibt frei."""
+    import economy
+    wand, mono = [_wann(1, 11)], [1000.0]
+    daten = {"guilds": {"77": {"monate": {"2026-10": _monat_mit()}}}}
+    with _wrapped_umgebung(daten) as (kern, server, client), _uhr_gestellt(wand, mono):
+        async def nicht_schreibbar():
+            return False
+        kern._store.save = nicht_schreibbar
+        _ticken(client)
+        assert economy.instance._profile(1000)["coins"] == 0
+        assert kern._store.data["bezahlt"] == {}
+        text = server.kanal.gesendet[0][0]
+        assert "<@1000>" in text and "Flo Coins" not in text, text
+        assert any("nicht schreibbar" in z for z in kern.log), kern.log
+
+
+def test_wrapped_nie_in_den_aufraeum_kanal():
+    """Auf dem Hauptserver ist der Ansagen-Kanal ab Werk ein Aufraeum-Kanal
+    (guildcfg: ansage_channel == autodelete_channels). Dort loeschte bot.py das
+    Wrapped samt DJ-Ping nach einer Minute - und 'verkuendet' stand schon, es
+    kam nie wieder. Jetzt nimmt es den naechsten Kanal, der taugt (System-
+    Kanal). Taugt keiner, wartet der Post - bezahlt wird trotzdem genau einmal."""
+    import economy
+    wand, mono = [_wann(1, 11)], [1000.0]
+    daten = {"guilds": {"77": {"monate": {"2026-10": _monat_mit()}}}}
+    aufraeum = list(guildcfg.get(77, "autodelete_channels"))
+    assert guildcfg.get(77, "ansage_channel") in aufraeum, "ab Werk derselbe Kanal"
+    with _wrapped_umgebung(daten) as (kern, server, client), _uhr_gestellt(wand, mono), \
+            mock.patch.object(musikstats, "_mono", lambda: mono[0]):
+        server.kanal.id = aufraeum[0]           # die Ansagen SIND der Aufraeum-Kanal
+        _ticken(client)
+        assert server.kanal.gesendet == [], "nie in den Aufraeum-Kanal"
+        assert economy.instance._profile(1000)["coins"] == 5000
+        assert kern._guild(77)["dj"]["verkuendet"] is False
+        assert any("kein Kanal" in z for z in kern.log)
+        system = _WrappedKanal(cid=601)
+        server.system_channel = system
+        wand[0] += musikstats.NOCHMAL_NACH
+        mono[0] += musikstats.NOCHMAL_NACH
+        _ticken(client)
+        assert server.kanal.gesendet == [] and len(system.gesendet) == 1
+        assert "<@1000>" in system.gesendet[0][0] and kern._guild(77)["dj"]["verkuendet"]
+        assert economy.instance._profile(1000)["coins"] == 5000
+
+
+def test_wrapped_dj_coins_nur_einmal_ueber_alle_server():
+    """Coins gelten fuer ALLE Server - der DJ-Lohn deshalb auch: wer auf drei
+    Servern DJ ist, wird dreimal ausgerufen, aber einmal bezahlt (Kassenbuch
+    'bezahlt', vor dem Zahlen auf der Platte). Sonst druckte sich jeder mit
+    ein paar Privatservern Geld. Im naechsten Monat gibt es wieder Coins."""
+    import economy
+    wand, mono = [_wann(1, 11)], [1000.0]
+    monate = {"2026-10": _monat_mit(), "2026-11": _monat_mit()}
+    daten = {"guilds": {str(gid): {"monate": json.loads(json.dumps(monate))}
+                        for gid in (77, 78, 79)}}
+    pfad = store.DATA_DIR / "musikstats.json"
+    auf_der_platte = []
+    echt = economy.add_coins
+
+    def zahlen(uid, betrag, reason=""):
+        platte = json.loads(pfad.read_text(encoding="utf-8"))
+        auf_der_platte.append((uid, betrag, reason, platte.get("bezahlt", {}).get(str(uid))))
+        return echt(uid, betrag, reason=reason)
+
+    with _wrapped_umgebung(daten) as (kern, server, client), _uhr_gestellt(wand, mono), \
+            mock.patch.object(economy, "add_coins", zahlen):
+        alle = [server, _WrappedServer(78), _WrappedServer(79)]
+        client.guilds = alle
+        _ticken(client)
+        assert economy.instance._profile(1000)["coins"] == 5000, auf_der_platte
+        assert auf_der_platte == [(1000, 5000, "dj-des-monats", "2026-10")], "erst die Platte"
+        texte = [s.kanal.gesendet[0][0] for s in alle]
+        assert all("<@1000>" in t for t in texte), "ausgerufen wird ueberall"
+        assert "+5.000 Flo Coins" in texte[0] and musikstats._ANDERSWO not in texte[0]
+        for t in texte[1:]:
+            assert "Flo Coins" not in t and musikstats._ANDERSWO in t, t
+        assert [kern._guild(g)["dj"]["grund"] for g in (77, 78, 79)] == ["", "anderswo",
+                                                                         "anderswo"]
+        assert kern._store.data["bezahlt"] == {"1000": "2026-10"}
+        # Einen Monat spaeter: wieder genau einmal.
+        wand[0] += 30 * 86400
+        mono[0] += 30 * 86400
+        _ticken(client)
+        assert [len(s.kanal.gesendet) for s in alle] == [2, 2, 2]
+        assert economy.instance._profile(1000)["coins"] == 10_000
+        assert kern._store.data["bezahlt"] == {"1000": "2026-11"}
+
+
+def test_wrapped_dj_mit_notsignal_ohne_ping_und_ohne_spott():
+    """Wer gerade ein Notsignal geschrieben hat (nachhaken, 72 Stunden), wird
+    nicht vorgefuehrt - wie bei Zitat der Woche und Geburtstag: kein Ping,
+    keine KI, kein Spott. Coins gibt es trotzdem. Und ein KI-Spruch, der ein
+    Hilfsangebot, private Daten oder Hetze enthaelt, wird verworfen."""
+    import economy
+    import nachhaken
+    wand, mono = [_wann(1, 11)], [1000.0]
+    daten = {"guilds": {"77": {"monate": {"2026-10": _monat_mit()}}}}
+    aufrufe = []
+    antworten = []
+
+    async def generate(prompt, **_kw):
+        aufrufe.append(prompt)
+        return antworten.pop(0) if antworten else "Anna, schäm dich für Sandstorm."
+
+    with _wrapped_umgebung(daten) as (kern, server, client), _uhr_gestellt(wand, mono), \
+            mock.patch.object(nachhaken, "is_enabled", lambda: True), \
+            mock.patch.object(nachhaken.instance, "_gesperrt", lambda uid: uid == 1000), \
+            mock.patch.object(ai, "is_enabled", lambda: True), \
+            mock.patch.object(ai, "generate", generate):
+        _ticken(client)
+        text, kw = server.kanal.gesendet[0]
+        assert aufrufe == [], "keine KI"
+        assert text.split("Wünschen. ", 1)[1] == musikstats._SANFT, text
+        assert kw["allowed_mentions"].users is False, "kein Ping"
+        assert economy.instance._profile(1000)["coins"] == 5000
+        # 'flo wrapped' (jemand fragt) roastet ihn auch nicht.
+        msg = _wrapped_nachricht("flo wrapped letzter monat", server)
+        assert asyncio.run(musikstats.handle(msg)) is musikstats.HANDLED
+        assert msg.gesendet[0][0].endswith(musikstats._SANFT) and aufrufe == []
+    # Ohne Sperre: KI-Spruch - aber was nach Hilfsangebot, privaten Daten oder
+    # Hetze aussieht, fliegt raus und der Ersatz kommt.
+    for schlecht in ("Ruf die Telefonseelsorge an, 0800 1110111, Anna.",
+                     "Anna wohnt in der Hauptstrasse 5, schreibt ihr ruhig."):
+        assert ai.instance.ist_notlage(schlecht, schlecht) or musikstats._heikel(schlecht)
+        with _wrapped_umgebung(daten) as (kern, server, client), _uhr_gestellt(wand, mono), \
+                mock.patch.object(nachhaken, "is_enabled", lambda: True), \
+                mock.patch.object(nachhaken.instance, "_gesperrt", lambda uid: False), \
+                mock.patch.object(ai, "is_enabled", lambda: True), \
+                mock.patch.object(ai, "generate", generate):
+            antworten[:] = [schlecht]
+            _ticken(client)
+            text, kw = server.kanal.gesendet[0]
+            assert schlecht not in text and kw["allowed_mentions"].users
+            assert any(text.endswith(e.format(song="**Darude - Sandstorm**", dj="**Anna**"))
+                       for e in musikstats._ERSATZ), text
 
 
 def admin_id():

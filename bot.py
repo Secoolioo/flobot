@@ -567,12 +567,18 @@ def _help_category_key(content):
     Sonst None.
 
     Nach einem ausdruecklichen 'hilfe' auch jede andere aktive Seite unter
-    ihrem Schluessel ('Flo hilfe playlist', 'Flo hilfe leben'). OHNE 'hilfe'
-    davor bleiben 'playlist' & Co. Befehle - deshalb kein Alias fuer sie."""
+    ihrem Schluessel ('Flo hilfe playlist', 'Flo hilfe leben') - davor oder
+    dahinter ('Flo playlist hilfe' hielt playlists sonst fuer die Liste
+    'hilfe': "gibt's hier nicht"). OHNE 'hilfe' bleiben 'playlist' & Co.
+    Befehle - deshalb kein Alias fuer sie."""
     word = ai.strip_lead(content).lower().strip(" ?!.,")
     ohne = re.sub(r"^(?:hilfe|help)\s+", "", word)
     if ohne in _HELP_CATEGORY_ALIASES:
         return _HELP_CATEGORY_ALIASES[ohne]
+    if ohne == word:
+        ohne = re.sub(r"\s+(?:hilfe|help|anleitung)$", "", word)
+        if ohne != word and ohne in _HELP_CATEGORY_ALIASES:
+            return _HELP_CATEGORY_ALIASES[ohne]
     if ohne != word and any(k == ohne for k, _e, _l in client._help_categories()):
         return ohne
     return None
@@ -670,7 +676,7 @@ _HELP_DATA = {
         ("flo playlist <name>", "abspielen (· mix = gemischt · zeig = alle Songs)"),
         ("flo playlists", "alle Playlists des Servers"),
         ("flo playlist <name> dazu · löschen",
-         "erweitern / wegwerfen – auch raus 3, umbenennen in … (Ersteller & Mods)"),
+         "erweitern · raus 3 · umbenennen – Ersteller & Mods"),
         ("flo queue speichern <name>", "aktuelle Warteschlange als Playlist"),
         ("flo radio · radio aus", "📻 Endlos-Radio: Schlange leer → Flo spielt Ähnliches"),
         ("flo skip", "ab 3 Leuten wird abgestimmt (Wünscher & Mods direkt)"),
@@ -2423,7 +2429,14 @@ class FloBot(discord.Client):
         # - Nachhaken zaehlt schon, wenn das Modul laeuft (siehe unten).
         mit_nachhaken = NACHHAKEN_ENABLED and _on("nachhaken")
         mit_laune = LAUNEN_ENABLED and _on("launen")
-        notlage = (NACHHAKEN_ENABLED or mit_laune) and _ist_notlage(content)
+        notlage = ((NACHHAKEN_ENABLED or mit_laune or ZITATE_ENABLED or GEBURTSTAGE_ENABLED
+                    or MUSIKSTATS_ENABLED) and _ist_notlage(content))
+        # Wer gerade am Boden ist, merkt sich basis (72 h, nur im Speicher) -
+        # Zitat der Woche, Geburtstage und Wrapped fuehren ihn dann nicht vor.
+        # Auch ohne KI (dann laeuft nachhaken nicht, und vorher wusste es
+        # sonst keiner).
+        if notlage:
+            basis.notlage_merken(message.author.id)
         # Und die Person selbst: tagelang keine Nachfrage, egal in welchem
         # Kanal und wie lange der Verlauf dort reicht (nachhaken.notlage) -
         # auch wo Nachhaken gerade aus ist: wird es wieder angeschaltet,
@@ -2630,6 +2643,11 @@ class FloBot(discord.Client):
             (NACHHAKEN_ENABLED and _on("nachhaken"), nachhaken.handle),
             (TERRARIA_ENABLED and _on("terraria"), terraria.handle),
             (GEHIRN_ENABLED and _on("gehirn"), gehirn.handle),
+            # Loeschen geht IMMER - auch wo Nachhaken oder das Gedaechtnis aus
+            # ist ('flo nachhaken aus', 'flo vergiss mich'). Sonst bekam die KI
+            # den Satz, und das Offene blieb liegen. Hinter gehirn: ist das
+            # Gedaechtnis an, fragt es selbst nach.
+            (NACHHAKEN_ENABLED, nachhaken.datenschutz),
             (WORDS_ENABLED and _on("words"), words.handle),
             (ECONOMY_ENABLED and _on("economy"), economy.handle),
             (FOOD_ENABLED and _on("food"), food.handle),

@@ -528,8 +528,12 @@ wieder nix war?" Standardmäßig **an**; wer nicht will, schaltet es für sich a
    je Server und Tag** (der Server-Deckel zählt ohne Namen und hält auch, wenn
    jemand `flo vergiss mich` sagt); drei Tage nach dem Termin verfällt es. Nicht
    in einem Aufräum-Kanal (dort wäre die Frage nach einer Minute weg — und mit
-   ihr die eine Nachfrage des Tages) und nicht, wo Flo nicht schreiben darf:
-   dann fragt die nächste Nachricht in einem normalen Kanal. Geht das Senden
+   ihr die eine Nachfrage des Tages), nicht, wo Flo nicht schreiben darf, und
+   **nicht vor Leuten, die die Ankündigung nie lesen konnten**: wer im
+   Mod-Kanal, in einem privaten Thread oder einem NSFW-Kanal vom
+   Vorstellungsgespräch erzählt, wird nicht im öffentlichen Chat danach gefragt
+   (wie bei den Zitaten; gibt es den Kanal nicht mehr, auch nicht). Dann fragt
+   die nächste Nachricht in einem passenden Kanal. Geht das Senden
    trotzdem schief, liegt die Sache wieder da. Die Frage landet im Chatverlauf
    der KI — wer darauf antwortet („war gut, ne 2"), redet mit einem Flo, der
    weiß, was er gefragt hat.
@@ -577,8 +581,11 @@ offen ist; `flo vergiss mich` zählt es mit und löscht es. Kandidaten (noch nic
 eingeordnete Zeilen, nur im Speicher) gehen mit, zählen aber nicht — wie der
 Puffer des Gedächtnisses; auch eine Zeile, die gerade bei der KI liegt, wird
 danach nicht mehr gemerkt. Die
-Abmeldung bleibt dabei stehen — sie ist ein Wunsch, kein Wissen über dich. Ist
-das Gedächtnis auf einem Server abgeschaltet, räumt `flo nachhaken aus` genauso.
+Abmeldung bleibt dabei stehen — sie ist ein Wunsch, kein Wissen über dich.
+Löschen geht **immer**: ist das Gedächtnis auf dem Server abgeschaltet, räumt
+`flo vergiss mich` trotzdem das Offene weg (ohne Rückfrage, es ist ja nur das),
+und `flo nachhaken aus` wirkt auch, wenn Nachhaken dort gerade aus ist — statt
+dass die KI den Satz bekommt und das Offene liegen bleibt.
 
 Braucht die KI (ohne sie lädt das Modul nicht). Schalter `nachhaken`. Daten:
 `data/nachhaken.json` — je Server die offenen Sachen (Person, Anzeigename, Thema,
@@ -865,7 +872,10 @@ Einzelheiten:
   `musik_max_queue` reicht), Flo bleibt, wo er ist, und sagt es: „Bin wieder
   da – und ihr habt natürlich schon ohne mich angefangen …". Sitzt Flo schon
   im Kanal, ohne dass etwas läuft (`flo komm`), geht es gleich mit dem alten
-  Song an seiner Stelle los.
+  Song an seiner Stelle los. Das gilt auch, wenn Flo erst später an diesem
+  Server ist (mehrere Server nacheinander, die Uhr nach dem Booten): bis dahin
+  bleibt der alte Stand unangetastet. Ein `flo spiel`, das nichts findet, ist
+  kein `flo stop` — der Stand kommt trotzdem zurück.
 * Lässt Discord ihn nicht in den Kanal, kommt die Schlange **geparkt** zurück
   (mit Hinweis) — `flo weiter` oder das nächste `flo spiel` machen dort weiter.
   Die Hinweise nennen den Namen, auf den Flo **auf diesem Server** hört (eigener
@@ -934,20 +944,27 @@ Flo über euren Geschmack herzieht und den DJ verspottet. `flo wrapped` geht
 einmal pro Minute je Server, ohne Ping und ohne Coins.
 
 **Am 1. ab 10 Uhr** postet Flo das Wrapped des Vormonats von selbst — in den
-Kanal `wrapped_channel` (`flo einstellung`), sonst in die Ansagen. Wer die
+Kanal `wrapped_channel` (`flo einstellung`), sonst in die Ansagen, sonst in den
+System-Kanal — **nie in einen Aufräum-Kanal** (dort wäre es samt Ping nach einer
+Minute weg; auf dem Hauptserver sind die Ansagen ab Werk so einer). Wer die
 meisten Songs gewünscht hat (Gleichstand: wessen Songs länger liefen), ist
 **DJ des Monats**: wird als Einziger gepingt, bekommt `dj_belohnung` Coins
-(Standard 5.000, höchstens 25.000 — Coins gelten auf allen Servern, ein Admin
-soll sich auf seinem Privatserver kein Geld drucken; `0` = nur die Ehre) und
-mit `dj_rolle` (auf dem Hauptserver
-von Haus aus an, sonst aus) die Rolle „🎧 DJ des Monats". Wer sie hat, merkt
+(Standard 5.000, höchstens 25.000; `0` = nur die Ehre) — und zwar **einmal im
+Monat über alle Server**: Coins gelten überall, wer auf drei Servern DJ ist,
+wird dreimal ausgerufen, aber einmal bezahlt (auf den anderen steht, dass er
+schon woanders kassiert hat). Sonst druckte sich jeder mit ein paar
+Privatservern Geld. Dazu mit `dj_rolle` (auf dem Hauptserver von Haus aus an,
+sonst aus) die Rolle „🎧 DJ des Monats". Wer sie hat, merkt
 sich Flo erst, wenn Discord sie wirklich vergeben hat — abgeben muss sie im
 nächsten Monat genau der, auch wenn dazwischen ein Monat ohne Schalter lag; ein
 Monat ohne DJ (unter 10 Songs) nimmt sie nur weg. Die Rolle braucht „Rollen
 verwalten" (und Flos Rolle darüber); fehlt das, steht es im Log.
 
-* **Gezählt wird, was startet** — auch ein Song, der nach drei Sekunden
-  geskippt wird. „Stunden" ist die Länge der Songs, nicht die gehörte Zeit.
+* **Gezählt wird, was startet** — außer einem Song, der in den ersten 30
+  Sekunden weggeskippt wird (bei kurzen Songs: vor der Hälfte): den hat keiner
+  gehört. Sonst skippte sich jeder in ein paar Minuten durch eine
+  200-Song-Playlist zum DJ des Monats. „Stunden" ist die Länge der Songs, nicht
+  die gehörte Zeit.
   Loop-Durchläufe, Tempo- und Wächter-Neustarts sind kein neuer Start; ein Song,
   der nach einem Neustart oder Netz-Aussetzer weiterläuft, zählt nicht doppelt.
 * **Radio-Songs** zählen nur als Zahl („+ 14 vom Radio") — gewünscht hat sie
@@ -974,15 +991,20 @@ verwalten" (und Flos Rolle darüber); fehlt das, steht es im Log.
 * **Der Spruch** kommt von der KI (Hintergrund-Aufruf mit der festen Grenze, nur
   mit Schalter `ki` und nicht in der Sendepause), sonst aus einem Ersatz-Pool im
   selben Ton. Ein Songtitel oder Name mit Notsignal geht nie an die KI und nie
-  in den Spruch; eine Antwort mit Notsignal wird verworfen. Ein DJ mit so einem
-  Namen bleibt DJ — im Spruch heißt er nur „DJ".
+  in den Spruch; eine Antwort mit Notsignal, Hilfsangebot, privaten Daten oder
+  Hetze wird verworfen. Ein DJ mit so einem Namen bleibt DJ — im Spruch heißt er
+  nur „DJ". Hat der DJ selbst gerade ein Notsignal geschrieben (wie bei Zitat
+  der Woche und Geburtstag): kein Ping, keine KI, kein Spott, nur eine neutrale
+  Zeile — Coins und Rolle bekommt er trotzdem.
 * `flo wrapped posten` (nur der Besitzer, zum Testen): steht das Wrapped des
   Vormonats noch aus (oder hing es), **ist** das der Monats-Post — mit Coins und
   Rolle, der Takt macht ihn danach nicht noch einmal. Sonst ein
   Wiederholungs-Post ohne Coins und ohne Ping. Ging der Post nicht raus, sagt
   Flo das, statt „ist raus" zu behaupten.
 * Nur eindeutige Befehle: „Flo wrapped ist cool" beantwortet die KI.
-  `MUSIKSTATS_ENABLED=0` schaltet es ab. Daten: `data/musikstats.json`.
+  `MUSIKSTATS_ENABLED=0` schaltet es ab. Daten: `data/musikstats.json` (je
+  Server, bis auf das DJ-Kassenbuch `bezahlt`: über alle Server, wer für welchen
+  Monat zuletzt DJ-Coins bekam).
 
 ---
 
@@ -1204,7 +1226,8 @@ Text darüber. Gibt es nur **einen** Kandidaten, gewinnt er konkurrenzlos (ohne
 Umfrage); gibt es **keinen**, kommt eine derbe Zeile — aber nur, wenn hier in
 den letzten vier Wochen überhaupt etwas gespeichert wurde. Fehlt Flo das Recht
 „Umfragen erstellen", entscheidet er allein. Wer gerade ein Notsignal geschrieben
-hat (das merkt sich „Er hält nach"), kommt nicht zur Wahl.
+hat (Flo merkt sich 72 Stunden lang nur, *dass* — im Speicher, auch ohne KI),
+kommt nicht zur Wahl.
 
 **Nie in einen Aufräum-Kanal** (`autodelete_channels`): dort löscht Flo auch
 seine eigenen Posts nach einer Minute — die Umfrage wäre weg, bevor einer
@@ -1319,7 +1342,7 @@ Wirtschaft (Modul oder Schalter `economy` aus) nur der Glückwunsch.
 
 **Nie zu einer Notlage:** ein Name mit Notsignal geht nicht an die KI, eine
 KI-Zeile mit Notsignal fliegt raus, und wer gerade ein Notsignal geschrieben hat
-(das merkt sich „Er hält nach" im Speicher), bekommt einen Glückwunsch ohne
+(72 Stunden, nur im Speicher, auch ohne KI), bekommt einen Glückwunsch ohne
 Spott und ohne KI.
 
 Je Server abschaltbar (Schalter `geburtstage`). Daten: `data/geburtstage.json` —
@@ -1922,7 +1945,10 @@ beiseitegelegt und die Sicherung eingespielt — **nichts wird stillschweigend
 Neu dazu kommen mit den Teilen auf dem Fundament: `playlists.json`,
 `musikzustand.json`, `musikstats.json`, `launen.json`, `nachhaken.json`,
 `zitate.json` und `geburtstage.json` — alle je Server, nichts wandert zwischen
-Servern.
+Servern. Ausnahme sind die beiden Kassenbücher (`"bezahlt"` in
+`geburtstage.json` und `musikstats.json`): über alle Server, wer für welches
+Jahr bzw. welchen Monat zuletzt Coins bekam — Coins gelten ja auch überall.
+Wer die Daten eines Servers von Hand löscht, lässt sie stehen.
 
 ---
 

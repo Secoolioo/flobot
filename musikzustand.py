@@ -13,7 +13,10 @@ Wo was aufgerufen wird:
                             Warteschlange, beim Radio-Schalter und wenn der
                             Watchdog sie parkt
     vergessen(gid)          music.py, GuildPlayer.disconnect() ('flo stop',
-                            Rauswurf, Leerlauf)
+                            Rauswurf, Leerlauf) - nicht beim Aufraeumen nach
+                            einem Fehlversuch (nichts gefunden, Radio kam
+                            nicht): das ist kein 'flo stop', ein Stand, der
+                            noch zurueckkommen soll, bleibt stehen
     ausstehend(gid)         music.py, 'flo stop' / 'flo hau ab': kommt hier
                             gleich eine Warteschlange zurueck? Dann meint der
                             Befehl SIE - auch wenn Flo noch in keinem Kanal
@@ -22,7 +25,9 @@ Wo was aufgerufen wird:
     takt()                  bot.py, im Voice-Watchdog-Takt (alle 15 s)
     sichern()               bot.py, beim Herunterfahren: EINMAL, im ersten
                             Durchgang VOR dem Abmelden (_alles_sichern mit
-                            vor_abmelden=True), vor store.alle_sichern
+                            vor_abmelden=True), vor store.alle_sichern. Laeuft
+                            gerade ein Songwechsel, wartet es den kurz ab
+                            (WECHSEL_WARTEN)
     wiederherstellen(client) bot.py, einmal je Prozess aus on_ready. Die
                             Sendepause prueft bot.py dort NICHT - das tut
                             wiederherstellen selbst: in der Sendepause geht Flo
@@ -115,6 +120,9 @@ GATEWAY_WARTEN = 60.0
 #: ob die Uhr zurueckspringt, und zwar in diesem Abstand.
 UHR_NACHHOLEN = 120.0
 NACHHOL_TAKT = 5.0
+#: So lange wartet sichern() hoechstens (fuer alle Server zusammen) auf einen
+#: Songwechsel, der gerade laeuft - docker stop gibt Flo nur 10 s.
+WECHSEL_WARTEN = 3.0
 #: So oft frischt takt() Stellen und Zeitstempel auf (Absturz, kill -9).
 AUFFRISCHEN = 60.0
 #: Mehr Songs nimmt kein Server mit (guildcfg 'musik_max_queue' geht bis 500).
@@ -372,14 +380,25 @@ class Musikzustand(FeatureBasis):
         except Exception:  # noqa: BLE001
             return {}
 
-    def _alles_bauen(self, *, alle):
+    def _alles_bauen(self, *, alle, wartende=False):
         """Geaenderte Player bauen - mit alle=True auch jeden anderen, der etwas
         hat oder einen Eintrag fuehrt (Stelle und Zeitstempel auffrischen).
-        Staende, die noch aufs Zurueckholen warten, bleiben, wie sie sind."""
+
+        Staende, die noch aufs Zurueckholen warten, bleiben, wie sie sind -
+        auch wenn auf dem Server inzwischen schon wieder etwas laeuft ('flo
+        spiel', bevor Flo dort zurueck war). Sonst ueberschrieb der naechste
+        Takt den alten Stand still, und wiederherstellen fand ihn nicht mehr:
+        kein 'hinten an', keine Logzeile. Der Player bleibt vermerkt und wird
+        gebaut, sobald sein alter Stand erledigt ist. Nur beim Herunterfahren
+        (wartende=True) gilt, was gerade laeuft."""
         jetzt = _jetzt()
         geaendert = False
-        faellig = dict(self._geaendert)
-        self._geaendert.clear()
+        faellig = {}
+        for gid, player in list(self._geaendert.items()):
+            if not wartende and str(gid) in self._alt:
+                continue                # wartet aufs Zurueckholen - spaeter
+            faellig[gid] = player
+            del self._geaendert[gid]
         if alle:
             guilds = self._guilds()
             for gid, player in self._spieler().items():
@@ -414,10 +433,32 @@ class Musikzustand(FeatureBasis):
         if not self._enabled or self._store is None:
             return
         if not self._herunterfahren:
-            self._alles_bauen(alle=True)
+            await self._wechsel_abwarten()
+            self._alles_bauen(alle=True, wartende=True)
             self._herunterfahren = True
             log.info("Musik-Zustand gesichert (%d Server).", len(self._guilds()))
         await self._store.save()
+
+    async def _wechsel_abwarten(self):
+        """Laeuft gerade ein Songwechsel, ist der naechste Song schon aus der
+        Schlange, wird aber noch geladen (oder das Radio holt Nachschub). Ein
+        Schnappschuss jetzt verloere ihn - und mit Radio und leerer Schlange
+        kaeme gar nichts zurueck. Deshalb kurz warten, bis der Wechsel durch
+        ist: hoechstens WECHSEL_WARTEN fuer alle Server zusammen, danach gilt
+        der Stand von jetzt."""
+        bis = time.monotonic() + WECHSEL_WARTEN
+        for player in self._spieler().values():
+            sperre = getattr(player, "_advance_lock", None)
+            if sperre is None or not sperre.locked():
+                continue
+            rest = bis - time.monotonic()
+            if rest <= 0:
+                break
+            try:
+                await asyncio.wait_for(sperre.acquire(), rest)
+            except Exception:  # noqa: BLE001 - zu lang: dann eben der Stand von jetzt
+                continue
+            sperre.release()
 
     # --- Zurueckholen ---------------------------------------------------------
     async def wiederherstellen(self, client):
@@ -608,9 +649,11 @@ class Musikzustand(FeatureBasis):
                  _songs(len(mit)))
         voice = player.voice
         if (leer and player.current is None and voice is not None and voice.is_connected()
-                and not player.ist_pausiert() and not player._advance_lock.locked()):
+                and not player.ist_pausiert() and not player._advance_lock.locked()
+                and not getattr(player, "_laufende_anfragen", 0)):
             # Flo sass schon im Kanal, aber es lief nichts ('flo komm'): dann
-            # geht es mit dem alten Stand los, statt dass er nur wartet.
+            # geht es mit dem alten Stand los, statt dass er nur wartet. Laedt
+            # gerade ein 'spiel' oder eine Playlist, wartet er hinter ihr.
             player._advancing = False
             await player._advance()
         elif not _sendepause():

@@ -151,10 +151,13 @@ KATALOG = [
                 minimum=1, maximum=500),
     Einstellung("wrapped_channel", "Musik-Wrapped-Kanal", "channel", 0, "",
                 "Wohin Flo am Monatsanfang das Musik-Wrapped postet. Aus = in "
-                "den Ansagen-Kanal.", "Musik"),
+                "den Ansagen-Kanal (sonst den System-Kanal) – nie in einen "
+                "Aufräum-Kanal, dort wäre es nach einer Minute weg.", "Musik"),
     # Coins gelten fuer ALLE Server. Die Obergrenze verhindert, dass sich der
     # Admin eines privaten Servers selbst Geld druckt (sich zum DJ waehlt und
-    # eine Million einstellt) - siehe auch geburtstag_coins.
+    # eine Million einstellt) - siehe auch geburtstag_coins. Und mehrere
+    # Privatserver helfen nicht: DJ-Coins gibt es je Person einmal im Monat
+    # ueber alle Server (musikstats, Kassenbuch 'bezahlt').
     Einstellung("dj_belohnung", "DJ des Monats: Coins", "zahl", 5000, "",
                 "So viel bekommt, wer im Monat die meisten Songs gewünscht hat. "
                 "0 = nur die Ehre.", "Musik", minimum=0, maximum=25_000),

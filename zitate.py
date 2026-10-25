@@ -39,7 +39,7 @@ nicht nachsehbar -> nach AUFGEBEN_NACH frei, die Kandidaten wandern weiter.
 
 Der Sieger bekommt eine Zitat-Karte (render.quote_card mit Profilbild), einen
 Kommentar (KI im Hintergrund, mit Grenze, sonst Ersatz-Pool) und als Einziger
-einen Ping. Wer gerade ein Notsignal geschrieben hat (nachhaken merkt sich das
+einen Ping. Wer gerade ein Notsignal geschrieben hat (basis merkt sich das
 72 Stunden im Speicher), kommt gar nicht erst zur Wahl - und gewinnt jemand,
 der waehrend der Abstimmung eins schreibt: keine KI, kein Spott, kein Ping.
 
@@ -113,7 +113,6 @@ import ai
 import basis
 from basis import FeatureBasis
 import features
-import guildcfg
 import uhr
 from store import JsonStore
 
@@ -312,65 +311,17 @@ def _heikel(text):
         return False
 
 
-def _kuerzlich_notlage(uid):
-    """Hat die Person gerade ein Notsignal geschrieben? Das weiss nachhaken
-    (nur im Speicher, 72 Stunden). Dann keine Abstimmung ueber ihren "Mist"
-    und kein Spott, wenn sie gewinnt."""
-    try:
-        import nachhaken
-        return bool(nachhaken.is_enabled() and nachhaken.instance._gesperrt(_ganz(uid)))
-    except Exception:  # noqa: BLE001 - ohne nachhaken weiss es keiner
-        return False
-
-
-def _leser(kanal, guild, merker=None):
-    """Die Rollen (IDs), die diesen Kanal lesen duerfen - Bot-Rollen zaehlen
-    nicht. None = nicht pruefbar (Attrappe ohne Rechte und Rollen). 'merker'
-    (ein dict) haelt das Ergebnis je Kanal fest, wenn viele Kandidaten aus
-    denselben Kanaelen kommen - jede Rolle durchzurechnen kostet."""
-    if merker is not None:
-        if id(kanal) not in merker:
-            merker[id(kanal)] = (kanal, _leser(kanal, guild))
-        return merker[id(kanal)][1]
-    pruefen = getattr(kanal, "permissions_for", None)
-    rollen = [r for r in (getattr(guild, "roles", None) or ())
-              if not getattr(r, "managed", False)]
-    jeder = getattr(guild, "default_role", None)
-    if jeder is not None and all(r is not jeder for r in rollen):
-        rollen.append(jeder)
-    if pruefen is None or not rollen:
-        return None
-    try:
-        return frozenset(_ganz(r.id) for r in rollen if pruefen(r).read_messages)
-    except Exception:  # noqa: BLE001 - Thread ohne Elternkanal im Cache: keiner
-        return frozenset()
-
-
-def _privat(quelle, ziel, guild, merker=None):
-    """Kommt ein Zitat aus einem Kanal, den nicht jeder lesen kann, der 'ziel'
-    liest (Mod-Kanal, privater Kanal, privater Thread) - oder aus einem
-    NSFW-Kanal? Dann haengt Flo es dort nicht aus: die zitierte Person hat sich
-    ihr Publikum nicht ausgesucht. Ohne 'ziel' zaehlt @everyone. Gemessen wird
-    je Rolle, so geht es auch auf Servern, auf denen @everyone nichts sieht
-    (nur die Rolle nach der Verifizierung)."""
-    if quelle is None or guild is None:
-        return False
-    if getattr(quelle, "type", None) == discord.ChannelType.private_thread:
-        return True
-    try:
-        nsfw = getattr(quelle, "is_nsfw", None)
-        if callable(nsfw) and nsfw():
-            return True
-    except Exception:  # noqa: BLE001
-        return True
-    von = _leser(quelle, guild, merker)
-    if von is None:
-        return False                    # nichts zu pruefen (Attrappe)
-    nach = _leser(ziel, guild, merker) if ziel is not None else None
-    if nach is None:
-        jeder = getattr(guild, "default_role", None)
-        nach = frozenset((_ganz(jeder.id),)) if jeder is not None else frozenset()
-    return bool(nach - von)
+# Die Regeln fuer alles, was Flo ungefragt postet, stehen in basis.py - hier
+# nur unter den alten Namen (die Aufrufstellen und Tests kennen sie so).
+#: Hat die Person gerade ein Notsignal geschrieben? Dann keine Abstimmung ueber
+#: ihren "Mist" und kein Spott, wenn sie gewinnt.
+_kuerzlich_notlage = basis.kuerzlich_notlage
+_leser = basis.leser
+#: Ein Zitat aus einem Kanal, den nicht jeder lesen kann (Mod-Kanal, privater
+#: Thread, NSFW), haengt Flo nicht dort aus, wo es andere lesen.
+_privat = basis.privat
+_darf_schreiben = basis.darf_schreiben
+kanal_ohne_aufraeumen = basis.kanal_ohne_aufraeumen
 
 
 def _quelle(guild, k):
@@ -384,34 +335,6 @@ def _quelle(guild, k):
         return holen(cid) if holen is not None else None
     except Exception:  # noqa: BLE001
         return None
-
-
-def _darf_schreiben(kanal, guild):
-    try:
-        return bool(kanal.permissions_for(guild.me).send_messages)
-    except Exception:  # noqa: BLE001 - nicht pruefbar: lieber der naechste Kanal
-        return False
-
-
-def kanal_ohne_aufraeumen(client, guild, schluessel):
-    """Der eingestellte Kanal (guildcfg 'schluessel'), sonst die Ansagen
-    (client._event_channel), sonst der System-Kanal - der erste, in den Flo
-    schreiben darf und der KEIN Aufraeum-Kanal ist. None, wenn keiner taugt."""
-    aufraeum = {_ganz(c) for c in (guildcfg.get(guild.id, "autodelete_channels") or ())}
-    wahl = []
-    cid = _ganz(guildcfg.get(guild.id, schluessel))
-    if cid:
-        wahl.append(guild.get_channel(cid))
-    ansage = getattr(client, "_event_channel", None)
-    if callable(ansage):
-        wahl.append(ansage(guild))
-    wahl.append(getattr(guild, "system_channel", None))
-    for kanal in wahl:
-        if kanal is None or _ganz(getattr(kanal, "id", 0)) in aufraeum:
-            continue
-        if _darf_schreiben(kanal, guild):
-            return kanal
-    return None
 
 
 def antwort_text(nr, kandidat):
@@ -890,7 +813,7 @@ class Zitate(FeatureBasis):
             if not uhr.spaeter_als(woche, vorher):
                 return "erledigt"
             # Nie zur Wahl: ein Notsignal im Zitat oder im Namen - und wer
-            # gerade eins geschrieben hat (nachhaken): "wer hat den groessten
+            # gerade eins geschrieben hat (basis): "wer hat den groessten
             # Mist gelabert?" ist dann das Letzte, was die Person braucht.
             kandidaten = [k for k in self.offene(g, bis=woche)
                           if not (_notlage(k.get("text")) or _notlage(k.get("name"))
@@ -1327,7 +1250,7 @@ class Zitate(FeatureBasis):
             uid = _ganz(k.get("uid"))
             kopf = _KOPF.get(u.get("art") or "umfrage", _KOPF["umfrage"]).format(
                 uid=uid, stimmen=_ganz(u.get("stimmen")), gesamt=_ganz(u.get("gesamt")))
-            # Hat der Sieger gerade ein Notsignal geschrieben (nachhaken):
+            # Hat der Sieger gerade ein Notsignal geschrieben (basis):
             # kein Spott, keine KI, kein Ping - nur die Karte und eine Zeile.
             sanft = _kuerzlich_notlage(uid)
             if sanft:

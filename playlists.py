@@ -168,9 +168,10 @@ _SATZ = _SATZ_VORN | frozenset((
     "von", "vom", "mit", "für", "fuer", "auch", "echt", "voll", "ziemlich", "der",
     "die", "das", "den", "dem", "ein", "eine", "einen", "meine", "deine", "mir",
     "mich", "dir", "dich", "uns", "euch", "jetzt", "heute", "gestern", "immer"))
-# Am Namensende waeren sie nicht mehr vom Befehl zu unterscheiden.
+# Am Namensende waeren sie nicht mehr vom Befehl zu unterscheiden. 'hilfe'
+# & Co.: 'flo playlist hilfe' oeffnet die Hilfe-Seite (bot._help_category_key).
 _RESERVIERT_VORN = frozenset(_NEU + _MIX + _DAZU + _ZEIG + _LOESCHEN + _SPEICHERN
-                             + _UMBENENNEN + ("alle",))
+                             + _UMBENENNEN + ("alle", "hilfe", "help", "anleitung"))
 _RESERVIERT_HINTEN = frozenset(_MIX + _DAZU + _ZEIG + _LOESCHEN)
 # Im Assistenten: Zeilen, die so anfangen, sind ein Song, keine Ansprache.
 _FLO_KUENSTLER = ("flo rida", "flo milli", "flo mega", "flo dalton", "flo nuggets")

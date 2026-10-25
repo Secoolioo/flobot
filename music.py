@@ -1675,7 +1675,7 @@ class GuildPlayer:
         except Exception:
             log.exception("Konnte naechsten Track nach Songende nicht einplanen")
 
-    async def _advance(self, gen=None):
+    async def _advance(self, gen=None, *, ziel=None):
         """Spielt den naechsten abspielbaren Track. Kaputte/altersbeschraenkte
         Eintraege (yt-dlp DownloadError, 'keine Treffer', tote Links) werden
         UEBERSPRUNGEN statt den Player anzuhalten - so bleibt die Musik bei einem
@@ -1702,8 +1702,22 @@ class GuildPlayer:
         # Kein Deadlock: der einzige Weg zurueck nach _advance fuehrt ueber
         # _after, und das plant per run_coroutine_threadsafe einen NEUEN Task -
         # es ruft sich nie innerhalb desselben Aufrufs selbst.
+        #
+        # 'ziel' (nur von skip): der Song, der weg soll. Laeuft unter dem Lock
+        # schon ein anderer - ein zweiter Skip oder das Songende war schneller -,
+        # ist dieser Skip erledigt. Weiterschalten hiesse sonst, den gerade
+        # gestarteten Song gleich mitzunehmen; vorher scheiterte das an
+        # 'Already playing audio.', und das kostete zwei Songs, das Panel und
+        # eine falsche Netz-Warnung.
         async with self._advance_lock:
+            if self._schon_weiter(ziel):
+                return None
             return await self._advance_intern(gen)
+
+    def _schon_weiter(self, ziel):
+        """Laeuft statt 'ziel' (des Songs, den ein Skip loswerden will) schon
+        ein anderer? Dann ist der Skip erledigt. Ohne 'ziel' nie."""
+        return ziel is not None and self.current is not None and self.current is not ziel
 
     async def _advance_intern(self, gen=None):
         """Der eigentliche Songwechsel. Nur ueber _advance aufrufen - der haelt
@@ -1795,7 +1809,17 @@ class GuildPlayer:
                     # wirft play() 'Already playing audio.', und das wurde als
                     # "Track nicht ladbar" verbucht: der Song war weg, obwohl
                     # mit ihm alles in Ordnung war.
-                    await self._warte_bis_still()
+                    if not await self._warte_bis_still() and gen is None:
+                        # Es spielt immer noch - also schon wieder: ein anderer
+                        # Wechsel ('flo spiel', ein zweiter Skip) war
+                        # schneller. Das ist kein kaputter Song, und zwei davon
+                        # gaben bisher die ganze Schlange auf (current=None
+                        # mitten im Song, falsche Netz-Warnung, und der
+                        # Leerlauf warf Flo danach raus). Zurueck nach vorn.
+                        if self._session_gen == sitzung:
+                            track.weiter_ab = ab
+                            self.queue.insert(0, track)
+                        return
                     # keep_speed beim Loop-Durchlauf: sonst setzte start()
                     # _neustart_versuche zurueck - die Schwelle, die einen
                     # kaputten Song aufgibt, koennte sich so ewig selbst
@@ -1851,7 +1875,11 @@ class GuildPlayer:
             # zurueckgelegt): der Stand fuer einen Neustart ist ein anderer.
             _zustand_merken(self)
 
-    async def disconnect(self):
+    async def disconnect(self, *, vergessen=True):
+        """Raus aus dem Kanal, Sitzung zu. vergessen=False nur beim Aufraeumen
+        nach einem Fehlversuch (nichts gefunden, das Radio kam nicht): das ist
+        kein 'flo stop' - ein Stand von vor dem Neustart, der hier noch
+        zurueckkommen soll (musikzustand), bleibt dann stehen."""
         self._vorladen_stoppen()
         self.queue.clear()
         self.current = None
@@ -1881,7 +1909,10 @@ class GuildPlayer:
         self._skip_stimmen.clear()
         self._abgewaehlt = None
         # Bewusst raus - nach einem Neustart soll Flo hier NICHT zurueckkommen.
-        _zustand_vergessen(self.guild_id)
+        if vergessen:
+            _zustand_vergessen(self.guild_id)
+        else:
+            _zustand_merken(self)
         await _retire_panel(self)
         if self.voice is not None:
             try:
@@ -2176,7 +2207,7 @@ class GuildPlayer:
         await self._advance()
         return True
 
-    async def skip(self):
+    async def skip(self, ziel=None):
         """Zum naechsten Song - und zwar VERLAESSLICH.
 
         Frueher stand hier nur voice.stop() und der Rest hing am
@@ -2185,7 +2216,22 @@ class GuildPlayer:
         Reconnect). Fiel der Skip in so ein Fenster, meldete Flo
         'uebersprungen' - und es passierte nichts. Jetzt entwerten wir den
         Callback selbst und stossen den naechsten Song direkt an, damit es
-        genau EINEN Weg gibt und der immer laeuft."""
+        genau EINEN Weg gibt und der immer laeuft.
+
+        ziel = der Song, der weg soll (Knopf und 'flo skip' geben ihn mit).
+        Laeuft inzwischen schon ein anderer (das Songende oder ein zweiter
+        Skip war schneller), tut der Skip nichts - sonst stoppte er den
+        gerade gestarteten Song gleich mit."""
+        if self._schon_weiter(ziel):
+            return
+        # Fuers Musik-Wrapped: wer gleich wegskippt, hat nicht gehoert - der
+        # Start zaehlt dann nicht (sonst skippte sich jeder zum DJ des Monats).
+        if self.current is not None:
+            try:
+                import musikstats      # lazy: musikstats liest Tracks aus diesem Modul
+                musikstats.zuruecknehmen(self.guild_id, self.current, self.position())
+            except Exception:  # noqa: BLE001 - Zaehlen darf nie die Musik kippen
+                log.debug("Musik-Statistik konnte den Skip nicht verrechnen", exc_info=True)
         # Wer skippt, will WEG von diesem Song - ein laufender Loop wuerde ihn
         # sonst sofort wieder vorne einreihen und der Skip verpuffte.
         self.loop_rest = 0
@@ -2197,7 +2243,7 @@ class GuildPlayer:
             except Exception:  # noqa: BLE001 - stop darf nie werfen
                 log.debug("voice.stop beim Skip fehlgeschlagen", exc_info=True)
             await self._warte_bis_still()
-        await self._advance()            # ohne gen -> laeuft IMMER
+        await self._advance(ziel=ziel)   # ohne gen -> laeuft IMMER (ausser 'ziel' ist weg)
 
     async def _nach_abbruch_fortsetzen(self):
         """War der Song ABGEBROCHEN statt zu Ende? Dann dort weitermachen.
@@ -2406,7 +2452,7 @@ class GuildPlayer:
                                   "- ueberspringe ihn.", titel, self._neustart_versuche)
                         await self._sag(f"⏭️ **{titel}** liefert keinen Ton mehr – "
                                         f"ich gehe zum nächsten.")
-                        await self.skip()
+                        await self.skip(ziel=self.current)
                         return
                     self._neustart_versuche += 1
                     log.warning("Audio-Stall: verbunden und 'spielend', aber seit "
@@ -5118,11 +5164,44 @@ class Music(FeatureBasis):
         items = Liste (yt-dlp-Eingabe, Anzeigetitel[, Match-Hint]),
         label z. B. 'aus dem Album', requested_by_id = wer es wollte (ID).
         Rueckgabe: Embed (eingereiht/Fehler) ODER HANDLED (frisch gestartet -> Panel).
+
+        Zaehlt als laufende Anfrage (wie ein einzelnes 'spiel'): solange die
+        Liste laedt, raeumt _vorab_aufraeumen den Player nicht weg, 'radio an'
+        startet nichts Eigenes, und ein zurueckkommender Stand stellt sich
+        hinten an. Sagt jemand 'flo stop', waehrend der erste Song noch
+        geladen wird, ist die Liste weg - vorher landete der Rest trotzdem in
+        der Schlange (ohne Verbindung: Soundboard und TTS hielten den Kanal
+        fuer belegt, und das naechste 'spiel' spielte die gestoppte Liste
+        hinterher).
         """
+        sitzung = player._session_gen
+        player._laufende_anfragen = getattr(player, "_laufende_anfragen", 0) + 1
+        try:
+            return await self._play_many_intern(player, channel, items, requested_by,
+                                                label, reply_to, requested_by_id, sitzung)
+        finally:
+            player._laufende_anfragen -= 1
+
+    def _gestoppt(self):
+        return self._embed("Gestoppt, bevor der erste Song überhaupt lief. Dann eben "
+                           "nicht – die Liste bleibt draußen.", color=_COL_ERR)
+
+    def _alle_einreihen(self, player, tracks, items, requested_by, requested_by_id):
+        for track in tracks:
+            self._einreihen(player, track)
+        for item in items:
+            inp, title, hint = self._unpack_item(item)
+            self._einreihen(player, self._lazy_track(
+                inp, title, requested_by, hint, requested_by_id=requested_by_id))
+
+    async def _play_many_intern(self, player, channel, items, requested_by, label, reply_to,
+                                requested_by_id, sitzung):
         try:
             await player.connect(channel)
         except VOICE_CONNECT_FEHLER as exc:
             return self._voice_kaputt(exc, "Mehrfach")
+        if player._session_gen != sitzung:
+            return self._gestoppt()
         player.fremden_ton_stoppen()
 
         deckel = max_queue(player.guild_id)
@@ -5134,10 +5213,7 @@ class Music(FeatureBasis):
 
         geparkt = getattr(player, "_geparkt", False)
         if player.is_active() or geparkt:
-            for item in items:
-                inp, title, hint = self._unpack_item(item)
-                self._einreihen(player, self._lazy_track(
-                    inp, title, requested_by, hint, requested_by_id=requested_by_id))
+            self._alle_einreihen(player, (), items, requested_by, requested_by_id)
             if geparkt:
                 # Geparkt: erst die alte Schlange weiter, die neuen hinten dran.
                 await player._advance()
@@ -5159,6 +5235,8 @@ class Music(FeatureBasis):
             try:
                 track = await self._resolve_input(first_inp, first_hint)
             except Exception:  # noqa: BLE001
+                if player._session_gen != sitzung:
+                    return self._gestoppt()
                 log.warning("Playlist: '%s' nicht ladbar - nehme den naechsten.",
                             first_title or first_inp)
                 uebersprungen += 1
@@ -5172,20 +5250,34 @@ class Music(FeatureBasis):
             track.query = first_inp
             track.match_hint = first_hint
             break
+        if player._session_gen != sitzung:
+            return self._gestoppt()             # 'flo stop' waehrend des Ladens
         if track is None:
             return self._embed(
                 "Von dieser Liste konnte ich gerade keinen Song laden (Netz? "
                 "gesperrt?). Versuch's gleich nochmal.", color=_COL_ERR)
-        for item in rest:
-            inp, title, hint = self._unpack_item(item)
-            self._einreihen(player, self._lazy_track(
-                inp, title, requested_by, hint, requested_by_id=requested_by_id))
+        if await player._warte_bis_still() is False:
+            # Waehrenddessen hat jemand selbst etwas gestartet ('spiel X'):
+            # dann stellt sich die Liste hinten an, statt am 'Already playing
+            # audio.' zu scheitern.
+            if player._session_gen != sitzung:
+                return self._gestoppt()
+            self._alle_einreihen(player, (track,), rest, requested_by, requested_by_id)
+            anzahl = len(rest) + 1
+            return self._embed(
+                f"**{anzahl}** Songs {label} eingereiht – ab "
+                f"**#{len(player.queue) - anzahl + 1}** in der Warteschlange.",
+                title="➕  Zur Warteschlange hinzugefügt", color=_COL_QUEUE)
+        if player._session_gen != sitzung:
+            return self._gestoppt()
         try:
-            await player._warte_bis_still()
             player.start(track)
         except Exception:
             log.exception("Erster Track (Mehrfach) nicht abspielbar: %s", track.title)
             return self._embed("Den ersten Song konnte ich gerade nicht abspielen.", color=_COL_ERR)
+        # Der Rest erst JETZT: scheitert der Start, bleibt keine halbe Liste
+        # ohne Song in der Schlange liegen.
+        self._alle_einreihen(player, (), rest, requested_by, requested_by_id)
         extra = f"+{len(rest)} weitere {label}" if rest else ""
         await self._send_panel(player, track, reply_to=reply_to, extra=extra)
         return HANDLED
@@ -5471,7 +5563,7 @@ class Music(FeatureBasis):
           'laeuft'   der Song ist schon abgewaehlt, der Wechsel laeuft noch
         Alles synchron, ohne await dazwischen: zwei Klicks im selben Augenblick
         koennen sich nicht ueberholen und zusammen zwei Songs rauswerfen.
-        Bei eigen/mod/erreicht MUSS der Aufrufer danach skippen - ueber
+        Bei direkt/eigen/mod/erreicht MUSS der Aufrufer danach skippen - ueber
         _abwaehlen, das den Merker auch dann wieder loest, wenn es schiefgeht."""
         track = player.current
         if track is None:
@@ -5480,6 +5572,11 @@ class Music(FeatureBasis):
             return ("laeuft", 0, 0)
         menschen = self._zuhoerer(player)
         if menschen is None or len(menschen) <= 2:
+            # Auch direkt gilt der Song als abgewaehlt, bis der Wechsel durch
+            # ist. Sonst ging ein zweiter Klick in der Luecke (der naechste
+            # Song wird noch geladen) gleich in einen zweiten Skip - und der
+            # nahm den naechsten Song mit.
+            player._abgewaehlt = track
             return ("direkt", 0, 0)
         uid = int(getattr(wer, "id", 0) or 0)
         art = None
@@ -5615,7 +5712,7 @@ class Music(FeatureBasis):
         try:
             if text:
                 await player._sag(text)
-            await player.skip()
+            await player.skip(ziel=track)
         finally:
             if player._abgewaehlt is track and player.current is track:
                 player._abgewaehlt = None
@@ -6247,7 +6344,8 @@ class Music(FeatureBasis):
                                title="📻  Radio", color=_COL_INFO)
         aufgegeben = not player.radio      # dann stand "Mir fällt nix ein" schon da
         if not war_drin and player.nichts_zu_tun() and not player.queue:
-            await player.disconnect()      # nicht stumm im Kanal sitzen bleiben
+            # Nicht stumm im Kanal sitzen bleiben - aber das ist kein "flo stop".
+            await player.disconnect(vergessen=False)
         if aufgegeben:
             return HANDLED
         return self._embed("Gerade krieg ich nix rein. Versuch's gleich nochmal.",
@@ -6275,7 +6373,7 @@ class Music(FeatureBasis):
                 and not player._advancing
                 and not getattr(player, "_laufende_anfragen", 0)):
             log.info("Musik: vorab verbunden, aber kein Song - gehe wieder raus.")
-            await player.disconnect()
+            await player.disconnect(vergessen=False)    # kein "flo stop"
 
     async def _such_zeichen(self, message, an):
         """🔎 an die Nachricht, solange Flo sucht (und danach wieder weg)."""

@@ -253,6 +253,140 @@ def glaubhafte_zeit(stempel, jetzt=None, *, vorlauf=0.0, ersatz=None):
     return stempel
 
 
+# --- Was Flo VON SICH AUS postet --------------------------------------------
+# Zitat der Woche, Geburtstage, Musik-Wrapped und das Nachhaken posten
+# ungefragt. Jedes Modul hielt sich dafuer eine eigene Kopie derselben Regeln -
+# und eine Kopie fehlte prompt: das Wrapped landete im Aufraeum-Kanal und war
+# nach einer Minute weg, und das Nachhaken fragte oeffentlich nach, was jemand
+# im Hinterzimmer angekuendigt hatte. Jetzt stehen die Regeln EINMAL hier.
+
+def _ganz(wert):
+    try:
+        return int(wert or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def darf_schreiben(kanal, guild):
+    """Darf Flo in 'kanal' schreiben? Nicht pruefbar = nein (lieber der
+    naechste Kanal)."""
+    try:
+        return bool(kanal.permissions_for(guild.me).send_messages)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def kanal_ohne_aufraeumen(client, guild, schluessel):
+    """Der eingestellte Kanal (guildcfg 'schluessel'), sonst die Ansagen
+    (client._event_channel), sonst der System-Kanal - der erste, in den Flo
+    schreiben darf und der KEIN Aufraeum-Kanal ist: dort loescht bot.py auch
+    Flos eigene Posts nach einer Minute, und mit ihnen den Ping. Auf dem
+    Hauptserver ist der Ansagen-Kanal ab Werk genau so einer. None, wenn
+    keiner taugt."""
+    import guildcfg
+    aufraeum = {_ganz(c) for c in (guildcfg.get(guild.id, "autodelete_channels") or ())}
+    wahl = []
+    cid = _ganz(guildcfg.get(guild.id, schluessel))
+    if cid:
+        wahl.append(guild.get_channel(cid))
+    ansage = getattr(client, "_event_channel", None)
+    if callable(ansage):
+        wahl.append(ansage(guild))
+    wahl.append(getattr(guild, "system_channel", None))
+    for kanal in wahl:
+        if kanal is None or _ganz(getattr(kanal, "id", 0)) in aufraeum:
+            continue
+        if darf_schreiben(kanal, guild):
+            return kanal
+    return None
+
+
+#: Wer ein Notsignal schreibt, gilt so lange als "gerade am Boden" (wie
+#: nachhaken.NOTLAGE_SPERRE).
+NOTLAGE_SPERRE = 72 * 3600.0
+#: uid -> time.monotonic() des letzten Notsignals. Nur im Speicher, nie der Text.
+_notlage_seit = {}
+
+
+def notlage_merken(uid):
+    """bot.on_message, fuer JEDE Nachricht mit Notsignal - egal, welche Module
+    laufen. Vorher wusste das nur nachhaken, und das laedt nur mit KI: ohne KI
+    kannten Zitat der Woche und Geburtstage gar keine Sperre und griffen zum
+    Spott-Pool."""
+    uid = _ganz(uid)
+    if not uid:
+        return
+    jetzt = time.monotonic()
+    for alt in [u for u, seit in _notlage_seit.items() if jetzt - seit >= NOTLAGE_SPERRE]:
+        del _notlage_seit[alt]
+    _notlage_seit[uid] = jetzt
+
+
+def kuerzlich_notlage(uid):
+    """Hat die Person gerade ein Notsignal geschrieben (notlage_merken, und
+    nachhaken weiss es auch - 72 Stunden, nur im Speicher)? Dann kein Spott,
+    kein Ping, keine KI - wer am Boden ist, wird nicht ungefragt vorgefuehrt."""
+    seit = _notlage_seit.get(_ganz(uid))
+    if seit is not None and time.monotonic() - seit < NOTLAGE_SPERRE:
+        return True
+    try:
+        import nachhaken
+        return bool(nachhaken.is_enabled() and nachhaken.instance._gesperrt(_ganz(uid)))
+    except Exception:  # noqa: BLE001 - ohne nachhaken weiss es keiner
+        return False
+
+
+def leser(kanal, guild, merker=None):
+    """Die Rollen (IDs), die diesen Kanal lesen duerfen - Bot-Rollen zaehlen
+    nicht. None = nicht pruefbar (Attrappe ohne Rechte und Rollen). 'merker'
+    (ein dict) haelt das Ergebnis je Kanal fest, wenn viele Kandidaten aus
+    denselben Kanaelen kommen - jede Rolle durchzurechnen kostet."""
+    if merker is not None:
+        if id(kanal) not in merker:
+            merker[id(kanal)] = (kanal, leser(kanal, guild))
+        return merker[id(kanal)][1]
+    pruefen = getattr(kanal, "permissions_for", None)
+    rollen = [r for r in (getattr(guild, "roles", None) or ())
+              if not getattr(r, "managed", False)]
+    jeder = getattr(guild, "default_role", None)
+    if jeder is not None and all(r is not jeder for r in rollen):
+        rollen.append(jeder)
+    if pruefen is None or not rollen:
+        return None
+    try:
+        return frozenset(_ganz(r.id) for r in rollen if pruefen(r).read_messages)
+    except Exception:  # noqa: BLE001 - Thread ohne Elternkanal im Cache: keiner
+        return frozenset()
+
+
+def privat(quelle, ziel, guild, merker=None):
+    """Stammt etwas aus einem Kanal, den nicht jeder lesen kann, der 'ziel'
+    liest (Mod-Kanal, privater Kanal, privater Thread) - oder aus einem
+    NSFW-Kanal? Dann holt Flo es dort nicht hervor: die Person hat sich ihr
+    Publikum nicht ausgesucht. Ohne 'ziel' zaehlt @everyone. Gemessen wird je
+    Rolle, so geht es auch auf Servern, auf denen @everyone nichts sieht (nur
+    die Rolle nach der Verifizierung)."""
+    import discord
+    if quelle is None or guild is None:
+        return False
+    if getattr(quelle, "type", None) == discord.ChannelType.private_thread:
+        return True
+    try:
+        nsfw = getattr(quelle, "is_nsfw", None)
+        if callable(nsfw) and nsfw():
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    von = leser(quelle, guild, merker)
+    if von is None:
+        return False                    # nichts zu pruefen (Attrappe)
+    nach = leser(ziel, guild, merker) if ziel is not None else None
+    if nach is None:
+        jeder = getattr(guild, "default_role", None)
+        nach = frozenset((_ganz(jeder.id),)) if jeder is not None else frozenset()
+    return bool(nach - von)
+
+
 class FeatureBasis:
     """Was jedes Feature-Modul koennen muss: seinen eigenen Namen kennen."""
 

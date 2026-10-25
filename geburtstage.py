@@ -66,7 +66,7 @@ Eintrag auf einem Server, gilt bis gestern als geprueft - sonst kaeme ein
 
 Nichts davon reagiert auf eine Notlage (ai.FloAI._NOTLAGE_RE): ein Name mit
 Notsignal geht nicht an die KI, eine KI-Zeile mit Notsignal fliegt raus, und
-wer gerade ein Notsignal geschrieben hat (nachhaken merkt sich das im
+wer gerade ein Notsignal geschrieben hat (basis merkt sich das im
 Speicher), bekommt einen Glueckwunsch ohne Spott.
 
 Daten: data/geburtstage.json
@@ -699,18 +699,29 @@ class Geburtstage(FeatureBasis):
 
     async def _festhalten_und_zahlen(self, gid, g, uid, tag, betrag, grund):
         """Lock-before-pay: erst 'gefeiert', das Kassenbuch (ueber alle Server)
-        und den offenen Glueckwunsch auf die Platte, DANN die Coins."""
+        und den offenen Glueckwunsch auf die Platte, DANN die Coins. Kam das
+        nicht auf die Platte (Datei nicht schreibbar - economy.json aber
+        schon), wird NICHT gezahlt: sonst zahlte jeder Neustart im
+        Nachhol-Fenster noch einmal."""
         k, jahr = str(uid), str(tag.year)
         g["gefeiert"][k] = jahr
+        kasse_vorher = self._bezahlt().get(k)
         if betrag > 0:
-            if uhr.spaeter_als(jahr, self._bezahlt().get(k)):
+            if uhr.spaeter_als(jahr, kasse_vorher):
                 self._bezahlt()[k] = jahr
             else:
                 # Dieses Jahr schon auf einem anderen Server bezahlt.
                 betrag, grund = 0, "anderswo"
         eintrag = g["offen"][k] = {"tag": uhr.tag_key(tag), "betrag": betrag,
                                    "bezahlt": False, "grund": grund, "versuche": 0}
-        await self._store.save()
+        if await self._store.save() is False and betrag > 0:
+            log.error("Geburtstage: geburtstage.json nicht schreibbar - %s bekommt KEINE "
+                      "Coins (sonst zahlte jeder Neustart noch mal).", uid)
+            if kasse_vorher is None:
+                self._bezahlt().pop(k, None)
+            else:
+                self._bezahlt()[k] = kasse_vorher
+            betrag = eintrag["betrag"] = 0
         if betrag > 0:
             economy.add_coins(uid, betrag, reason="geburtstag")
             try:
@@ -818,13 +829,9 @@ class Geburtstage(FeatureBasis):
 
     @staticmethod
     def _kuerzlich_notlage(uid):
-        """Hat die Person gerade ein Notsignal geschrieben? Das weiss nachhaken
-        (nur im Speicher). Dann kein Spott - auch nicht zum Geburtstag."""
-        try:
-            import nachhaken
-            return bool(nachhaken.is_enabled() and nachhaken.instance._gesperrt(uid))
-        except Exception:  # noqa: BLE001 - ohne nachhaken weiss es keiner
-            return False
+        """Hat die Person gerade ein Notsignal geschrieben (basis)? Dann kein
+        Spott - auch nicht zum Geburtstag."""
+        return basis.kuerzlich_notlage(uid)
 
     async def _ki_zeile(self, gid, name):
         """Zwei Saetze von der KI - None, wenn sie nicht darf, nicht kann oder
@@ -876,24 +883,7 @@ class Geburtstage(FeatureBasis):
         (autodelete_channels): dort loescht bot.py auch Flos Glueckwunsch nach
         einer Minute, und mit ihm den Ping. Auf dem Hauptserver ist der
         Ansagen-Kanal ab Werk genau so einer. None = keiner taugt."""
-        aufraeum = {_ganz(c) for c in (guildcfg.get(guild.id, "autodelete_channels") or ())}
-        wahl = []
-        cid = _ganz(guildcfg.get(guild.id, "geburtstag_channel"))
-        if cid:
-            wahl.append(guild.get_channel(cid))
-        ansage = getattr(client, "_event_channel", None)
-        if callable(ansage):
-            wahl.append(ansage(guild))
-        wahl.append(getattr(guild, "system_channel", None))
-        for kanal in wahl:
-            if kanal is None or _ganz(getattr(kanal, "id", 0)) in aufraeum:
-                continue
-            try:
-                if kanal.permissions_for(guild.me).send_messages:
-                    return kanal
-            except Exception:  # noqa: BLE001 - nicht pruefbar: lieber der naechste
-                continue
-        return None
+        return basis.kanal_ohne_aufraeumen(client, guild, "geburtstag_channel")
 
     # --- Die Rolle ------------------------------------------------------------
     @staticmethod

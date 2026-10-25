@@ -15,9 +15,12 @@ Wie es laeuft
   3. vielleicht_nachfragen()  schreibt die Person nach dem Termin wieder etwas
      (nicht an Flo), fragt Flo EINMAL nach - als Antwort auf diese Nachricht,
      hoechstens einmal je Person und Tag und dreimal je Server und Tag. Nicht
-     in einem Aufraeum-Kanal (dort waere die Frage nach einer Minute weg) und
-     nicht, wo Flo nicht schreiben darf - dann fragt die naechste Nachricht in
-     einem normalen Kanal. Die Frage landet im Chatverlauf der KI: wer darauf
+     in einem Aufraeum-Kanal (dort waere die Frage nach einer Minute weg),
+     nicht, wo Flo nicht schreiben darf, und nicht vor Leuten, die die
+     Ankuendigung nie lesen konnten (sie kam aus einem privaten Kanal oder
+     Thread, einem Mod- oder NSFW-Kanal - basis.privat) - dann fragt die
+     naechste Nachricht in einem passenden Kanal. Die Frage landet im
+     Chatverlauf der KI: wer darauf
      antwortet ('war gut, ne 2'), redet mit einem Flo, der weiss, was er fragte.
 
 Wann
@@ -55,10 +58,16 @@ Was bewusst nicht passiert
   - Nicht in der Sendepause, nicht bei Ansprache, nie ungefragt mit Ping.
   - Wer nicht will: 'flo nachhaken aus' (je Person und Server) - das raeumt
     auch alles Offene weg. 'flo vergiss mich' (gehirn) raeumt es ebenfalls.
+    Beides gilt auch, wo Nachhaken oder das Gedaechtnis aus ist (datenschutz).
 
 Wo was aufgerufen wird:
     handle(message)              Handler-Kette, nach umfrage
                                  ('flo nachhaken aus|an' je Person)
+    datenschutz(message)         Handler-Kette, nach gehirn, OHNE Schalter:
+                                 'flo nachhaken aus' und - wenn das
+                                 Gedaechtnis es nicht nimmt - 'flo vergiss
+                                 mich' gelten auch, wo Nachhaken oder das
+                                 Gedaechtnis aus ist
     note_message(msg)            bot.on_message, SYNCHRON, direkt nach dem
                                  Gedaechtnis-Haken - nie bei Notlagen
     vielleicht_nachfragen(msg)   bot.on_message, im Hintergrund, fuer jede
@@ -113,6 +122,8 @@ _CMDS = ("nachhaken",)
 _ERSTE = frozenset(_CMDS)
 _BEFEHL_RE = re.compile(r"nachhaken(?: (aus|an|ein|stop|stopp|off|on))?")
 _AUS = frozenset(("aus", "stop", "stopp", "off"))
+#: Wie im Gedaechtnis (gehirn._VERGESSEN_RE): 'vergiss' und 'vergiss mich'.
+_VERGISS_RE = re.compile(r"vergiss(?: mich)?")
 
 # --- Grenzen -------------------------------------------------------------------
 MIN_LAENGE, MAX_LAENGE = 12, 300
@@ -470,6 +481,35 @@ class Nachhaken(FeatureBasis):
         return bool(getattr(rechte, "send_messages", False))
 
     @staticmethod
+    def _hinterzimmer(guild, sache, kanal):
+        """Wurde 'sache' in einem Kanal angekuendigt, den nicht jeder lesen
+        kann, der 'kanal' liest (privater Kanal oder Thread, Mod-Kanal, NSFW)?
+        Dann fragt Flo hier nicht nach: wer im Hinterzimmer vom
+        Vorstellungsgespraech erzaehlt, hat sich sein Publikum ausgesucht. Im
+        selben Kanal (oder einem mit hoechstens demselben Publikum) schon.
+
+        Gibt es den Kanal nicht mehr (geloescht, Thread archiviert), weiss Flo
+        nicht, wer ihn lesen konnte - dann auch nicht. Nur eine Attrappe ohne
+        Kanal-Suche (oder ein Eintrag ohne Kanal) ist nicht pruefbar."""
+        try:
+            cid = int(sache.get("kanal") or 0)
+        except (TypeError, ValueError):
+            cid = 0
+        if not cid or cid == getattr(kanal, "id", None):
+            return False
+        holen = (getattr(guild, "get_channel_or_thread", None)
+                 or getattr(guild, "get_channel", None))
+        if holen is None:
+            return False
+        try:
+            quelle = holen(cid)
+        except Exception:  # noqa: BLE001
+            quelle = None
+        if quelle is None:
+            return True
+        return basis.privat(quelle, kanal, guild)
+
+    @staticmethod
     def _heikel(text):
         """Notlage, private Daten, Hetze oder ein Thema, ueber das Flo nicht
         hinterher redet? Dann gar nicht erst."""
@@ -716,6 +756,11 @@ class Nachhaken(FeatureBasis):
         kanal = getattr(msg, "channel", None)
         if not self._kanal_taugt(guild, kanal):
             return False
+        # Was im Hinterzimmer angekuendigt wurde, fragt Flo nicht vor allen
+        # anderen nach - auch ohne zu buchen: im passenden Kanal fragt er.
+        faellig = [e for e in faellig if not self._hinterzimmer(guild, e, kanal)]
+        if not faellig:
+            return False
         eintrag = self._guild(gid)
         heute = uhr.tag_key(self._jetzt())
         gefragt = eintrag["gefragt"]
@@ -855,6 +900,38 @@ class Nachhaken(FeatureBasis):
         return ("Ich wart noch auf:\n" + "\n".join(f"• {z}" for z in zeilen)
                 + f"\nKeine Lust drauf? `{self._bot_name} nachhaken aus`.")
 
+    async def datenschutz(self, message):
+        """Was jemand zum Loeschen sagt, gilt IMMER - auch wo Nachhaken oder das
+        Gedaechtnis auf dem Server aus ist. Sonst ging der Satz an die KI (die
+        dann frei erfindet, sie haette vergessen), und das Offene blieb liegen,
+        bis jemand den Schalter wieder anmacht:
+            'flo nachhaken aus'   wie immer: abmelden, alles Offene weg
+            'flo vergiss mich'    nur, wenn das Gedaechtnis es nicht nimmt
+                                  (Modul oder Schalter aus): das Offene weg
+        bot.py ruft das NACH gehirn.handle, ohne Schalter. Sonst None."""
+        if not self.is_enabled():
+            return None
+        gid = getattr(getattr(message, "guild", None), "id", 0)
+        uid = getattr(getattr(message, "author", None), "id", 0)
+        if not gid or not uid:
+            return None
+        text = re.sub(r"\s+", " ", ai.strip_lead(getattr(message, "content", "") or "")
+                      .lower()).strip(" ?!.,")
+        befehl = _BEFEHL_RE.fullmatch(text)
+        if befehl and befehl.group(1) in _AUS:
+            return await self.handle(message)
+        if not _VERGISS_RE.fullmatch(text):
+            return None
+        if gehirn.is_enabled() and features.is_on_in(gid, "gehirn"):
+            return None                 # das Gedaechtnis fragt selbst nach
+        if basis.erstes_ziel(message, ohne=[uid]) is not None:
+            return None                 # fremde Leute vergisst nur das Gedaechtnis
+        weg = self.vergiss(gid, uid)
+        if not weg:
+            return "Über dich weiß ich sowieso nichts. Nimm dich nicht so wichtig."
+        return (f"Vergessen. {weg} offene Sache(n) über dich sind weg – ich frag dich "
+                "nix mehr. Als ob's mich je interessiert hätte.")
+
     def abmelden(self, gid, uid):
         """Opt-out: merken, dass die Person nicht will, und alles Offene weg."""
         weg = self.vergiss(gid, uid)
@@ -952,3 +1029,4 @@ vergiss = instance.vergiss
 notlage = instance.notlage
 zeilen_fuer = instance.zeilen_fuer
 abmelden = instance.abmelden
+datenschutz = instance.datenschutz

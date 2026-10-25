@@ -380,6 +380,33 @@ def test_hilfe_zeigt_nur_was_geladen_ist():
         assert bot._help_category_key("flo hilfe leben") is None
 
 
+def test_hilfe_karte_schneidet_nichts_ab():
+    """Die Hilfe-Karte ist fest 900 px breit. Neue Zeilen ('flo playlist <name>
+    dazu · löschen', 'flo wrapped', 'flo zitate · zitat der woche') liefen
+    rechts aus dem Bild - 'umbenennen' und wer es darf, waren auf der Karte
+    weg. Jetzt wird eine zu lange Beschreibung kleiner gesetzt (und erst ganz
+    zuletzt mit '…' gekuerzt): rechts am Rand steht nie Text."""
+    import bot
+    import render
+    from PIL import Image
+    with _nur_geladen(bot, "MUSIC_ENABLED", "PLAYLISTS_ENABLED", "MUSIKSTATS_ENABLED",
+                      "ZITATE_ENABLED", "GEBURTSTAGE_ENABLED", "LAUNEN_ENABLED",
+                      "NACHHAKEN_ENABLED"):
+        for key in ("playlist", "leben"):
+            titel, farbe, _alle = bot._HELP_DATA[key]
+            eintraege = bot._hilfe_eintraege(key)
+            bild = Image.open(render.help_card(titel, bot._rgb(farbe), eintraege)).convert("RGB")
+            breite, hoehe = bild.size
+            for y in range(92, hoehe - 24):
+                for x in range(breite - 24, breite - 11):
+                    assert max(bild.getpixel((x, y))) < 100, (key, x, y)
+    # Und auch eine absurd lange Zeile bleibt im Bild.
+    bild = Image.open(render.help_card("T", (200, 0, 0), [("flo x", "sehr lang " * 40)]))
+    bild = bild.convert("RGB")
+    for y in range(92, bild.size[1] - 24):
+        assert max(bild.getpixel((bild.size[0] - 18, y))) < 100, y
+
+
 def test_funktionen_zeigen_was_nicht_geladen_ist():
     """'flo funktionen' zeigte alles gruen - auch, was beim Start gar nicht
     hochkam (kein ffmpeg, keine KI, ein Teil, der noch ein Geruest ist). Wer

@@ -1072,6 +1072,53 @@ def test_nachhaken_im_gedaechtnis_und_bei_vergiss_mich():
         restore()
 
 
+def test_loeschen_geht_auch_mit_schalter_aus():
+    """Ein Server, der das Gedaechtnis abgeschaltet hat, bekommt Nachhaken trotzdem
+    (neue Schalter stehen auf an). Dort gingen 'flo vergiss mich' und - mit
+    Nachhaken aus - 'flo nachhaken aus' bisher an die KI: das Offene blieb
+    liegen, und Flo fragte zwei Tage spaeter nach. Jetzt loescht beides
+    immer. Ist das Gedaechtnis an, fragt es wie gewohnt selbst nach."""
+    import bot
+    from test_fundament import _menschen_nachricht, _nur_geladen
+    uid = 778899001122334455                      # der Autor von _menschen_nachricht
+
+    def durch_bot(text, aus, mid):
+        msg = _menschen_nachricht(text, mid=mid)
+        with mock.patch.object(bot.features, "fuer", lambda _g: (lambda k: k not in aus)), \
+                mock.patch.object(features, "is_on_in", lambda _g, k: k not in aus):
+            asyncio.run(bot.client.on_message(msg))
+        return [c for c, _e, _v in msg.channel.gesendet]
+
+    _gehirn, restore = _gehirn_frisch()
+    try:
+        with _nh_frisch() as (nh, _uhren), \
+                _nur_geladen(bot, "NACHHAKEN_ENABLED", "GEHIRN_ENABLED"):
+            # Gedaechtnis aus: 'vergiss mich' raeumt das Offene trotzdem weg.
+            _offen(nh, uid=uid)
+            texte = durch_bot("flo vergiss mich", {"gehirn"}, 801)
+            assert nh.zeilen_fuer(77, uid) == [], "das Offene ist weg"
+            assert texte and "1 offene Sache(n)" in texte[0], texte
+            texte = durch_bot("flo vergiss mich", {"gehirn"}, 802)
+            assert texte and "sowieso nichts" in texte[0], texte
+            # Nachhaken aus: 'nachhaken aus' meldet trotzdem ab und raeumt.
+            _offen(nh, uid=uid, was="das Konzert")
+            texte = durch_bot("flo nachhaken aus", {"nachhaken"}, 803)
+            assert nh.zeilen_fuer(77, uid) == [] and nh._guild(77)["aus"] == [str(uid)]
+            assert texte and "nie wieder" in texte[0], texte
+            # Nur das Loeschen - alles andere bleibt bei ausgeschaltetem Nachhaken still.
+            assert durch_bot("flo nachhaken an", {"nachhaken"}, 804) == []
+            assert nh._guild(77)["aus"] == [str(uid)]
+            # Gedaechtnis an: das fragt selbst nach (mit Knopf), Nachhaken
+            # loescht dann nichts an der Rueckfrage vorbei.
+            nh._guild(77)["aus"] = []
+            _offen(nh, uid=uid, was="die Klausur")
+            texte = durch_bot("flo vergiss mich", set(), 805)
+            assert texte and "Echt alles loeschen" in texte[0], texte
+            assert nh.zeilen_fuer(77, uid), "erst nach dem Klick"
+    finally:
+        restore()
+
+
 def test_nachhaken_ueberlebt_den_neustart_ohne_rohtext():
     ki = _KiAttrappe(_antwort((1, True, "das Vorstellungsgespräch", False)))
     with _nh_frisch() as (nh, uhren), mock.patch.object(ai, "generate", ki):
@@ -1300,6 +1347,62 @@ def test_nachhaken_nicht_im_aufraeum_kanal_und_nicht_ohne_schreibrecht():
     guild = SimpleNamespace(id=77, me=SimpleNamespace(id=1))
     assert nachhaken.Nachhaken._kanal_taugt(guild, faden) is False
     assert nachhaken.Nachhaken._kanal_taugt(guild, None) is False
+
+
+def test_nachhaken_fragt_nicht_oeffentlich_was_im_hinterzimmer_gesagt_wurde():
+    """Wer im Mod-Kanal, in einem privaten Thread oder einem NSFW-Kanal vom
+    Vorstellungsgespraech erzaehlt, hat sich sein Publikum ausgesucht. Flo
+    fragt dann nicht im oeffentlichen Chat nach (und bucht nichts) - nur dort,
+    wo es gesagt wurde. Wie bei den Zitaten (basis.privat). Gibt es den
+    Kanal nicht mehr (geloescht, Thread archiviert), auch nicht."""
+    jeder, mods = SimpleNamespace(id=77), SimpleNamespace(id=9)
+    kanaele = {}
+
+    def raum(cid, lesen, *, nsfw=False, typ=None):
+        k = _Kanal(cid=cid)
+        k.permissions_for = lambda wer: SimpleNamespace(
+            send_messages=True, send_messages_in_threads=True,
+            read_messages=getattr(wer, "id", None) in lesen)
+        k.is_nsfw = lambda: nsfw
+        if typ is not None:
+            k.type = typ
+        kanaele[cid] = k
+        return k
+
+    server = SimpleNamespace(id=77, me=SimpleNamespace(id=1), roles=[jeder, mods],
+                             default_role=jeder, get_channel_or_thread=kanaele.get)
+    oeffentlich = raum(555, {77, 9})
+    allgemein = raum(556, {77, 9})
+    modkanal = raum(900, {9})
+    faden = raum(901, {77, 9}, typ=discord.ChannelType.private_thread)
+    schmuddel = raum(902, {77, 9}, nsfw=True)
+
+    def fragen(text, uid, kanal):
+        msg = _nachricht(text, uid=uid, name=f"P{uid}", kanal=kanal)
+        msg.guild = server
+        return asyncio.run(nh.vielleicht_nachfragen(msg))
+
+    with _nh_frisch(datetime(2026, 10, 23, 12, 0, tzinfo=uhr.TIMEZONE)) as (nh, _uhren), \
+            mock.patch.object(ai, "generate", _KiAttrappe("Na, wie war's, du Held?")):
+        ab = datetime(2026, 10, 22, 17, 0, tzinfo=uhr.TIMEZONE).timestamp()
+        for uid, quelle in ((1, modkanal), (2, faden), (3, schmuddel), (4, 999),
+                            (5, oeffentlich)):
+            nh._eintragen(77, {"uid": uid, "name": f"P{uid}", "wann": "morgen",
+                               "kanal": getattr(quelle, "id", quelle), "faellig": ab},
+                          "das Vorstellungsgespräch")
+        for uid in (1, 2, 3, 4):        # 999: den Kanal gibt es nicht mehr
+            assert fragen("moin leute", uid, oeffentlich) is False, uid
+        assert oeffentlich.gesendet == [], "nichts aus dem Hinterzimmer im Chat"
+        assert len(nh._guild(77)["offen"]) == 5 and nh._guild(77)["gefragt"] == {}
+        # Dort, wo es gesagt wurde, fragt er.
+        assert fragen("bin wieder da", 1, modkanal)
+        assert len(modkanal.gesendet) == 1
+        # Oeffentlich angekuendigt: auch in einem anderen oeffentlichen Kanal.
+        assert fragen("moin", 5, allgemein)
+        assert len(allgemein.gesendet) == 1
+        assert sorted(e["uid"] for e in nh._guild(77)["offen"]) == [2, 3, 4]
+    assert basis.privat(modkanal, oeffentlich, server)
+    assert not basis.privat(oeffentlich, modkanal, server), "nach innen ist nichts privat"
 
 
 def test_nachhaken_senden_scheitert_legt_die_sache_zurueck():

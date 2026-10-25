@@ -997,6 +997,60 @@ def test_geburtstag_ueber_bot_kette():
             assert not msg.channel.gesendet
 
 
+def test_notsignal_sperre_auch_ohne_ki():
+    """Wer gerade ein Notsignal geschrieben hat, wird von Zitat der Woche,
+    Geburtstagen und Wrapped nicht vorgefuehrt. Das wusste bisher nur
+    nachhaken - und das laedt nur mit KI. Ohne KI griffen Zitate und
+    Geburtstage dann zum Spott-Pool ('Wieder ein Jahr aelter und immer noch nix
+    erreicht', mit Ping). Jetzt merkt es sich bot.py in basis, egal welche
+    Module laufen - nur die ID und wann, nie den Text, nur im Speicher."""
+    import basis
+    import bot
+    import nachhaken
+    from test_fundament import _menschen_nachricht, _nur_geladen
+    try:
+        with _nur_geladen(bot, "GEBURTSTAGE_ENABLED"), \
+                mock.patch.object(nachhaken, "is_enabled", lambda: False):
+            msg = _menschen_nachricht("hallo zusammen", mid=711)
+            asyncio.run(bot.client.on_message(msg))
+            uid = msg.author.id
+            assert not basis.kuerzlich_notlage(uid)
+            asyncio.run(bot.client.on_message(
+                _menschen_nachricht("ich will nicht mehr leben", mid=712)))
+            assert basis.kuerzlich_notlage(uid), "ohne KI weiss es jetzt trotzdem jemand"
+            assert geburtstage.Geburtstage._kuerzlich_notlage(uid)
+            assert zitate._kuerzlich_notlage(uid) and not basis.kuerzlich_notlage(uid + 1)
+            assert list(basis._notlage_seit) == [uid], "nur die ID, kein Text"
+            # Nach 72 Stunden ist es vorbei.
+            basis._notlage_seit[uid] -= basis.NOTLAGE_SPERRE + 1
+            assert not basis.kuerzlich_notlage(uid)
+    finally:
+        basis._notlage_seit.clear()
+
+
+def test_geburtstag_zahlt_nicht_ohne_lock_auf_der_platte():
+    """Lock-before-pay heisst: der Lock steht WIRKLICH auf der Platte. Ist
+    geburtstage.json nicht schreibbar (ein Docker-Lauf hat sie als root
+    angelegt), economy.json aber schon, zahlte sonst jeder Neustart im
+    Nachhol-Fenster noch einmal. Dann gibt es lieber keine Coins - gratuliert
+    wird trotzdem, und das Kassenbuch bleibt frei."""
+    import economy
+    wand, mono = [_wann(12, 10)], [1000.0]
+    with _gb_umgebung(_gb_daten((5, 12, 3, "2026-01-01", "Anna"))) as \
+            (kern, server, client, zeilen), _uhr_gestellt(wand, mono):
+        server.mitglied(5, "Anna")
+
+        async def nicht_schreibbar():
+            return False
+        kern._store.save = nicht_schreibbar
+        _gb_ticken(client)
+        assert economy.instance._profile(5)["coins"] == 0
+        assert kern._store.data["bezahlt"] == {}
+        (text, _kw), = server.kanal.gesendet
+        assert "<@5>" in text and "Flo Coins" not in text, text
+        assert any("nicht schreibbar" in z for z in zeilen), zeilen
+
+
 def test_geburtstag_coins_einmal_im_jahr_ueber_alle_server():
     """Coins gelten auf allen Servern - also gibt es sie auch nur einmal im Jahr,
     egal auf wie vielen Servern jemand gefeiert wird (sonst druckte sich jeder

@@ -1192,7 +1192,7 @@ def test_musik_verbindet_waehrend_der_suche():
         def fremden_ton_stoppen(self):
             pass
 
-        async def disconnect(self):
+        async def disconnect(self, **_kw):
             ablauf.append("disconnect")
 
     async def extract(eingabe, *a, **k):

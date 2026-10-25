@@ -374,6 +374,27 @@ def test_handle_unbekannte_namen_und_saetze():
     assert "gibt's hier nicht" in raus["flo playlist abend dazu"]
 
 
+def test_playlist_hilfe_ist_die_hilfe_seite():
+    """'flo hilfe playlist' oeffnete die Hilfe - das genauso natuerliche 'flo
+    playlist hilfe' hielt playlists fuer die Liste 'hilfe' ("gibt's hier
+    nicht. Bau sie halt"). Jetzt ist beides die Hilfe-Seite, und 'hilfe'
+    taugt nicht mehr als Name."""
+    import bot
+    from test_fundament import _nur_geladen
+    with _nur_geladen(bot, "MUSIC_ENABLED", "PLAYLISTS_ENABLED", "ZITATE_ENABLED"):
+        for text, seite in (("flo playlist hilfe", "playlist"),
+                            ("Flo playlist help?", "playlist"),
+                            ("flo leben hilfe", "leben"), ("flo musik anleitung", "musik")):
+            assert bot._help_category_key(text) == seite, text
+        for text in ("flo playlist", "flo spiel hilfe", "flo playlist zocken hilfe",
+                     "flo hilfe", "flo hilfe hilfe"):
+            assert bot._help_category_key(text) is None, text
+    with _pl_frisch() as pl:
+        for name in ("hilfe", "Help", "anleitung"):
+            assert pl._name_pruefen(name)[0] is None, name
+        assert pl._name_pruefen("Hilfsbereit")[0] == "Hilfsbereit"
+
+
 def test_handle_links_und_saetze_mit_befehlswort_hinten():
     """'flo playlist <link>' ist kein Name: ein Hinweis, wie es geht - nicht
     "gibt's nicht, bau sie: playlist neu <link>" (das lehnt die Namenspruefung

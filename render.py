@@ -2446,7 +2446,12 @@ class Render:
             d.rounded_rectangle([34, y, 34 + pw, y + 34], radius=9,
                                 fill=(10, 11, 16), outline=col, width=2)
             d.text((34 + 13, y + 7), cmd, font=cf, fill=(235, 238, 245))
-            d.text((34 + pw + 20, y + 8), self._clean_text(desc), font=df,
+            # Passt die Beschreibung nicht mehr in die Karte, wird sie kleiner
+            # (und erst ganz zuletzt mit '…' gekuerzt) - vorher lief sie einfach
+            # ueber den Rand, und der Rest war im Bild weg.
+            x = 34 + pw + 20
+            df, text = self._fit_font(d, self._clean_text(desc), W - 26 - x, 19, 13)
+            d.text((x, y + 8 + (19 - df.size) // 2), text, font=df,
                    fill=(165, 172, 186))
             y += row_h
         return self._png(img)
