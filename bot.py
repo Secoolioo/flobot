@@ -674,7 +674,7 @@ _HELP_DATA = {
         ("flo queue speichern <name>", "aktuelle Warteschlange als Playlist"),
         ("flo radio · radio aus", "📻 Endlos-Radio: Schlange leer → Flo spielt Ähnliches"),
         ("flo skip", "ab 3 Leuten wird abgestimmt (Wünscher & Mods direkt)"),
-        ("flo wrapped", "🎧 Top-Songs des Monats & DJ des Monats"),
+        ("flo wrapped", "🎧 Top-Songs & DJ des Monats (· letzter monat) – am 1. postet Flo selbst"),
     ]),
     "spiele": ("Spiele", 0xE67E22, [
         ("flo quiz", "Quizfrage - Erster gewinnt 50 Coins"),

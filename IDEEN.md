@@ -333,16 +333,25 @@ wer selten schreibt, bekommt eine normale Antwort. Die Zahlen liegen schon in
 
 ## Musik
 
-**[41] Warteschlange, die Neustarts überlebt.** 🔧 **Im Bau** — Gerüst steht (`musikzustand.py`).
-Aktuell ist nach einem Update
-alles weg. Warteschlange und Position auf Platte, beim Start wieder rein
-(fragen, nicht einfach losspielen).
-*mittel · `music.py`*
+**[41] Warteschlange, die Neustarts überlebt.** ✅ **Erledigt** (25.10.2026).
+Nach einem Update oder Absturz kommt Flo von selbst zurück in den Kanal: derselbe
+Song an derselben Stelle (frisch aufgelöst, Live am Rand), die Schlange dahinter,
+Pause und Radio wie vorher. Statt zu fragen nur, wenn es jemand will: der Stand
+ist höchstens 20 Minuten alt und im Kanal sitzt ein Mensch — sonst verworfen,
+mit Logzeile. Eine geparkte Schlange (und jede in der Sendepause) kommt geparkt
+und still zurück, `flo weiter` setzt fort. `flo stop` löscht den Stand — auch
+in den Sekunden, in denen Flo zurückkommt; wer da schon selbst etwas spielt,
+bekommt den alten Stand hinten angehängt. Was beim Abmelden passiert, ändert ihn
+nicht mehr. Übersteht den Uhrsprung beim Booten. README „Neustartfeste
+Warteschlange".
+*mittel · neu `musikzustand.py`*
 
-**[42] Wer hat's gewünscht.** 🔧 **Im Bau** — Gerüst steht (`Track.requested_by_id`).
-Steht in `Track` schon halb drin, wird nur nicht
-angezeigt. Dazu „wer hat diesen Monat am meisten Musik gespielt".
-*klein · `music.py`*
+**[42] Wer hat's gewünscht.** ✅ **Erledigt** (25.10.2026).
+Jeder Song trägt `Track.requested_by_id` (auch im Verlauf, durch Playlists,
+Radio und das Zurückholen nach einem Neustart). „Wer hat diesen Monat am meisten
+Musik gespielt" ist der **DJ des Monats** im Musik-Wrapped (siehe [48]) — mit
+Ping, Coins und auf Wunsch einer Rolle.
+*klein · `music.py`, `musikstats.py`*
 
 **[43] Abstimmung zum Überspringen.** ✅ **Erledigt** (25.10.2026).
 Ab drei Menschen im Kanal braucht Skip `Menschen // 2 + 1` Stimmen — per ⏭️-Knopf
@@ -382,10 +391,16 @@ Rauf- und Runterdrehen zwischen Songs auf.
 raus. Spart Bandbreite und wirkt aufmerksam.
 *klein · `music.py`*
 
-**[48] Musik-Statistik zum Jahresende.** 🔧 **Im Bau** — Gerüst steht (`musikstats.py`).
-Meistgespielte Titel, wer welchen
-Geschmack hat, längste Sitzung — als Bild aus `render.py`.
-*mittel · `music.py`, `render.py`*
+**[48] Musik-Statistik zum Jahresende.** ✅ **Erledigt** (25.10.2026) — als
+**Musik-Wrapped jeden Monat** statt einmal im Jahr. `flo wrapped [letzter monat]`
+zeigt eine Karte (Top-Songs, Songs/Stunden/Radio, wer am meisten gewünscht hat)
+mit zwei fiesen Sätzen dazu; am 1. ab 10 Uhr postet Flo das Wrapped des
+Vormonats selbst, genau einmal (auch nach einem Uhrsprung, Nachholen bis zum 7.),
+und der DJ des Monats bekommt Coins und optional eine Rolle — bezahlt erst,
+wenn „erledigt" auf der Platte steht; ein abgebrochener oder abgelehnter Post
+kommt nach, ohne noch einmal zu zahlen. Radio-Songs zählen nur als Zahl. 13 Monate
+bleiben stehen; „längste Sitzung" ist bewusst nicht drin. README „Musik-Wrapped".
+*mittel · neu `musikstats.py`, `render.py`*
 
 ## Wirtschaft, Casino, Aktie
 

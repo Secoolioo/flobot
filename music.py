@@ -1093,6 +1093,16 @@ def _zustand_vergessen(gid):
         log.debug("Musik-Zustand konnte nicht vergessen werden", exc_info=True)
 
 
+def _zustand_ausstehend(gid):
+    """Kommt hier gleich die Warteschlange von vor dem Neustart zurueck? Dann
+    meint 'Flo stop' SIE - auch solange Flo noch in keinem Kanal sitzt."""
+    try:
+        import musikzustand
+        return bool(musikzustand.ausstehend(gid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # --- Track + Player ------------------------------------------------------
 @dataclass
 class Track:
@@ -5730,7 +5740,9 @@ class Music(FeatureBasis):
             # keinem Sprachkanal." Und zwar BEVOR ein Player angelegt wird.
             arg = ""
             vorhanden = self._players.get(message.guild.id)
-            if vorhanden is None or not vorhanden.sitzung_offen():
+            if ((vorhanden is None or not vorhanden.sitzung_offen())
+                    and not (action in ("stop", "leave")
+                             and _zustand_ausstehend(message.guild.id))):
                 return None
             if action == "resume" and not (vorhanden.ist_pausiert() or vorhanden.queue):
                 return None
@@ -5796,9 +5808,12 @@ class Music(FeatureBasis):
             # wenn die Verbindung schon weg war - dann blieb aber
             # active_channel_id gesetzt, und der Watchdog (heal) holte den Bot
             # samt laufender Musik prompt zurueck, obwohl der Nutzer gestoppt hat.
-            # Nur wenn WIRKLICH nichts mehr offen ist, gibt es den Hinweis.
+            # Nur wenn WIRKLICH nichts mehr offen ist, gibt es den Hinweis -
+            # und auch nur, wenn nicht gleich die Warteschlange von vor dem
+            # Neustart zurueckkommt (musikzustand): die meint der Stopp dann.
             if (player.voice is None and player.active_channel_id is None
-                    and not player.queue and player.current is None):
+                    and not player.queue and player.current is None
+                    and not _zustand_ausstehend(player.guild_id)):
                 return self._embed("Ich bin gerade in keinem Sprachkanal.", color=_COL_ERR)
             await player.disconnect()
             return self._embed("Musik gestoppt, Warteschlange geleert und raus aus dem Sprachkanal.",

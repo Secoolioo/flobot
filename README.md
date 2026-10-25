@@ -703,9 +703,67 @@ Karaoke …) — außer der Ausgangssong ist selbst so einer.
 
 ### Neustartfeste Warteschlange
 
-*Im Bau* — das Gerüst steht (`musikzustand.py`): die Musik meldet schon jede
-Änderung (Start, Pause, Einreihen, Songwechsel, Parken), `flo stop` löscht den
-Stand, und beim Beenden wird er gesichert.
+Ein Update, ein Absturz, `flo restart` — und hinterher sitzt Flo wieder im
+Kanal und spielt weiter: **derselbe Song an derselben Stelle**, die Schlange
+dahinter, Pause bleibt Pause, das Radio bleibt an (samt dem, was es schon
+gespielt hat). Er meldet sich dabei: „🔁 Bin wieder da. Hab eure Warteschlange
+mitgebracht – 5 Songs, ihr Undankbaren." und ein Panel mit „Wieder da – weiter
+bei 1:23".
+
+Zurück kommt er aber nur, wenn das jemand will:
+
+* Der Stand ist höchstens `MUSIC_WIEDERHERSTELLEN_MIN` (20) Minuten alt — wer
+  länger weg war, dem reißt Flo nicht ungefragt den Kanal auf.
+* Im Sprachkanal sitzt noch ein **Mensch** (Bots zählen nicht; im Zweifel nicht).
+* Server, Sprachkanal und der Schalter `music` gibt es dort noch.
+* Sonst wird der Stand verworfen — je eine Logzeile, warum („keiner in 'Musik'",
+  „23 Minuten alt", „Sprachkanal weg" …).
+
+Einzelheiten:
+
+* Der Song wird **frisch aufgelöst** (Stream-Adressen laufen nach Minuten ab und
+  werden nie gespeichert), erst dann geht Flo in den Kanal — lädt er gar nicht
+  und war er der einzige, bleibt Flo draußen. Sonst geht es mit dem nächsten
+  weiter. Ein **Live-Stream** setzt am Live-Rand wieder ein, ein Song, der
+  schon so gut wie durch war, wird übersprungen. Loop und Tempo kommen nicht mit
+  (sie gehören zu genau einem laufenden Song).
+* Während Flo zurückkommt, hält sich der Voice-Wächter raus. Sagt in diesen
+  Sekunden jemand `flo stop` (oder `flo hau ab`), startet nichts — auch wenn
+  Flo noch in keinem Kanal sitzt, und auch, wenn er schon drin ist und sich
+  gerade meldet: dann geht er wieder raus, und es bleibt keine Schlange liegen.
+* Spielt jemand selbst etwas, bevor Flo zurück ist — gleich nach dem Start oder
+  während er lädt —, stellt sich der alte Stand **hinten an** (soweit
+  `musik_max_queue` reicht), Flo bleibt, wo er ist, und sagt es: „Bin wieder
+  da – und ihr habt natürlich schon ohne mich angefangen …". Sitzt Flo schon
+  im Kanal, ohne dass etwas läuft (`flo komm`), geht es gleich mit dem alten
+  Song an seiner Stelle los.
+* Lässt Discord ihn nicht in den Kanal, kommt die Schlange **geparkt** zurück
+  (mit Hinweis) — `flo weiter` oder das nächste `flo spiel` machen dort weiter.
+  Die Hinweise nennen den Namen, auf den Flo **auf diesem Server** hört (eigener
+  Präfix), Panel und Ansagen laufen im Kontext des Servers.
+* Eine **geparkte** Schlange (der Wächter kam nach einem Netz-Aussetzer nicht
+  mehr in den Voice) überlebt den Neustart ebenfalls geparkt: Flo geht dafür in
+  keinen Kanal und sagt nichts, `flo weiter` setzt sie im Kanal dessen fort, der
+  es sagt — der Song vorne an seiner Stelle.
+* In der **Sendepause** kommt die Schlange genauso geparkt und still zurück.
+* Ein zurückgeholter Song zählt fürs Musik-Wrapped **nicht noch einmal** — er
+  lief ja schon.
+* `flo stop`, ein Rauswurf und der Leerlauf löschen den Stand: dann soll Flo
+  nach dem Neustart gerade **nicht** zurückkommen.
+* Gemerkt wird bei jeder Änderung (Start, Pause, Einreihen, Songwechsel,
+  Verschieben, Radio-Schalter, Parken) — gebaut und geschrieben im 15-s-Takt
+  des Voice-Wächters, Stelle und Zeitstempel jede Minute (deckt Absturz und
+  `kill -9`), beim Beenden einmal vor dem Abmelden. Was danach beim Abmelden
+  passiert (discord.py trennt die Voice, der Song „endet"), ändert den Stand
+  nicht mehr.
+* **Die Uhr:** das Alter misst die Auszeit („so stand es, als Flo noch lief").
+  Auf dem Server springt die Uhr kurz nach dem Booten zwei Stunden zurück —
+  ein Stand aus den Sekunden davor liegt danach bis zu 2,5 h in der Zukunft
+  (gilt), und solange die Uhr nach dem Start noch nicht stabil ist, schaut Flo
+  zwei Minuten lang nach, ob ein „zu alter" Stand nach dem Sprung doch frisch ist.
+* Einmal je Prozess, fünf Sekunden nach dem Login — ein Reconnect ist kein
+  Neustart. `MUSIKZUSTAND_ENABLED=0` schaltet es ab. Daten:
+  `data/musikzustand.json`.
 
 ### Abstimmung zum Überspringen
 
@@ -734,8 +792,66 @@ für den ⏭️-Knopf am Panel und für `Flo skip` gleichermaßen.
 
 ### Musik-Wrapped
 
-*Im Bau* — das Gerüst steht (`musikstats.py`). Jeder Song trägt dafür jetzt
-mit, **wer** ihn gewünscht hat (ID, nicht nur der Name — auch im Verlauf).
+```
+Flo wrapped                    der laufende Monat als Karte (läuft noch)
+Flo wrapped letzter monat      der Monat davor
+Flo wrapped posten             nur der Chef: das Monats-Wrapped jetzt
+```
+
+Flo zählt mit, was läuft — je Server und Monat: welche Songs, wie oft, und
+**wer** sie gewünscht hat. Daraus wird eine Karte (Top-5-Songs mit Balken,
+Songs/Stunden/Radio, wer am meisten gewünscht hat) plus zwei Sätze, in denen
+Flo über euren Geschmack herzieht und den DJ verspottet. `flo wrapped` geht
+einmal pro Minute je Server, ohne Ping und ohne Coins.
+
+**Am 1. ab 10 Uhr** postet Flo das Wrapped des Vormonats von selbst — in den
+Kanal `wrapped_channel` (`flo einstellung`), sonst in die Ansagen. Wer die
+meisten Songs gewünscht hat (Gleichstand: wessen Songs länger liefen), ist
+**DJ des Monats**: wird als Einziger gepingt, bekommt `dj_belohnung` Coins
+(Standard 5.000, `0` = nur die Ehre) und mit `dj_rolle` (auf dem Hauptserver
+von Haus aus an, sonst aus) die Rolle „🎧 DJ des Monats". Wer sie hat, merkt
+sich Flo erst, wenn Discord sie wirklich vergeben hat — abgeben muss sie im
+nächsten Monat genau der, auch wenn dazwischen ein Monat ohne Schalter lag; ein
+Monat ohne DJ (unter 10 Songs) nimmt sie nur weg. Die Rolle braucht „Rollen
+verwalten" (und Flos Rolle darüber); fehlt das, steht es im Log.
+
+* **Gezählt wird, was startet** — auch ein Song, der nach drei Sekunden
+  geskippt wird. „Stunden" ist die Länge der Songs, nicht die gehörte Zeit.
+  Loop-Durchläufe, Tempo- und Wächter-Neustarts sind kein neuer Start; ein Song,
+  der nach einem Neustart oder Netz-Aussetzer weiterläuft, zählt nicht doppelt.
+* **Radio-Songs** zählen nur als Zahl („+ 14 vom Radio") — gewünscht hat sie
+  keiner, also stehen sie weder in den Top-Songs noch beim DJ.
+* Derselbe Song ist derselbe, egal mit welchem Link (YouTube-ID ohne `&t=`,
+  `&list=`, `?si=`); ohne YouTube-ID die Adresse ohne Anhang, sonst der Titel.
+  Je Monat höchstens 500 verschiedene Songs (der seltenste fliegt), 13 Monate
+  bleiben stehen.
+* **Genau einmal:** unter 10 gewünschten Songs gibt es kein Wrapped (und keinen
+  DJ). Gepostet wird nur bei stabiler Uhr, und „erledigt" läuft nur vorwärts —
+  springt die Uhr nach dem Booten zurück (vor 10 Uhr oder in den Vormonat),
+  kommt nichts doppelt. Wer am 1. offline war, bekommt es **bis zum 7.** nach;
+  in der Sendepause wartet es (im selben Fenster).
+* **Coins genau einmal:** erst steht „erledigt" samt DJ auf der Platte, dann
+  fließen die Coins (wie beim Giveaway). Bricht der Takt mittendrin ab, wird
+  trotzdem zu Ende bezahlt; stirbt Flo genau dazwischen, fehlen dem DJ
+  schlimmstenfalls die Coins — doppelt gibt's nie, auch nicht, wenn jemand
+  „erledigt" von Hand aus der Datei kratzt.
+* **Der Post kommt nach:** Post und Rolle sind vom Bezahlen getrennt. Bricht der
+  Takt nach dem Bezahlen ab (er hat höchstens drei Minuten — KI, Karte und
+  Hochladen kosten), lehnt Discord den Post ab oder gibt es keinen Kanal, holt
+  der Takt nach, was fehlt — alle 30 Minuten, höchstens sechsmal und nur bis zum
+  7. Der DJ wird dabei gepingt, die Coins stehen dabei, gezahlt wird nichts mehr.
+* **Der Spruch** kommt von der KI (Hintergrund-Aufruf mit der festen Grenze, nur
+  mit Schalter `ki` und nicht in der Sendepause), sonst aus einem Ersatz-Pool im
+  selben Ton. Ein Songtitel oder Name mit Notsignal geht nie an die KI und nie
+  in den Spruch; eine Antwort mit Notsignal wird verworfen. Ein DJ mit so einem
+  Namen bleibt DJ — im Spruch heißt er nur „DJ".
+* `flo wrapped posten` (nur der Besitzer, zum Testen): steht das Wrapped des
+  Vormonats noch aus (oder hing es), **ist** das der Monats-Post — mit Coins und
+  Rolle, der Takt macht ihn danach nicht noch einmal. Sonst ein
+  Wiederholungs-Post ohne Coins und ohne Ping. Ging der Post nicht raus, sagt
+  Flo das, statt „ist raus" zu behaupten.
+* Nur eindeutige Befehle: „Flo wrapped ist cool" beantwortet die KI.
+  `MUSIKSTATS_ENABLED=0` schaltet es ab. Daten: `data/musikstats.json`.
 
 ---
 
@@ -1565,6 +1681,8 @@ Servern.
 | `PLAYLISTS_ENABLED` | `1` | `0` schaltet die Playlists ab (die Musik bleibt) |
 | `MUSIKQUELLEN_FRIST` | `5` | so lange darf ein Titel-Abruf (oEmbed, Spotify-Einbettung) dauern (Sekunden; Alben/Playlists mindestens 15) |
 | `MUSIC_RADIO_MAX` | `150` | so viele Songs legt das Endlos-Radio je Sitzung höchstens nach |
+| `MUSIC_WIEDERHERSTELLEN_MIN` | `20` | so frisch muss eine Warteschlange sein, damit Flo nach einem Neustart zurückkommt (Minuten) |
+| `MUSIKZUSTAND_ENABLED` / `MUSIKSTATS_ENABLED` | `1` | `0` schaltet die neustartfeste Warteschlange bzw. das Musik-Wrapped ab |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
 | `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
 | `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |

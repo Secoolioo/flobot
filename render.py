@@ -2899,6 +2899,97 @@ class Render:
         return self._png(img)
 
 
+    def musik_wrapped(self, monat, songs, leute, *, gesamt=0, sekunden=0, radio=0,
+                      server="", laufend=False):
+        """Das Musik-Wrapped eines Monats als Karte.
+
+        ``monat``: 'Oktober 2026'. ``songs``: [(titel, anzahl)] - die Top-Songs,
+        meistgespielt zuerst. ``leute``: [(name, anzahl)] - wer am meisten
+        gewuenscht hat, Platz 1 ist der DJ des Monats. Lange Titel werden mit
+        '…' gekuerzt, Emojis fallen raus (die Schrift kann sie nicht)."""
+        W = 900
+        songs = list(songs or [])[:5]
+        leute = list(leute or [])[:4]
+        kopf, kacheln, zeile = 120, 104, 52
+        song_h = 44 + max(1, len(songs)) * zeile
+        dj_h = 54 + (96 if leute else 40) + max(0, len(leute) - 1) * 34
+        H = kopf + kacheln + song_h + dj_h + 30
+        img = self._vgrad(W, H, (30, 18, 46), (10, 10, 22)).convert("RGBA")
+        d = ImageDraw.Draw(img, "RGBA")
+        akzent = (30, 215, 96)                 # Musik-Gruen
+        gold = (241, 196, 15)
+        grau = (150, 146, 172)
+        d.rounded_rectangle([6, 6, W - 7, H - 7], radius=20, outline=akzent, width=3)
+        hf = self._font(40)
+        d.text((34, 26), "MUSIK", font=hf, fill=self._WHITE)
+        d.text((34 + d.textlength("MUSIK ", font=hf), 26), "WRAPPED", font=hf, fill=akzent)
+        unter = self._clean_text(monat) + ("  ·  läuft noch" if laufend else "")
+        d.text((36, 78), unter, font=self._font(19), fill=grau)
+        if server:
+            sf, st = self._fit_font(d, self._clean_text(server), 300, 18, 14)
+            d.text((W - 34, 44), st, font=sf, fill=grau, anchor="rm")
+
+        # Drei Kacheln: Songs, Stunden, Radio
+        y = kopf
+        stunden = max(0, int(sekunden or 0)) / 3600
+        werte = (("SONGS", self._kurz_zahl(gesamt)),
+                 ("STUNDEN", f"{stunden:.1f}".replace(".", ",") if stunden < 100
+                  else self._kurz_zahl(round(stunden))),
+                 ("RADIO", self._kurz_zahl(radio)))
+        breite = (W - 68 - 2 * 16) // 3
+        for i, (name, wert) in enumerate(werte):
+            x = 34 + i * (breite + 16)
+            d.rounded_rectangle([x, y, x + breite, y + 84], radius=14, fill=(44, 32, 66))
+            d.text((x + breite / 2, y + 34), wert, font=self._font(34), fill=self._WHITE,
+                   anchor="mm")
+            d.text((x + breite / 2, y + 66), name, font=self._font(14), fill=grau, anchor="mm")
+
+        # Top-Songs mit Balken
+        y = kopf + kacheln
+        d.text((34, y), "TOP-SONGS", font=self._font(20), fill=akzent)
+        y += 40
+        medaille = {0: gold, 1: (196, 202, 212), 2: (205, 127, 50)}
+        if songs:
+            spitze = max((int(n or 0) for _t, n in songs), default=1) or 1
+            for i, (titel, anzahl) in enumerate(songs):
+                farbe = medaille.get(i, (150, 157, 172))
+                d.text((50, y + 14), f"{i + 1}", font=self._font(24), fill=farbe, anchor="mm")
+                tf, tt = self._fit_font(d, self._clean_text(str(titel)) or "?", W - 300, 22, 16)
+                d.text((78, y + 2), tt, font=tf, fill=self._WHITE)
+                self._hbar(d, 78, y + 32, W - 300, 8, int(anzahl or 0) / spitze, akzent)
+                d.text((W - 34, y + 4), f"{int(anzahl or 0)}×", font=self._font(22),
+                       fill=(210, 214, 228), anchor="ra")
+                y += zeile
+        else:
+            d.text((78, y + 4), "Nichts gewünscht. Nur Radio. Traurig.", font=self._font(20),
+                   fill=grau)
+            y += zeile
+
+        # DJ des Monats (+ wer sonst noch gewuenscht hat)
+        y += 14
+        d.text((34, y), "DJ DES MONATS", font=self._font(20), fill=gold)
+        y += 40
+        if leute:
+            name, anzahl = leute[0]
+            d.rounded_rectangle([34, y, W - 34, y + 80], radius=16, fill=(66, 52, 18))
+            d.ellipse([52, y + 14, 104, y + 66], fill=gold)
+            d.text((78, y + 40), "DJ", font=self._font(20), fill=(70, 50, 6), anchor="mm")
+            nf, nt = self._fit_font(d, self._clean_text(str(name)) or "?", W - 330, 30, 18)
+            d.text((124, y + 40), nt, font=nf, fill=self._WHITE, anchor="lm")
+            d.text((W - 54, y + 40), f"{int(anzahl or 0)} Wünsche", font=self._font(22),
+                   fill=gold, anchor="rm")
+            y += 96
+            for platz, (name, anzahl) in enumerate(leute[1:], start=2):
+                nf, nt = self._fit_font(d, self._clean_text(str(name)) or "?", W - 330, 20, 14)
+                d.text((60, y + 12), f"{platz}.", font=self._font(18), fill=grau, anchor="lm")
+                d.text((92, y + 12), nt, font=nf, fill=(220, 222, 234), anchor="lm")
+                d.text((W - 54, y + 12), f"{int(anzahl or 0)}", font=self._font(18),
+                       fill=grau, anchor="rm")
+                y += 34
+        else:
+            d.text((60, y + 6), "Keiner. Ihr habt nur zugehört.", font=self._font(20), fill=grau)
+        return self._png(img)
+
     @staticmethod
     def _kurz_zahl(n):
         """Grosse Zahlen kurz: 1.250.000 -> 1,25 Mio. Auf einer Kachel ist kein
@@ -2951,3 +3042,4 @@ floaktie_chart = instance.floaktie_chart
 wordle_board = instance.wordle_board
 lohnzettel = instance.lohnzettel
 arbeit_rangliste = instance.arbeit_rangliste
+musik_wrapped = instance.musik_wrapped
