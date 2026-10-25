@@ -47,6 +47,7 @@ import os
 import pathlib
 import random
 import re
+import shutil
 import sys
 import tempfile
 
@@ -68,6 +69,24 @@ WURZEL = pathlib.Path(__file__).resolve().parent.parent
 # gleich" wackelte also selbst; unter 'lauf.py --misch 4242' fiel er um.
 # ---------------------------------------------------------------------------
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="flobot-abdruck-")
+
+# ---------------------------------------------------------------------------
+# Die Messumgebung festnageln: der gespeicherte Abdruck stammt von einer
+# Maschine OHNE ffmpeg - dort bleibt die Musik "nicht geladen". Liegt ffmpeg im
+# PATH, laedt sie, und 'flo funktionen' zeigt sie gruen: fuenf Antworten
+# "anders", obwohl sich an Flo nichts geaendert hat. Der Waechter haengt damit
+# von der Maschine ab statt vom Code. Also sieht der Abdruck nie ein ffmpeg.
+# ---------------------------------------------------------------------------
+_which = shutil.which
+
+
+def _ohne_ffmpeg(befehl, *args, **kwargs):
+    if os.path.basename(str(befehl)) in ("ffmpeg", "ffprobe"):
+        return None
+    return _which(befehl, *args, **kwargs)
+
+
+shutil.which = _ohne_ffmpeg
 if str(WURZEL) not in sys.path:
     sys.path.insert(0, str(WURZEL))
 
