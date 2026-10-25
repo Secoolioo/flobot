@@ -1880,6 +1880,7 @@ class GuildPlayer:
         nach einem Fehlversuch (nichts gefunden, das Radio kam nicht): das ist
         kein 'flo stop' - ein Stand von vor dem Neustart, der hier noch
         zurueckkommen soll (musikzustand), bleibt dann stehen."""
+        self._start_zuruecknehmen()     # vor dem Ausraeumen: die Uhr steht noch
         self._vorladen_stoppen()
         self.queue.clear()
         self.current = None
@@ -2224,14 +2225,7 @@ class GuildPlayer:
         gerade gestarteten Song gleich mit."""
         if self._schon_weiter(ziel):
             return
-        # Fuers Musik-Wrapped: wer gleich wegskippt, hat nicht gehoert - der
-        # Start zaehlt dann nicht (sonst skippte sich jeder zum DJ des Monats).
-        if self.current is not None:
-            try:
-                import musikstats      # lazy: musikstats liest Tracks aus diesem Modul
-                musikstats.zuruecknehmen(self.guild_id, self.current, self.position())
-            except Exception:  # noqa: BLE001 - Zaehlen darf nie die Musik kippen
-                log.debug("Musik-Statistik konnte den Skip nicht verrechnen", exc_info=True)
+        self._start_zuruecknehmen()
         # Wer skippt, will WEG von diesem Song - ein laufender Loop wuerde ihn
         # sonst sofort wieder vorne einreihen und der Skip verpuffte.
         self.loop_rest = 0
@@ -2244,6 +2238,21 @@ class GuildPlayer:
                 log.debug("voice.stop beim Skip fehlgeschlagen", exc_info=True)
             await self._warte_bis_still()
         await self._advance(ziel=ziel)   # ohne gen -> laeuft IMMER (ausser 'ziel' ist weg)
+
+    def _start_zuruecknehmen(self):
+        """Fuers Musik-Wrapped: der laufende Song wird gerade abgewuergt (Skip,
+        'flo stop', Leerlauf, Rauswurf, Aufraeumen). Wer ihn so frueh loswird,
+        hat ihn nicht gehoert - sein Start zaehlt dann nicht (musikstats
+        entscheidet, was 'frueh' ist). Sonst skippte sich jeder zum DJ des
+        Monats, oder er stoppte sich hin: 'flo spiel X', 'flo stop', von vorn.
+        Ein Song, der zu Ende gelaufen ist, kommt hier nie vorbei."""
+        if self.current is None:
+            return
+        try:
+            import musikstats      # lazy: musikstats liest Tracks aus diesem Modul
+            musikstats.zuruecknehmen(self.guild_id, self.current, self.position())
+        except Exception:  # noqa: BLE001 - Zaehlen darf nie die Musik kippen
+            log.debug("Musik-Statistik konnte den Abbruch nicht verrechnen", exc_info=True)
 
     async def _nach_abbruch_fortsetzen(self):
         """War der Song ABGEBROCHEN statt zu Ende? Dann dort weitermachen.

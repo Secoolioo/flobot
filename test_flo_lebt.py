@@ -1119,6 +1119,50 @@ def test_loeschen_geht_auch_mit_schalter_aus():
         restore()
 
 
+def test_vergiss_mich_mit_gedaechtnis_schalter_aus_vergisst_auch_die_fakten():
+    """Gedaechtnis-Schalter auf dem Server aus, das Modul aber geladen: 'flo
+    vergiss mich' loeschte nur das Offene von Nachhaken. Was das Gedaechtnis von
+    frueher noch ueber einen wusste, blieb liegen - und Flo sagte "Über dich weiß
+    ich sowieso nichts". Jetzt kommt die Rueckfrage des Gedaechtnisses wie
+    sonst auch: sie zaehlt beides, und erst der Klick loescht beides."""
+    import bot
+    from test_fundament import _menschen_nachricht, _nur_geladen
+    uid = 778899001122334455                      # der Autor von _menschen_nachricht
+    gehirn, restore = _gehirn_frisch()
+
+    async def ablauf(nh):
+        aus = {"gehirn"}
+        msg = _menschen_nachricht("flo vergiss mich", mid=811)
+        with mock.patch.object(bot.features, "fuer", lambda _g: (lambda k: k not in aus)), \
+                mock.patch.object(features, "is_on_in", lambda _g, k: k not in aus):
+            await bot.client.on_message(msg)
+        gesendet = msg.channel.gesendet
+        assert len(gesendet) == 1, gesendet
+        text, _embed, view = gesendet[0]
+        assert "3 Sache(n)" in text and "Echt alles loeschen" in text, text
+        assert gehirn.weiss_ueber(77, uid) and nh.zeilen_fuer(77, uid), "erst nach dem Klick"
+        gesagt = []
+
+        async def sag(inhalt=None, **kw):
+            gesagt.append(kw.get("content", inhalt))
+        klick = SimpleNamespace(user=SimpleNamespace(id=uid), response=SimpleNamespace(
+            send_message=sag, edit_message=sag))
+        ja = {k.label: k for k in view.children}["Ja, weg damit"]
+        await ja.callback(klick)
+        assert gehirn.weiss_ueber(77, uid) == [] and nh.zeilen_fuer(77, uid) == []
+        assert gesagt and "3 Sache(n)" in gesagt[0], gesagt
+
+    try:
+        with _nh_frisch() as (nh, _uhren), \
+                _nur_geladen(bot, "NACHHAKEN_ENABLED", "GEHIRN_ENABLED"):
+            for fakt in ("spielt Terraria", "hasst Montage"):
+                gehirn.Gehirn._merge(gehirn.instance._person(77, uid)["fakten"], fakt, 25)
+            _offen(nh, uid=uid)
+            asyncio.run(ablauf(nh))
+    finally:
+        restore()
+
+
 def test_nachhaken_ueberlebt_den_neustart_ohne_rohtext():
     ki = _KiAttrappe(_antwort((1, True, "das Vorstellungsgespräch", False)))
     with _nh_frisch() as (nh, uhren), mock.patch.object(ai, "generate", ki):

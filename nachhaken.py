@@ -907,7 +907,9 @@ class Nachhaken(FeatureBasis):
         bis jemand den Schalter wieder anmacht:
             'flo nachhaken aus'   wie immer: abmelden, alles Offene weg
             'flo vergiss mich'    nur, wenn das Gedaechtnis es nicht nimmt
-                                  (Modul oder Schalter aus): das Offene weg
+                                  (Modul oder Schalter aus): das Offene weg -
+                                  und mit dem Schalter aus auch, was das
+                                  Gedaechtnis von frueher noch ueber einen weiss
         bot.py ruft das NACH gehirn.handle, ohne Schalter. Sonst None."""
         if not self.is_enabled():
             return None
@@ -926,7 +928,19 @@ class Nachhaken(FeatureBasis):
             return None                 # das Gedaechtnis fragt selbst nach
         if basis.erstes_ziel(message, ohne=[uid]) is not None:
             return None                 # fremde Leute vergisst nur das Gedaechtnis
-        weg = self.vergiss(gid, uid)
+        if gehirn.is_enabled():
+            if gehirn.weiss_ueber(gid, uid):
+                # Schalter aus, aber die Fakten von damals liegen noch da: dann
+                # die Rueckfrage des Gedaechtnisses wie sonst auch (ein Klick,
+                # dann ist beides weg, gezaehlt wird beides). Vorher blieben
+                # sie liegen, und Flo behauptete, er wisse nichts.
+                return await gehirn.handle(message)
+            # Das Gedaechtnis weiss nichts, was verloren gehen koennte: sein
+            # Puffer geht ohne Rueckfrage mit, gezaehlt wird nur das Offene
+            # (das loescht gehirn.vergiss gleich mit).
+            weg = gehirn.vergiss(gid, uid)
+        else:
+            weg = self.vergiss(gid, uid)
         if not weg:
             return "Über dich weiß ich sowieso nichts. Nimm dich nicht so wichtig."
         return (f"Vergessen. {weg} offene Sache(n) über dich sind weg – ich frag dich "

@@ -137,6 +137,14 @@ _GEPARKT = ("🔁 Wollte zurück in euren Voice, Discord lässt mich nicht. Die 
             "({n}) hab ich geparkt – `{name} weiter`, und es geht da weiter.")
 _HINTEN_AN = ("🔁 Bin wieder da – und ihr habt natürlich schon ohne mich angefangen. Eure "
               "alte Warteschlange ({n}) hab ich hinten drangehängt. Bitte, gern geschehen.")
+_GEPARKT_NACH_STOP = ("🔁 Bin wieder da – und ihr habt die Musik gerade selber ausgemacht. "
+                      "Eure alte Warteschlange ({n}) hab ich geparkt – `{name} weiter`, falls "
+                      "ihr's euch anders überlegt.")
+
+#: So lange wartet ein alter Stand hoechstens, bis ein gerade ladendes 'spiel'
+#: oder eine ladende Playlist eingereiht ist (Sekunden). Erst dann stellt er
+#: sich hinten an.
+ANFRAGE_WARTEN = float(os.getenv("MUSIKZUSTAND_ANFRAGE_WARTEN", "30") or "30")
 
 
 def _jetzt():
@@ -359,16 +367,25 @@ class Musikzustand(FeatureBasis):
             return False
 
     def _bauen(self, gid, player, jetzt):
-        """Den Eintrag eines Servers neu bauen (oder entfernen). True = geaendert."""
+        """Den Eintrag eines Servers neu bauen (oder entfernen). True = geaendert.
+
+        Ein Stand, der noch aufs Zurueckholen wartet, wird nie durch "nichts"
+        ersetzt: hat der Player selbst nichts (etwa nach dem Aufraeumen eines
+        Fehlversuchs, disconnect(vergessen=False)), bleibt der alte Stand
+        liegen - auch beim Herunterfahren, sonst war er nach dem naechsten
+        Start weg. Nur ein 'flo stop' (vergessen) wirft ihn weg."""
         guilds = self._guilds()
-        self._alt.pop(str(gid), None)
         try:
             eintrag = eintrag_bauen(player, jetzt)
         except Exception:  # noqa: BLE001 - ein kaputter Player kippt nicht alle
             log.exception("Musik-Zustand von Server %s nicht baubar", gid)
+            self._alt.pop(str(gid), None)
             return False
         if eintrag is None:
+            if str(gid) in self._alt:
+                return False
             return guilds.pop(str(gid), None) is not None
+        self._alt.pop(str(gid), None)
         guilds[str(gid)] = eintrag
         return True
 
@@ -390,7 +407,8 @@ class Musikzustand(FeatureBasis):
         Takt den alten Stand still, und wiederherstellen fand ihn nicht mehr:
         kein 'hinten an', keine Logzeile. Der Player bleibt vermerkt und wird
         gebaut, sobald sein alter Stand erledigt ist. Nur beim Herunterfahren
-        (wartende=True) gilt, was gerade laeuft."""
+        (wartende=True) gilt, was gerade laeuft - laeuft dort nichts, bleibt
+        der alte Stand (siehe _bauen)."""
         jetzt = _jetzt()
         geaendert = False
         faellig = {}
@@ -636,6 +654,29 @@ class Musikzustand(FeatureBasis):
         den Kanal, Radio und Pause bleiben, wie sie sind. Rueckgabe: wie viele
         Songs mitkamen."""
         import music
+        # Laedt gerade ein 'spiel' oder eine Playlist, stellt sich der alte
+        # Stand erst DANACH an. Sonst landete er zwischen Song 1 und dem Rest
+        # der Playlist (die reiht ihren Rest erst nach dem Start ein), obwohl
+        # Flo "hinten drangehaengt" sagt - und der Waechter (heal) koennte ihn
+        # in der Luecke sogar vor der Playlist starten.
+        uhr = asyncio.get_running_loop()
+        frist = uhr.time() + ANFRAGE_WARTEN
+        while getattr(player, "_laufende_anfragen", 0) > 0 and uhr.time() < frist:
+            await asyncio.sleep(0.25)
+        if not player.sitzung_offen() and not player._geparkt:
+            # Waehrenddessen hat jemand 'flo stop' gesagt (oder die Anfrage ist
+            # gescheitert): nichts anspringen lassen, aber auch nichts
+            # wegwerfen - geparkt, 'weiter' holt ihn zurueck.
+            mit = list(tracks)[:music.max_queue(player.guild_id)]
+            if not mit:
+                return 0
+            self._parken(player, None, 0.0, mit)
+            log.info("Musik-Zustand: Sitzung war schon wieder vorbei - %s geparkt.",
+                     _songs(len(mit)))
+            if not _sendepause():
+                await player._sag(_GEPARKT_NACH_STOP.format(
+                    n=_songs(len(mit)), name=self.name_fuer(player.guild_id)))
+            return len(mit)
         platz = max(0, music.max_queue(player.guild_id) - len(player.queue))
         mit = list(tracks)[:platz]
         if not mit:

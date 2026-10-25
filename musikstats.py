@@ -34,8 +34,10 @@ Wo was aufgerufen wird:
                            (nach einem Neustart oder nach dem Parken: die
                            liefen schon einmal)
     zuruecknehmen(gid, track, gehoert)
-                           music.GuildPlayer.skip, SYNCHRON: der laufende Song
-                           fliegt nach 'gehoert' Sekunden raus
+                           music.GuildPlayer._start_zuruecknehmen (skip und
+                           disconnect: 'flo stop', Leerlauf, Rauswurf,
+                           Aufraeumen), SYNCHRON: der laufende Song fliegt
+                           nach 'gehoert' Sekunden raus
     tick(client)           bot.alltag_loop, jede Minute (hoechstens
                            bot.ALLTAG_FRIST, dann abgebrochen). Die Sendepause
                            prueft bot.py hier NICHT - tick fragt admin.is_locked()
@@ -43,10 +45,11 @@ Wo was aufgerufen wird:
 
 Gezaehlt wird, was STARTET ("sek" ist die Laenge der Songs, nicht die
 gehoerte Zeit) - ausser einem Song, der in den ersten MIN_GEHOERT Sekunden
-weggeskippt wird (bei kurzen Songs: vor der Haelfte): den hat keiner gehoert,
-sein Start wird zurueckgenommen (zuruecknehmen). Sonst skippte sich jeder in
-ein paar Minuten zum DJ des Monats - eigene Wuensche skippt man ohne
-Abstimmung, und eine 200-Song-Playlist ist ein Klick. Radio-Songs
+weggeskippt oder weggestoppt wird (bei kurzen Songs: vor der Haelfte): den
+hat keiner gehoert, sein Start wird zurueckgenommen (zuruecknehmen). Sonst
+skippte sich jeder in ein paar Minuten zum DJ des Monats - eigene Wuensche
+skippt man ohne Abstimmung, eine 200-Song-Playlist ist ein Klick, und
+'flo spiel X', 'flo stop' geht genauso schnell. Radio-Songs
 (Endlos-Radio) zaehlen nur in "radio" - keiner
 hat sie gewuenscht, also gehoeren sie weder in die Top-Songs noch zum DJ. Loop-
 Durchlaeufe, Tempo- und Watchdog-Neustarts sind kein neuer Start (music.py
@@ -410,7 +413,7 @@ class Musikstats(FeatureBasis):
         self._store.save_soon()
 
     def zuruecknehmen(self, gid, track, gehoert):
-        """Der laufende Song fliegt nach 'gehoert' Sekunden raus (Skip). War
+        """Der laufende Song fliegt nach 'gehoert' Sekunden raus (Skip, Stopp). War
         das zu frueh (MIN_GEHOERT, bei kurzen Songs die Haelfte), zaehlt sein
         Start nicht - in dem Monat, in dem er gezaehlt wurde. Synchron, darf
         nie werfen."""

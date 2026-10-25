@@ -582,10 +582,12 @@ eingeordnete Zeilen, nur im Speicher) gehen mit, zählen aber nicht — wie der
 Puffer des Gedächtnisses; auch eine Zeile, die gerade bei der KI liegt, wird
 danach nicht mehr gemerkt. Die
 Abmeldung bleibt dabei stehen — sie ist ein Wunsch, kein Wissen über dich.
-Löschen geht **immer**: ist das Gedächtnis auf dem Server abgeschaltet, räumt
-`flo vergiss mich` trotzdem das Offene weg (ohne Rückfrage, es ist ja nur das),
-und `flo nachhaken aus` wirkt auch, wenn Nachhaken dort gerade aus ist — statt
-dass die KI den Satz bekommt und das Offene liegen bleibt.
+Löschen geht **immer**, auch wenn das Gedächtnis auf dem Server abgeschaltet
+ist: weiß Flo von früher noch Fakten über dich, kommt bei `flo vergiss mich` die
+übliche Rückfrage mit Knopf, und der Klick löscht Fakten **und** Offenes; ohne
+Fakten räumt er das Offene sofort weg (ohne Rückfrage, es ist ja nur das).
+`flo nachhaken aus` wirkt auch, wenn Nachhaken dort gerade aus ist — statt dass
+die KI den Satz bekommt und alles liegen bleibt.
 
 Braucht die KI (ohne sie lädt das Modul nicht). Schalter `nachhaken`. Daten:
 `data/nachhaken.json` — je Server die offenen Sachen (Person, Anzeigename, Thema,
@@ -961,9 +963,10 @@ Monat ohne DJ (unter 10 Songs) nimmt sie nur weg. Die Rolle braucht „Rollen
 verwalten" (und Flos Rolle darüber); fehlt das, steht es im Log.
 
 * **Gezählt wird, was startet** — außer einem Song, der in den ersten 30
-  Sekunden weggeskippt wird (bei kurzen Songs: vor der Hälfte): den hat keiner
-  gehört. Sonst skippte sich jeder in ein paar Minuten durch eine
-  200-Song-Playlist zum DJ des Monats. „Stunden" ist die Länge der Songs, nicht
+  Sekunden weggeskippt oder weggestoppt wird (bei kurzen Songs: vor der
+  Hälfte): den hat keiner gehört. Sonst skippte sich jeder in ein paar Minuten
+  durch eine 200-Song-Playlist zum DJ des Monats (oder machte „spiel", „stop",
+  „spiel", „stop"). „Stunden" ist die Länge der Songs, nicht
   die gehörte Zeit.
   Loop-Durchläufe, Tempo- und Wächter-Neustarts sind kein neuer Start; ein Song,
   der nach einem Neustart oder Netz-Aussetzer weiterläuft, zählt nicht doppelt.

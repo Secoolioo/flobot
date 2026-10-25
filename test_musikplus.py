@@ -1980,10 +1980,85 @@ def test_zustand_startet_nicht_vor_einer_ladenden_liste():
         player.voice = _VoiceImKanal(_voice_kanal(1, 1, cid=50))
         player.active_channel_id = 50
         player._laufende_anfragen = 1
-        _zurueckholen(client)
+        # Die Anfrage laeuft hier nie aus: nach der (kurzen) Frist stellt sich
+        # der alte Stand trotzdem hinten an - aber er springt nicht an.
+        with mock.patch.object(musikzustand, "ANFRAGE_WARTEN", 0.3):
+            _zurueckholen(client)
         assert player.current is None, "nicht vor der ladenden Liste"
         assert [t.title for t in player.queue] == ["Jetzt", "Danach", "Funk"]
         assert any("hinten drangehängt" in t for t in prot.gesagt), prot.gesagt
+
+
+def test_zustand_wartet_bis_die_ladende_playlist_eingereiht_ist():
+    """Kommt der alte Stand zurueck, waehrend eine Playlist noch ihren ersten
+    Song laedt, stellt er sich erst an, wenn die Playlist eingereiht ist. Vorher
+    stand er zwischen Song 1 und dem Rest der Playlist, obwohl Flo "hinten
+    drangehängt" sagt - und der Waechter konnte ihn in der Luecke sogar vor der
+    Playlist starten."""
+    mi = music.instance
+    items = [(n, n.title(), None) for n in ("eins", "zwei", "drei", "vier")]
+
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        aufgaben = []
+
+        async def aufloesen(inp, _hint):
+            if inp == "eins":
+                # Genau jetzt holt Flo nach dem Start den alten Stand zurueck.
+                aufgaben.append(asyncio.ensure_future(musikzustand.wiederherstellen(client)))
+                await asyncio.sleep(0.6)
+                assert not player.queue, "der alte Stand draengelt sich nicht vor"
+            return music.Track(title=inp, stream_url=f"http://s/{inp}", duration=100)
+
+        async def panel(_player, track, *, reply_to=None, extra=""):
+            prot.panel.append((track.title, extra))
+
+        async def lauf():
+            erg = await mi._play_many(player, _VoiceChannelStub(), items, "Bob",
+                                      "aus „Zocken“", requested_by_id=5)
+            await asyncio.gather(*aufgaben)
+            return erg
+
+        with mock.patch.object(mi, "_resolve_input", aufloesen), \
+                mock.patch.object(mi, "_send_panel", panel):
+            assert asyncio.run(lauf()) is music.HANDLED
+        assert player.current.title == "eins"
+        assert [t.title for t in player.queue] == [
+            "Zwei", "Drei", "Vier", "Jetzt", "Danach", "Funk"], player.queue
+        assert any("hinten drangehängt" in t for t in prot.gesagt), prot.gesagt
+
+
+def test_zustand_parkt_wenn_waehrend_des_wartens_gestoppt_wird():
+    """Sagt jemand 'flo stop', waehrend der alte Stand auf die ladende Playlist
+    wartet, springt danach nichts an - weggeworfen wird er aber auch nicht:
+    geparkt, 'flo weiter' holt ihn zurueck."""
+    mi = music.instance
+    items = [(n, n.title(), None) for n in ("eins", "zwei")]
+
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        aufgaben = []
+
+        async def aufloesen(inp, _hint):
+            if inp == "eins":
+                aufgaben.append(asyncio.ensure_future(musikzustand.wiederherstellen(client)))
+                await asyncio.sleep(0.6)
+                await player.disconnect()          # 'flo stop', waehrend die Liste laedt
+            return music.Track(title=inp, stream_url=f"http://s/{inp}", duration=100)
+
+        async def panel(_player, track, *, reply_to=None, extra=""):
+            prot.panel.append((track.title, extra))
+
+        async def lauf():
+            await mi._play_many(player, _VoiceChannelStub(), items, "Bob",
+                                "aus „Zocken“", requested_by_id=5)
+            await asyncio.gather(*aufgaben)
+
+        with mock.patch.object(mi, "_resolve_input", aufloesen), \
+                mock.patch.object(mi, "_send_panel", panel):
+            asyncio.run(lauf())
+        assert player.current is None and player.voice is None
+        assert player._geparkt, "geparkt statt angesprungen"
+        assert [t.title for t in player.queue] == ["Jetzt", "Danach", "Funk"], player.queue
+        assert any("geparkt" in t for t in prot.gesagt), prot.gesagt
 
 
 def test_zustand_wartender_stand_ueberlebt_takt_und_fehlversuch():
@@ -2026,6 +2101,41 @@ def test_zustand_wartender_stand_ueberlebt_takt_und_fehlversuch():
         _zurueckholen(client)
         assert prot.connect and player.current.title == "Jetzt"
         assert [t.title for t in player.queue] == ["Danach", "Funk"]
+
+
+def test_zustand_wartender_stand_ueberlebt_fehlversuch_und_herunterfahren():
+    """Der Fehlversuch ('flo spiel <Tippfehler>': vorab verbunden, nichts
+    gefunden, wieder raus) vermerkt den leeren Player als geaendert. Wird Flo
+    danach heruntergefahren, bevor er zurueckgeholt hat, baute sichern() den
+    leeren Player - und warf damit den wartenden Stand von der Platte: nach dem
+    naechsten Start war die Schlange weg. "Nichts" ersetzt jetzt nie einen
+    wartenden Stand; ein 'flo stop' wirft ihn weiter weg."""
+    pfad = store.DATA_DIR / "musikzustand.json"
+
+    async def tippfehler(player):
+        await music.instance._vorab_aufraeumen(player, asyncio.ensure_future(asyncio.sleep(0)))
+
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        asyncio.run(tippfehler(player))
+        assert player.voice is None and musikzustand.ausstehend(77)
+        asyncio.run(musikzustand.sichern())
+        e = json.loads(pfad.read_text(encoding="utf-8"))["guilds"].get("77")
+        assert e is not None, "der wartende Stand ist beim Herunterfahren verschwunden"
+        assert e["current"]["t"] == "Jetzt" and [s["t"] for s in e["queue"]] == ["Danach", "Funk"]
+    # Was der Player selbst hat, gilt beim Herunterfahren weiter - und 'flo
+    # stop' meint den wartenden Stand mit.
+    with _zurueck_umgebung(_stand()) as (player, prot, client):
+        player.voice = _VoiceImKanal(_voice_kanal(1, 1, cid=50))
+        player.active_channel_id = 50
+        player.start(_track("Neu"))
+        asyncio.run(musikzustand.sichern())
+        e = json.loads(pfad.read_text(encoding="utf-8"))["guilds"]["77"]
+        assert e["current"]["t"] == "Neu" and e["queue"] == []
+    with _zurueck_umgebung(_stand()) as (player, prot, client), \
+            mock.patch.object(music.instance, "_enabled", True):
+        assert "Gestoppt" in _embed_text(asyncio.run(_im_chat("flo stop")))
+        asyncio.run(musikzustand.sichern())
+        assert "77" not in json.loads(pfad.read_text(encoding="utf-8"))["guilds"]
 
 
 def test_zustand_sichern_wartet_den_songwechsel_ab():
@@ -2357,6 +2467,57 @@ def test_wrapped_weggeskippt_zaehlt_nicht():
             assert "7" not in kern.daten(77, "2026-10")["wer"]
             assert kern.daten(77, "2026-11") is None
     finally:
+        aufraeumen()
+        verlauf_zurueck()
+
+
+def test_wrapped_weggestoppt_zaehlt_auch_nicht():
+    """Nur der Skip nahm einen zu frueh beendeten Start zurueck. Die DJ-Farm ging
+    also weiter ueber 'flo spiel X' und nach fuenf Sekunden 'flo stop' - und
+    genauso ueber Leerlauf, Rauswurf und das Aufraeumen nach einem Fehlversuch
+    (alles disconnect()). Jetzt zaehlt auch das nicht; was lange genug lief,
+    zaehlt weiter."""
+    mi = music.instance
+    wand, mono = [_wann(15, 20, monat=10)], [1000.0]
+    _modul, verlauf_zurueck = _verlauf_frisch()
+    player, voice, aufraeumen = _musik_umgebung()
+    player.guild_id = 77
+    alt = mi._players.get(77)
+    mi._players[77] = player
+
+    def stop():
+        e = asyncio.run(_im_chat("flo stop"))
+        assert "Gestoppt" in (e.title or ""), e
+
+    try:
+        with _stats_frisch() as kern, _uhr_gestellt(wand, mono), \
+                mock.patch.object(mi, "_enabled", True):
+            for i in range(5):
+                player.voice, player.active_channel_id = voice, 42
+                voice.spielt = False
+                player.start(_lauf(f"Farm {i}", 100 + i, wer=5, name="Farmer"))
+                player._played = 5.0                # fuenf Sekunden, dann 'flo stop'
+                stop()
+            assert player.current is None and len(voice.play_calls) == 5
+            assert kern.daten(77, "2026-10")["gesamt"] == 0, kern.daten(77, "2026-10")
+            # Lange genug gehoert, dann gestoppt: zaehlt.
+            player.voice, player.active_channel_id = voice, 42
+            voice.spielt = False
+            player.start(_lauf("Gehört", 7, wer=6, name="Bob"))
+            player._played = 31.0
+            stop()
+            # Der Leerlauf (und alles andere, was disconnect ruft) genauso wie 'stop'.
+            player.voice, player.active_channel_id = voice, 42
+            voice.spielt = False
+            player.start(_lauf("Leerlauf", 8, wer=5, name="Farmer"))
+            asyncio.run(player.disconnect(vergessen=False))
+            m = kern.daten(77, "2026-10")
+            assert (m["gesamt"], "5" in m["wer"], m["wer"]["6"]["n"]) == (1, False, 1), m
+    finally:
+        if alt is None:
+            mi._players.pop(77, None)
+        else:
+            mi._players[77] = alt
         aufraeumen()
         verlauf_zurueck()
 
