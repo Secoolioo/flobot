@@ -51,8 +51,9 @@ TESTDATEIEN = (
     # Jede kann RAUCHPROBEN fuehren (siehe test_fundament.py).
     "test_fundament", "test_playlists", "test_musikplus", "test_flo_lebt",
     "test_serverleben",
-    # Voice-Clips: der Empfang (voiceempfang.py).
-    "test_voiceempfang",
+    # Voice-Clips: der Empfang (voiceempfang.py) und die beiden Bibliotheken
+    # fuer Schnitt und Text (clipschnitt.py, clipstext.py).
+    "test_voiceempfang", "test_clipschnitt", "test_clipstext",
 )
 
 
