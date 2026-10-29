@@ -23,6 +23,7 @@ from unittest import mock
 
 import discord
 
+import clips
 import geburtstage
 import laune
 import musikstats
@@ -37,6 +38,7 @@ import zitate
 NEUE_MODULE = {
     playlists: "music", musikstats: "music", laune: "launen",
     nachhaken: "nachhaken", zitate: "zitate", geburtstage: "geburtstage",
+    clips: "clips",
 }
 
 

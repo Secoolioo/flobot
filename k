@@ -5,6 +5,7 @@
 #     bash k n        vorher git pull
 #     bash k l        nur die letzten KI-Fehler aus dem Journal
 #     bash k m        Musik/Spotify pruefen (yt-dlp, ffmpeg, Token, Track)
+#     bash k c        Voice-Clips: die letzten Clip- und Empfangs-Meldungen
 #     bash k y        YouTube: was geht, was nicht, was tun
 #     bash k y browser firefox     Cookies aus einem Browser hier uebernehmen
 #     bash k y datei cookies.txt   exportierte cookies.txt einrichten
@@ -96,6 +97,13 @@ logs() {
 # Zeilen nicht, die die Frage beantworten. Ein Test haelt das fest.
 MUSIKMUSTER="Musik-Fehler|Musik-Selbsttest|Musik-Feature|Spotify|yt-dlp|403 Forbidden|DRM|brach nach|bricht immer wieder|Track konnte nicht|Voice-Connect|Stream-Adresse"
 
+# Voice-Clips: jede Zeile aus clips, clipschnitt und clipstext beginnt mit
+# "Clips:" (dazu die Startzeile "Clips aktiv/aus" und bot.py's "Clips-Takt"),
+# jede aus dem Empfang (voiceempfang) mit "Empfang:". Darunter die
+# 5-Minuten-Zusammenfassung je Server ("... Pakete (... gespeichert ...)").
+# Ein Test haelt das gegen alle Logzeilen dieser Dateien.
+CLIPMUSTER="Clips:|Clips aktiv|Clips aus|Clips-Takt|Empfang:"
+
 case "${1:-}" in
     n|neu)
         printf '\033[1mHole neuen Stand...\033[0m\n'
@@ -126,6 +134,9 @@ case "${1:-}" in
     m|musik)
         "$PY" tools_musik_check.py
         logs "Letzte Musik-Meldungen im Journal" "$MUSIKMUSTER"
+        ;;
+    c|clips)
+        logs "Letzte Clip-Meldungen im Journal" "$CLIPMUSTER"
         ;;
     y|yt|youtube)
         # Alle weiteren Woerter durchreichen:  k y browser firefox
@@ -170,7 +181,7 @@ case "${1:-}" in
         logs
         trenner
         echo "k a = ALLES | k n = neu holen | k l = Log | k m = Musik"
-        echo "k y = YouTube einrichten | k r = Neustart"
+        echo "k y = YouTube einrichten | k r = Neustart | k c = Clips"
         echo "k d = in Docker starten | k s = zurueck zu systemd"
         ;;
 esac

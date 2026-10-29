@@ -569,6 +569,32 @@ Beitrag laufend nachbearbeiten, statt 4 Sekunden nichts zu zeigen. Zusammen mit
 [34] fühlt sich Flo dann wirklich schnell an, ohne schneller zu sein.
 *mittel · `ai.py`, `bot.py`*
 
+## Voice
+
+**[77] Voice-Clips.** ✅ **Erledigt** (29.10.2026) — auf ausdrücklichen Wunsch
+des Betreibers. `flo clip` schneidet die letzten 30 s, 1 min oder 5 min aus dem
+Voice als MP3 unter 10 MB (Dialog mit Länge und „Alle" oder einer Person, oder
+direkt: `flo clip 1m @wer`), mit Flos eigener Musik leise darunter, Transkript
+über Groq-Whisper und einem passiv-aggressiven Satz von Flo; 🔥 zum Abstimmen
+(`flo clips`) und 🗑️ für alle, die drin sind. Mitgehört wird nur in einer echten
+Musik-Sitzung und nur mit **Ansage** im Voice-Chat — ohne Ansage keine Aufnahme,
+erst danach hebt Flo die Taubheit auf (das Kopfhörer-Symbol ist die Anzeige).
+Einwilligungsmodell: **Opt-out mit Ansage** — 🙅 Ohne mich / `flo clip nein`
+gilt sofort auf jedem Server, 🔇 Für alle aus / `flo clip aus` bis zum Ende der
+Runde. Ab Werk nur auf dem Hauptserver (`clip_aufnahme`), Notsignal oder Hetze
+im Transkript halten den Clip zurück, kein Clip ohne menschliche Stimme. Der
+Ton liegt nur im Arbeitsspeicher (5 Minuten, gedeckelt), gespeichert wird nur
+der Index. README „Voice-Clips".
+*groß · neu `voiceempfang.py`, `clipschnitt.py`, `clipstext.py`, `clips.py`*
+
+**[78] Clips weiterdenken.** Ein **Opt-in-Modus** je Server (mitgehört wird
+nur, wer ausdrücklich „ja" gesagt hat — rechtlich der sichere Weg), der **Clip
+der Woche** sonntags aus den meisten 🔥 (wie das Zitat der Woche) und der
+Sprachkanal-Status „🎙️ hört mit", solange der Puffer läuft. Eine Bestenliste
+übers Jahr bräuchte einen schlankeren, länger gehaltenen Index — heute hält er
+Clips bewusst nur 35 Tage (`flo clips alle` = 5 Wochen).
+*mittel · `clips.py`*
+
 ---
 
 # Teil 4 — Was ich zuerst bauen würde
@@ -612,6 +638,8 @@ Damit klar ist, dass es nicht vergessen wurde:
   Feldern (Giveaway) sind sie richtig — flächendeckend nicht.
 - **Sprachverständnis im Voice-Kanal.** Technisch reizvoll, in der Praxis teuer,
   wackelig und unangenehm, weil dann permanent mitgehört wird.
+  → seit [77] auf ausdrücklichen Wunsch als Clips umgesetzt (Ansage, Opt-out,
+  5 Minuten nur im Arbeitsspeicher). Ein Dauer-Transkript gibt es weiterhin nicht.
 - **Eine Datenbank aus Prinzip.** `JsonStore` ist bei euren Größenordnungen
   richtig, robust und von Hand reparierbar. Nur die drei großen Töpfe [74]
   rechtfertigen den Wechsel — der Rest nicht.

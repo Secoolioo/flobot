@@ -492,11 +492,13 @@ class VoiceGags(FeatureBasis):
         if not self._darf_discord_sounds(guild, channel):
             return False, ("Mir fehlt hier das Recht „Soundboard verwenden“. "
                            "Gebt's mir, dann knallt's.")
+        import music
         vc = guild.voice_client
         neu_da = False
         try:
             if vc is None or not vc.is_connected():
-                vc = await channel.connect(self_deaf=False)
+                # verbindungs_optionen: ohne clips exakt self_deaf=False.
+                vc = await channel.connect(**music.verbindungs_optionen(self_deaf=False))
                 neu_da = True
             elif vc.channel.id != channel.id:
                 if self._voice_beschaeftigt(guild) or self._musik_hat_sie(guild, vc):
@@ -713,7 +715,9 @@ class VoiceGags(FeatureBasis):
         created = False
         try:
             if vc is None or not vc.is_connected():
-                vc = await channel.connect(self_deaf=True)
+                import music
+                # verbindungs_optionen: ohne clips exakt self_deaf=True.
+                vc = await channel.connect(**music.verbindungs_optionen(self_deaf=True))
                 created = True
             else:
                 if vc.is_playing() or vc.is_paused():

@@ -48,6 +48,7 @@ import arbeit
 import basis
 import bayern
 import casino
+import clips
 import cmdnorm
 import economy
 import features
@@ -330,6 +331,11 @@ PLAYLISTS_ENABLED = playlists.setup() if MUSIC_ENABLED else False
 MUSIKZUSTAND_ENABLED = musikzustand.setup() if MUSIC_ENABLED else False
 # Musik-Wrapped ('Flo wrapped'): Monatsstatistik und DJ des Monats.
 MUSIKSTATS_ENABLED = musikstats.setup() if MUSIC_ENABLED else False
+# Voice-Clips ('Flo clip'): Flo hoert in einer Musik-Sitzung mit (mit Ansage und
+# Opt-out) und schneidet auf Zuruf die letzten 30 s bis 5 min als MP3. Haengt an
+# der Musik: nur sie haelt eine Sitzung, in der zugehoert werden darf. Der
+# Ausstieg ('flo clip nein', 🙅) gilt auch ohne Musik - gemerkt wird er immer.
+CLIPS_ENABLED = clips.setup() if MUSIC_ENABLED else clips.nur_datenschutz()
 # Flos Launen ('Flo laune'): eine Tagesstimmung, die Status und Ton faerbt.
 LAUNEN_ENABLED = laune.setup()
 # Er haelt nach: "morgen Pruefung" -> Flo fragt hinterher nach. Wer was ist,
@@ -360,6 +366,7 @@ FEATURE_LOADED = {
     # Playlists, Radio, Abstimmung und Wrapped haengen am Schalter 'music'.
     "launen": LAUNEN_ENABLED, "nachhaken": NACHHAKEN_ENABLED,
     "zitate": ZITATE_ENABLED, "geburtstage": GEBURTSTAGE_ENABLED,
+    "clips": CLIPS_ENABLED,
 }
 
 # Alle 'ich habe selbst geantwortet'-Sentinels an EINER Stelle.
@@ -377,7 +384,7 @@ _HANDLED_SENTINELS = (basis.HANDLED,) + tuple(
         moderation, music, casino, games, economy, media, food, words, luxus,
         voicegags, terraria, merchant, lotto, floaktie, giveaway, schulden,
         steal, bayern, guildcfg, profil, arbeit, umfrage, playlists, musikstats,
-        laune, nachhaken, zitate, geburtstage)
+        laune, nachhaken, zitate, geburtstage, clips)
     if getattr(modul, "HANDLED", None) is not None
     and getattr(modul, "HANDLED") is not basis.HANDLED
 )
@@ -432,7 +439,7 @@ ALLTAG_FRIST = 3 * ALLTAG_TAKT
 # setup_hook angemeldet. Steht als Liste hier, damit der Test, der die Vorlagen
 # auf Ueberschneidungen prueft, genau dieselben Module sieht.
 DYNAMISCHE_MODULE = (lotto, floaktie, merchant, music, voicegags, giveaway, arbeit,
-                     playlists, zitate)
+                     playlists, zitate, clips)
 
 if "--once" in sys.argv:
     MODE = "once"
@@ -478,7 +485,7 @@ _NEED_MESSAGES = any(
      STEAL_ENABLED, TERRARIA_ENABLED,
      MERCHANT_ENABLED, LOTTO_ENABLED, FLOAKTIE_ENABLED, ARBEIT_ENABLED,
      PLAYLISTS_ENABLED, MUSIKSTATS_ENABLED, LAUNEN_ENABLED, NACHHAKEN_ENABLED,
-     ZITATE_ENABLED, GEBURTSTAGE_ENABLED]
+     ZITATE_ENABLED, GEBURTSTAGE_ENABLED, CLIPS_ENABLED]
 )
 intents = discord.Intents.none()
 intents.guilds = True
@@ -494,9 +501,10 @@ if _NEED_MESSAGES:
     # message_content: noetig, um den TEXT der Nachricht zu lesen. Privilegiert -
     # muss zusaetzlich im Discord Developer Portal aktiviert sein.
     intents.message_content = True
-if MUSIC_ENABLED or VOICE_GAGS_ENABLED or ECONOMY_ENABLED:
+if MUSIC_ENABLED or VOICE_GAGS_ENABLED or ECONOMY_ENABLED or CLIPS_ENABLED:
     # voice_states: noetig, um zu sehen, wer in welchem Sprachkanal steckt
-    # (Musik, Soundboard/Join-Sounds, Voice-XP). Nicht privilegiert.
+    # (Musik, Soundboard/Join-Sounds, Voice-XP, wer clippen darf). Nicht
+    # privilegiert.
     intents.voice_states = True
 
 
@@ -753,6 +761,11 @@ _HELP_DATA = {
         ("flo soundboard", "Sound-Knöpfe + Server- & Discord-Sounds (über der Musik)"),
         ("flo sound <name>", "einzelnen Sound abspielen (auch Discords eigene)"),
         ("flo sprich <text>", "Text-to-Speech im Voice"),
+        ("flo clip", "🎬 die letzten 30 s · 1 min · 5 min aus dem Voice als MP3"),
+        ("flo clip 1m @wer", "direkt: Länge und nur eine Person"),
+        ("flo clips", "🔥 die besten Clips der Woche (· monat)"),
+        ("flo clip nein · ja", "nicht mitgeschnitten werden · wieder rein"),
+        ("flo clip an · aus", "Flo hört mit · Mikro aus, Puffer weg"),
     ]),
     "mod": ("Moderation", 0xED4245, [
         ("flo lösch 20 · nuke", "aufräumen (Gepinntes bleibt)"),
@@ -817,6 +830,16 @@ _HELP_ZEILE_BRAUCHT = {
     "flo zitate · zitat der woche": "ZITATE_ENABLED",
     "flo geburtstag 12.03.": "GEBURTSTAGE_ENABLED",
     "flo geburtstage": "GEBURTSTAGE_ENABLED",
+    # Die Voice-Seite traegt zwei Module: das Soundboard (voicegags) und die
+    # Clips. Jede Zeile nur, solange ihr Modul laeuft.
+    "flo soundboard": "VOICE_GAGS_ENABLED",
+    "flo sound <name>": "VOICE_GAGS_ENABLED",
+    "flo sprich <text>": "VOICE_GAGS_ENABLED",
+    "flo clip": "CLIPS_ENABLED",
+    "flo clip 1m @wer": "CLIPS_ENABLED",
+    "flo clips": "CLIPS_ENABLED",
+    "flo clip nein · ja": "CLIPS_ENABLED",
+    "flo clip an · aus": "CLIPS_ENABLED",
 }
 
 
@@ -837,7 +860,7 @@ _HELP_HINTS = {
     "wörter": "wörter <wort>",
     "terraria": "alles aus dem Wiki",
     "chaos": "roast · rate · umfrage",
-    "bilder": "male · quote · kalorien", "voice": "sounds · sprich",
+    "bilder": "male · quote · kalorien", "voice": "sounds · sprich · clip",
     "mod": "lösch · warn · ban", "ki": "einfach fragen · gedächtnis",
     "leben": "laune · zitate · geburtstag",
     "arbeit": "work · lohnzettel · wordle", "profil": "check · avatar · banner",
@@ -1260,6 +1283,10 @@ class FloBot(discord.Client):
         # abgeschlossen hat - sonst waeren die eingefuegten Songs weg.
         if vor_abmelden and PLAYLISTS_ENABLED:
             schritte.append(("Playlist-Assistenten", playlists.offene_sichern))
+        # Voice-Clips: Puffer leer, laufende Schnitte abbrechen, Temp-Ordner weg -
+        # nichts vom Ton ueberlebt das Herunterfahren.
+        if vor_abmelden and CLIPS_ENABLED:
+            schritte.append(("Clips", clips.herunterfahren))
         # Und zum Schluss ALLES, was noch im Sammler haengt - economy und jeder
         # kuenftige Store, ohne dass hier eine Zeile dazukommen muss.
         schritte.append(("Speicher", store.alle_sichern))
@@ -1388,7 +1415,7 @@ class FloBot(discord.Client):
             ("terraria", "🌳", "Terraria", TERRARIA_ENABLED),
             ("chaos", "😈", "Chaos", FUN_ENABLED),
             ("bilder", "🎨", "Bilder", MEDIA_ENABLED),
-            ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED),
+            ("voice", "🔊", "Voice", VOICE_GAGS_ENABLED or CLIPS_ENABLED),
             ("mod", "🛡️", "Moderation", MOD_ENABLED),
             ("ki", "💬", "KI", AI_ENABLED),
             ("leben", "🎂", "Server-Leben", LAUNEN_ENABLED or NACHHAKEN_ENABLED
@@ -1691,6 +1718,13 @@ class FloBot(discord.Client):
                 await musikzustand.takt()
             except Exception:
                 log.exception("Musik-Zustand-Takt fehlgeschlagen - laeuft weiter")
+        # Voice-Clips: abgleichen (Sendepause, Funktion aus), Puffer stutzen,
+        # wach halten, 5-Minuten-Bericht. Eigener try - wie alles hier.
+        if CLIPS_ENABLED:
+            try:
+                await clips.tick(self)
+            except Exception:
+                log.exception("Clips-Takt fehlgeschlagen - laeuft weiter")
 
     @tasks.loop(seconds=ALLTAG_TAKT)
     async def alltag_loop(self):
@@ -2084,6 +2118,12 @@ class FloBot(discord.Client):
         # Panels von vor dem Update raeumt das Auto-Loeschen jetzt mit weg.
         if music.ist_panel(m):
             return True
+        # Die Clip-Ansage im Voice-Chat: ohne sie hoert Flo nicht mit - die
+        # AKTUELLE bleibt auch in einem Aufraeum-Kanal stehen, solange sie zaehlt
+        # (clips.ansage_behalten). Ebenso ein Clip, der im Voice-Chat eines
+        # privaten Voice liegt (der Clip-Kanal selbst ist nie einer).
+        if CLIPS_ENABLED and (clips.ansage_behalten(m) or clips.ist_clip(m)):
+            return True
         return bool(m.embeds) and m.embeds[0].title == economy.LEVELUP_EMBED_TITLE
 
     def _sweepable(self, m):
@@ -2413,6 +2453,15 @@ class FloBot(discord.Client):
             # + KI-Chat). Alle anderen duerfen schreiben - Flo bleibt ihnen
             # gegenueber stumm, LEITET die Nachricht aber an den Besitzer weiter
             # (so werden Antworten auf 'flo dm' sichtbar).
+            # Ausnahme: der Ausstieg aus den Voice-Clips ('clip nein' / 'clip ja')
+            # gilt auf jedem Server, also auch privat - beantwortet von Flo und
+            # NICHT an den Besitzer weitergereicht. Ein Fehler dort darf die
+            # Privatnachrichten (auch die Admin-Befehle des Besitzers) nie lahmlegen.
+            try:
+                if await clips.datenschutz_dm(message):
+                    return
+            except Exception:  # noqa: BLE001 - dann eben wie jede andere DM
+                log.exception("Clips: Ausstieg per Privatnachricht ging nicht")
             if OWNER_ID and message.author.id == OWNER_ID:
                 await self._handle_owner_dm(message)
             elif OWNER_ID:
@@ -2430,9 +2479,10 @@ class FloBot(discord.Client):
         mit_nachhaken = NACHHAKEN_ENABLED and _on("nachhaken")
         mit_laune = LAUNEN_ENABLED and _on("launen")
         notlage = ((NACHHAKEN_ENABLED or mit_laune or ZITATE_ENABLED or GEBURTSTAGE_ENABLED
-                    or MUSIKSTATS_ENABLED) and _ist_notlage(content))
+                    or MUSIKSTATS_ENABLED or CLIPS_ENABLED) and _ist_notlage(content))
         # Wer gerade am Boden ist, merkt sich basis (72 h, nur im Speicher) -
-        # Zitat der Woche, Geburtstage und Wrapped fuehren ihn dann nicht vor.
+        # Zitat der Woche, Geburtstage, Wrapped und die Voice-Clips fuehren ihn
+        # dann nicht vor.
         # Auch ohne KI (dann laeuft nachhaken nicht, und vorher wusste es
         # sonst keiner).
         if notlage:
@@ -2620,6 +2670,10 @@ class FloBot(discord.Client):
             (MUSIKSTATS_ENABLED and _on("music"), musikstats.handle),
             (MUSIC_ENABLED and _on("music"), music.handle),
             (VOICE_GAGS_ENABLED and _on("voice"), voicegags.handle),
+            (CLIPS_ENABLED and _on("clips"), clips.handle),
+            # Ohne-mich gilt IMMER - auch wo Clips hier aus sind, und auch,
+            # wenn sie im ganzen Bot nicht laufen (wie nachhaken.datenschutz).
+            (True, clips.datenschutz),
             (GAMES_ENABLED and _on("games"), games.handle),
             (CASINO_ENABLED and _on("casino"), casino.handle),
             (ARBEIT_ENABLED and _on("arbeit"), arbeit.handle),
@@ -3040,6 +3094,10 @@ class FloBot(discord.Client):
             self._spawn(music.flo_getrennt(member.guild.id, before.channel.id))
         if VOICE_GAGS_ENABLED:
             self._spawn(voicegags.on_voice_state_update(member, before, after))
+        # Voice-Clips: Flo rein, raus, verschoben oder taub gestellt -> abgleichen
+        # (clips schaut selbst, ob es Flo ist).
+        if CLIPS_ENABLED:
+            self._spawn(clips.voice_state(member, before, after))
         # FloCorp-Aktie: geht ein Livestream AN oder kommt jemand in den Call,
         # schiebt das den Kurs sofort ein Stueck - man muss nicht auf den
         # Minuten-Takt warten.
@@ -3052,6 +3110,19 @@ class FloBot(discord.Client):
                 self._spawn(floaktie.note_stream_start(member))
             elif call_neu:
                 self._spawn(floaktie.note_voice_join(member))
+
+    async def on_raw_message_delete(self, payload):
+        """Eine Nachricht ist weg (auch eine, die nicht im Cache lag). Die
+        Voice-Clips wollen das wissen: ohne ihre Ansage hoert Flo nicht mit -
+        eine neue muss her -, und ein Clip, den ein Mod von Hand geloescht hat,
+        fliegt aus Index und Bestenliste."""
+        if CLIPS_ENABLED:
+            clips.geloescht(payload.guild_id, payload.channel_id, {payload.message_id})
+
+    async def on_raw_bulk_message_delete(self, payload):
+        """Dasselbe im Buendel ('flo lösch 50', das Auto-Loeschen)."""
+        if CLIPS_ENABLED:
+            clips.geloescht(payload.guild_id, payload.channel_id, set(payload.message_ids))
 
     async def on_guild_join(self, guild):
         """Flo wurde auf einen neuen Server eingeladen.

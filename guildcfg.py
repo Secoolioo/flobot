@@ -61,6 +61,10 @@ def horcht_auf(key, fn):
 # Der gigachat des Heimatservers. Steht hier als Name statt als nackte Zahl
 # mitten im Katalog - und an EINER Stelle, falls er sich mal aendert.
 GIGACHAT_CHANNEL = 1453881901738889351
+# Der Clip-Kanal des Heimatservers - dorthin legt Flo die Voice-Clips, ohne dass
+# erst jemand etwas einstellen muss. Auf einem fremden Server gibt es ihn nicht,
+# dann nimmt clips den Ansagen-Kanal (sonst den System-Kanal).
+CLIP_CHANNEL = 1453880623893839913
 
 HAUPT_GUILD = int(os.getenv("GUILD_ID", "0") or "0")
 
@@ -241,6 +245,17 @@ KATALOG = [
     Einstellung("join_sounds", "Join-Sounds", "an_aus", False, "JOIN_SOUNDS",
                 "Flo spielt einen kurzen Sound, wenn jemand einen Sprachkanal "
                 "betritt. Standard: aus.", "Voice"),
+    # Voice-Clips ('flo clip'). Mithoeren nur, wo es ausdruecklich erlaubt ist:
+    # ab Werk auf dem Hauptserver, anderswo muss ein Admin es anschalten.
+    Einstellung("clip_channel", "Clip-Kanal", "channel", CLIP_CHANNEL, "CLIP_CHANNEL_ID",
+                "Wohin Flo die Voice-Clips legt. Standard ist der Clip-Kanal des "
+                "Heimatservers; kennt dieser Server ihn nicht, nimmt Flo den "
+                "Ansagen-Kanal (sonst den System-Kanal) – nie einen Aufräum-Kanal.",
+                "Voice"),
+    Einstellung("clip_aufnahme", "Voice-Clips: Mithören erlaubt", "an_aus", False, "",
+                "Ob Flo hier im Voice mithört (5-Minuten-Puffer, mit Ansage und "
+                "Opt-out), damit `flo clip` geht. Standard: nur auf dem Hauptserver an.",
+                "Voice", nur_haupt=True),
 
     # --- Moderation ------------------------------------------------------
     # Standen nur in der .env, galten fuer alle Server gleich und brauchten

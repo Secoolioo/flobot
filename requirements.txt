@@ -15,7 +15,11 @@ openai>=1.58
 #            braucht yt-dlp diese Skripte PLUS eine JS-Laufzeit (deno, unten).
 #            Ohne beides spielt YouTube still nicht mehr ab.
 # Zusaetzlich noetig (System-Paket, NICHT pip): ffmpeg  ->  z. B.  apt install ffmpeg
-davey>=0.1.5
+#   davey ist hier GEDECKELT: discord.py verlangt nur davey>=0.1.0, aber der
+#   Voice-Empfang der Clips (voiceempfang.py) baut darauf, wie davey 0.1.x
+#   Schluessel und Nonces je Absender fuehrt (nur vorwaerts, siehe dort). 0.2
+#   aendert genau das - erst pruefen (test_voiceempfang), dann den Deckel heben.
+davey>=0.1.6,<0.2
 PyNaCl>=1.5
 yt-dlp[default]>=2026.8.19
 # deno = die JS-Laufzeit fuer yt-dlp (siehe oben). Als pip-Paket, damit sie auf

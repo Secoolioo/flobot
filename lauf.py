@@ -51,9 +51,10 @@ TESTDATEIEN = (
     # Jede kann RAUCHPROBEN fuehren (siehe test_fundament.py).
     "test_fundament", "test_playlists", "test_musikplus", "test_flo_lebt",
     "test_serverleben",
-    # Voice-Clips: der Empfang (voiceempfang.py) und die beiden Bibliotheken
-    # fuer Schnitt und Text (clipschnitt.py, clipstext.py).
-    "test_voiceempfang", "test_clipschnitt", "test_clipstext",
+    # Voice-Clips: der Empfang (voiceempfang.py), die beiden Bibliotheken
+    # fuer Schnitt und Text (clipschnitt.py, clipstext.py) und das Feature
+    # selbst (clips.py) samt Einbau.
+    "test_voiceempfang", "test_clipschnitt", "test_clipstext", "test_clips",
 )
 
 
@@ -70,7 +71,11 @@ WACHE = ("economy", "features", "guildcfg", "admin", "music", "words",
          # Die Module aus dem Fundament - ein Test, der eins anschaltet und
          # stehen laesst, soll nicht die Tests der anderen Teile faerben.
          "playlists", "musikzustand", "musikstats", "laune", "nachhaken",
-         "zitate", "geburtstage")
+         "zitate", "geburtstage",
+         # Die Voice-Clips: ein angeschaltetes clips gaebe JEDEM spaeteren
+         # Voice-Beitritt die Empfangs-Klasse mit (music.verbindungs_optionen) -
+         # und die Tests, die die connect-Flags nachzaehlen, fielen um.
+         "clips")
 
 #: Auch der Panel-Login: ein Test, der ihn abschaltet und stehen laesst, macht
 #: den naechsten Panel-Test gruen, ohne dass der seine Anmeldung geprueft haette.
@@ -124,6 +129,7 @@ WACHE_TIEF = (
     ("uhr", "instance._start"),
     ("uhr", "instance._versatz"),
     ("uhr", "instance._sprung_um"),
+    ("clips", "instance._store"),
 )
 
 #: Schalter, die nicht ERSETZT, sondern an Ort und Stelle veraendert werden
@@ -139,6 +145,10 @@ WACHE_INHALT = (
     # Test das stehen, gewaenne dieselbe ID im naechsten Test ihr Zitat 'sanft' -
     # je nach Reihenfolge.
     ("basis", "_notlage_seit"),
+    # Welcher Empfaenger auf welchem Server lauscht (voiceempfang.anmelden).
+    # Ein liegengebliebener bekaeme im naechsten Test die op-5-Zuordnungen und
+    # op-4-Neuaufbauten eines fremden Clients gemeldet.
+    ("voiceempfang", "_REGISTER"),
 )
 
 

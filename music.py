@@ -136,6 +136,59 @@ VOICE_CONNECT_TIMEOUT = 20.0
 _VOICE_FLAGS = {"self_deaf": True, "reconnect": True}
 
 
+def verbindungs_optionen(**flags):
+    """Flags plus - nur wenn clips geladen ist - die Empfangs-Klasse. ALLE Wege in
+    den Voice (Musik, Soundboard, TTS/Join-Sounds) gehen hier durch: wer zuerst
+    verbindet, bestimmt die Klasse, und die Musik uebernimmt den Client. Ohne
+    clips exakt die Flags.
+
+    clips wird beim AUFRUF ueber sys.modules gefragt, nie beim Import und nie
+    ueber eine Anmeldung in setup(): ein Test, der clips hochfaehrt, faerbt so
+    keinen anderen Test ein, der die Flags nachzaehlt."""
+    clips = sys.modules.get("clips")
+    try:
+        klasse = clips.instance.empfangs_klasse() if clips is not None else None
+    except Exception:  # noqa: BLE001 - dann eben der normale Client
+        klasse = None
+    if klasse is not None:
+        flags["cls"] = klasse
+    return flags
+
+
+def _clips_melden(gid):
+    """Die Musik-Sitzung dieses Servers hat sich geaendert (verbunden/getrennt):
+    clips gleicht ab, ob es mithoeren soll. Ohne clips passiert nichts."""
+    clips = sys.modules.get("clips")
+    if clips is not None:
+        try:
+            clips.instance.sitzung_geaendert(gid)
+        except Exception:  # noqa: BLE001 - clips darf die Musik nie stoeren
+            log.debug("Clips: Sitzungsmeldung ging nicht", exc_info=True)
+
+
+def _clips_an(gid):
+    """Koennte clips auf diesem Server mithoeren (geladen, an, Funktion und
+    Einwilligung des Servers an - clips.Clips.laeuft_auf)? Beim Aufruf ueber
+    sys.modules gefragt - ohne clips immer nein, und die Musik verhaelt sich
+    exakt wie vorher."""
+    clips = sys.modules.get("clips")
+    try:
+        return bool(clips is not None and clips.instance.laeuft_auf(gid))
+    except Exception:  # noqa: BLE001 - im Zweifel: wie ohne clips
+        return False
+
+
+def _clips_haelt(gid, kanal_id):
+    """'flo clip an' haelt Flo in diesem Kanal - aber nur, solange clips dort
+    mithoeren darf (clips.Clips.haelt). Ein vergessener Schalter haelt so nie
+    einen Flo fest, der ohnehin nicht mehr zuhoert. Ohne clips: nein."""
+    clips = sys.modules.get("clips")
+    try:
+        return bool(clips is not None and clips.instance.haelt(gid, kanal_id))
+    except Exception:  # noqa: BLE001 - clips darf die Musik nie stoeren
+        return False
+
+
 def _env_sekunden(name, vorgabe):
     """Sekunden aus der .env - ein Tippfehler dort darf den Start nicht kippen."""
     roh = os.getenv(name, "")
@@ -1290,6 +1343,11 @@ class GuildPlayer:
     # Der Song, den eine Abstimmung (oder ein Mod) gerade rauswirft. Ein Klick,
     # der in den Songwechsel faellt, skippt so nicht gleich den naechsten mit.
     _abgewaehlt: "Track | None" = None
+    # 'flo clip an': Flo sitzt zum Mithoeren hier - er bleibt, solange Menschen
+    # im Kanal sind und clips dort mithoeren darf, auch ohne Musik (siehe
+    # _leerlauf). Gilt nur fuer DIESE Sitzung: disconnect ('stop'), _parken und
+    # ein verschwundener Kanal nehmen es zurueck, ebenso 'Mikro aus'.
+    clip_halten: bool = False
 
     # --- Vorladen: der naechste Song ist fertig, wenn dieser endet ----------
     def _vorladen_planen(self):
@@ -1388,6 +1446,9 @@ class GuildPlayer:
             # Leerlauf-Uhr haette ihn sonst beim naechsten Watchdog-Takt
             # wieder rausgeworfen.
             self._leer_seit = None
+        # Eine echte Musik-Sitzung: clips entscheidet, ob es mithoert (Ansage
+        # zuerst). Ohne clips passiert hier nichts.
+        _clips_melden(self.guild_id)
         return self.voice
 
     async def _fresh_connect(self, channel):
@@ -1422,9 +1483,10 @@ class GuildPlayer:
         von Soundboard und TTS. Die Frist von aussen bleibt nur als Netz fuer
         einen Haenger, bevor discord.pys eigene Uhr laeuft."""
         if timeout is None:
-            return await channel.connect(**_VOICE_FLAGS)
+            return await channel.connect(**verbindungs_optionen(**_VOICE_FLAGS))
         return await asyncio.wait_for(
-            channel.connect(timeout=timeout, **_VOICE_FLAGS), timeout=timeout + 10)
+            channel.connect(timeout=timeout, **verbindungs_optionen(**_VOICE_FLAGS)),
+            timeout=timeout + 10)
 
     async def _halboffen_wegraeumen(self, guild):
         """Nach einem gescheiterten Verbindungsversuch: einen halb offenen
@@ -1449,6 +1511,24 @@ class GuildPlayer:
         """Gleich trennen WIR selbst (Neuaufbau) - flo_getrennt soll das nicht
         fuer einen Rauswurf halten. 30 s reichen fuer Discords Meldung."""
         self._selbst_getrennt_bis = time.monotonic() + 30.0
+
+    def _fremder_besuch(self, vc):
+        """Ein FREMDER Voice-Client (ein Soundboard-/TTS-/Join-Sound-Besuch von
+        voicegags) in einem ANDEREN Kanal als dem dieser Sitzung - waehrend der
+        eigene gerade weg ist?
+
+        Den adoptiert die Musik nicht, solange clips auf diesem Server mithoeren
+        koennte: sonst wuerde der kurze Besuch zur Musik-Sitzung - clips
+        kuendigte dort an und hoerte mit, voicegags liesse ihn nicht mehr
+        gehen, und eine 'flo clip an'-Sitzung hinge fuer immer dort. Der Besuch
+        geht von selbst wieder, danach holt der naechste Takt Flo in SEINEN
+        Kanal zurueck. Ohne clips (aus, hier aus oder nicht geladen) adoptiert
+        die Musik wie eh und je."""
+        if vc is None or vc is self.voice:
+            return False
+        if getattr(getattr(vc, "channel", None), "id", None) == self.active_channel_id:
+            return False
+        return bool(self.clip_halten or _clips_an(self.guild_id))
 
     def sitzung_offen(self):
         """Laeuft hier eine Musik-Sitzung - oder soll eine laufen?"""
@@ -1909,6 +1989,7 @@ class GuildPlayer:
         self._radio_fehler = 0
         self._skip_stimmen.clear()
         self._abgewaehlt = None
+        self.clip_halten = False        # 'flo clip an' gilt nur fuer diese Sitzung
         # Bewusst raus - nach einem Neustart soll Flo hier NICHT zurueckkommen.
         if vergessen:
             _zustand_vergessen(self.guild_id)
@@ -1925,6 +2006,8 @@ class GuildPlayer:
             except Exception:  # noqa: BLE001
                 pass
             self.voice = None
+        # Sitzung zu: clips leert seinen Puffer und stellt sich wieder taub.
+        _clips_melden(self.guild_id)
 
     async def _sag(self, text):
         """Kurze Meldung in den Musik-Kanal. Nie fatal - wenn das Reden nicht
@@ -2419,6 +2502,7 @@ class GuildPlayer:
         channel = guild.get_channel(self.active_channel_id)
         if not isinstance(channel, discord.VoiceChannel):
             self.active_channel_id = None   # Kanal gibt es nicht mehr -> aufgeben
+            self.clip_halten = False        # ... und mit ihm 'flo clip an'
             return
         if await self._radio_nachholen(channel):
             return
@@ -2430,6 +2514,8 @@ class GuildPlayer:
             log.warning("Voice-Desync: sollte in '%s' verbunden sein, ist es nicht.", channel.name)
             await self._reconnect(channel)
             return
+        if self._fremder_besuch(vc):
+            return      # ein Sound-Besuch woanders - der geht gleich, dann holt der Takt Flo
         self.voice = vc   # echten Client adoptieren (Discord kennt ihn, wir bisher nicht)
 
         # Pausiert? Dann ist Stillstand genau richtig - Finger weg von allem.
@@ -2525,6 +2611,14 @@ class GuildPlayer:
         zurueck, wenn ihn jemand rausgeworfen hatte."""
         leer = self.nichts_zu_tun()
         allein = _nur_bots_im_kanal(channel)
+        if (leer and not allein and self.clip_halten
+                and _clips_haelt(self.guild_id, channel.id)):
+            # 'flo clip an': mithoeren ist hier die Aufgabe - Menschen da, Flo
+            # bleibt (und der Watchdog holt ihn nach einem Abriss zurueck).
+            # Sitzen nur noch Bots drin, laeuft die Uhr wie immer - ebenso,
+            # sobald clips hier nicht mehr mithoeren darf (Mikro aus, vom
+            # Server taub, keine Ansage moeglich, Clips aus ...).
+            leer = False
         if not (leer or allein) or MUSIC_IDLE_SEKUNDEN <= 0:
             self._leer_seit = None
             return False
@@ -2611,6 +2705,8 @@ class GuildPlayer:
             # Unter Lock nochmal pruefen: hat sich das Problem schon erledigt
             # (discord.py-Auto-Reconnect oder paralleler connect)? Dann NICHT abreissen.
             live = self.voice if (self.voice and self.voice.is_connected()) else channel.guild.voice_client
+            if live is not None and live.is_connected() and self._fremder_besuch(live):
+                return  # ein Sound-Besuch woanders: weder adoptieren noch abreissen
             if live is not None and live.is_connected() and (
                     self.current is None or live.is_playing() or live.is_paused()):
                 self.voice = live
@@ -2717,6 +2813,9 @@ class GuildPlayer:
         self._last_frames = -1
         self.pausiert = False
         self.active_channel_id = None
+        # 'flo clip an' gehoert zu dieser Sitzung - die naechste ('weiter',
+        # 'spiel') erbt es nicht, sonst ginge Flo dort nach dem letzten Song nie.
+        self.clip_halten = False
         self._reconnect_fails = 0
         self._leer_seit = None
         self._geparkt = bool(self.queue)

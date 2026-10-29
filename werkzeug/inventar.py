@@ -96,6 +96,7 @@ NICHT_PROBIEREN = {
     "admin": "Owner-Befehle: Neustart, Update, Sendepause - Nebenwirkungen",
     "giveaway": "legt Verlosungen an und startet Timer",
     "voicegags": "will in den Voice-Channel und ruft TTS",
+    "clips": "kann in den Voice (flo clip an) und rendert Audio",
 }
 
 #: Dateien, die ueberhaupt keine Chat-Befehle haben. Ohne diese Liste landeten

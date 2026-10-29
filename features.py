@@ -50,6 +50,7 @@ CATALOG = [
     {"key": "launen",   "label": "Launen",            "emoji": "🌦️", "desc": "Flo hat eine Tageslaune – Status + Ton (flo laune)"},
     {"key": "nachhaken", "label": "Nachhaken",        "emoji": "🕵️", "desc": "merkt sich 'morgen Prüfung' und fragt nach – flo nachhaken aus"},
     {"key": "voice",    "label": "Voice-Gags",        "emoji": "🔊", "desc": "Soundboard, Text-to-Speech & Join-Sounds"},
+    {"key": "clips",    "label": "Voice-Clips",       "emoji": "🎬", "desc": "flo clip – die letzten 30 s bis 5 min aus dem Voice als MP3 (mit Ansage & Opt-out)"},
     {"key": "chaos",    "label": "Chaos & Fun",       "emoji": "😈", "desc": "Roast, Hype, Reactions, DM-Konter, Bot-Hass"},
     {"key": "mod",      "label": "Moderation",        "emoji": "🛡️", "desc": "Löschen, Warnen, Timeout, Kick, Ban"},
     {"key": "bayern",   "label": "Bayrisch-Modus",    "emoji": "🥨", "desc": "Flo antwortet auf Boarisch"},

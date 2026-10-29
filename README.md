@@ -40,6 +40,8 @@ Nur für die, die den Server **verwalten** dürfen. Im Panel geht dasselbe: unte
 | `icon_auto` | Server-Icon nach Tages-/Jahreszeit |
 | `aktie_zaehlt` | ob Calls und Chat dieses Servers den $FLO-Kurs bewegen |
 | `soundboard`, `join_sounds` | Sound-Brett und Begrüßungs-Sounds |
+| `clip_channel` | wohin die Voice-Clips gehen (ab Werk der Clip-Kanal des Hauptservers) |
+| `clip_aufnahme` | ob Flo hier für `flo clip` mithören darf (ab Werk nur auf dem Hauptserver) |
 | `warn_limit`, `warn_timeout`, `timeout_standard`, `purge_max` | Moderations-Grenzen |
 
 Gesetzt wird nur, was abweicht; der Rest folgt dem Standard aus der `.env`. Ein
@@ -1011,6 +1013,149 @@ verwalten" (und Flos Rolle darüber); fehlt das, steht es im Log.
 
 ---
 
+## Voice-Clips
+
+```
+Flo clip                   Länge (30 s · 1 min · 5 min) und Person per Knopf
+Flo clip 1m @Bob           direkt: Länge und nur Bob (30s, 90, 1:30, 2 min, halbe minute …)
+Flo clips · clips monat    die Clips mit den meisten 🔥 (Woche, Monat, alle = 5 Wochen)
+Flo clip nein · ja         ich will nicht mitgeschnitten werden · wieder rein
+Flo clip an · aus          Flo kommt lauschen · Mikro aus, Puffer weg
+Flo clip status            Zahlen für Mods (nie Namen)
+```
+
+Flo hat die letzten **5 Minuten** eines Calls im Kopf — nur im Arbeitsspeicher,
+laufend überschrieben. `flo clip` schneidet daraus eine **MP3** (30 s bis
+5 min; eine nackte Zahl bis 5 sind Minuten, darüber Sekunden, unter 10 s wird
+aufgerundet) und legt sie in den Clip-Kanal — mit 🔥 zum Abstimmen und 🗑️ zum
+Löschen. Es zählt der Moment der Frage: wer im Dialog erst nach 40 Sekunden
+klickt, bekommt trotzdem das, was davor lief. Hat Flo noch nicht so lange
+zugehört, wird der Clip kürzer (und Flo sagt es).
+
+**Wann Flo mithört.** Nur in einer echten Musik-Sitzung: Musik, Pause, Radio,
+`flo komm`, die nach einem Neustart zurückgeholte Warteschlange — oder `flo clip
+an` (dann bleibt Flo, solange Menschen im Kanal sind; sitzen nur noch Bots
+drin, geht er wie sonst nach `MUSIC_IDLE_SEKUNDEN`). **Nie** bei einem kurzen
+Soundboard-, TTS- oder Join-Sound-Besuch. Dazu muss gelten: Funktion `clips`
+an, Einstellung `clip_aufnahme` an (ab Werk **nur auf dem Hauptserver**,
+anderswo schaltet ein Admin sie ein), keine Sendepause, ffmpeg mit MP3 da, Flo
+nicht vom Server taub gestellt, kein „Mikro aus" für diesen Kanal.
+
+**Ohne Ansage keine Aufnahme.** Bevor Flo zuhört, postet er in den Text-Chat
+des Voice-Kanals eine Ansage (was, wie lange, wohin, Groq) mit zwei Knöpfen:
+**🙅 Ohne mich** und **🔇 Für alle aus**. Erst danach hebt er seine Taubheit
+auf — das durchgestrichene Kopfhörer-Symbol ist die ehrliche Anzeige: taub =
+hört nicht mit; hört er auf, stellt er sich wieder taub. Darf Flo dort nicht
+schreiben, hört er nicht mit (und versucht es 10 Minuten lang nicht nochmal).
+Steht in demselben Kanal schon eine Ansage, die jünger als 45 Minuten ist und
+die es noch gibt, kommt keine zweite — ein Neuaufbau oder Neustart spammt
+nicht. Wer später dazukommt, bekommt keine eigene Nachricht; die Ansage steht
+im Chat (in einem Aufräum-Kanal bleibt sie stehen, solange Flo zuhört oder sie
+jünger als 45 Minuten ist — danach
+räumt sie das Auto-Löschen mit weg, und die nächste Runde kündigt neu an).
+Verschwindet sie mitten in der Runde (`flo lösch 50` im Voice-Chat), postet Flo
+sofort eine neue (ohne Meldung von Discord findet es der Takt nach spätestens
+fünf Minuten) — und darf er das nicht, hört er auf. Höchstens eine neue je zehn
+Minuten: löscht sie jemand (oder ein Moderations-Bot) gleich wieder, hört Flo
+auf, statt den Chat mit Ansagen zu füllen — und sagt bei `flo clip` auch genau
+das (Status-Grund `ansage_weg`), nicht „darf nicht schreiben".
+
+**Raus.** 🙅 oder `flo clip nein` (auch `nein danke`, `bitte ohne mich`, `ich will
+nicht` — und vertippt wie `flo cilp nein`; auch als Privatnachricht an Flo, die
+dann nicht beim Chef landet): sofort und auf **jedem** Server — auch wo Clips
+aus sind (sogar im ganzen Bot), der Knopf auch in der Sendepause. Pakete dieser Person werden
+schon vor der DAVE-Entschlüsselung verworfen, was im Puffer lag, ist weg, offene
+Dialoge vergessen sie, und nach dem Schnitt wird nochmal geprüft — bevor der Ton
+zu Groq geht, unmittelbar vor dem Hochladen und gleich danach (dann kommt der
+Post wieder weg). Wer raus ist, kann auch andere nicht clippen. Niemand kann
+jemand anderen rausnehmen. Zurück mit `flo clip ja` (das nur richtig geschrieben).
+
+**Für alle aus.** 🔇 oder `flo clip aus` (wer im Call sitzt, und Mods): Puffer
+weg, Flo stellt sich wieder taub, laufende Schnitte und offene Dialoge werden
+verworfen, und im Voice-Chat steht, wer es war. Das gilt, bis die Runde in
+diesem Kanal vorbei ist (Flo ist raus und die Musik will nicht mehr hin) —
+höchstens 12 Stunden, auch über einen Neustart. `flo clip an` hebt es auf und
+kündigt neu an — frühestens eine Minute nach dem „aus" (sonst wird aus Hin- und
+Herschalten Spam im Voice-Chat). Kam Flo nur zum Mithören und läuft nichts,
+geht er gleich mit.
+Ist Flo schon weg (oder sitzt woanders), verwerfen 🔇 und `flo clip aus` trotzdem,
+was aus der Runde noch unterwegs ist — einen offenen Dialog, einen laufenden
+Schnitt.
+
+**Wer clippen darf.** Wer im Call sitzt oder im Puffer zu hören ist, und Mods.
+Je Person alle 45 Sekunden, je Server 12 in der Stunde (ein Clip, der technisch
+scheitert — ffmpeg, Upload abgelehnt —, zählt nicht mit); geschnitten wird
+einer nach dem anderen (höchstens drei warten, dann „Eins nach dem anderen").
+
+**Was im Clip ist.** Alle, die geredet haben — außer wer raus ist und wer gerade
+ein Notsignal geschrieben hat (der fehlt still, ohne Begründung; fragt er selbst,
+ist er drin, aber ohne Spruch). Flos eigene Musik läuft leiser mit. „Nur eine
+Person" (`@wer` oder im Menü) heißt: nur deren Spur, ohne Flos Musik; Bots kann
+man nicht einzeln clippen, und wer raus oder gerade am Boden ist, auch nicht —
+mit derselben knappen Abfuhr für beides, damit niemand daraus ein Notsignal
+liest. Kein Clip ohne menschliche Stimme — „nur meine Musik" gibt's auf YouTube.
+
+**Transkript und Spruch.** Gibt es einen Whisper-Zugang (Groq, siehe
+Konfiguration), bekommt der Clip ein Transkript („KI, ohne Gewähr") und einen
+passiv-aggressiven Satz von Flo (KI im Hintergrund mit derselben Grenze wie im
+Chat, Sprecher als A/B/C; ohne KI oder Transkript ein Spruch aus dem
+Ersatz-Pool). Steht im Transkript ein Notsignal oder Hetze, **bleibt der Clip
+liegen** (das Notsignal merkt sich Flo wie im Chat 72 Stunden, nur im
+Speicher); private Daten werden im Transkript geschwärzt, der Ton bleibt.
+
+**Wohin.** In den Kanal `clip_channel` (ab Werk der Clip-Kanal des
+Hauptservers), sonst in die Ansagen, sonst in den System-Kanal — nur, wo Flo
+schreiben **und Dateien hochladen** darf, **nie** in einen Aufräum-Kanal. Ist der
+Voice privat (nicht jeder, der den Clip-Kanal liest, sieht den Voice), bleibt
+der Clip im Voice-Chat dieses Kanals — oder es gibt keinen; dort bleibt er auch
+stehen, wenn dieser Voice-Chat ein Aufräum-Kanal ist. Höchstens
+`min(9,5 MiB, Upload-Grenze − 512 KiB)`; 5 Minuten passen mit 192 kbps hinein.
+Kein Post pingt jemanden.
+
+**Was gespeichert wird.** `data/clips.json`: wer raus ist, wann wo die Ansage
+steht, „Mikro aus" je Kanal, das Whisper-Kontingent und ein Index der Clips
+(Nachricht, Kanal, wer geclippt hat, wer drin ist, wer 🔥 gab) — **kein Ton, kein
+Transkript**. Clips fliegen nach 35 Tagen aus dem Index (danach zählen ihre 🔥
+nicht mehr; 🗑️ geht weiter — wer drin ist, steht im Post selbst), Ansagen nach 7. Der
+Puffer liegt nur im Arbeitsspeicher (höchstens `CLIP_PUFFER_MB` je Server und
+160 MiB insgesamt), die MP3 nur als Bytes; die Temp-Dateien des Schnitts
+(privater Ordner, 0700) löscht Flo sofort, Reste beim Start und beim
+Herunterfahren. Eine Clip-Sitzung kommt nach einem Neustart bewusst **nicht**
+von allein zurück — nur, wenn die Musik zurückkommt (und dann ohne neue Ansage,
+solange die alte noch steht).
+
+**Dritte.** Für das Transkript bekommt Groq (bzw. `CLIP_WHISPER_URL`) den Ton der
+Sprecher (nur die Stellen, an denen sie reden); für den Spruch bekommt der
+eingestellte KI-Anbieter (`LLM_BASE_URL`, ab Werk Groq) den Text — mit
+Buchstaben statt Namen. Die Ansage nennt Groq nur, wenn beides dort landet,
+sonst „einen externen KI-Dienst"; `flo clip nein` deckt beides ab.
+`CLIP_TRANSKRIPT=aus` schaltet das Transkript ab (dann gibt es auch keinen
+KI-Spruch, nur einen aus dem Ersatz-Pool).
+
+**Nachsehen.** `flo clip status` (Mods und der Chef) zeigt nur Zahlen: Sitzung
+und Grund, Verbindung (Modus, DAVE, taub, geweckt), Pakete der letzten 60 s,
+Puffer, Schnitt, Whisper heute. Im Journal: `bash k c` — alle fünf Minuten eine
+Zeile je laufender Sitzung („… Pakete (… gespeichert, … DAVE-retry …)"), dazu
+Warnungen, wenn Pakete ankommen und nichts im Puffer landet oder minutenlang
+gar nichts kommt.
+
+> **Rechtlich:** Opt-out mit Ansage ist die Entscheidung des Betreibers. Nach
+> § 201 StGB und DSGVO ist das **keine Einwilligung** — wer Gespräche
+> aufzeichnet, braucht im Zweifel die Zustimmung aller. Flo macht es so
+> durchsichtig wie möglich (Ansage, Taub-Symbol, Opt-out überall, dauerhaft nur,
+> was jemand mit `flo clip` rausschneidet), ersetzt aber keine Rechtsberatung.
+> Ein Opt-in-Modus wäre der sichere Weg (IDEEN [78]).
+
+Technik: `voiceempfang.py` (RTP, Transport- und DAVE-Entschlüsselung),
+`clipschnitt.py` (Schnitt mit ffmpeg), `clipstext.py` (Whisper, Prüfung, Spruch,
+Bestenliste), `clips.py` (alles andere). `CLIPS_ENABLED=0` schaltet es ab; ohne
+Musik gibt es keine Clips. Nach einem discord.py- oder davey-Update zuerst
+`python lauf.py --nur empfang` — der Empfang hängt an Innereien von discord.py
+(steht beim Start im Log, falls etwas fehlt), und davey ist deshalb auf `<0.2`
+gedeckelt.
+
+---
+
 ## Wenn YouTube blockt
 
 YouTube prüft, ob ein echter Browser dahintersitzt. Welcher „player_client"
@@ -1886,7 +2031,7 @@ handle = instance.handle          # Modul-Aliase danach
 
 `bot.py` hält die Handler-Kette (der erste, der nicht `None` liefert, gewinnt),
 die Hintergrund-Loops und die Feature-Schalter. `features.py`, `FEATURE_LOADED`
-und die Handler-Kette führen dieselben 29 Schlüssel — `test_feature_schluessel_
+und die Handler-Kette führen dieselben 30 Schlüssel — `test_feature_schluessel_
 passen_ueberall_zusammen` prüft das in beide Richtungen und findet auch einen
 Schalter, den niemand abfragt.
 
@@ -1936,6 +2081,10 @@ Avatar-Wege laufen bereits über REST-Fallbacks.
 | `musikstats.py` | Musik-Wrapped, DJ des Monats |
 | `laune.py` / `nachhaken.py` | Flos Launen, „er hält nach" |
 | `zitate.py` / `geburtstage.py` | Zitat der Woche, Geburtstage |
+| `clips.py` | Voice-Clips: Ansage, Opt-out, Puffer, Befehle, Dialog, Post, 🔥 |
+| `voiceempfang.py` | Voice-Empfang: RTP, Transport- und DAVE-Entschlüsselung, je Sprecher |
+| `clipschnitt.py` | Clip-Schnitt: Opus → Spuren → ffmpeg-Mix → MP3 unter dem Upload-Limit |
+| `clipstext.py` | Whisper-Transkript, Prüfung (Notsignal/Hetze/Privates), Spruch, Bestenliste |
 
 ### Daten
 
@@ -1952,6 +2101,10 @@ Servern. Ausnahme sind die beiden Kassenbücher (`"bezahlt"` in
 `geburtstage.json` und `musikstats.json`): über alle Server, wer für welches
 Jahr bzw. welchen Monat zuletzt Coins bekam — Coins gelten ja auch überall.
 Wer die Daten eines Servers von Hand löscht, lässt sie stehen.
+
+`clips.json` (Voice-Clips) hält nur, wer raus ist (über alle Server), wann wo
+die Ansage steht, „Mikro aus" je Kanal, das Whisper-Kontingent und je Server
+einen Index der Clips mit 🔥 — **keinen Ton und kein Transkript**.
 
 ---
 
@@ -1994,6 +2147,12 @@ Wer die Daten eines Servers von Hand löscht, lässt sie stehen.
 | `MUSIKZUSTAND_ENABLED` / `MUSIKSTATS_ENABLED` | `1` | `0` schaltet die neustartfeste Warteschlange bzw. das Musik-Wrapped ab |
 | `UMFRAGE_STUNDEN` | `24` | Standard-Laufzeit von `flo umfrage` (1–768) |
 | `ZITATE_ENABLED` / `GEBURTSTAGE_ENABLED` | `1` | `0` schaltet das Zitat der Woche bzw. die Geburtstage ab |
+| `CLIPS_ENABLED` | `1` | `0` schaltet die Voice-Clips ab (sie brauchen ohnehin die Musik) |
+| `CLIP_CHANNEL_ID` | Clip-Kanal des Hauptservers | Standard für `clip_channel` (je Server überschreibbar) |
+| `CLIP_TMP_DIR` | System-Temp | wo der Schnitt seine privaten Temp-Ordner anlegt |
+| `CLIP_TRANSKRIPT` | an | `aus` = Clips ohne Whisper-Transkript |
+| `CLIP_WHISPER_KEY` / `_URL` / `_MODEL` | — / Groq / `whisper-large-v3-turbo` | eigener Whisper-Zugang; ohne Schlüssel nimmt Flo den der KI, wenn die bei Groq ist |
+| `CLIP_PUFFER_MB` | `48` | so viel Arbeitsspeicher darf der 5-Minuten-Puffer je Server belegen (1–160; insgesamt höchstens 160; Unlesbares gilt als 48) |
 | `UHR_START_GNADE` | `300` | so lange nach dem Start traut Flo der Wanduhr noch nicht (Sekunden) |
 | `ALLTAG_TAKT` | `60` | Takt fürs Server-Leben (Launen, Nachhaken, Zitate, Geburtstage, Wrapped) |
 
@@ -2014,7 +2173,7 @@ python lauf.py --misch            zufällige Reihenfolge (deckt Abhängigkeiten 
 python lauf.py --nur musik        nur passende Testnamen
 ```
 
-Die Testsuite liegt in 15 Themendateien (`test_musik.py`, `test_casino.py`, …);
+Die Testsuite liegt in 25 Themendateien (`test_musik.py`, `test_casino.py`, …);
 die gemeinsamen Attrappen und der umgebogene Datenordner stehen **einmal** in
 `testhilfe.py`. Keine Testdatei fasst `DATA_DIR` selbst an — sonst zeigten die
 Speicher hinterher auf verschiedene Ordner.

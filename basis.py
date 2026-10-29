@@ -276,13 +276,17 @@ def darf_schreiben(kanal, guild):
         return False
 
 
-def kanal_ohne_aufraeumen(client, guild, schluessel):
+def kanal_ohne_aufraeumen(client, guild, schluessel, *, rechte=()):
     """Der eingestellte Kanal (guildcfg 'schluessel'), sonst die Ansagen
     (client._event_channel), sonst der System-Kanal - der erste, in den Flo
     schreiben darf und der KEIN Aufraeum-Kanal ist: dort loescht bot.py auch
     Flos eigene Posts nach einer Minute, und mit ihnen den Ping. Auf dem
     Hauptserver ist der Ansagen-Kanal ab Werk genau so einer. None, wenn
-    keiner taugt."""
+    keiner taugt.
+
+    'rechte': was Flo dort ausserdem duerfen muss (Namen der Discord-Rechte,
+    z. B. ("attach_files",) fuer die Voice-Clips). Ohne Angabe wie bisher nur
+    das Schreiben."""
     import guildcfg
     aufraeum = {_ganz(c) for c in (guildcfg.get(guild.id, "autodelete_channels") or ())}
     wahl = []
@@ -296,9 +300,20 @@ def kanal_ohne_aufraeumen(client, guild, schluessel):
     for kanal in wahl:
         if kanal is None or _ganz(getattr(kanal, "id", 0)) in aufraeum:
             continue
-        if darf_schreiben(kanal, guild):
+        if darf_schreiben(kanal, guild) and _darf_auch(kanal, guild, rechte):
             return kanal
     return None
+
+
+def _darf_auch(kanal, guild, rechte):
+    """Hat Flo in 'kanal' alle diese Rechte? Nicht pruefbar = nein."""
+    if not rechte:
+        return True
+    try:
+        erlaubt = kanal.permissions_for(guild.me)
+        return all(bool(getattr(erlaubt, recht, False)) for recht in rechte)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 #: Wer ein Notsignal schreibt, gilt so lange als "gerade am Boden" (wie

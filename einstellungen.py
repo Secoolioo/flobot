@@ -71,6 +71,7 @@ ZUORDNUNG = {
     "schulden": ("schulden_pranger",),
     "floaktie": ("aktie_zaehlt",),
     "voice": ("soundboard", "join_sounds"),
+    "clips": ("clip_channel", "clip_aufnahme"),
     "bayern": ("bayern",),
     "zitate": ("zitat_channel",),
     "geburtstage": ("geburtstag_channel", "geburtstag_coins", "geburtstag_rolle"),

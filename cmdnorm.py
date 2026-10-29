@@ -195,6 +195,8 @@ class CmdNorm:
         # 'zitat' steht schon bei media.
         "laune", "mood", "nachhaken", "zitate", "geburtstag", "geburtstage",
         "birthday", "bday",
+        # Voice-Clips ('flo clip 1m', 'flo clips').
+        "clip", "clips",
     }
 
     # Fremdsprachige Synonyme -> anerkanntes Befehlswort. Bewusst ein eigener
@@ -489,6 +491,9 @@ class CmdNorm:
         # 'zitate weg 3' nimmt einen Kandidaten raus - 'zitae weg mit dem Mist'
         # ist trotzdem kein Befehl.
         "zitate",
+        # 'clip' schneidet mit und schaltet das Mikro - 'cilp das war gut' ist
+        # kein Befehl, 'cilp 1m' schon.
+        "clip",
     }
 
     def _one_typo(self, a, b):
