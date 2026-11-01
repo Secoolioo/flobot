@@ -377,6 +377,8 @@ TEXTE = {
                   "Also kein Clip."),
     "privat_offen": ("Euer Voice ist abgeschlossen – aber seinen Chat lesen auch Leute, die gar "
                      "nicht reinkommen. Dann eben kein Clip, weder dort noch sonstwo."),
+    "voice_weg": ("Den Voice gibt's nicht mehr – und wer da drin hören durfte, weiß jetzt "
+                  "keiner. Also auch kein Clip draus."),
     "verworfen_aus": "Das Mikro wurde inzwischen ausgemacht – Clip verworfen.",
     "verworfen_raus": "Einer aus dem Clip ist inzwischen ausgestiegen – verworfen. Nochmal clippen.",
     "zurueckgehalten": ("Den Clip lass ich liegen. Manche Sachen gehören nicht in einen "
@@ -855,9 +857,6 @@ class Sitzung:
         self.sperre_grund = ""
         self.lock = None
         self.lock_loop = None
-        #: Der letzte Kanal, in dem Flo in einer Musik-Sitzung sass (fuer das
-        #: Ende von 'Mikro aus').
-        self.kanal_zuletzt = None
         self.hoeren_task = None
         #: Fuer welchen Client hoeren_task laeuft (ein neuer bekommt einen neuen).
         self.hoeren_vc = None
@@ -1106,9 +1105,13 @@ class Clips(FeatureBasis):
         self._kontingent_stand = None
         #: voice_kanal_id -> Wanduhr des letzten 'Mikro aus' dort. Fuer die
         #: Umschalt-Bremse (AN_PAUSE) - getrennt vom 'aus' im Speicher, das mit
-        #: der Runde endet: geht Flo wegen genau dieses 'aus' (aus_raus), ist
-        #: die Runde sofort vorbei, die Bremse muss aber trotzdem gelten.
+        #: der Runde endet: gehen alle schnell raus, ist die Runde vorbei, die
+        #: Bremse muss aber trotzdem gelten.
         self._aus_zuletzt = {}
+        #: gid -> {Transkript-Task: uids, an denen er haengt} - steigt einer
+        #: davon aus (oder geht das Mikro aus), wird er abgebrochen: auch ein
+        #: Upload, der schon laeuft, kommt dann nie ganz bei Whisper an.
+        self._whisper_laeuft = {}
         #: gid -> wann zuletzt "kein Ziel fuer Clips" im Log stand
         self._ziel_gemeldet = {}
 
@@ -1408,7 +1411,20 @@ class Clips(FeatureBasis):
         for dialoge in self._dialoge.values():
             for dialog in dialoge.values():
                 dialog.vergessen(uid)
+        self._whisper_stoppen(uid=uid)
         log.info("Clips: jemand ist ausgestiegen (%d raus).", len(self._raus_ids))
+
+    def _whisper_stoppen(self, *, gid=None, uid=None):
+        """Laufende Transkripte abbrechen: die eines Servers (Mikro aus,
+        Sendepause, Funktion aus ...) oder die, an denen 'uid' haengt (eben
+        ausgestiegen). Ein abgebrochener Upload kommt nie als ganze Datei bei
+        Whisper an, und was noch wartete, geht gar nicht erst raus."""
+        for g, laufend in list(self._whisper_laeuft.items()):
+            if gid is not None and g != gid:
+                continue
+            for aufgabe, uids in list(laufend.items()):
+                if uid is None or uid in uids:
+                    aufgabe.cancel()
 
     def rein(self, uid):
         uid = int(uid)
@@ -1539,25 +1555,40 @@ class Clips(FeatureBasis):
 
     def _aus_ende(self, guild, s):
         """'Mikro aus' gilt, bis die Runde in diesem Kanal vorbei ist: Flo ist
-        dort nicht mehr, und die Musik will auch nicht mehr hin."""
+        dort nicht mehr, die Musik will auch nicht mehr hin - und Menschen
+        sitzen auch keine mehr drin. Ging Flo wegen des 'aus' gleich mit
+        (aus_raus) oder nach dem letzten Song, laeuft die Runde fuer die
+        anderen ja weiter: ein 'flo komm' Sekunden spaeter hoerte sonst
+        wieder mit - ausgerechnet bei denen, die eben nein sagten. Laenger als
+        AUS_SEK haelt es ohnehin nicht; ein Kanal, den es nicht mehr gibt,
+        wartet eben darauf. Gerufen bei jedem Abgleich, also spaetestens alle
+        15 s (Takt) - auch fuer Kanaele, in denen Flo laengst nicht mehr ist."""
+        aus = self._daten("aus")
+        if not aus:
+            return
         vc = getattr(guild, "voice_client", None)
         hier = None
         if _verbunden(vc) and music.gehoert_der_musik(guild.id, vc):
             hier = getattr(getattr(vc, "channel", None), "id", None)
-        alt = s.kanal_zuletzt
-        if hier is not None:
-            s.kanal_zuletzt = hier
-        if alt is None or alt == hier:
-            return
         player = _player(guild.id)
-        if player is not None and player.active_channel_id == alt:
-            return                        # Neuaufbau - die Runde laeuft noch
-        if hier is None:
-            s.kanal_zuletzt = None
-        if self._daten("aus").pop(str(alt), None) is not None:
-            self._store.save_soon()
+        will = getattr(player, "active_channel_id", None) if player is not None else None
+        vorbei = []
+        for schluessel in list(aus):
+            cid = _ganz(schluessel)
+            if not cid or cid in (hier, will):
+                continue                  # Flo ist dort oder will hin (Neuaufbau)
+            kanal = guild.get_channel(cid) if hasattr(guild, "get_channel") else None
+            if kanal is None:
+                continue                  # anderer Server - oder geloescht
+            if any(not getattr(m, "bot", False) for m in (getattr(kanal, "members", None) or ())):
+                continue                  # die Leute sind noch da: dieselbe Runde
+            vorbei.append(schluessel)
+        for schluessel in vorbei:
+            aus.pop(schluessel, None)
             log.info("Clips: Server %s – Mikro-aus für Kanal %s endet mit der Runde.",
-                     guild.id, alt)
+                     guild.id, schluessel)
+        if vorbei:
+            self._store.save_soon()
 
     def _kenner(self, guild):
         """uid -> (Name, Bot?) - beim ERSTEN Paket gefragt: ohne Members-Intent
@@ -1639,6 +1670,7 @@ class Clips(FeatureBasis):
         if grund in _SPERR_GRUENDE:
             s.sperre_gen += 1
             s.sperre_grund = grund
+            self._whisper_stoppen(gid=s.gid)
             player = _player(s.gid)
             if player is not None:
                 player.clip_halten = False
@@ -2308,18 +2340,26 @@ class Clips(FeatureBasis):
 
     async def ausstieg_in_der_sendepause(self, message):
         """bot.on_message in der Sendepause - da schweigt Flo fuer alle ausser
-        dem Chef. Nur eins geht trotzdem: 'flo clip nein'. Der Ausstieg gilt
-        immer (der Knopf 🙅 geht da auch) - sonst waere, wer jetzt aussteigt,
-        nach der Sendepause wieder drin. -> ob beantwortet."""
-        if self._store is None or getattr(message, "guild", None) is None:
+        dem Chef. Nur zwei Dinge gehen trotzdem, beide schuetzen: 'flo clip
+        nein' (der Ausstieg gilt immer, der Knopf 🙅 geht da auch - sonst waere,
+        wer jetzt aussteigt, nach der Sendepause wieder drin) und 'flo clip
+        aus' (gilt fuer diese Runde - sonst kuendigte Flo nach der Sendepause
+        an und hoerte mit, obwohl eben jemand nein sagte). -> ob beantwortet."""
+        guild = getattr(message, "guild", None)
+        if self._store is None or guild is None:
             return False
         if getattr(message, "author", None) is None:
             return False
         if not _vielleicht_clip(getattr(message, "content", "") or ""):
             return False
         befehl = self.befehl(message)
-        if befehl is None or befehl[0] != "raus":
+        if befehl is None or befehl[0] not in ("raus", "aus"):
             return False
+        if befehl[0] == "aus":
+            if not (self._enabled and features.is_on_in(guild.id, "clips")):
+                return False            # dann hoert hier ohnehin niemand mit
+            await self._leise(message, await self._aus_befehl(message, guild))
+            return True
         await self._leise(message, self._raus_befehl(message, befehl[1]))
         return True
 
@@ -2483,6 +2523,7 @@ class Clips(FeatureBasis):
         s = self._sitzung(guild.id)
         s.sperre_gen += 1
         s.sperre_grund = "aus"
+        self._whisper_stoppen(gid=guild.id)
         for dialog in list((self._dialoge.get(guild.id) or {}).values()):
             dialog.snap = None
         log.info("Clips: Server %s – Mikro aus nach der Runde, Offenes verworfen.", guild.id)
@@ -2506,6 +2547,7 @@ class Clips(FeatureBasis):
         else:
             s.sperre_gen += 1
             s.sperre_grund = "aus"
+            self._whisper_stoppen(gid=guild.id)
         for dialog in list((self._dialoge.get(guild.id) or {}).values()):
             dialog.snap = None
         return geht
@@ -2518,7 +2560,9 @@ class Clips(FeatureBasis):
             await self._wieder_taub(guild, s)
             await self._abgleichen(guild, s)
         kanal = guild.get_channel(cid) if hasattr(guild, "get_channel") else None
-        if kanal is not None:
+        # In der Sendepause bleibt der Voice-Chat still: es hoert ohnehin
+        # niemand mit, und danach kuendigt Flo dort auch nichts an.
+        if kanal is not None and not _sendepause():
             try:
                 await kanal.send(self._text_fuer(guild, "aus_gemeldet",
                                                  wer=f"<@{_ganz(wer.id)}>"),
@@ -2772,10 +2816,14 @@ class Clips(FeatureBasis):
     def _privat_fuer(guild, voice_id, kanal):
         """Ist dieser Voice privat gegenueber 'kanal' - lesen dort Leute mit, die
         dort nicht hoeren konnten (den Voice nicht sehen oder nicht betreten
-        duerfen)? Im Voice-Chat selbst nie."""
-        voice = guild.get_channel(voice_id) if hasattr(guild, "get_channel") else None
-        if voice is None or kanal is None:
+        duerfen)? Im Voice-Chat selbst nie. Einen Voice, den es nicht mehr
+        gibt (TempVoice, ein Admin hat ihn geloescht), behandelt Flo als
+        privat: wer dort hoeren durfte, weiss dann keiner mehr."""
+        if kanal is None:
             return False
+        voice = guild.get_channel(voice_id) if hasattr(guild, "get_channel") else None
+        if voice is None:
+            return True
         if getattr(kanal, "id", None) == getattr(voice, "id", None):
             return False
         try:
@@ -2913,6 +2961,13 @@ class Clips(FeatureBasis):
                 return _sauber(snap.stimmen[ziel_uid][0], 40)
             return ziel_name or fallback
 
+        voice = guild.get_channel(snap.kanal_id) if hasattr(guild, "get_channel") else None
+        if voice is None:
+            # Der Voice ist seit dem Schnappschuss geloescht worden (TempVoice,
+            # ein Admin; der Dialog steht bis zu DIALOG_SEK offen): wer dort
+            # hoeren durfte, steht nirgends mehr - also auch nicht, ob der Clip
+            # in den Clip-Kanal duerfte. Im Zweifel fuer die Privatsphaere.
+            return None, self._text_fuer(guild, "voice_weg")
         verfuegbar = snap.bis - snap.seit
         if verfuegbar < MIN_REST_SEK:
             return None, self._text_fuer(guild, "grund_start")
@@ -2949,16 +3004,18 @@ class Clips(FeatureBasis):
         if menschen < STIMME_MIN_SEK:
             leer = "nur_musik" if _flo_ton(flo, von_t, snap.bis) else "leer"
             return None, self._text_fuer(guild, leer)
-        voice = guild.get_channel(snap.kanal_id) if hasattr(guild, "get_channel") else None
         titel = f"Clip aus {getattr(voice, 'name', 'dem Voice')} – {uhr.jetzt():%d.%m.%Y %H:%M}"
-        whisper = bool(clipstext.transkriber.an()
-                       and not clipstext.transkriber.kontingent.gesperrt())
+        # 'pruefen': ist ein Transkript eingerichtet, muss es die Pruefung auf
+        # Notsignal und Hetze auch geben - fehlt sie (Whisper nach einem 429
+        # gesperrt, Fehler ...), gibt es keinen Spruch (_nach_dem_schnitt).
+        pruefen = bool(clipstext.transkriber.an())
+        whisper = pruefen and not clipstext.transkriber.kontingent.gesperrt()
         auftrag = clipschnitt.Auftrag(
             bis=snap.bis, dauer=float(dauer), stimmen=stimmen, flo=flo,
             budget=self._budget(guild), titel=titel, whisper=whisper,
             frist=float(RENDER_FRIST - 10), abbruch=abbruch)
         return auftrag, {"kuerzer": kuerzer, "namen": namen, "dauer": dauer, "voice": voice,
-                         "menschen": leute}
+                         "menschen": leute, "pruefen": pruefen}
 
     async def _job(self, guild, snap, dauer, ziel_uid, von, *, antwort=None, anfrage=None,
                    ziel_name=None, angerechnet=None):
@@ -3106,10 +3163,22 @@ class Clips(FeatureBasis):
         if erg.whisper:
             # Vor JEDEM Upload nochmal: wer 🙅 oder 🔇 drueckt, waehrend die
             # ersten Sprecher bei Whisper sind, dessen Ton (und der aller
-            # danach) geht nicht mehr raus.
-            segmente = await clipstext.transkriber.je_sprecher(
+            # danach) geht nicht mehr raus. Und was schon unterwegs ist, bricht
+            # raus()/_leeren() ab (_whisper_stoppen) - mit WHISPER_PARALLEL
+            # laufen die Uploads von zwei Sprechern ja gleichzeitig los.
+            aufgabe = asyncio.ensure_future(clipstext.transkriber.je_sprecher(
                 erg.whisper, frist=WHISPER_FRIST,
-                weiter=lambda: self._verworfen_text(guild, s, gen, von, dabei) is None)
+                weiter=lambda: self._verworfen_text(guild, s, gen, von, dabei) is None))
+            laufend = self._whisper_laeuft.setdefault(gid, {})
+            laufend[aufgabe] = frozenset(dabei) | {von.id}
+            try:
+                await asyncio.wait({aufgabe})
+            finally:
+                aufgabe.cancel()          # erledigt: nichts; von aussen abgebrochen: mit
+                laufend.pop(aufgabe, None)
+                if not laufend and self._whisper_laeuft.get(gid) is laufend:
+                    self._whisper_laeuft.pop(gid, None)
+            segmente = None if aufgabe.cancelled() else aufgabe.result()
             self._kontingent_merken()
             if segmente is not None:
                 gehoert = set(erg.whisper)        # die hat die Pruefung gesehen
@@ -3134,16 +3203,20 @@ class Clips(FeatureBasis):
         if verworfen:
             await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
-        # Gibt es ein Transkript, aber einen Menschen im Clip, den es nicht
-        # enthaelt (zu kurz fuer Whisper, mehr als WHISPER_MAX_SPRECHER), hat
-        # die Pruefung auf Notsignal und Hetze ihn nie gesehen - und das
-        # Teil-Transkript sieht trotzdem vollstaendig aus. Dann kein Spruch:
-        # Flo macht keinen Witz ueber jemanden, dessen Worte er nicht kennt.
-        # Ebenso, wenn Whisper gefragt war und nichts zurueckkam (Fehler,
-        # Kontingent, Frist): dann hat die Pruefung niemanden gesehen. Ohne
-        # Whisper (aus, Kontingent schon vorher voll) wie immer der Ersatz.
-        ungeprueft = bool(erg.whisper) and (gehoert is None or any(
-            uid not in gehoert for uid in dabei if uid in info.get("menschen", dabei)))
+        # Ist ein Transkript eingerichtet, muss die Pruefung auf Notsignal und
+        # Hetze jeden Menschen gesehen haben, der im Clip lang genug redet,
+        # dass Whisper ihn bekommt (WHISPER_MIN_SEK) - sonst kein Spruch: Flo
+        # macht keinen Witz ueber jemanden, dessen Worte er nicht kennt. Das
+        # trifft auch: Whisper nach einem 429 gesperrt, Kontingent voll,
+        # Fehler, Frist, mehr als WHISPER_MAX_SPRECHER. Wer kuerzer redet (ein
+        # Lacher, ein 'ja'), zaehlt als geprueft - in einer halben Sekunde
+        # sagt niemand, wonach die Pruefung sucht. Ohne Transkript (gar nicht
+        # eingerichtet) wie immer der Ersatz.
+        menschen = info.get("menschen", dabei)
+        noetig = [uid for uid in dabei if uid in menschen
+                  and (erg.stimm_sek or {}).get(uid, 0) >= clipschnitt.WHISPER_MIN_SEK]
+        ungeprueft = bool(info.get("pruefen")) and any(
+            uid not in (gehoert or ()) for uid in noetig)
         kommentar = None
         if not (ungeprueft or basis.kuerzlich_notlage(von.id)
                 or any(basis.kuerzlich_notlage(uid) for uid in dabei)):
