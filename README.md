@@ -1076,7 +1076,8 @@ weg, Flo stellt sich wieder taub, laufende Schnitte und offene Dialoge werden
 verworfen, und im Voice-Chat steht, wer es war. Das gilt, bis die Runde in
 diesem Kanal vorbei ist (Flo ist raus, die Musik will nicht mehr hin, und drin
 sitzt kein Mensch mehr — ein `flo komm` gleich nach dem „aus" hört also nicht
-wieder mit) — höchstens 12 Stunden, auch über einen Neustart. Sitzt Flo schon mit
+wieder mit), auch über einen Neustart hinweg — höchstens 12 Stunden nach dem
+letzten „aus": wer es nochmal sagt oder 🔇 nochmal drückt, frischt es auf. Sitzt Flo schon mit
 der Musik im Call, hört aber noch nicht mit (der Song lädt noch, die Ansage ist
 unterwegs, Sendepause), gilt das „aus" schon für diese Runde; `flo clip aus` geht
 auch in der Sendepause (dann ohne Meldung im Voice-Chat). `flo clip an` hebt
@@ -1089,7 +1090,7 @@ Schnitt.
 
 **Wer clippen darf.** Wer im Call sitzt oder im Puffer zu hören ist, und Mods.
 Je Person alle 45 Sekunden, je Server 12 in der Stunde (ein Clip, der technisch
-scheitert — ffmpeg, Upload abgelehnt, kein Ziel —, zählt nicht mit); geschnitten wird
+scheitert — ffmpeg, Upload abgelehnt, kein Ziel, Voice gelöscht —, zählt nicht mit); geschnitten wird
 einer nach dem anderen (höchstens drei warten, dann „Eins nach dem anderen").
 
 **Was im Clip ist.** Alle, die geredet haben — außer wer raus ist und wer gerade
@@ -1126,8 +1127,10 @@ Voice sehen *und* betreten; auch ein abgeschlossener Raum, den alle sehen, aber 
 wenige betreten dürfen), bleibt der Clip im Voice-Chat dieses Kanals — oder es
 gibt keinen; dort bleibt er auch stehen, wenn dieser Voice-Chat ein Aufräum-Kanal
 ist. Lesen den Voice-Chat auch Leute, die draußen bleiben mussten, gibt es dort
-ebenfalls keinen Clip — und auch nicht, wenn der Voice inzwischen gelöscht ist
-(TempVoice): wer dort hören durfte, weiß dann keiner mehr. Gibt es gar kein Ziel (kein Clip-Kanal, keine Dateien,
+ebenfalls keinen Clip — und auch nicht, wenn der Voice gelöscht wird, bevor der
+Clip oben ist (TempVoice räumt ihn gern mitten im Schnitt weg): wer dort hören
+durfte, weiß dann keiner mehr. Ab da geht auch nichts mehr zu Whisper oder an
+die KI. Gibt es gar kein Ziel (kein Clip-Kanal, keine Dateien,
 so ein Raum), kündigt Flo dort nicht an und hört nicht mit; `flo clip` sagt
 warum, und die Prüfung kommt vor dem Schnitt, nicht nach Whisper. Höchstens
 `min(9,5 MiB, Upload-Grenze − 512 KiB)`; 5 Minuten passen mit 192 kbps hinein.
@@ -1149,7 +1152,11 @@ solange die alte noch steht).
 Sprecher (nur die Stellen, an denen sie reden); für den Spruch bekommt der
 eingestellte KI-Anbieter (`LLM_BASE_URL`, ab Werk Groq) den Text — mit
 Buchstaben statt Namen. Die Ansage nennt Groq nur, wenn beides dort landet,
-sonst „einen externen KI-Dienst"; `flo clip nein` deckt beides ab.
+sonst „einen externen KI-Dienst"; `flo clip nein` deckt beides ab. Geht
+`clip_aufnahme` aus (das merkt Flo sofort) oder die Funktion `clips`, beginnt die
+Sendepause (die beiden spätestens im 15-s-Takt) oder fährt Flo herunter, bricht
+ein Upload zu Whisper ab, der dann noch läuft — auch für einen Schnitt, dessen
+Runde schon vorbei ist.
 `CLIP_TRANSKRIPT=aus` schaltet das Transkript ab (dann gibt es auch keinen
 KI-Spruch, nur einen aus dem Ersatz-Pool).
 

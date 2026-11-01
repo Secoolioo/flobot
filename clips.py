@@ -224,6 +224,10 @@ AUS_SEK = 12 * 3600
 #: Gruende, bei denen auch laufende Dialoge und Schnitte verworfen werden.
 _SPERR_GRUENDE = frozenset(("aus", "feature", "server", "sendepause", "ansage", "ansage_weg",
                             "ende"))
+#: Davon die, die fuer den ganzen Server gelten statt nur fuer eine Runde: sie
+#: brechen laufende Whisper-Uploads auch dann ab, wenn die Runde des Schnitts
+#: schon vorbei ist (Flo ging nach dem Schnappschuss).
+_SERVER_SPERREN = frozenset(("feature", "server", "sendepause", "ende"))
 #: Was ein verworfener Clip dazu sagt - je Grund, aus dem verworfen wurde.
 _VERWORFEN_TEXT = {"aus": "verworfen_aus", "feature": "aus_hier",
                    "server": "nicht_erlaubt_server", "sendepause": "grund_sendepause",
@@ -1186,6 +1190,9 @@ class Clips(FeatureBasis):
         if not self._enabled or self._store is None:
             return
         self._abbruch = True
+        # Laufende Whisper-Uploads brechen ab - auch die eines Schnitts, dessen
+        # Runde schon vorbei ist (dessen Sitzung leert unten keiner).
+        self._whisper_stoppen()
         for gid, s in list(self._sitzungen.items()):
             if s.aktiv or s.puffer is not None:
                 self._leeren(self._guild(gid), s, "ende")
@@ -1416,9 +1423,10 @@ class Clips(FeatureBasis):
 
     def _whisper_stoppen(self, *, gid=None, uid=None):
         """Laufende Transkripte abbrechen: die eines Servers (Mikro aus,
-        Sendepause, Funktion aus ...) oder die, an denen 'uid' haengt (eben
-        ausgestiegen). Ein abgebrochener Upload kommt nie als ganze Datei bei
-        Whisper an, und was noch wartete, geht gar nicht erst raus."""
+        Sendepause, Funktion aus ...), die, an denen 'uid' haengt (eben
+        ausgestiegen) - oder ohne beides alle (Herunterfahren). Ein
+        abgebrochener Upload kommt nie als ganze Datei bei Whisper an, und was
+        noch wartete, geht gar nicht erst raus."""
         for g, laufend in list(self._whisper_laeuft.items()):
             if gid is not None and g != gid:
                 continue
@@ -1481,7 +1489,7 @@ class Clips(FeatureBasis):
 
     async def _abgleichen(self, guild, s):
         soll, grund, vc = self._soll(guild, s)
-        self._aus_ende(guild, s)
+        self._aus_ende(guild)
         if soll:
             kanal = vc.channel
             s.getrennt_seit = None
@@ -1520,6 +1528,12 @@ class Clips(FeatureBasis):
             self._spaeter_n.pop(guild.id, None)
             self._hoeren_planen(guild, vc, s)
             return
+        if grund in _SERVER_SPERREN:
+            # Auch ohne laufende Runde: ein Schnitt, dessen Runde schon vorbei
+            # ist, laedt vielleicht gerade zu Whisper hoch - und die Einwilligung
+            # (oder Clips hier, oder die Sendepause) gilt fuer den ganzen Server.
+            # Mit laufender Runde tut das _leeren gleich auch.
+            self._whisper_stoppen(gid=guild.id)
         if s.aktiv:
             player = _player(guild.id)
             if (grund in ("nicht_im_voice", "client", "keine_sitzung") and player is not None
@@ -1553,16 +1567,19 @@ class Clips(FeatureBasis):
             return
         self._spaeter_n.pop(guild.id, None)
 
-    def _aus_ende(self, guild, s):
+    def _aus_ende(self, guild):
         """'Mikro aus' gilt, bis die Runde in diesem Kanal vorbei ist: Flo ist
         dort nicht mehr, die Musik will auch nicht mehr hin - und Menschen
         sitzen auch keine mehr drin. Ging Flo wegen des 'aus' gleich mit
         (aus_raus) oder nach dem letzten Song, laeuft die Runde fuer die
         anderen ja weiter: ein 'flo komm' Sekunden spaeter hoerte sonst
         wieder mit - ausgerechnet bei denen, die eben nein sagten. Laenger als
-        AUS_SEK haelt es ohnehin nicht; ein Kanal, den es nicht mehr gibt,
-        wartet eben darauf. Gerufen bei jedem Abgleich, also spaetestens alle
-        15 s (Takt) - auch fuer Kanaele, in denen Flo laengst nicht mehr ist."""
+        AUS_SEK haelt es ohnehin nicht (sagt es jemand nochmal, ab dann: siehe
+        _aus_erneuern); ein Kanal, den es nicht mehr gibt, wartet eben darauf.
+        Gerufen bei jedem Abgleich - und vom Takt auch fuer Server, auf denen
+        gar keine Sitzung steht (nach einem Neustart gibt es noch keine) -,
+        also spaetestens alle 15 s, auch fuer Kanaele, in denen Flo laengst
+        nicht mehr ist."""
         aus = self._daten("aus")
         if not aus:
             return
@@ -1958,11 +1975,19 @@ class Clips(FeatureBasis):
     async def tick(self, client):
         """bot.voice_heal_loop, alle 15 s: abgleichen (Sendepause, Funktion aus,
         Gnade vorbei), Puffer stutzen, Empfaenger-Takt, wach halten, Bericht,
-        Warnungen, alte Dialoge und alte Eintraege weg."""
+        Warnungen, alte Dialoge und alte Eintraege weg - und ein 'aus', dessen
+        Runde vorbei ist, auch auf Servern ohne Sitzung."""
         if not self._enabled or self._store is None:
             return
         for guild in list(getattr(client, "guilds", ()) or ()):
             if getattr(guild, "voice_client", None) is None and guild.id not in self._sitzungen:
+                # Hier laeuft nichts, was einen Abgleich braucht - aber ein 'aus'
+                # von vorher (etwa von vor einem Neustart, da gibt es noch keine
+                # Sitzung) endet trotzdem mit seiner Runde, nicht erst nach AUS_SEK.
+                try:
+                    self._aus_ende(guild)
+                except Exception:  # noqa: BLE001
+                    log.exception("Clips: Mikro-aus-Ende für Server %s gescheitert", guild.id)
                 continue
             s = self._sitzung(guild.id)
             if s.lock is not None and s.lock_loop is asyncio.get_running_loop() \
@@ -2474,6 +2499,11 @@ class Clips(FeatureBasis):
         # Sendepause ...), gilt das 'aus' trotzdem fuer diese Runde - sonst
         # finge Flo Sekunden spaeter an, ausgerechnet bei dem, der eben nein sagte.
         cid = s.kanal_id if s.aktiv else self._runden_kanal(guild)
+        # Steht das 'aus' dort schon, gilt es ab jetzt wieder volle AUS_SEK -
+        # im eigenen Call, und fuer Mods auch in dem der Runde.
+        self._aus_erneuern(im_kanal)
+        if _ist_mod(autor):
+            self._aus_erneuern(cid)
         if not s.aktiv and str(cid) in self._daten("aus"):
             cid = None                    # fuer diese Runde schon aus - nichts Neues
         if cid is None or (im_kanal != cid and not _ist_mod(autor)):
@@ -2490,6 +2520,20 @@ class Clips(FeatureBasis):
         geht = self._mikro_aus_sofort(guild, cid)
         await self._mikro_aus_rest(guild, cid, autor, geht)
         return self._text("aus_raus" if geht else ("aus_ok" if hoerte else "aus_vorab"))
+
+    def _aus_erneuern(self, cid):
+        """Ein 'aus', das fuer diesen Kanal schon steht, sagt (oder drueckt)
+        jemand nochmal: dann gilt es ab JETZT wieder volle AUS_SEK. Sonst liefe
+        es in einem Call, der nie leer wird (dort endet die Runde nie), zwoelf
+        Stunden nach dem ERSTEN 'aus' ab - und Flo kuendigte wieder an und
+        hoerte mit, Minuten nachdem jemand ausdruecklich nein sagte. Einen
+        Kanal ohne 'aus' laesst es in Ruhe. -> ob dort eins stand."""
+        aus = self._daten("aus")
+        if cid is None or str(cid) not in aus:
+            return False
+        aus[str(cid)] = round(_wand())
+        self._store.save_soon()
+        return True
 
     def _offen_aus(self, gid):
         """Aus welchen Voice-Kanaelen gerade noch etwas unterwegs ist: offene
@@ -3149,6 +3193,29 @@ class Clips(FeatureBasis):
             return self._text_fuer(guild, "zurueckgehalten")
         return None
 
+    @staticmethod
+    def _voice_weg(guild, voice):
+        """Gibt es den Voice des Clips nicht mehr? Ein TempVoice-Bot raeumt ihn
+        weg, sobald alle draussen sind - gern mitten im Schnitt, waehrend
+        Whisper oder die KI noch arbeiten."""
+        if not hasattr(guild, "get_channel"):
+            return False
+        return guild.get_channel(getattr(voice, "id", None)) is None
+
+    async def _ohne_voice(self, guild, info, von, antwort, anfrage):
+        """Ist der Voice seit dem Start des Schnitts geloescht worden, gibt es
+        keinen Clip - wie in _auftrag_bauen, nur spaeter gemerkt: wer dort
+        hoeren durfte, steht nirgends mehr. Dann geht auch nichts mehr zu
+        Whisper oder an die KI, und das Abkuehlen zahlt dafuer niemand.
+        -> ob es so war."""
+        if not self._voice_weg(guild, info.get("voice")):
+            return False
+        log.info("Clips: Server %s – der Voice ist seit dem Schnappschuss gelöscht, kein Clip.",
+                 guild.id)
+        self._erstatten(guild.id, von.id, info.get("angerechnet"))
+        await self._melden(antwort, anfrage, self._text_fuer(guild, "voice_weg"))
+        return True
+
     async def _nach_dem_schnitt(self, guild, s, gen, erg, info, ziel_uid, von, antwort, anfrage):
         gid = guild.id
         dauer = info["dauer"]
@@ -3159,16 +3226,20 @@ class Clips(FeatureBasis):
         if verworfen:
             await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
+        if await self._ohne_voice(guild, info, von, antwort, anfrage):
+            return
         zeilen, befund, gehoert = [], None, None
         if erg.whisper:
             # Vor JEDEM Upload nochmal: wer 🙅 oder 🔇 drueckt, waehrend die
             # ersten Sprecher bei Whisper sind, dessen Ton (und der aller
-            # danach) geht nicht mehr raus. Und was schon unterwegs ist, bricht
+            # danach) geht nicht mehr raus - ebenso, wenn der Voice inzwischen
+            # geloescht ist. Und was schon unterwegs ist, bricht
             # raus()/_leeren() ab (_whisper_stoppen) - mit WHISPER_PARALLEL
             # laufen die Uploads von zwei Sprechern ja gleichzeitig los.
             aufgabe = asyncio.ensure_future(clipstext.transkriber.je_sprecher(
                 erg.whisper, frist=WHISPER_FRIST,
-                weiter=lambda: self._verworfen_text(guild, s, gen, von, dabei) is None))
+                weiter=lambda: (self._verworfen_text(guild, s, gen, von, dabei) is None
+                                and not self._voice_weg(guild, info.get("voice")))))
             laufend = self._whisper_laeuft.setdefault(gid, {})
             laufend[aufgabe] = frozenset(dabei) | {von.id}
             try:
@@ -3203,6 +3274,8 @@ class Clips(FeatureBasis):
         if verworfen:
             await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
+        if await self._ohne_voice(guild, info, von, antwort, anfrage):
+            return                          # dann auch kein KI-Spruch mehr
         # Ist ein Transkript eingerichtet, muss die Pruefung auf Notsignal und
         # Hetze jeden Menschen gesehen haben, der im Clip lang genug redet,
         # dass Whisper ihn bekommt (WHISPER_MIN_SEK) - sonst kein Spruch: Flo
@@ -3223,6 +3296,11 @@ class Clips(FeatureBasis):
             if zeilen and features.is_on_in(gid, "ki"):
                 kommentar = await clipstext.kommentar(gid, zeilen, dauer)
             kommentar = kommentar or clipstext.ersatz_kommentar()
+        # Der Spruch kann gedauert haben: ist der Voice jetzt weg, waehlte
+        # _ziel_pruefen mit seinen letzten Rechten - bei einem privaten seinen
+        # Chat, den es mit ihm nicht mehr gibt.
+        if await self._ohne_voice(guild, info, von, antwort, anfrage):
+            return
         voice = info.get("voice")
         ziel, hier, art, werte = self._ziel_pruefen(guild, voice)
         if art:
@@ -3275,7 +3353,10 @@ class Clips(FeatureBasis):
             log.warning("Clips: Server %s – Upload abgelehnt (%s).", gid,
                         getattr(exc, "status", "?"))
             self._erstatten(gid, von.id, info.get("angerechnet"))
-            await self._melden(antwort, anfrage, self._text_fuer(guild, "upload_kaputt"))
+            # Ein privater Voice bekommt den Clip in seinen eigenen Chat - wird
+            # er genau jetzt geloescht, hilft 'nochmal versuchen' nicht.
+            schluessel = "voice_weg" if self._voice_weg(guild, voice) else "upload_kaputt"
+            await self._melden(antwort, anfrage, self._text_fuer(guild, schluessel))
             return
         # Das Hochladen (ein paar MB) dauert auch: kam waehrenddessen ein
         # Ausstieg oder 🔇, kommt der Post gleich wieder weg.
@@ -3416,7 +3497,9 @@ class Clips(FeatureBasis):
         if not (hoerte or vorab):
             # Flo hoert hier nicht (mehr) mit und sitzt auch in keiner Runde
             # hier - was aus dieser Runde noch unterwegs ist (offener Dialog,
-            # laufender Schnitt), stirbt trotzdem.
+            # laufender Schnitt), stirbt trotzdem. Steht das 'aus' schon, gilt
+            # es ab jetzt wieder volle AUS_SEK.
+            self._aus_erneuern(vc_id)
             if vc_id in self._offen_aus(guild.id):
                 self._offenes_verwerfen(guild)
                 await _kurz(interaction, self._text_fuer(guild, "aus_verworfen"))

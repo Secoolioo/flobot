@@ -522,17 +522,20 @@ class Transkriber:
             # nur Kontingent - nach einem 429 obendrein den naechsten 429.
             for aufgabe in aufgaben:
                 aufgabe.cancel()
-            await asyncio.gather(*aufgaben, return_exceptions=True)
+            try:
+                await asyncio.gather(*aufgaben, return_exceptions=True)
+            finally:
+                # Ein 429 sperrt - wie auch immer es hier rausgeht: auch wenn er
+                # nicht der erste Fehler war, neben einem verworfenen Upload und
+                # wenn der Abbruch von aussen (Ausstieg, Mikro aus) mitten ins
+                # Aufraeumen faellt. Sonst fragte der naechste Clip gleich wieder.
+                self._sperren_nach_429(aufgaben)
         fehler = [a.exception() for a in aufgaben
                   if not a.cancelled() and a.exception() is not None]
         if any(isinstance(erg, _Verworfen) for erg in fehler):
             log.info("Clips: Transkript abgebrochen - der Clip gilt nicht mehr.")
             return None
         if fehler:
-            # Ein 429 sperrt - auch wenn er nicht der erste Fehler war.
-            voll = [erg for erg in fehler if _status(erg) == 429]
-            if voll:
-                self.kontingent.sperren(_retry_after(voll[0]))
             log.info("Clips: Transkript gescheitert (%s).",
                      ", ".join(sorted({type(erg).__name__ for erg in fehler})))
             return None
@@ -542,6 +545,14 @@ class Transkriber:
         log.info("Clips: Transkript fuer %d Sprecher in %.1f s.", len(aufgaben),
                  time.monotonic() - start)
         return dict(a.result() for a in aufgaben)
+
+    def _sperren_nach_429(self, aufgaben):
+        """Hat einer der (fertigen) Uploads einen 429 bekommen: sperren, so lange
+        Retry-After sagt. Was noch laeuft oder abgebrochen wurde, zaehlt nicht."""
+        voll = [a.exception() for a in aufgaben if a.done() and not a.cancelled()
+                and a.exception() is not None and _status(a.exception()) == 429]
+        if voll:
+            self.kontingent.sperren(_retry_after(voll[0]))
 
 
 transkriber = Transkriber()

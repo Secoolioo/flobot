@@ -622,6 +622,61 @@ def test_clipstext_transkriber_abbruch_von_aussen_raeumt_auf():
     asyncio.run(ablauf())
 
 
+def test_clipstext_transkriber_429_sperrt_auch_wenn_es_anders_rausgeht():
+    """Ein Upload bekommt 429, der andere raeumt nach seinem Abbruch noch auf
+    (ein abgebrochener HTTP-Upload schliesst erst seine Verbindung) - und
+    genau da bricht clips den ganzen Auftrag von aussen ab (jemand steigt aus,
+    Mikro aus). Frueher ging der 429 dabei verloren: das Kontingent blieb
+    offen, und der naechste Clip schickte alles nochmal zu Groq - in den
+    naechsten 429. Ebenso, wenn neben dem 429 ein Upload verworfen wurde
+    (weiter() sagte nein). Jetzt sperrt ein 429 immer."""
+    audio = {1: WhisperAudio(b"1", [(0.0, 2.0, 0.0)]), 2: WhisperAudio(b"2", [(0.0, 2.0, 0.0)])}
+    uhr = _Uhr()
+    stand = {}
+
+    async def antwort(kw):
+        if kw["file"][1] == b"1":
+            await asyncio.sleep(0.01)
+            # Der Abbruch von aussen kommt, waehrend der andere noch aufraeumt.
+            asyncio.get_running_loop().call_later(0.01, stand["auftrag"].cancel)
+            raise _Fehler429("600")
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.1)               # die Verbindung geht erst noch zu
+            raise
+        return {"segments": []}
+
+    tr, _fake = _transkriber(antwort, uhr)
+
+    async def ablauf():
+        stand["auftrag"] = asyncio.ensure_future(tr.je_sprecher(audio, frist=30))
+        try:
+            await stand["auftrag"]
+            raise AssertionError("haette abgebrochen sein muessen")
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(ablauf())
+    assert tr.kontingent.gesperrt() and tr.kontingent._gesperrt_bis == uhr.jetzt + 600
+    # 429 und ein verworfener Upload zugleich: auch dann gesperrt.
+    gefragt = []
+
+    def weiter():
+        gefragt.append(True)
+        return len(gefragt) < 2                    # der zweite gilt schon nicht mehr
+
+    def voll(kw):
+        if kw["file"][1] == b"1":
+            raise _Fehler429("300")
+        return {"segments": []}
+
+    tr, fake = _transkriber(voll, uhr)
+    assert asyncio.run(tr.je_sprecher(audio, frist=5, weiter=weiter)) is None
+    assert [kw["file"][1] for kw in fake.aufrufe] == [b"1"] and len(gefragt) == 2
+    assert tr.kontingent.gesperrt() and tr.kontingent._gesperrt_bis == uhr.jetzt + 300
+
+
 def test_clipstext_transkriber_waehlt_den_client():
     """Eigener Schluessel -> eigener Client (keine Wiederholungen, 30 s lesen,
     5 s verbinden, Standard Groq). Ohne: der von ai.py - aber nur, wenn der zu
