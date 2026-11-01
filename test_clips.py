@@ -446,6 +446,19 @@ async def _kein_kommentar(*_a, **_k):
     return None
 
 
+async def _nichts_abgebrochen(welt, abgebrochen, wer):
+    """Hat das eben (Flo geht, zieht um, ist taub ...) einen laufenden
+    Whisper-Upload abgebrochen? Direkt danach waere 'abgebrochen' immer leer:
+    ein Abbruch braucht ein paar Runden der Schleife, bis er beim Upload
+    ankommt (erst je_sprecher, dann dessen Teilaufgaben). Also erst nachsehen,
+    ob jemand ihn auch nur angefordert hat, dann die Schleife laufen lassen."""
+    laufend = list(welt.inst._whisper_laeuft.get(GID, {}))
+    assert laufend and not any(a.cancelling() for a in laufend), (wer, laufend)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert abgebrochen == [], (wer, abgebrochen)
+
+
 # =============================================================================
 # Verdrahtung
 # =============================================================================
@@ -4429,10 +4442,17 @@ def _ffprobe_dauer(mp3):
     try:
         with open(pfad, "wb") as datei:
             datei.write(mp3)
-        lauf = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                               "-of", "default=nw=1:nk=1", pfad], capture_output=True,
-                              text=True, timeout=30)
-        return float(lauf.stdout.strip())
+        # Unter Last (mehrere Testlaeufe gleichzeitig) kam von ffprobe schon
+        # einmal gar nichts zurueck: dann ein zweiter Versuch - und scheitert
+        # auch der, steht ffprobes eigene Meldung im Fehler.
+        for _ in range(2):
+            lauf = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                   "-of", "default=nw=1:nk=1", pfad], capture_output=True,
+                                  text=True, timeout=60)
+            if lauf.stdout.strip():
+                return float(lauf.stdout.strip())
+        raise AssertionError(f"ffprobe ohne Ergebnis (Code {lauf.returncode}): "
+                             f"{(lauf.stderr or '').strip()[-300:]}")
     finally:
         shutil.rmtree(ordner, ignore_errors=True)
 
@@ -4676,7 +4696,8 @@ def test_clips_ausstieg_bricht_auch_den_laufenden_whisper_upload_ab():
                 else:
                     welt.guild.me.voice.deaf = True           # vom Server taub, bleibt drin
                 await welt.inst.abgleichen(welt.guild)
-                assert not _sitzung(welt).aktiv and abgebrochen == [], art
+                assert not _sitzung(welt).aktiv, art
+                await _nichts_abgebrochen(welt, abgebrochen, art)   # das allein nicht
                 if art.endswith("knopf"):
                     klick = _klick_im_voice(BOB, welt.kanal)
                     klick.guild = welt.guild
@@ -4929,7 +4950,8 @@ def test_clips_server_sperre_bricht_whisper_auch_nach_der_runde_ab():
                 welt.spieler.active_channel_id = None     # Flo geht, die Runde ist um ...
                 welt.guild.voice_client = None
                 await welt.inst.abgleichen(welt.guild)
-                assert not _sitzung(welt).aktiv and abgebrochen == [], art
+                assert not _sitzung(welt).aktiv, art
+                await _nichts_abgebrochen(welt, abgebrochen, art)   # das allein nicht
                 if art == "server":                       # ... dann gilt fuer den ganzen
                     welt.schalter["aufnahme"] = False     # Server etwas anderes
                     clips._einstellung_neu(GID)           # (der Haken von guildcfg)
@@ -5163,7 +5185,7 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
                     s = _sitzung(welt)
                     erwartet = (True, neu.id) if welcher == "nach_dem_umzug" else (False, None)
                     assert (s.aktiv, s.kanal_id) == erwartet, (welcher, s.aktiv, s.kanal_id)
-                    assert abgebrochen == [], welcher         # das allein bricht nichts ab
+                    await _nichts_abgebrochen(welt, abgebrochen, welcher)   # das allein nicht
                 kanal = anderer if welcher == "ein_anderer" else welt.kanal
                 welt.guild.kanaele.pop(kanal.id, None)    # discord.py: erst raus aus
                 await bot.client.on_guild_channel_delete(kanal)   # dem Cache, dann das
