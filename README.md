@@ -1129,8 +1129,8 @@ gibt keinen; dort bleibt er auch stehen, wenn dieser Voice-Chat ein Aufräum-Kan
 ist. Lesen den Voice-Chat auch Leute, die draußen bleiben mussten, gibt es dort
 ebenfalls keinen Clip — und auch nicht, wenn der Voice gelöscht wird, bevor der
 Clip oben ist (TempVoice räumt ihn gern mitten im Schnitt weg): wer dort hören
-durfte, weiß dann keiner mehr. Ab da geht auch nichts mehr zu Whisper oder an
-die KI. Gibt es gar kein Ziel (kein Clip-Kanal, keine Dateien,
+durfte, weiß dann keiner mehr. Ab da geht auch nichts mehr zu Whisper (ein
+Upload, der gerade läuft, bricht ab) oder an die KI. Gibt es gar kein Ziel (kein Clip-Kanal, keine Dateien,
 so ein Raum), kündigt Flo dort nicht an und hört nicht mit; `flo clip` sagt
 warum, und die Prüfung kommt vor dem Schnitt, nicht nach Whisper. Höchstens
 `min(9,5 MiB, Upload-Grenze − 512 KiB)`; 5 Minuten passen mit 192 kbps hinein.
@@ -1154,9 +1154,9 @@ eingestellte KI-Anbieter (`LLM_BASE_URL`, ab Werk Groq) den Text — mit
 Buchstaben statt Namen. Die Ansage nennt Groq nur, wenn beides dort landet,
 sonst „einen externen KI-Dienst"; `flo clip nein` deckt beides ab. Geht
 `clip_aufnahme` aus (das merkt Flo sofort) oder die Funktion `clips`, beginnt die
-Sendepause (die beiden spätestens im 15-s-Takt) oder fährt Flo herunter, bricht
-ein Upload zu Whisper ab, der dann noch läuft — auch für einen Schnitt, dessen
-Runde schon vorbei ist.
+Sendepause (die beiden spätestens im 15-s-Takt), fährt Flo herunter oder wird
+der Voice des Clips gelöscht, bricht ein Upload zu Whisper ab, der dann noch
+läuft — auch für einen Schnitt, dessen Runde schon vorbei ist.
 `CLIP_TRANSKRIPT=aus` schaltet das Transkript ab (dann gibt es auch keinen
 KI-Spruch, nur einen aus dem Ersatz-Pool).
 

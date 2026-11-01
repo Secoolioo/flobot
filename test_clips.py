@@ -24,6 +24,7 @@ import copy
 from collections import deque
 import logging
 import math
+import re
 import struct
 from unittest import mock
 
@@ -264,6 +265,12 @@ def _person(uid, name, kanal=None, *, mod=False, bot=False):
     return SimpleNamespace(id=uid, display_name=name, name=name.lower(), bot=bot,
                            mention=f"<@{uid}>", guild_permissions=rechte,
                            voice=SimpleNamespace(channel=kanal) if kanal is not None else None)
+
+
+def _nennt_id(text, uid):
+    """Steht die ID als eigene Zahl im Text? Ein Zeitstempel wie
+    <t:1793505012:R> enthaelt '501' nur zufaellig - das ist keine ID."""
+    return re.search(rf"(?<!\d){int(uid)}(?!\d)", text) is not None
 
 
 class _Bezug:
@@ -1418,7 +1425,7 @@ def test_clips_takt_haelt_wach_berichtet_und_warnt():
             asyncio.run(welt.inst.tick(laufzeit.client))
         zeilen = [e.getMessage() for e in mit.eintraege if "Pakete" in e.getMessage()]
         assert len(zeilen) == 1 and f"Server {GID}" in zeilen[0], zeilen
-        assert "Anna" not in zeilen[0] and str(ANNA) not in zeilen[0]
+        assert "Anna" not in zeilen[0] and not _nennt_id(zeilen[0], ANNA)
         # Pakete kommen, aber nichts wird gespeichert (z. B. DAVE klemmt).
         e = s.empfaenger
         e._zaehler["roh"] += 200
@@ -3612,7 +3619,7 @@ def test_clips_status_nur_fuer_mods_und_nur_zahlen():
                      "Schnitt & Transkript"):
             assert feld in text, feld
         assert "läuft seit" in text and "_Client" in text and "aead_xchacha20" in text
-        assert "Anna" not in text and "Bob" not in text and str(ANNA) not in text
+        assert "Anna" not in text and "Bob" not in text and not _nennt_id(text, ANNA)
         welt.inst.raus(BOB)
         assert "ausgestiegen 1" in _embed_text(asyncio.run(clips.handle(
             _nachricht(welt, "flo clip status", mod))))
@@ -5113,3 +5120,123 @@ def test_clips_voice_geloescht_waehrend_whisper_und_beim_hochladen():
         antwort = welt.text.gesendet[-1].content
         assert "gibt's nicht mehr" in antwort and "Nochmal" not in antwort, antwort
         assert welt.ziel.gesendet == [] and ANNA not in welt.inst._zuletzt
+
+
+def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
+    """Zwei Sprecher, beide Uploads zu Whisper laufen schon (WHISPER_PARALLEL) -
+    da loescht der TempVoice-Bot den Raum. Die Frage vor jedem Upload kam fuer
+    beide zu spaet: frueher liefen sie zu Ende, der ganze Ton lag bei Groq,
+    obwohl es den Clip nie mehr geben konnte. Jetzt bricht Flo sie ab
+    (bot.on_guild_channel_delete -> clips.kanal_geloescht), sagt, dass es den
+    Voice nicht mehr gibt, und erstattet das Abkuehlen. Wird irgendein ANDERER
+    Kanal geloescht, laeuft alles weiter. Echter Transkriber, gefakter
+    Groq-Client."""
+    import bot
+    from test_fundament import _nur_geladen
+    for welcher in ("der_voice", "ein_anderer"):
+        with _welt(transkript=True) as welt:
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 15)
+            _reden(welt, BOB, 20, 10, strang=2)
+            anderer = _TextKanal(cid=602, name="spam")
+            anderer.guild = welt.guild
+            welt.guild.kanaele[anderer.id] = anderer
+            gestartet, fertig, abgebrochen, nebenbei = [], [], [], []
+
+            async def loeschen(welcher=welcher, welt=welt, anderer=anderer):
+                kanal = welt.kanal if welcher == "der_voice" else anderer
+                welt.guild.kanaele.pop(kanal.id, None)    # discord.py: erst raus aus
+                await bot.client.on_guild_channel_delete(kanal)   # dem Cache, dann das
+
+            class _Transkriptionen:
+                async def create(self, *, model, file, welcher=welcher, **_kw):
+                    uid = int(file[1].decode())
+                    gestartet.append(uid)
+                    if len(gestartet) == 2:             # beide sind unterwegs ...
+                        nebenbei.append(asyncio.ensure_future(loeschen()))
+                    try:                                # ... ein langer Upload
+                        await asyncio.sleep(5 if welcher == "der_voice" else 0.2)
+                    except asyncio.CancelledError:
+                        abgebrochen.append(uid)
+                        raise
+                    fertig.append(uid)
+                    return {"segments": [{"start": 0.1, "end": 1.0, "text": "hallo",
+                                          "avg_logprob": -0.1, "no_speech_prob": 0.0,
+                                          "compression_ratio": 1.0}]}
+
+            groq = SimpleNamespace(audio=SimpleNamespace(transcriptions=_Transkriptionen()))
+
+            def ergebnis(auftrag):
+                return _ergebnis(auftrag, whisper={sp.uid: clipschnitt.WhisperAudio(
+                    mp3=str(sp.uid).encode(), karte=[(0.0, 5.0, 10.0)])
+                    for sp in auftrag.stimmen})
+
+            async def lauf(welt=welt, nebenbei=nebenbei):
+                with mock.patch.object(clipstext, "kommentar", _kein_kommentar):
+                    await clips.handle(_nachricht(welt, "flo clip 30", welt.anna))
+                await asyncio.gather(*nebenbei)       # wirft, was dort schiefging
+            with mock.patch.object(clipstext.transkriber, "client", lambda: groq), \
+                    mock.patch.object(clipstext.transkriber, "kontingent",
+                                      clipstext.Kontingent()), \
+                    _nur_geladen(bot, "CLIPS_ENABLED"), _schnitt(ergebnis):
+                asyncio.run(lauf())
+            assert sorted(gestartet) == [ANNA, BOB], (welcher, gestartet)
+            assert welt.inst._whisper_laeuft == {}, welcher
+            if welcher == "der_voice":
+                assert sorted(abgebrochen) == [ANNA, BOB] and fertig == [], \
+                    (abgebrochen, fertig)
+                assert welt.ziel.gesendet == [] and welt.kanal.gesendet[1:] == []
+                assert "gibt's nicht mehr" in welt.text.gesendet[-1].content
+                assert ANNA not in welt.inst._zuletzt            # erstattet
+            else:
+                assert abgebrochen == [] and sorted(fertig) == [ANNA, BOB], \
+                    (abgebrochen, fertig)
+                assert len(welt.ziel.gesendet) == 1               # der Clip kam
+    # Ohne geladene Clips meldet bot.py nichts weiter.
+    gemeldet = []
+    kanal = SimpleNamespace(id=VOICE, guild=SimpleNamespace(id=GID))
+    with mock.patch.object(clips, "kanal_geloescht", gemeldet.append):
+        with _nur_geladen(bot):
+            asyncio.run(bot.client.on_guild_channel_delete(kanal))
+        assert gemeldet == []
+        with _nur_geladen(bot, "CLIPS_ENABLED"):
+            asyncio.run(bot.client.on_guild_channel_delete(kanal))
+    assert gemeldet == [kanal]
+
+
+def test_clips_404_beim_hochladen_in_den_geloeschten_voice_chat():
+    """Privater Voice: der Clip geht in dessen eigenen Chat - und genau da
+    loescht ihn der TempVoice-Bot. Discords 404 ('Unknown Channel', 10003) ist
+    schneller als die Loeschung im Cache: Flo sagt trotzdem, dass es den Voice
+    nicht mehr gibt - 'Nochmal versuchen' hilft da nie. Jeder andere Fehler
+    bleibt 'Nochmal versuchen', ebenso ein 10003 aus dem Clip-Kanal eines
+    oeffentlichen Voice (dann fehlt der Clip-Kanal, nicht der Voice)."""
+    faelle = [("privat", 404, 10003, "gibt's nicht mehr"),
+              ("privat", 404, 10008, "Nochmal versuchen"),
+              ("privat", 500, 0, "Nochmal versuchen"),
+              ("oeffentlich", 404, 10003, "Nochmal versuchen")]
+    for art, status, code, erwartet in faelle:
+        with _welt() as welt:
+            if art == "privat":
+                _privater_voice(welt)
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 15)
+            ziel = welt.kanal if art == "privat" else welt.ziel
+            echt = ziel.send
+
+            async def senden(content=None, *, echt=echt, status=status, code=code, **kw):
+                if kw.get("file") is not None:               # der Clip, nicht die Ansage
+                    fehler = discord.NotFound if status == 404 else discord.HTTPException
+                    raise fehler(SimpleNamespace(status=status, reason="kaputt"),
+                                 {"code": code, "message": "Unknown Channel"})
+                return await echt(content, **kw)
+            ziel.send = senden
+            with _schnitt():
+                _direkt(welt)
+            fall = (art, status, code)
+            antwort = welt.text.gesendet[-1].content
+            assert erwartet in antwort, (fall, antwort)
+            assert welt.guild.get_channel(VOICE) is welt.kanal, fall   # noch im Cache
+            assert ANNA not in welt.inst._zuletzt, fall                 # erstattet

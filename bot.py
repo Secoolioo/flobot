@@ -2624,8 +2624,9 @@ class FloBot(discord.Client):
         # jeden ausser dem Besitzer. Die passiven Hooks oben (XP, Level, Coins,
         # Wortzaehler, Reactions) sind bewusst schon gelaufen und bleiben erhalten.
         if ADMIN_ENABLED and admin.is_locked() and message.author.id != OWNER_ID:
-            # Bis auf eins: 'flo clip nein' gilt immer (wie der Knopf 🙅) - wer
-            # in der Sendepause aussteigt, waere danach sonst wieder drin.
+            # Bis auf zwei: 'flo clip nein' (wie der Knopf 🙅) und 'flo clip aus'
+            # (wie 🔇) gelten immer - wer in der Sendepause aussteigt oder das
+            # Mikro abdreht, waere danach sonst wieder drin.
             try:
                 await clips.ausstieg_in_der_sendepause(message)
             except Exception:  # noqa: BLE001 - die Sendepause bleibt trotzdem still
@@ -3140,6 +3141,13 @@ class FloBot(discord.Client):
         """Dasselbe im Buendel ('flo lösch 50', das Auto-Loeschen)."""
         if CLIPS_ENABLED:
             clips.geloescht(payload.guild_id, payload.channel_id, set(payload.message_ids))
+
+    async def on_guild_channel_delete(self, channel):
+        """Ein Kanal ist weg. War es der Voice eines Clips, der gerade bei Whisper
+        ist (ein TempVoice-Bot raeumt gern mitten im Schnitt auf), bricht auch
+        der Upload ab, der schon laeuft - den Clip gibt es dann ohnehin nicht."""
+        if CLIPS_ENABLED:
+            clips.kanal_geloescht(channel)
 
     async def on_guild_join(self, guild):
         """Flo wurde auf einen neuen Server eingeladen.

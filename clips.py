@@ -228,6 +228,8 @@ _SPERR_GRUENDE = frozenset(("aus", "feature", "server", "sendepause", "ansage", 
 #: brechen laufende Whisper-Uploads auch dann ab, wenn die Runde des Schnitts
 #: schon vorbei ist (Flo ging nach dem Schnappschuss).
 _SERVER_SPERREN = frozenset(("feature", "server", "sendepause", "ende"))
+#: Discords Fehlercode fuer "Unknown Channel" (404): der Kanal ist geloescht.
+_UNBEKANNTER_KANAL = 10003
 #: Was ein verworfener Clip dazu sagt - je Grund, aus dem verworfen wurde.
 _VERWORFEN_TEXT = {"aus": "verworfen_aus", "feature": "aus_hier",
                    "server": "nicht_erlaubt_server", "sendepause": "grund_sendepause",
@@ -1112,9 +1114,10 @@ class Clips(FeatureBasis):
         #: der Runde endet: gehen alle schnell raus, ist die Runde vorbei, die
         #: Bremse muss aber trotzdem gelten.
         self._aus_zuletzt = {}
-        #: gid -> {Transkript-Task: uids, an denen er haengt} - steigt einer
-        #: davon aus (oder geht das Mikro aus), wird er abgebrochen: auch ein
-        #: Upload, der schon laeuft, kommt dann nie ganz bei Whisper an.
+        #: gid -> {Transkript-Task: (uids, an denen er haengt, Voice-ID)} -
+        #: steigt einer davon aus (oder geht das Mikro aus, oder wird der Voice
+        #: geloescht), wird er abgebrochen: auch ein Upload, der schon laeuft,
+        #: kommt dann nie ganz bei Whisper an.
         self._whisper_laeuft = {}
         #: gid -> wann zuletzt "kein Ziel fuer Clips" im Log stand
         self._ziel_gemeldet = {}
@@ -1421,18 +1424,40 @@ class Clips(FeatureBasis):
         self._whisper_stoppen(uid=uid)
         log.info("Clips: jemand ist ausgestiegen (%d raus).", len(self._raus_ids))
 
-    def _whisper_stoppen(self, *, gid=None, uid=None):
+    def _whisper_stoppen(self, *, gid=None, uid=None, voice=None):
         """Laufende Transkripte abbrechen: die eines Servers (Mikro aus,
         Sendepause, Funktion aus ...), die, an denen 'uid' haengt (eben
-        ausgestiegen) - oder ohne beides alle (Herunterfahren). Ein
-        abgebrochener Upload kommt nie als ganze Datei bei Whisper an, und was
-        noch wartete, geht gar nicht erst raus."""
+        ausgestiegen), die aus dem Voice 'voice' (eben geloescht) - oder ohne
+        alles alle (Herunterfahren). Ein abgebrochener Upload kommt nie als
+        ganze Datei bei Whisper an, und was noch wartete, geht gar nicht erst
+        raus. -> wie viele abgebrochen wurden."""
+        n = 0
         for g, laufend in list(self._whisper_laeuft.items()):
             if gid is not None and g != gid:
                 continue
-            for aufgabe, uids in list(laufend.items()):
-                if uid is None or uid in uids:
-                    aufgabe.cancel()
+            for aufgabe, (uids, voice_id) in list(laufend.items()):
+                if uid is not None and uid not in uids:
+                    continue
+                if voice is not None and voice_id != voice:
+                    continue
+                if aufgabe.cancel():          # False: schon fertig
+                    n += 1
+        return n
+
+    def kanal_geloescht(self, kanal):
+        """bot.on_guild_channel_delete: ein Kanal ist weg (discord.py hat ihn da
+        schon aus dem Cache genommen). War es der Voice eines Clips, der gerade
+        bei Whisper ist - ein TempVoice-Bot raeumt den Raum gern weg, sobald
+        alle draussen sind, mitten im Schnitt -, bricht auch ein Upload ab, der
+        schon laeuft: den Clip gibt es dann ohnehin nicht mehr (_ohne_voice),
+        der Ton hat bei Groq also nichts mehr verloren."""
+        if not self._enabled or self._store is None:
+            return
+        gid = _ganz(getattr(getattr(kanal, "guild", None), "id", None))
+        cid = _ganz(getattr(kanal, "id", None))
+        if gid and cid and self._whisper_stoppen(gid=gid, voice=cid):
+            log.info("Clips: Server %s – der Voice eines laufenden Transkripts ist gelöscht, "
+                     "der Upload bricht ab.", gid)
 
     def rein(self, uid):
         uid = int(uid)
@@ -3234,14 +3259,16 @@ class Clips(FeatureBasis):
             # ersten Sprecher bei Whisper sind, dessen Ton (und der aller
             # danach) geht nicht mehr raus - ebenso, wenn der Voice inzwischen
             # geloescht ist. Und was schon unterwegs ist, bricht
-            # raus()/_leeren() ab (_whisper_stoppen) - mit WHISPER_PARALLEL
-            # laufen die Uploads von zwei Sprechern ja gleichzeitig los.
+            # raus()/_leeren()/kanal_geloescht() ab (_whisper_stoppen) - mit
+            # WHISPER_PARALLEL laufen die Uploads von zwei Sprechern ja
+            # gleichzeitig los.
             aufgabe = asyncio.ensure_future(clipstext.transkriber.je_sprecher(
                 erg.whisper, frist=WHISPER_FRIST,
                 weiter=lambda: (self._verworfen_text(guild, s, gen, von, dabei) is None
                                 and not self._voice_weg(guild, info.get("voice")))))
             laufend = self._whisper_laeuft.setdefault(gid, {})
-            laufend[aufgabe] = frozenset(dabei) | {von.id}
+            laufend[aufgabe] = (frozenset(dabei) | {von.id},
+                                _ganz(getattr(info.get("voice"), "id", None)))
             try:
                 await asyncio.wait({aufgabe})
             finally:
@@ -3354,8 +3381,13 @@ class Clips(FeatureBasis):
                         getattr(exc, "status", "?"))
             self._erstatten(gid, von.id, info.get("angerechnet"))
             # Ein privater Voice bekommt den Clip in seinen eigenen Chat - wird
-            # er genau jetzt geloescht, hilft 'nochmal versuchen' nicht.
-            schluessel = "voice_weg" if self._voice_weg(guild, voice) else "upload_kaputt"
+            # er genau jetzt geloescht, hilft 'nochmal versuchen' nicht. Die
+            # 404 kann schneller da sein als die Loeschung im Cache: dann sagt
+            # es Discord selbst (10003, 'Unknown Channel').
+            weg = self._voice_weg(guild, voice) or (
+                hier and isinstance(exc, discord.NotFound)
+                and getattr(exc, "code", 0) == _UNBEKANNTER_KANAL)
+            schluessel = "voice_weg" if weg else "upload_kaputt"
             await self._melden(antwort, anfrage, self._text_fuer(guild, schluessel))
             return
         # Das Hochladen (ein paar MB) dauert auch: kam waehrenddessen ein
@@ -3636,3 +3668,4 @@ datenschutz_dm = instance.datenschutz_dm
 ausstieg_in_der_sendepause = instance.ausstieg_in_der_sendepause
 ist_clip = instance.ist_clip
 geloescht = instance.geloescht
+kanal_geloescht = instance.kanal_geloescht
