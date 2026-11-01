@@ -5128,12 +5128,15 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
     beide zu spaet: frueher liefen sie zu Ende, der ganze Ton lag bei Groq,
     obwohl es den Clip nie mehr geben konnte. Jetzt bricht Flo sie ab
     (bot.on_guild_channel_delete -> clips.kanal_geloescht), sagt, dass es den
-    Voice nicht mehr gibt, und erstattet das Abkuehlen. Wird irgendein ANDERER
-    Kanal geloescht, laeuft alles weiter. Echter Transkriber, gefakter
-    Groq-Client."""
+    Voice nicht mehr gibt, und erstattet das Abkuehlen. Auch, wenn die Runde da
+    schon vorbei ist: Flo ist zuerst gegangen ('flo stop' - erst dann ist der
+    Raum ja leer), oder er ist mit allen in den naechsten Voice weitergezogen
+    und hoert dort schon wieder mit - es zaehlt der Voice des Clips, nicht der,
+    in dem Flo gerade sitzt. Wird irgendein ANDERER Kanal geloescht, laeuft
+    alles weiter. Echter Transkriber, gefakter Groq-Client."""
     import bot
     from test_fundament import _nur_geladen
-    for welcher in ("der_voice", "ein_anderer"):
+    for welcher in ("der_voice", "nach_der_runde", "nach_dem_umzug", "ein_anderer"):
         with _welt(transkript=True) as welt:
             asyncio.run(_starten(welt))
             welt.uhr.vor(60)
@@ -5142,10 +5145,26 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
             anderer = _TextKanal(cid=602, name="spam")
             anderer.guild = welt.guild
             welt.guild.kanaele[anderer.id] = anderer
+            neu = _voice_kanal_mit_chat(cid=881, name="Lounge")
+            neu.guild = welt.guild
+            welt.guild.kanaele[neu.id] = neu
             gestartet, fertig, abgebrochen, nebenbei = [], [], [], []
 
-            async def loeschen(welcher=welcher, welt=welt, anderer=anderer):
-                kanal = welt.kanal if welcher == "der_voice" else anderer
+            async def loeschen(welcher=welcher, welt=welt, anderer=anderer, neu=neu,
+                               abgebrochen=abgebrochen):
+                if welcher == "nach_der_runde":
+                    welt.spieler.active_channel_id = None     # Flo geht, die Runde ist um
+                    welt.guild.voice_client = None
+                elif welcher == "nach_dem_umzug":
+                    welt.vc.channel = neu                     # Flo zieht mit allen weiter
+                    welt.spieler.active_channel_id = neu.id   # und hoert dort wieder mit
+                if welcher.startswith("nach_"):
+                    await welt.inst.abgleichen(welt.guild)
+                    s = _sitzung(welt)
+                    erwartet = (True, neu.id) if welcher == "nach_dem_umzug" else (False, None)
+                    assert (s.aktiv, s.kanal_id) == erwartet, (welcher, s.aktiv, s.kanal_id)
+                    assert abgebrochen == [], welcher         # das allein bricht nichts ab
+                kanal = anderer if welcher == "ein_anderer" else welt.kanal
                 welt.guild.kanaele.pop(kanal.id, None)    # discord.py: erst raus aus
                 await bot.client.on_guild_channel_delete(kanal)   # dem Cache, dann das
 
@@ -5156,7 +5175,7 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
                     if len(gestartet) == 2:             # beide sind unterwegs ...
                         nebenbei.append(asyncio.ensure_future(loeschen()))
                     try:                                # ... ein langer Upload
-                        await asyncio.sleep(5 if welcher == "der_voice" else 0.2)
+                        await asyncio.sleep(0.2 if welcher == "ein_anderer" else 5)
                     except asyncio.CancelledError:
                         abgebrochen.append(uid)
                         raise
@@ -5176,6 +5195,7 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
                 with mock.patch.object(clipstext, "kommentar", _kein_kommentar):
                     await clips.handle(_nachricht(welt, "flo clip 30", welt.anna))
                 await asyncio.gather(*nebenbei)       # wirft, was dort schiefging
+                await _nebenher(welt)
             with mock.patch.object(clipstext.transkriber, "client", lambda: groq), \
                     mock.patch.object(clipstext.transkriber, "kontingent",
                                       clipstext.Kontingent()), \
@@ -5183,16 +5203,17 @@ def test_clips_geloeschter_voice_bricht_den_laufenden_whisper_upload_ab():
                 asyncio.run(lauf())
             assert sorted(gestartet) == [ANNA, BOB], (welcher, gestartet)
             assert welt.inst._whisper_laeuft == {}, welcher
-            if welcher == "der_voice":
-                assert sorted(abgebrochen) == [ANNA, BOB] and fertig == [], \
-                    (abgebrochen, fertig)
-                assert welt.ziel.gesendet == [] and welt.kanal.gesendet[1:] == []
-                assert "gibt's nicht mehr" in welt.text.gesendet[-1].content
-                assert ANNA not in welt.inst._zuletzt            # erstattet
-            else:
+            if welcher == "ein_anderer":
                 assert abgebrochen == [] and sorted(fertig) == [ANNA, BOB], \
-                    (abgebrochen, fertig)
+                    (welcher, abgebrochen, fertig)
                 assert len(welt.ziel.gesendet) == 1               # der Clip kam
+            else:
+                assert sorted(abgebrochen) == [ANNA, BOB] and fertig == [], \
+                    (welcher, abgebrochen, fertig)
+                assert welt.ziel.gesendet == [] and welt.kanal.gesendet[1:] == [], welcher
+                assert not any(m.file is not None for m in neu.gesendet), welcher
+                assert "gibt's nicht mehr" in welt.text.gesendet[-1].content, welcher
+                assert ANNA not in welt.inst._zuletzt, welcher   # erstattet
     # Ohne geladene Clips meldet bot.py nichts weiter.
     gemeldet = []
     kanal = SimpleNamespace(id=VOICE, guild=SimpleNamespace(id=GID))

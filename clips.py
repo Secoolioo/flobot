@@ -1450,7 +1450,10 @@ class Clips(FeatureBasis):
         bei Whisper ist - ein TempVoice-Bot raeumt den Raum gern weg, sobald
         alle draussen sind, mitten im Schnitt -, bricht auch ein Upload ab, der
         schon laeuft: den Clip gibt es dann ohnehin nicht mehr (_ohne_voice),
-        der Ton hat bei Groq also nichts mehr verloren."""
+        der Ton hat bei Groq also nichts mehr verloren. Die Sitzung zaehlt
+        dabei bewusst nicht: ihre Runde dort kann laengst vorbei sein (Flo ging
+        zuerst, oder er ist mit allen in den naechsten Voice weitergezogen) -
+        es geht um den Voice des Clips, nicht um den, in dem Flo gerade sitzt."""
         if not self._enabled or self._store is None:
             return
         gid = _ganz(getattr(getattr(kanal, "guild", None), "id", None))
