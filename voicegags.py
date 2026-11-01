@@ -167,6 +167,10 @@ _STANDARD_CACHE_SEK = 3600
 # Wie lange Flo nach einem Discord-Sound im Kanal bleibt, wenn er NUR dafuer
 # gekommen ist (die Sounds dauern ein paar Sekunden).
 _NACH_SOUND_SEK = 8
+# Laeuft auf dem Besuch dann noch ein Gag (Vorlesen, Datei-Sound), wird so oft
+# im selben Abstand nochmal geschaut (8 x 8 s - ein Vorlese-Gag dauert
+# hoechstens 60 s).
+_NACH_SOUND_RUNDEN = 8
 
 
 class VoiceGags(FeatureBasis):
@@ -526,12 +530,24 @@ class VoiceGags(FeatureBasis):
         return True, ""
 
     async def _nach_sound_gehen(self, guild, vc):
-        """Nur fuer den Sound gekommen -> nach ein paar Sekunden wieder weg,
-        ausser die Musik hat den Kanal inzwischen uebernommen."""
+        """Nur fuer den Sound gekommen -> nach ein paar Sekunden wieder weg.
+
+        Bleiben darf der Besuch nur, wenn die Musik ihn uebernommen hat - oder
+        gleich uebernimmt, weil ihre Sitzung genau in diesem Kanal steht. Dass
+        die Musik irgendwo ANDERS beschaeftigt ist, haelt ihn nicht mehr: ihr
+        eigener Client ist dann weg (je Server gibt es nur einen), und solange
+        der Besuch woanders sitzt, holt der Watchdog sie nicht zurueck, wenn
+        clips dort mithoeren koennte (music.GuildPlayer._fremder_besuch). Der
+        Song stand dann still, bis jemand 'flo komm' tippte. Spielt auf dem
+        Besuch noch ein Gag, wird spaeter nochmal geschaut."""
         await asyncio.sleep(_NACH_SOUND_SEK)
-        if (vc.is_connected() and not self._voice_beschaeftigt(guild)
-                and not self._musik_hat_sie(guild, vc)):
-            await self._safe_disconnect(vc)
+        for _ in range(_NACH_SOUND_RUNDEN):
+            if not vc.is_connected() or self._musik_will_sie(guild, vc):
+                return
+            if not (vc.is_playing() or vc.is_paused()):
+                await self._safe_disconnect(vc)
+                return
+            await asyncio.sleep(_NACH_SOUND_SEK)
 
     async def _klick(self, interaction, art, wert):
         """Ein Knopf oder Menue-Eintrag am Brett."""
@@ -785,7 +801,29 @@ class VoiceGags(FeatureBasis):
         except Exception:  # noqa: BLE001
             return False
 
+    @staticmethod
+    def _musik_will_sie(guild, vc):
+        """Die Musik hat diese Verbindung - oder ihre Sitzung steht genau in
+        diesem Kanal (nach einem Abriss ohne eigenen Client): dann uebernimmt
+        der Watchdog den Besuch gleich, wegraeumen waere verkehrt."""
+        if VoiceGags._musik_hat_sie(guild, vc):
+            return True
+        try:
+            import music
+            return music.sitzung_im_kanal(guild.id, vc.channel.id)
+        except Exception:  # noqa: BLE001
+            return False
+
     async def _safe_disconnect(self, vc):
+        """Einen EIGENEN Besuch trennen - die Verbindung der Musik trennt
+        voicegags nie (das pruefen die Aufrufer). Steht hier eine
+        Musik-Sitzung, hielte flo_getrennt die Trennung sonst fuer einen
+        Rauswurf und wuerfe die Warteschlange weg."""
+        try:
+            import music
+            music.besuch_geht(vc.guild.id)
+        except Exception:  # noqa: BLE001 - Attrappe ohne Server, Musik nicht geladen
+            pass
         try:
             await vc.disconnect(force=True)
         except Exception:  # noqa: BLE001

@@ -868,6 +868,17 @@ _HELP_HINTS = {
 }
 
 
+def _hilfe_hinweis(key):
+    """Die Kurzzeile einer Kategorie (Uebersicht, Menue). Die Voice-Seite nennt
+    nur, was hier laeuft: ohne Clips versprach sie 'clip', und der Befehl
+    sagte dann 'Clips sind aus' - ohne Soundboard dasselbe mit 'sounds'."""
+    if key == "voice":
+        teile = (["sounds", "sprich"] if VOICE_GAGS_ENABLED else []) + (
+            ["clip"] if CLIPS_ENABLED else [])
+        return " · ".join(teile)
+    return _HELP_HINTS.get(key, "")
+
+
 def _rgb(farbe):
     return ((farbe >> 16) & 0xFF, (farbe >> 8) & 0xFF, farbe & 0xFF)
 
@@ -896,7 +907,7 @@ class HilfeAuswahl(discord.ui.DynamicItem[discord.ui.Select],
         for key, emoji, label in client._help_categories()[:24]:
             optionen.append(discord.SelectOption(
                 label=label, value=key, emoji=emoji, default=key == aktiv,
-                description=(_HELP_HINTS.get(key) or None)))
+                description=(_hilfe_hinweis(key) or None)))
         super().__init__(discord.ui.Select(
             custom_id="flo:hilfe:auswahl", options=optionen,
             placeholder="Kategorie wählen – die Seite siehst nur du"))
@@ -1435,7 +1446,7 @@ class FloBot(discord.Client):
         if png is None:
             try:
                 if key == "_overview":
-                    entries = [(label, _HELP_HINTS.get(k, ""), _rgb(_HELP_DATA[k][1]))
+                    entries = [(label, _hilfe_hinweis(k), _rgb(_HELP_DATA[k][1]))
                                for k, _e, label in self._help_categories() if k in _HELP_DATA]
                     buf = await asyncio.to_thread(
                         render.help_card, f"{ai.bot_name().upper()} – HILFE",
@@ -2613,6 +2624,12 @@ class FloBot(discord.Client):
         # jeden ausser dem Besitzer. Die passiven Hooks oben (XP, Level, Coins,
         # Wortzaehler, Reactions) sind bewusst schon gelaufen und bleiben erhalten.
         if ADMIN_ENABLED and admin.is_locked() and message.author.id != OWNER_ID:
+            # Bis auf eins: 'flo clip nein' gilt immer (wie der Knopf 🙅) - wer
+            # in der Sendepause aussteigt, waere danach sonst wieder drin.
+            try:
+                await clips.ausstieg_in_der_sendepause(message)
+            except Exception:  # noqa: BLE001 - die Sendepause bleibt trotzdem still
+                log.exception("Clips: Ausstieg in der Sendepause ging nicht")
             return
 
         # 'Flo restart' / 'Flo neustarten' -> kompletter Neustart, NUR fuer den Besitzer.

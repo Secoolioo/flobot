@@ -372,6 +372,11 @@ def _retry_after(fehler):
         return None
 
 
+class _Verworfen(Exception):
+    """Der Clip gilt nicht mehr (je_sprecher: weiter() sagte nein) - kein
+    Fehler, nur: dieser Upload geht nicht mehr raus."""
+
+
 class Transkriber:
     """Schickt den Ton je Sprecher an Whisper. Ein Fehler, egal welcher, heisst:
     kein Transkript - nie ein halbes, dem ein Sprecher fehlt."""
@@ -453,19 +458,27 @@ class Transkriber:
             self._sperre_loop = loop
         return self._sperre
 
-    async def je_sprecher(self, audio, frist=WHISPER_FRIST):
+    async def je_sprecher(self, audio, frist=WHISPER_FRIST, weiter=None):
         """{uid: WhisperAudio} -> {uid: [Segment]} (schon ohne Halluzinationen)
         oder None: aus, Kontingent voll, Frist um, irgendein Fehler - beim
         ersten Fehler werden die uebrigen Sprecher gar nicht erst geschickt
         (oder abgebrochen). Wirft nie - nur ein Abbruch (CancelledError) geht
-        durch. Das Kontingent prueft und bucht es selbst."""
+        durch. Das Kontingent prueft und bucht es selbst.
+
+        weiter() -> False heisst: der Clip gilt nicht mehr (jemand ist
+        ausgestiegen, Mikro aus, Sendepause ...). Gefragt wird VOR JEDEM
+        Upload, nachdem er seinen Platz (WHISPER_PARALLEL) bekommen hat - was
+        bis dahin wartete, geht dann nie zu Whisper, und das ganze Transkript
+        faellt weg. Was schon unterwegs ist, laesst sich nicht zurueckholen.
+        Wirft weiter() selbst, gilt das als nein (im Zweifel fuer die
+        Privatsphaere)."""
         try:
-            return await self._je_sprecher(audio, frist)
+            return await self._je_sprecher(audio, frist, weiter)
         except Exception as exc:  # noqa: BLE001 - nie ein halbes Transkript, nie ein Absturz
             log.info("Clips: Transkript gescheitert (%s).", type(exc).__name__)
             return None
 
-    async def _je_sprecher(self, audio, frist):
+    async def _je_sprecher(self, audio, frist, weiter=None):
         audio = {uid: wa for uid, wa in (audio or {}).items() if getattr(wa, "mp3", None)}
         if not audio:
             return None
@@ -480,8 +493,18 @@ class Transkriber:
         sperre = self._semaphore()
         modell = self.modell()
 
+        def gilt_noch():
+            if weiter is None:
+                return True
+            try:
+                return bool(weiter())
+            except Exception:  # noqa: BLE001 - im Zweifel geht nichts raus
+                return False
+
         async def einer(uid, wa):
             async with sperre:
+                if not gilt_noch():
+                    raise _Verworfen()
                 antwort = await client.audio.transcriptions.create(
                     model=modell, file=("sprecher.mp3", wa.mp3, "audio/mpeg"),
                     language="de", response_format="verbose_json",
@@ -502,6 +525,9 @@ class Transkriber:
             await asyncio.gather(*aufgaben, return_exceptions=True)
         fehler = [a.exception() for a in aufgaben
                   if not a.cancelled() and a.exception() is not None]
+        if any(isinstance(erg, _Verworfen) for erg in fehler):
+            log.info("Clips: Transkript abgebrochen - der Clip gilt nicht mehr.")
+            return None
         if fehler:
             # Ein 429 sperrt - auch wenn er nicht der erste Fehler war.
             voll = [erg for erg in fehler if _status(erg) == 429]

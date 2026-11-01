@@ -408,6 +408,10 @@ class CmdNorm:
         # 'radi' (Rettich), 'rado' wurden 'radio', 'endlose' wurde 'endlos' -
         # 'Flo, adio!' haette das Radio angeworfen.
         "adio", "radi", "rado", "endlose",
+        # Seit 'clips' die Bestenliste zeigt: 'lips' (Englisch) und 'clipse'
+        # (die Haarklammern) wurden 'clips' - 'Flo lips' zeigte die Clips der
+        # Woche statt einer Antwort.
+        "lips", "clipse",
     }
     # Echte Befehle nie als Stopword blocken:
     STOPWORDS -= KNOWN

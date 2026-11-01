@@ -23,6 +23,10 @@ im Log statt mit einem Traceback im Voice-Thread.
 
 DER WEG EINES PAKETS
 ====================
+    anhaengen()             was schon im Socket lag, kam, als niemand zuhoeren
+                            durfte (Flo nicht taub, aber kein Lauscher): es
+                            fliegt ungelesen raus, statt mit JETZT gestempelt
+                            im neuen Puffer zu landen
     UDP -> roh()            SocketReader-Thread: mit Ankunftszeit ablegen und
                             den Loop EINMAL wecken. Sonst nichts.
         -> abarbeiten()     Event-Loop, je Paket:
@@ -74,6 +78,11 @@ DIE THREADS
                    Parsen, kein Krypto, kein Log - jede Millisekunde dort
                    fehlt dem naechsten Paket, und eine Ausnahme dort wuerde
                    discord.py nur ins Log kippen.
+                   Solange wir lauschen, schlaeft er nie, sondern sitzt in
+                   select() auf dem Socket (30 s Frist). Tauscht discord.py
+                   den Socket (Umzug, Neuaufbau), weckt EmpfangsZustand ihn
+                   am alten - sonst wartete die neue Verbindung bis zu 30 s
+                   auf ihre IP-Erkennung (siehe dort).
     AudioPlayer    EmpfangsClient._get_voice_packet -> eigen_senke(opus, t).
                    Die Senke darf nur anhaengen (deque, atomar).
     Event-Loop     alles andere: Websocket-Haken, Entschluesseln (auch DAVE -
@@ -108,6 +117,7 @@ import asyncio
 import inspect
 import logging
 import re
+import socket
 import struct
 import time
 from collections import deque
@@ -216,6 +226,7 @@ ZAEHLER = (
     "dave_verworfen",       # aufgegeben: nach HALTEN_DAVE, am Deckel, oder tot
                             # (ein juengerer desselben Absenders ging auf)
     "senke_fehler",         # die Senke hat geworfen
+    "vorher_verworfen",     # lag schon im Socket, bevor wir lauschten - ungelesen weg
 )
 
 
@@ -366,9 +377,11 @@ def kompatibel():
     Empfang baut - sonst der Grund (fuer die Logzeile in clips.setup).
 
     Geprueft wird, was hier wirklich benutzt wird: der hook-Parameter von
-    VoiceConnectionState, add/remove_socket_listener, _get_voice_packet und
-    create_connection_state am VoiceClient, dass discord.py rtpsize noch
-    waehlen kann, nacl.secret.Aead und davey.MediaType."""
+    VoiceConnectionState, add/remove_socket_listener, die drei Stellen, an
+    denen discord.py den Socket tauscht oder schliesst (_create_socket,
+    disconnect, soft_disconnect - EmpfangsZustand weckt dort den Leser),
+    _get_voice_packet und create_connection_state am VoiceClient, dass
+    discord.py rtpsize noch waehlen kann, nacl.secret.Aead und davey.MediaType."""
     try:
         zustand = getattr(_voice_state, "VoiceConnectionState", None)
         if zustand is None:
@@ -379,7 +392,8 @@ def kompatibel():
             return "VoiceConnectionState laesst sich nicht pruefen"
         if "hook" not in parameter:
             return "VoiceConnectionState nimmt keinen hook mehr"
-        for name in ("add_socket_listener", "remove_socket_listener"):
+        for name in ("add_socket_listener", "remove_socket_listener",
+                     "_create_socket", "disconnect", "soft_disconnect"):
             if not callable(getattr(zustand, name, None)):
                 return f"VoiceConnectionState.{name} fehlt"
         for name in ("_get_voice_packet", "create_connection_state"):
@@ -428,6 +442,164 @@ def fuer(gid):
         return None
 
 
+# --- Der Socket unter dem Leser ----------------------------------------------------
+#: So lange bleibt ein Socket, den discord.py schliessen wollte, bei uns noch
+#: offen (aber stillgelegt) - siehe EmpfangsZustand._abschied.
+AUSGEDIENT_SEK = 2.0
+#: Hoechstens so viele alte Pakete wirft anhaengen() ungelesen weg (der Kernel
+#: haelt ohnehin nur ein paar hundert - das hier ist nur der Deckel der Schleife).
+VORHER_MAX = 4096
+
+
+def _offen(sock):
+    """Ein echter Socket, der noch nicht zu ist (MISSING, None, Attrappe: nein)."""
+    try:
+        return isinstance(sock, socket.socket) and sock.fileno() != -1
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _aufschrecken(sock):
+    """Wer in select() auf diesem Socket wartet, kommt SOFORT zurueck - auch
+    aus einem anderen Thread: shutdown() legt den Socket still, er gilt ab da
+    als lesbar. Unter Linux weckt das sogar ein unverbundenes UDP-Socket (das
+    meldet ENOTCONN und weckt trotzdem). Wirft nie."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:  # noqa: BLE001 - zu, nie verbunden, MISSING: egal
+        pass
+
+
+def _spaeter_zu(sock):
+    """Den stillgelegten Socket erst nach AUSGEDIENT_SEK schliessen (im Loop)."""
+    try:
+        asyncio.get_running_loop().call_later(AUSGEDIENT_SEK, sock.close)
+    except Exception:  # noqa: BLE001 - ohne Loop: beim naechsten Abschied
+        pass
+
+
+def _altes_verwerfen(st):
+    """Was im Socket liegt, BEVOR wir lauschen, kam, als niemand las: ohne
+    Lauscher schlaeft discord.py's SocketReader, und sitzt Flo nicht taub im
+    Call, sammelt der Kernel bis ~212 KB (gut 5 s eines Sprechers) - aus einer
+    Zeit ohne Ansage, mit 'Mikro aus' oder vor der Zustimmung des Servers. Der
+    Leser lieferte das gleich hintereinander, und roh() stempelte es mit
+    JETZT: alter Ton im neuen Puffer, als waere er eben gesagt worden. Also
+    ungelesen weg damit.
+
+    Nur, wenn sonst niemand mitliest - dann schlaeft der Leser, und alles im
+    Socket ist alt (liest jemand mit, etwa discord.py's IP-Erkennung, liegt
+    nichts Altes, und klauen wollen wir ihm nichts) - und nur an einem Socket,
+    der nicht blockiert: der Loop darf hier nie warten. -> wie viele."""
+    leser = getattr(st, "_socket_reader", None)
+    if getattr(leser, "_callbacks", None):
+        return 0
+    sock = getattr(st, "socket", None)
+    if not _offen(sock):
+        return 0
+    try:
+        if sock.gettimeout() != 0.0:
+            return 0
+    except Exception:  # noqa: BLE001
+        return 0
+    n = 0
+    while n < VORHER_MAX:
+        try:
+            sock.recv(4096)
+        except OSError:            # leer (BlockingIOError), zu, stillgelegt
+            break
+        n += 1
+    return n
+
+
+#: Die Basis fuer EmpfangsZustand. Fehlt sie (discord.py-Update), meldet das
+#: kompatibel() - der Import darf deshalb nicht schon daran scheitern.
+_ZUSTAND_BASIS = getattr(_voice_state, "VoiceConnectionState", object)
+
+
+class EmpfangsZustand(_ZUSTAND_BASIS):
+    """discord.py's VoiceConnectionState - nur dass der SocketReader nie an
+    einem Socket haengen bleibt, den discord.py schon abgeschrieben hat.
+
+    Warum: ohne Lauscher schlaeft der Leser, und discord.py's eigener Lauscher
+    fuer die IP-Erkennung (discover_ip) weckt ihn gleich am NEUEN Socket.
+    Solange clips lauscht, schlaeft er nie: er sitzt fast immer in
+    select([socket], 30 s) auf dem Socket, auf dem zuletzt etwas kam. Und
+    discord.py tauscht den Socket, ohne ihn zu wecken:
+      - Umzug (move_to -> voice_server_update -> _create_socket): ein neuer
+        kommt, der alte bleibt offen und wird still;
+      - Neuaufbau (disconnect(cleanup=False), soft_disconnect): der alte wird
+        geschlossen - und ein close() aus einem anderen Thread weckt unter
+        Linux kein select().
+    Die IP-Erkennung der neuen Verbindung wartete dann, bis das alte select()
+    nach bis zu 30 s ablaeuft: 'flo komm' aus einem anderen Kanal laeuft in
+    die Zeitgrenze von move_to, der Song steht so lange still, und ein
+    interner Neuaufbau scheitert an seiner eigenen Zeitgrenze. Ein Paket an
+    den alten Socket hilft nicht - der ist verbunden, der Kernel verwirft
+    alles von anderswo.
+
+    Abhilfe: shutdown() weckt ein select() auf diesem Socket sofort. Beim
+    Umzug den alten direkt nach dem Tausch (siehe _create_socket); vor dem
+    Schliessen siehe _abschied. Geweckt wird nur ein Socket, den discord.py
+    gerade selbst ersetzt oder schliesst - nie der, auf dem Ton kommt."""
+
+    #: Der zuletzt stillgelegte Socket (siehe _abschied). Er haelt seine Nummer
+    #: belegt, bis er nach AUSGEDIENT_SEK zugeht - spaetestens beim naechsten
+    #: Abschied, falls der Loop vorher endete.
+    _ausgedient = None
+
+    def _create_socket(self):
+        alt = getattr(self, "socket", None)
+        super()._create_socket()
+        if alt is not self.socket and _offen(alt):
+            # Umzug: der alte bliebe offen und still. Offen bleibt er, bis das
+            # select() des Lesers zurueck ist (dessen Liste haelt ihn) - das
+            # sieht also den stillgelegten Socket, nie eine wiederverwendete
+            # Nummer.
+            _aufschrecken(alt)
+
+    async def disconnect(self, *args, **kwargs):
+        # Wie discord.py selbst: ohne force und ohne Verbindung passiert nichts.
+        if kwargs.get("force", True) or self.is_connected():
+            self._abschied()
+        return await super().disconnect(*args, **kwargs)
+
+    async def soft_disconnect(self, *args, **kwargs):
+        self._abschied()
+        return await super().soft_disconnect(*args, **kwargs)
+
+    def _abschied(self):
+        """Gleich schliesst discord.py den Socket. Einfach vorher aufschrecken
+        reicht nicht: kommt der Leser-Thread erst dran, wenn die Nummer schon
+        zu UND neu vergeben ist (der naechste Socket nimmt die kleinste freie),
+        schaut sein select() auf den neuen Besitzer der Nummer und schlaeft
+        die vollen 30 s weiter (nachgemessen). Deshalb, in dieser Reihenfolge:
+          1. den Leser anhalten - wie es discord.py gleich ohnehin tut; so
+             nimmt er sich kein neues select() mehr vor;
+          2. discord.py einen zweiten Griff (dup) zum Schliessen geben;
+          3. den Socket stilllegen: der Leser kommt aus select() zurueck;
+          4. unseren Griff erst nach AUSGEDIENT_SEK schliessen (spaetestens
+             beim naechsten Abschied) - bis dahin ist seine Nummer belegt.
+        Kein await: discord.py ruft das auch beim Abbruch eines Connects."""
+        try:
+            self._socket_reader.pause()
+        except Exception:  # noqa: BLE001
+            pass
+        sock = getattr(self, "socket", None)
+        if not _offen(sock):
+            return
+        try:
+            self.socket = sock.dup()
+        except Exception:  # noqa: BLE001 - keine Griffe mehr frei: dann nur wecken
+            _aufschrecken(sock)
+            return
+        _aufschrecken(sock)
+        vorher, self._ausgedient = self._ausgedient, sock
+        if vorher is not None:
+            vorher.close()                # einen ganzen Neuaufbau her: der Leser ist laengst weg
+        _spaeter_zu(sock)
+
+
 # --- Der Client ------------------------------------------------------------------
 class EmpfangsClient(discord.VoiceClient):
     """Ein discord.VoiceClient, der zusaetzlich zuhoert.
@@ -464,8 +636,10 @@ class EmpfangsClient(discord.VoiceClient):
         self._letzter_player = None
 
     def create_connection_state(self):
-        """Wie discord.py, nur mit unserem Haken am Voice-Websocket."""
-        return _voice_state.VoiceConnectionState(self, hook=self._ws_hook)
+        """Wie discord.py, nur mit unserem Haken am Voice-Websocket - und mit
+        einem Zustand, dessen Leser beim Socket-Tausch nicht haengen bleibt
+        (EmpfangsZustand)."""
+        return EmpfangsZustand(self, hook=self._ws_hook)
 
     # -- Websocket --------------------------------------------------------------
     async def _ws_hook(self, ws, msg):
@@ -703,13 +877,17 @@ class Empfaenger:
         Verbindung im selben Kanal aendert nichts (zweimal angemeldet hiesse
         jedes Paket doppelt). Sonst (anderer Client, neue Verbindung,
         verschoben): vom alten loesen, neu anmelden, verbindung_nr hoch, Halte-
-        und Entfaltungs-Zustand frisch. -> True, wenn er jetzt dranhaengt."""
+        und Entfaltungs-Zustand frisch. -> True, wenn er jetzt dranhaengt.
+
+        Was schon vorher im Socket lag, fliegt ungelesen raus (siehe
+        _altes_verwerfen): es kam, als niemand zuhoeren durfte."""
         st = getattr(client, "_connection", None)
         if client is None or st is None:
             return False
         if client is self.client and st is self._zustand and _kanal_von(client) == self._kanal:
             return True
         self.abhaengen()
+        self._zaehler["vorher_verworfen"] += _altes_verwerfen(st)
         try:
             st.add_socket_listener(self.roh)
         except Exception:  # noqa: BLE001

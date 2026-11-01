@@ -64,6 +64,13 @@ RATE = 48000
 _BREITE = 2
 #: Ein Standard-Rahmen: 20 ms bei 48 kHz. Gilt, wenn ein Paket kaputt ist.
 RAHMEN_STANDARD = 960
+#: So viel (Samples) vor dem Fensteranfang bleibt beim Beschneiden stehen -
+#: nicht fuer den Clip, nur fuer den Decoder: Opus braucht Vorgeschichte.
+#: Kalt dekodiert lag der erste Rahmen um 70 bis 120 % der Lautstaerke
+#: daneben (nachgemessen) - ein Knackser am Anfang jedes Clips, der mitten im
+#: Song oder mitten im Satz beginnt. Sprache sitzt nach zwei, drei Rahmen,
+#: Musik (CELT) erst nach rund zehn (75 % -> 0,7 %). Geschrieben wird davon nichts.
+VORLAUF = 10 * RAHMEN_STANDARD
 
 # --- Wann ein neuer Redeschub beginnt (siehe platzieren) -----------------------
 #: Der RTP-Zeitstempel springt um mehr als 0,2 s ueber das erwartete Ende.
@@ -108,8 +115,11 @@ FFMPEG_HALT_SEK = 0.25
 FRIST_PRUEFEN_ALLE = 500
 
 # --- Ton fuer Whisper -----------------------------------------------------------
-#: Wer kuerzer redet, bekommt kein Transkript (kostet nur Kontingent).
-WHISPER_MIN_SEK = 1.5
+#: Wer kuerzer redet, bekommt kein Transkript (kostet nur Kontingent). Bewusst
+#: knapp unter clips.STIMME_MIN_SEK (1,0 s): auch ein kurzer Satz ("Ich bring
+#: mich um.") geht durch die Pruefung auf Notsignal und Hetze - wer darunter
+#: bleibt, hat kaum ein Wort gesagt.
+WHISPER_MIN_SEK = 0.5
 #: Hoechstens so viele Sprecher je Clip (die mit dem meisten Ton zuerst).
 WHISPER_MAX_SPRECHER = 8
 #: Stille zwischen zwei Redestuecken in der Whisper-Datei - und zugleich die
@@ -300,13 +310,15 @@ def platzieren(pakete, bis, dauer, rate=RATE):
         ende_bisher = schub.ende if ende_bisher is None else max(ende_bisher, schub.ende)
 
     # Auf das Fenster beschneiden. Ein Rahmen, der nur halb hineinragt, bleibt
-    # (das Schreiben schneidet ihn zurecht).
+    # (das Schreiben schneidet ihn zurecht) - und davor noch VORLAUF: die
+    # waermen nur den Decoder an, geschrieben und gezaehlt wird davon nichts.
     raus = []
     for schub in schuebe:
         schub.rahmen = [r for r in schub.rahmen
-                        if schub.start + r[0] + r[2] > 0 and schub.start + r[0] < gesamt]
-        if schub.rahmen:
-            raus.append(schub)
+                        if schub.start + r[0] + r[2] > -VORLAUF
+                        and schub.start + r[0] < gesamt]
+        if any(schub.start + a + n > 0 for a, _o, n in schub.rahmen):
+            raus.append(schub)          # nur Vorlauf: der Schub liegt ganz davor
     return raus
 
 

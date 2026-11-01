@@ -101,8 +101,10 @@ MUSIKMUSTER="Musik-Fehler|Musik-Selbsttest|Musik-Feature|Spotify|yt-dlp|403 Forb
 # "Clips:" (dazu die Startzeile "Clips aktiv/aus" und bot.py's "Clips-Takt"),
 # jede aus dem Empfang (voiceempfang) mit "Empfang:". Darunter die
 # 5-Minuten-Zusammenfassung je Server ("... Pakete (... gespeichert ...)").
-# Ein Test haelt das gegen alle Logzeilen dieser Dateien.
-CLIPMUSTER="Clips:|Clips aktiv|Clips aus|Clips-Takt|Empfang:"
+# Und die Abstuerze: ein Befehl wirft ("Befehl fehlgeschlagen (clips)", aus
+# bot.py) oder ein Knopf/Dialog (discord.py: "Ignoring exception in view
+# <ClipDialog ...>"). Ein Test haelt das gegen alle Logzeilen dieser Dateien.
+CLIPMUSTER="Clips:|Clips aktiv|Clips aus|Clips-Takt|Empfang:|Befehl fehlgeschlagen \(clips\)|ClipDialog|ClipView|AnsageView|ClipFeuer|ClipWeg|ClipOhneMich|ClipAus"
 
 case "${1:-}" in
     n|neu)

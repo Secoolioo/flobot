@@ -286,7 +286,9 @@ def kanal_ohne_aufraeumen(client, guild, schluessel, *, rechte=()):
 
     'rechte': was Flo dort ausserdem duerfen muss (Namen der Discord-Rechte,
     z. B. ("attach_files",) fuer die Voice-Clips). Ohne Angabe wie bisher nur
-    das Schreiben."""
+    das Schreiben. Ein Kanal, in den man gar nichts schicken kann (Forum,
+    Kategorie), taugt nie - auch wenn er eingestellt ist und die Rechte passen:
+    sonst platzte erst das Posten."""
     import guildcfg
     aufraeum = {_ganz(c) for c in (guildcfg.get(guild.id, "autodelete_channels") or ())}
     wahl = []
@@ -299,6 +301,8 @@ def kanal_ohne_aufraeumen(client, guild, schluessel, *, rechte=()):
     wahl.append(getattr(guild, "system_channel", None))
     for kanal in wahl:
         if kanal is None or _ganz(getattr(kanal, "id", 0)) in aufraeum:
+            continue
+        if not callable(getattr(kanal, "send", None)):
             continue
         if darf_schreiben(kanal, guild) and _darf_auch(kanal, guild, rechte):
             return kanal
@@ -351,15 +355,9 @@ def kuerzlich_notlage(uid):
         return False
 
 
-def leser(kanal, guild, merker=None):
-    """Die Rollen (IDs), die diesen Kanal lesen duerfen - Bot-Rollen zaehlen
-    nicht. None = nicht pruefbar (Attrappe ohne Rechte und Rollen). 'merker'
-    (ein dict) haelt das Ergebnis je Kanal fest, wenn viele Kandidaten aus
-    denselben Kanaelen kommen - jede Rolle durchzurechnen kostet."""
-    if merker is not None:
-        if id(kanal) not in merker:
-            merker[id(kanal)] = (kanal, leser(kanal, guild))
-        return merker[id(kanal)][1]
+def _rollen_mit(kanal, guild, darf):
+    """Die Rollen (IDs), denen 'darf(rechte)' in diesem Kanal gelingt - Bot-
+    Rollen zaehlen nicht. None = nicht pruefbar (Attrappe ohne Rechte und Rollen)."""
     pruefen = getattr(kanal, "permissions_for", None)
     rollen = [r for r in (getattr(guild, "roles", None) or ())
               if not getattr(r, "managed", False)]
@@ -369,18 +367,50 @@ def leser(kanal, guild, merker=None):
     if pruefen is None or not rollen:
         return None
     try:
-        return frozenset(_ganz(r.id) for r in rollen if pruefen(r).read_messages)
+        return frozenset(_ganz(r.id) for r in rollen if darf(pruefen(r)))
     except Exception:  # noqa: BLE001 - Thread ohne Elternkanal im Cache: keiner
         return frozenset()
 
 
-def privat(quelle, ziel, guild, merker=None):
+def leser(kanal, guild, merker=None):
+    """Die Rollen (IDs), die diesen Kanal lesen duerfen - Bot-Rollen zaehlen
+    nicht. None = nicht pruefbar (Attrappe ohne Rechte und Rollen). 'merker'
+    (ein dict) haelt das Ergebnis je Kanal fest, wenn viele Kandidaten aus
+    denselben Kanaelen kommen - jede Rolle durchzurechnen kostet."""
+    if merker is not None:
+        if id(kanal) not in merker:
+            merker[id(kanal)] = (kanal, leser(kanal, guild))
+        return merker[id(kanal)][1]
+    return _rollen_mit(kanal, guild, lambda rechte: rechte.read_messages)
+
+
+def hoerer(voice, guild, merker=None):
+    """Die Rollen (IDs), die in diesem Voice HOEREN konnten: sehen UND
+    verbinden. Fuer Ton aus einem Voice ist das das Publikum - nicht, wer ihn
+    nur sieht: ein abgeschlossener Raum ('Lock' bei TempVoice, ein Team-Raum,
+    den alle sehen, aber nur das Team betritt) ist fuer seinen Ton privat.
+    Kennt eine Attrappe 'connect' nicht, zaehlt es als erlaubt (wie vorher).
+    None = nicht pruefbar."""
+    if merker is not None:
+        schluessel = ("hoeren", id(voice))
+        if schluessel not in merker:
+            merker[schluessel] = (voice, hoerer(voice, guild))
+        return merker[schluessel][1]
+    return _rollen_mit(voice, guild, lambda rechte: bool(
+        rechte.read_messages and getattr(rechte, "connect", True)))
+
+
+def privat(quelle, ziel, guild, merker=None, *, ton=False):
     """Stammt etwas aus einem Kanal, den nicht jeder lesen kann, der 'ziel'
     liest (Mod-Kanal, privater Kanal, privater Thread) - oder aus einem
     NSFW-Kanal? Dann holt Flo es dort nicht hervor: die Person hat sich ihr
     Publikum nicht ausgesucht. Ohne 'ziel' zaehlt @everyone. Gemessen wird je
     Rolle, so geht es auch auf Servern, auf denen @everyone nichts sieht (nur
-    die Rolle nach der Verifizierung)."""
+    die Rolle nach der Verifizierung).
+
+    ton=True: es geht um TON aus diesem Voice (Clips). Dann ist das Publikum,
+    wer dort hoeren konnte (hoerer: sehen UND verbinden) - nicht schon, wer
+    den Raum nur sieht."""
     import discord
     if quelle is None or guild is None:
         return False
@@ -392,7 +422,7 @@ def privat(quelle, ziel, guild, merker=None):
             return True
     except Exception:  # noqa: BLE001
         return True
-    von = leser(quelle, guild, merker)
+    von = (hoerer if ton else leser)(quelle, guild, merker)
     if von is None:
         return False                    # nichts zu pruefen (Attrappe)
     nach = leser(ziel, guild, merker) if ziel is not None else None

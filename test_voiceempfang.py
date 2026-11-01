@@ -1370,6 +1370,150 @@ def test_empfang_haken_haengt_wirklich_am_voice_websocket():
         _leser_stoppen(vc)
 
 
+def _leser_schlaeft(st):
+    """Warten, bis discord.py's SocketReader-Thread wirklich losgelaufen ist
+    und sich selbst pausiert hat (run() -> pause()). Erst danach greift
+    _create_socket -> resume() so, wie im Betrieb."""
+    leser = st._socket_reader
+    for _ in range(500):
+        if leser.is_alive() and leser._idle_paused is False and not leser._running.is_set():
+            return
+        time.sleep(0.01)
+    raise AssertionError("der SocketReader kam nicht in Gang")
+
+
+def _ip_erkennung(st, server, frist):
+    """discord.py's discover_ip ohne Netz: ein Lauscher wartet auf die
+    74-Byte-Antwort, der 'Voice-Server' schickt sie an den AKTUELLEN Socket.
+    -> Sekunden, bis der Leser sie las - oder None nach 'frist'."""
+    da = threading.Event()
+
+    def antwort(data):
+        if len(data) == 74 and data[1] == 0x02:
+            da.set()
+    st.add_socket_listener(antwort)
+    try:
+        t0 = time.monotonic()
+        server.sendto(b"\x00\x02" + bytes(72), st.socket.getsockname())
+        return time.monotonic() - t0 if da.wait(frist) else None
+    finally:
+        st.remove_socket_listener(antwort)
+
+
+def test_empfang_leser_haengt_nach_umzug_und_neuaufbau_nicht_am_alten_socket():
+    """Solange clips lauscht, schlaeft discord.py's SocketReader nie: er sitzt
+    in select() (30 s) auf dem Socket, auf dem zuletzt etwas kam. Umzug
+    (_create_socket: neuer Socket, alter bleibt offen) und Neuaufbau
+    (disconnect(cleanup=False), soft_disconnect: alter wird geschlossen)
+    tauschen den Socket, ohne den Leser zu wecken - die IP-Erkennung der neuen
+    Verbindung wartete bis zu 30 s ('flo komm' aus einem anderen Kanal: move_to
+    in der Zeitgrenze, der Song steht so lange). Echter VoiceConnectionState,
+    echter SocketReader, echtes UDP ueber 127.0.0.1: die Antwort muss sofort
+    gelesen werden. Und nach dem Trennen kommt der Leser auch wieder heraus.
+
+    Zweimal je Art: der neue Socket bekommt hier sofort die kleinste freie
+    Nummer - war das die des alten, auf den der Leser noch schaut, schliefe
+    sein select() die vollen 30 s weiter (nachgemessen)."""
+    import socket as _socket
+    for art in ("umzug", "neuaufbau", "weich") * 2:
+        vc = _echter_client()
+        st = vc._connection
+        assert isinstance(st, ve.EmpfangsZustand)
+        server = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        server.bind(("127.0.0.1", 0))
+        e = ve.Empfaenger(77, _Senke())
+        try:
+            _leser_schlaeft(st)
+            st._create_socket()                           # voice_server_update (erste Verbindung)
+            st.socket.connect(server.getsockname())       # loop.sock_connect
+            assert _ip_erkennung(st, server, 3.0) is not None
+            assert e.anhaengen(vc)                        # clips lauscht ab jetzt
+            time.sleep(0.2)                               # Leser sitzt in select() auf Socket 1
+            if art == "neuaufbau":
+                asyncio.run(st.disconnect(cleanup=False))    # _poll_voice_ws vor _connect
+            elif art == "weich":
+                asyncio.run(st.soft_disconnect())
+            st._create_socket()                           # neuer Socket (Umzug / neuer Anlauf)
+            st.socket.connect(server.getsockname())
+            dauer = _ip_erkennung(st, server, 3.0)
+            assert dauer is not None and dauer < 1.5, (art, dauer)
+            assert e.roh in st._socket_reader._callbacks  # clips lauscht weiter
+            e.abhaengen()
+            asyncio.run(st.soft_disconnect())             # weckt den Leser am letzten Socket ...
+            _leser_stoppen(vc)                            # ... und er kommt sofort heraus
+        finally:
+            e.abhaengen()
+            with contextlib.suppress(Exception):
+                st.socket.close()
+            st._socket_reader.stop()
+            server.close()
+
+
+def test_empfang_was_vor_dem_lauschen_im_socket_lag_kommt_nie_in_die_senke():
+    """Sitzt Flo nicht taub im Call, aber niemand lauscht ('Mikro aus', noch
+    keine Ansage, Server-Zustimmung aus, nach einem Discord-Sound), schlaeft
+    discord.py's SocketReader - und der Kernel sammelt, was Discord schickt.
+    Haengt sich der naechste Empfaenger an, laese der Leser das gleich
+    hintereinander, und roh() stempelte es mit JETZT: Ton aus der Zeit ohne
+    Ansage landete als frischer im Puffer. Echter Zustand, echter Leser,
+    echtes UDP, echt verschluesselte Pakete. Was danach kommt, kommt an."""
+    import socket as _socket
+    vc = _echter_client()
+    st = vc._connection
+    server = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    server.bind(("127.0.0.1", 0))
+    senke = _Senke()
+    e = ve.Empfaenger(77, senke)
+    try:
+        _leser_schlaeft(st)
+        st._create_socket()
+        st.socket.connect(server.getsockname())
+        assert _ip_erkennung(st, server, 3.0) is not None    # danach schlaeft der Leser
+        st.secret_key, st.mode = list(_SCHLUESSEL), ve.MODUS
+        vc.ssrc_zu_uid[4242] = 501
+        ziel = st.socket.getsockname()
+        for k in range(40):                                   # 0,8 s Anna, und keiner hoert zu
+            server.sendto(_paket(b"\xfc\x01", seq=100 + k, ts=960 * k, nonce=k + 1), ziel)
+        time.sleep(0.2)
+        assert e.anhaengen(vc)
+        time.sleep(0.3)                                       # Zeit genug, Altes zu liefern
+        e.abarbeiten()
+        # Eins darf der schlafende Leser selbst geschluckt haben: nach der
+        # IP-Erkennung sass er noch in select() und warf das erste ohne
+        # Lauscher weg. In die Senke kommt keins.
+        assert senke.pakete == [] and e.zaehler()["vorher_verworfen"] >= 39, e.zaehler()
+        for k in range(5):                                    # ab jetzt: das zaehlt
+            server.sendto(_paket(b"\xfc\x02", seq=200 + k, ts=960 * (100 + k),
+                                 nonce=100 + k), ziel)
+        for _ in range(100):
+            e.abarbeiten()
+            if len(senke.pakete) == 5:
+                break
+            time.sleep(0.02)
+        assert senke.opus() == [b"\xfc\x02"] * 5 and {p[0] for p in senke.pakete} == {501}
+        # Liest schon jemand mit (discord.py's IP-Erkennung), liegt nichts Altes -
+        # und dem wird auch nichts weggelesen.
+        e.abhaengen()
+
+        def fremd(data):
+            pass
+        st.add_socket_listener(fremd)
+        try:
+            assert ve._altes_verwerfen(st) == 0
+        finally:
+            st.remove_socket_listener(fremd)
+        assert ve._altes_verwerfen(SimpleNamespace()) == 0       # Attrappe ohne Socket
+        e.abhaengen()
+        asyncio.run(st.soft_disconnect())
+        _leser_stoppen(vc)
+    finally:
+        e.abhaengen()
+        with contextlib.suppress(Exception):
+            st.socket.close()
+        st._socket_reader.stop()
+        server.close()
+
+
 # =============================================================================
 # An- und abhaengen, Neuaufbau
 # =============================================================================
@@ -1863,6 +2007,10 @@ def test_empfang_kompatibel_meldet_fehlende_innereien():
         (mock.patch.object(zustand, "__init__", ohne_haken), "hook"),
         (mock.patch.object(zustand, "add_socket_listener", None), "add_socket_listener"),
         (mock.patch.object(zustand, "remove_socket_listener", None), "remove_socket_listener"),
+        # Die drei Stellen, an denen EmpfangsZustand den Leser weckt.
+        (mock.patch.object(zustand, "_create_socket", None), "_create_socket"),
+        (mock.patch.object(zustand, "disconnect", None), "disconnect"),
+        (mock.patch.object(zustand, "soft_disconnect", None), "soft_disconnect"),
         (mock.patch.object(discord.VoiceClient, "_get_voice_packet", None), "_get_voice_packet"),
         (mock.patch.object(discord.VoiceClient, "create_connection_state", None),
          "create_connection_state"),

@@ -155,6 +155,8 @@ ABKUEHLEN_SEK = 45
 #: Nach 'Mikro aus' so lange kein 'flo clip an' im selben Kanal - jedes aus
 #: postet einen Hinweis in den Voice-Chat, jedes an eine neue Ansage.
 AN_PAUSE = 60
+#: "kein Ziel fuer Clips" steht hoechstens so oft je Server im Log.
+ZIEL_LOG_SEK = 600
 #: ... und je Server hoechstens so viele in der Stunde.
 STUNDE_MAX = 12
 #: So viele Schnitte duerfen warten oder laufen (es rechnet immer nur einer).
@@ -222,6 +224,11 @@ AUS_SEK = 12 * 3600
 #: Gruende, bei denen auch laufende Dialoge und Schnitte verworfen werden.
 _SPERR_GRUENDE = frozenset(("aus", "feature", "server", "sendepause", "ansage", "ansage_weg",
                             "ende"))
+#: Was ein verworfener Clip dazu sagt - je Grund, aus dem verworfen wurde.
+_VERWORFEN_TEXT = {"aus": "verworfen_aus", "feature": "aus_hier",
+                   "server": "nicht_erlaubt_server", "sendepause": "grund_sendepause",
+                   "ansage": "grund_ansage", "ansage_weg": "grund_ansage_weg",
+                   "ende": "grund_ende"}
 #: Was der Empfaenger als 'roh' mitzaehlt, aber kein Ton ist: Berichte (RTCP),
 #: fremde Nutzlast (Video) und Muell. Fuer die Warnungen im Takt zaehlt nur der Rest.
 _KEIN_TON = ("rtcp", "fremd", "kaputt")
@@ -229,7 +236,7 @@ _KEIN_TON = ("rtcp", "fremd", "kaputt")
 WARNEN_AB_PAKETEN = 50
 #: Gruende, aus denen 'flo clip an' Flo NICHT im Kanal haelt: so bald wird
 #: daraus nichts (anders als 'start' - da kommt die Ansage gleich).
-_AN_SINNLOS = frozenset(("ansage", "ansage_weg", "server_taub", "client"))
+_AN_SINNLOS = frozenset(("ansage", "ansage_weg", "server_taub", "client", "kein_ziel"))
 
 #: custom_ids der dauerhaften Knoepfe.
 OHNE_ID = "flo:clip:ohne"
@@ -363,13 +370,20 @@ TEXTE = {
     "kein_kanal": ("Ich find keinen Kanal, in den ich den Clip legen darf. Admin: "
                    "`{name} einstellung clip_channel #kanal`."),
     "keine_dateien": "Im Clip-Kanal darf ich keine Dateien hochladen. Admin, du bist dran.",
+    "kanal_zu": ("Der Clip-Kanal {kanal} steht zwar drin, aber da komm ich nicht rein: "
+                 "Schreiben oder Dateien fehlt, dort wird aufgeräumt, oder es ist gar kein "
+                 "Textkanal. Admin, du bist dran."),
     "privat_zu": ("Euer Voice ist privat, und in eurem Voice-Chat darf ich nichts hochladen. "
                   "Also kein Clip."),
+    "privat_offen": ("Euer Voice ist abgeschlossen – aber seinen Chat lesen auch Leute, die gar "
+                     "nicht reinkommen. Dann eben kein Clip, weder dort noch sonstwo."),
     "verworfen_aus": "Das Mikro wurde inzwischen ausgemacht – Clip verworfen.",
     "verworfen_raus": "Einer aus dem Clip ist inzwischen ausgestiegen – verworfen. Nochmal clippen.",
     "zurueckgehalten": ("Den Clip lass ich liegen. Manche Sachen gehören nicht in einen "
                         "Clip-Kanal."),
     "hetze": "Da ist menschenfeindlicher Müll drin. Den häng ich nicht aus.",
+    "nix_draussen": "Wird nix mit dem Clip. Warum, steht im Voice-Chat eures Voice.",
+    "nix_draussen_kurz": "Wird nix mit dem Clip.",
     # Der Post
     "post_kopf": "🎬 **Clip · {dauer}** aus 🔊 **{voice}** · geclippt von {von}",
     "post_dabei": "Mit dabei: {namen}",
@@ -387,6 +401,8 @@ TEXTE = {
     "aus_ok": ("🔇 Mikro aus. Puffer gelöscht, für diese Runde hör ich nicht mehr mit. "
                "`{name} clip an`, wenn ihr's euch anders überlegt."),
     "aus_schon": "Ich hör doch gar nicht mit.",
+    "aus_vorab": ("🔇 Mikro aus – für diese Runde hör ich gar nicht erst mit. "
+                  "`{name} clip an`, wenn ihr's euch anders überlegt."),
     "aus_verworfen": ("Hier hör ich gerade nicht mit – aber was von der Runde noch offen war, "
                       "ist weg. Zufrieden?"),
     "aus_raus": "🔇 Mikro aus, Puffer weg – und weil hier eh nix läuft: ich bin raus.",
@@ -394,6 +410,7 @@ TEXTE = {
               "euch einen Clip."),
     "an_schon": "Ich hör schon mit. `{name} clip`, wenn was Lustiges war.",
     "an_kein_voice": "Geh erst in einen Voice, dann komm ich lauschen.",
+    "an_musik_aus": "Musik ist hier aus – dann sitz ich auch nicht im Voice rum.",
     "an_woanders": "Ich häng gerade in **{kanal}** – komm rüber.",
     "an_zu_schnell": ("Gerade erst ausgemacht, jetzt schon wieder an? Entscheidet euch. In {s} s "
                       "geht's wieder."),
@@ -420,7 +437,7 @@ _GRUND_TEXT = {
     "keine_sitzung": "grund_keine_sitzung", "aus": "grund_aus",
     "server_taub": "grund_server_taub", "ansage": "grund_ansage", "start": "grund_start",
     "getrennt": "grund_getrennt", "ende": "grund_ende", "vorab": "grund_start",
-    "ansage_weg": "grund_ansage_weg",
+    "ansage_weg": "grund_ansage_weg", "kein_ziel": "kein_kanal",
 }
 
 
@@ -433,6 +450,16 @@ def _sendepause():
         return bool(admin.is_locked())
     except Exception:  # noqa: BLE001 - ohne admin keine Sendepause
         return False
+
+
+def _musik_an(gid):
+    """Ist die Musik hier an (der Schalter global und auf diesem Server)? Ueber
+    sie sitzt Flo im Voice - auch fuer 'flo clip an'. (Laeuft die Musik gar
+    nicht, laufen die Clips auch nicht - das regelt bot.py.)"""
+    try:
+        return bool(features.is_on_in(gid, "music"))
+    except Exception:  # noqa: BLE001 - im Zweifel: wie bisher
+        return True
 
 
 def _besitzer(uid):
@@ -821,8 +848,11 @@ class Sitzung:
         self.letzte_weckung = float("-inf")
         self.getrennt_seit = None
         #: Zaehlt hoch, wenn Mikro aus, Funktion aus usw. - offene Dialoge und
-        #: laufende Schnitte mit einem alten Stand werden dann verworfen.
+        #: laufende Schnitte mit einem alten Stand werden dann verworfen ...
         self.sperre_gen = 0
+        #: ... und warum zuletzt (ein Grund aus _SPERR_GRUENDE): damit der
+        #: verworfene Clip den echten Grund nennt, nicht immer 'Mikro aus'.
+        self.sperre_grund = ""
         self.lock = None
         self.lock_loop = None
         #: Der letzte Kanal, in dem Flo in einer Musik-Sitzung sass (fuer das
@@ -1074,6 +1104,13 @@ class Clips(FeatureBasis):
         self._uhr = time.monotonic
         self._aufgeraeumt_um = float("-inf")
         self._kontingent_stand = None
+        #: voice_kanal_id -> Wanduhr des letzten 'Mikro aus' dort. Fuer die
+        #: Umschalt-Bremse (AN_PAUSE) - getrennt vom 'aus' im Speicher, das mit
+        #: der Runde endet: geht Flo wegen genau dieses 'aus' (aus_raus), ist
+        #: die Runde sofort vorbei, die Bremse muss aber trotzdem gelten.
+        self._aus_zuletzt = {}
+        #: gid -> wann zuletzt "kein Ziel fuer Clips" im Log stand
+        self._ziel_gemeldet = {}
 
     # --- Lebenszyklus -----------------------------------------------------
     def _datenschutz_oeffnen(self):
@@ -1124,6 +1161,7 @@ class Clips(FeatureBasis):
         self._aufgeraeumt_um = float("-inf")
         self._aufraeumen()
         guildcfg.horcht_auf("clip_aufnahme", _einstellung_neu)
+        guildcfg.horcht_auf("clip_channel", _einstellung_neu)
         clipschnitt.alte_reste_weg()
         clipstext.transkriber.kontingent.aus_dict(self._store.data.get("whisper"))
         self._kontingent_stand = None
@@ -1204,7 +1242,7 @@ class Clips(FeatureBasis):
         except (TypeError, ValueError):
             return False
         if (not features.is_on_in(gid, "clips") or not guildcfg.an(gid, "clip_aufnahme")
-                or _sendepause() or not self._kann_rendern):
+                or _sendepause() or not self._kann_rendern or not _musik_an(gid)):
             return False
         if str(kanal_id) in self._daten("aus"):
             return False
@@ -1434,6 +1472,17 @@ class Clips(FeatureBasis):
             if s.aktiv and s.kanal_id != kanal.id:
                 await self._stoppen(guild, s, "kanalwechsel")
             if not s.aktiv:
+                # Ohne Ziel kein Clip - dann auch kein Mithoeren: die Ansage
+                # versprache einen Kanal, den es nicht gibt, und der Puffer hielte
+                # Ton fest, aus dem nie etwas werden kann (kein Clip-Kanal,
+                # keine Dateien, abgeschlossener Raum mit offenem Chat ...).
+                _ziel, _hier, art, _werte = self._ziel_pruefen(guild, kanal)
+                if art:
+                    s.grund = "kein_ziel"
+                    s.ansage_fehlt = (kanal.id, time.monotonic() + ANSAGE_FEHLT_PAUSE,
+                                      "kein_ziel")
+                    self._ziel_fehlt_melden(guild.id, art)
+                    return
                 if not await self._ankuendigen(guild, kanal, s):
                     s.grund = "ansage"
                     s.ansage_fehlt = (kanal.id, time.monotonic() + ANSAGE_FEHLT_PAUSE)
@@ -1589,6 +1638,7 @@ class Clips(FeatureBasis):
             task.cancel()
         if grund in _SPERR_GRUENDE:
             s.sperre_gen += 1
+            s.sperre_grund = grund
             player = _player(s.gid)
             if player is not None:
                 player.clip_halten = False
@@ -1708,7 +1758,7 @@ class Clips(FeatureBasis):
     def _ziel_text(self, guild, voice):
         """Wohin die Clips dieses Voice gehen - wie _zielkanal() es entscheidet."""
         ziel = self._zielkanal_roh(guild)
-        if voice is not None and basis.privat(voice, ziel, guild):
+        if voice is not None and basis.privat(voice, ziel, guild, ton=True):
             return "diesen Voice-Chat (euer Voice ist privat)"
         if ziel is not None:
             return getattr(ziel, "mention", None) or "den Clip-Kanal"
@@ -1997,14 +2047,14 @@ class Clips(FeatureBasis):
                 dialoge.pop(uid, None)
                 dialog.snap = None
                 if dialog._fertig:
-                    self.freigeben(dialog.message)
+                    self._frei_wie_ueblich(dialog.guild, dialog.message)
                     continue
                 try:
                     dialog.stop()
                 except Exception:  # noqa: BLE001 - die View hing an keinem Loop mehr
                     log.debug("Clips: alter Dialog liess sich nicht stoppen", exc_info=True)
                 if self._spawn(dialog.on_timeout()) is None:
-                    self.freigeben(dialog.message)
+                    self._frei_wie_ueblich(dialog.guild, dialog.message)
             if not dialoge:
                 self._dialoge.pop(gid, None)
         for uid, wann in list(self._zuletzt.items()):
@@ -2051,7 +2101,13 @@ class Clips(FeatureBasis):
             return None
         if kern in _RAUS:
             return ("raus", ziele)
-        if kern in _REIN:
+        # Zurueck rein ist eine Einwilligung - die darf nicht aus einer
+        # Nachfrage entstehen: 'Flo, clip mal, ja?' heisst 'clip mal, okay?',
+        # nicht 'nehmt mich wieder auf'. Ein nacktes 'ja' zaehlt deshalb nur
+        # VORNE ('ja bitte', 'ja danke'); 'mal ja', 'bitte, ja?', 'doch ja'
+        # gehen an die KI. Die ausdruecklichen Formen ('bitte wieder rein')
+        # vertragen Hoeflichkeit weiter ueberall.
+        if kern in _REIN and (kern != "ja" or rest.split()[0] == "ja"):
             return ("rein", ziele)
         if not ziele:
             if kern in _AUS:
@@ -2188,6 +2244,9 @@ class Clips(FeatureBasis):
                 continue
             kanal = (guild.get_channel(_ganz(eintrag.get("cid")))
                      if hasattr(guild, "get_channel") else None)
+            # Gezaehlt wird, wo der Clip STEHT: aus einem abgeschlossenen Raum
+            # kommt er nur in dessen Voice-Chat, wenn den bloss lesen kann, wer
+            # dort hoeren konnte (_ziel_pruefen) - sonst gar nicht.
             if kanal is None or basis.privat(kanal, hier, guild):
                 continue
             eintraege.append(eintrag)
@@ -2247,6 +2306,23 @@ class Clips(FeatureBasis):
             await self._leise(message, self._rein_befehl(message, befehl[1]))
         return True
 
+    async def ausstieg_in_der_sendepause(self, message):
+        """bot.on_message in der Sendepause - da schweigt Flo fuer alle ausser
+        dem Chef. Nur eins geht trotzdem: 'flo clip nein'. Der Ausstieg gilt
+        immer (der Knopf 🙅 geht da auch) - sonst waere, wer jetzt aussteigt,
+        nach der Sendepause wieder drin. -> ob beantwortet."""
+        if self._store is None or getattr(message, "guild", None) is None:
+            return False
+        if getattr(message, "author", None) is None:
+            return False
+        if not _vielleicht_clip(getattr(message, "content", "") or ""):
+            return False
+        befehl = self.befehl(message)
+        if befehl is None or befehl[0] != "raus":
+            return False
+        await self._leise(message, self._raus_befehl(message, befehl[1]))
+        return True
+
     def _raus_befehl(self, message, ziele):
         autor = message.author
         fremde = [z for z in ziele if _ganz(getattr(z, "id", 0)) != _ganz(autor.id)]
@@ -2281,6 +2357,10 @@ class Clips(FeatureBasis):
             return self._text("nicht_erlaubt_server")
         if _sendepause():
             return self._text("grund_sendepause")
+        if not _musik_an(gid):
+            # Flo sitzt ueber die Musik im Voice - wer sie hier (oder ganz)
+            # abgeschaltet hat, will auch keinen Flo, der zum Mithoeren bleibt.
+            return self._text("an_musik_aus")
         vc = getattr(guild, "voice_client", None)
         if (_verbunden(vc) and getattr(vc.channel, "id", None) != kanal.id
                 and music.gehoert_der_musik(gid, vc)):
@@ -2294,15 +2374,20 @@ class Clips(FeatureBasis):
                 player.clip_halten = True
             return self._text("an_schon")
         # Umschalt-Bremse: jedes 'aus' postet in den Voice-Chat, jedes 'an'
-        # eine neue Ansage - aus/an im Sekundentakt waere Spam dort.
-        aus_um = self._daten("aus").get(str(kanal.id))
-        if aus_um is not None:
+        # eine neue Ansage - aus/an im Sekundentakt waere Spam dort. Gefragt
+        # wird auch die Merke im Arbeitsspeicher: ging Flo wegen des 'aus'
+        # gleich mit (aus_raus), ist das 'aus' der Runde schon wieder weg.
+        seit = AN_PAUSE
+        for aus_um in (self._daten("aus").get(str(kanal.id)),
+                       self._aus_zuletzt.get(kanal.id)):
+            if aus_um is None:
+                continue
             try:
-                seit = _wand() - basis.glaubhafte_zeit(float(aus_um))
+                seit = min(seit, _wand() - basis.glaubhafte_zeit(float(aus_um)))
             except (TypeError, ValueError):
-                seit = AN_PAUSE
-            if seit < AN_PAUSE:
-                return self._text("an_zu_schnell", s=max(1, int(AN_PAUSE - seit + 0.999)))
+                pass
+        if seit < AN_PAUSE:
+            return self._text("an_zu_schnell", s=max(1, int(AN_PAUSE - seit + 0.999)))
         self._daten("aus").pop(str(kanal.id), None)
         self._daten("ansagen").pop(str(kanal.id), None)
         self._store.save_soon()
@@ -2326,26 +2411,45 @@ class Clips(FeatureBasis):
             player.clip_halten = False
         if s.grund == "ansage":
             return self._text("an_ansage_fehlt")
+        if s.grund == "kein_ziel":
+            return self._ziel_text_fehlt(guild, getattr(guild, "voice_client", None))
         return self._grund_text(s.grund)
+
+    def _runden_kanal(self, guild):
+        """Der Kanal der laufenden Musik-Runde: wo Flo mit der Musik sitzt -
+        auch wenn er (noch) nicht mithoert -, sonst wohin die Musik gerade
+        will (Neuaufbau). None: es gibt keine Runde."""
+        vc = getattr(guild, "voice_client", None)
+        if _verbunden(vc) and music.gehoert_der_musik(guild.id, vc):
+            return getattr(getattr(vc, "channel", None), "id", None)
+        player = _player(guild.id)
+        return getattr(player, "active_channel_id", None)
 
     async def _aus_befehl(self, message, guild):
         s = self._sitzung(guild.id)
         autor = message.author
         im_kanal = getattr(getattr(getattr(autor, "voice", None), "channel", None), "id", None)
-        if not s.aktiv or (im_kanal != s.kanal_id and not _ist_mod(autor)):
+        # Sitzt Flo schon mit der Musik im Call, hoert aber noch nicht mit (der
+        # Song wird noch gesucht, die Ansage ist unterwegs, vom Server taub,
+        # Sendepause ...), gilt das 'aus' trotzdem fuer diese Runde - sonst
+        # finge Flo Sekunden spaeter an, ausgerechnet bei dem, der eben nein sagte.
+        cid = s.kanal_id if s.aktiv else self._runden_kanal(guild)
+        if not s.aktiv and str(cid) in self._daten("aus"):
+            cid = None                    # fuer diese Runde schon aus - nichts Neues
+        if cid is None or (im_kanal != cid and not _ist_mod(autor)):
             # Flo hoert (hier) nicht mit - aber aus der Runde kann noch etwas
             # unterwegs sein: ein offener Dialog, ein laufender Schnitt.
             offen = self._offen_aus(guild.id)
             if not offen:
-                return self._text("aus_schon" if not s.aktiv else "zaungast_mikro")
+                return self._text("aus_schon" if cid is None else "zaungast_mikro")
             if im_kanal not in offen and not _ist_mod(autor):
                 return self._text("zaungast_mikro")
             self._offenes_verwerfen(guild)
             return self._text("aus_verworfen")
-        cid = s.kanal_id                  # _leeren() nimmt ihn der Sitzung gleich weg
+        hoerte = s.aktiv
         geht = self._mikro_aus_sofort(guild, cid)
         await self._mikro_aus_rest(guild, cid, autor, geht)
-        return self._text("aus_raus" if geht else "aus_ok")
+        return self._text("aus_raus" if geht else ("aus_ok" if hoerte else "aus_vorab"))
 
     def _offen_aus(self, gid):
         """Aus welchen Voice-Kanaelen gerade noch etwas unterwegs ist: offene
@@ -2378,6 +2482,7 @@ class Clips(FeatureBasis):
         fuer die es gaelte, ist schon vorbei."""
         s = self._sitzung(guild.id)
         s.sperre_gen += 1
+        s.sperre_grund = "aus"
         for dialog in list((self._dialoge.get(guild.id) or {}).values()):
             dialog.snap = None
         log.info("Clips: Server %s – Mikro aus nach der Runde, Offenes verworfen.", guild.id)
@@ -2386,7 +2491,10 @@ class Clips(FeatureBasis):
         """Mikro aus fuer Kanal cid - der Teil ohne await: merken, Puffer leer,
         laufende Schnitte und Dialoge verwerfen. -> ob Flo danach geht (er kam
         nur zum Mithoeren, und es laeuft nichts)."""
-        self._daten("aus")[str(cid)] = round(_wand())
+        jetzt = _wand()
+        self._daten("aus")[str(cid)] = round(jetzt)
+        self._aus_zuletzt = {k: t for k, t in self._aus_zuletzt.items() if jetzt - t < AN_PAUSE}
+        self._aus_zuletzt[cid] = jetzt
         self._daten("ansagen").pop(str(cid), None)
         self._store.save_soon()
         player = _player(guild.id)
@@ -2397,6 +2505,7 @@ class Clips(FeatureBasis):
             log.info("Clips: Server %s – Puffer geleert (aus).", guild.id)
         else:
             s.sperre_gen += 1
+            s.sperre_grund = "aus"
         for dialog in list((self._dialoge.get(guild.id) or {}).values()):
             dialog.snap = None
         return geht
@@ -2444,8 +2553,16 @@ class Clips(FeatureBasis):
         eintrag = self._daten("ansagen").get(str(kanal)) if kanal else None
         if isinstance(eintrag, dict):
             ansage = f"steht (<t:{_ganz(eintrag.get('ts'))}:R>)"
+        voice = guild.get_channel(kanal) if kanal and hasattr(guild, "get_channel") else None
+        ziel, hier, art, _werte = self._ziel_pruefen(guild, voice)
+        if art:
+            wohin = f"fehlt (`{art}`)"
+        elif hier:
+            wohin = "der Voice-Chat (privat)"
+        else:
+            wohin = getattr(ziel, "mention", None) or "—"
         emb.add_field(name="Sitzung", value=f"{sitzung}\nKanal: {f'<#{kanal}>' if kanal else '—'}"
-                      f"\nAnsage: {ansage}", inline=False)
+                      f"\nAnsage: {ansage}\nZiel: {wohin}", inline=False)
         stand = vc.stand() if isinstance(vc, voiceempfang.EmpfangsClient) else {}
         stimme = getattr(getattr(guild, "me", None), "voice", None)
         taub = "ja" if getattr(stimme, "self_deaf", False) or getattr(stimme, "deaf", False) \
@@ -2547,6 +2664,8 @@ class Clips(FeatureBasis):
                 return self._text("kein_voice_flo")
             # Der Grund von JETZT - s.grund kann bis zu einem Takt alt sein.
             soll, grund, _vc = self._soll(guild, s)
+            if grund == "kein_ziel":
+                return self._ziel_text_fehlt(guild, _vc)
             return self._grund_text(grund if not soll else (s.grund or "start"))
         if s.getrennt_seit is not None or s.puffer is None:
             return self._grund_text("getrennt")
@@ -2611,7 +2730,7 @@ class Clips(FeatureBasis):
                                 ziel_name=_name(ziel) if ziel is not None else None,
                                 angerechnet=wann)
             finally:
-                self.freigeben(antwort)
+                self._frei_wie_ueblich(guild, antwort)
         return HANDLED
 
     async def _dialog_oeffnen(self, message, guild, s, bis, ziel):
@@ -2652,14 +2771,15 @@ class Clips(FeatureBasis):
     @staticmethod
     def _privat_fuer(guild, voice_id, kanal):
         """Ist dieser Voice privat gegenueber 'kanal' - lesen dort Leute mit, die
-        den Voice (und seinen Chat) gar nicht sehen? Im Voice-Chat selbst nie."""
+        dort nicht hoeren konnten (den Voice nicht sehen oder nicht betreten
+        duerfen)? Im Voice-Chat selbst nie."""
         voice = guild.get_channel(voice_id) if hasattr(guild, "get_channel") else None
         if voice is None or kanal is None:
             return False
         if getattr(kanal, "id", None) == getattr(voice, "id", None):
             return False
         try:
-            return bool(basis.privat(voice, kanal, guild))
+            return bool(basis.privat(voice, kanal, guild, ton=True))
         except Exception:  # noqa: BLE001 - im Zweifel fuer die Privatsphaere
             return True
 
@@ -2688,7 +2808,22 @@ class Clips(FeatureBasis):
         if not offen:
             self._dialoge.pop(gid, None)
         if freigeben and dialog.message is not None:
-            self.freigeben(dialog.message)
+            self._frei_wie_ueblich(dialog.guild, dialog.message)
+
+    def _frei_wie_ueblich(self, guild, msg):
+        """Den Loesch-Schutz einer Antwort aufheben - und sie dann so lange
+        stehen lassen wie jede andere Antwort im Aufraeum-Kanal
+        (autodelete_sekunden), nicht nur die kurze Gnadenfrist danach: das
+        Ergebnis ('Clip ist raus', 'Zu langsam', warum nicht) kommt oft erst,
+        wenn man laengst wieder spielt."""
+        try:
+            sek = float(guildcfg.get(getattr(guild, "id", 0), "autodelete_sekunden") or 0)
+        except (TypeError, ValueError):
+            sek = 0.0
+        if sek > 0:
+            self.freigeben(msg, delay=sek)
+        else:
+            self.freigeben(msg)
 
     async def dialog_schneiden(self, dialog, sek):
         """Ein Laengen-Knopf im Dialog: den Schnitt fahren - mit dem Stand von
@@ -2698,8 +2833,8 @@ class Clips(FeatureBasis):
         self.dialog_weg(dialog, freigeben=False)
         try:
             if snap is None:
-                await self._melden(dialog.message, dialog.anfrage, self._text_fuer(
-                    dialog.guild, "verworfen_aus"))
+                await self._melden(dialog.message, dialog.anfrage, self._verworfen_aus_text(
+                    dialog.guild, self._sitzung(dialog.guild.id)))
                 return
             autor = dialog.besitzer
             sperre = self._sperre_fuer(dialog.guild.id, autor.id)
@@ -2712,7 +2847,7 @@ class Clips(FeatureBasis):
                                 antwort=dialog.message, anfrage=dialog.anfrage,
                                 angerechnet=wann)
         finally:
-            self.freigeben(dialog.message)
+            self._frei_wie_ueblich(dialog.guild, dialog.message)
 
     def _text_fuer(self, guild, schluessel, **werte):
         """Ein Text fuer einen Server ausserhalb von on_message (Knopf, Takt)."""
@@ -2731,6 +2866,33 @@ class Clips(FeatureBasis):
                 log.debug("Clips: Zwischenmeldung liess sich nicht umschreiben", exc_info=True)
         if anfrage is not None:
             await basis.antworte(anfrage, text)
+
+    async def _heikel_melden(self, guild, voice, antwort, anfrage, text):
+        """Ein Ergebnis, das etwas ueber den Call verraet - der Clip bleibt
+        liegen (Notsignal) oder enthaelt Hetze. Gefragt in einem Kanal, den
+        auch Leute lesen, die in diesem (privaten) Voice nicht hoeren konnten,
+        steht dort nur ein knappes 'wird nix'; der Grund geht in den Voice-Chat
+        des Raums, an die, die dabei waren - aber nur, wenn den auch bloss
+        lesen kann, wer dort hoeren konnte (wie beim Clip-Ziel). Sonst wie
+        immer."""
+        if text not in (self._text_fuer(guild, "zurueckgehalten"), self._text_fuer(guild, "hetze")):
+            await self._melden(antwort, anfrage, text)      # nichts Heikles: wie immer
+            return
+        draussen = getattr(anfrage, "channel", None) or getattr(antwort, "channel", None)
+        if voice is not None and self._privat_fuer(guild, getattr(voice, "id", None), draussen):
+            schluessel = "nix_draussen_kurz"                # kein Verweis ins Leere
+            try:
+                dicht = not basis.privat(voice, voice, guild, ton=True)
+            except Exception:  # noqa: BLE001 - im Zweifel fuer die Privatsphaere
+                dicht = False
+            if dicht:
+                try:
+                    await voice.send(text, allowed_mentions=discord.AllowedMentions.none())
+                    schluessel = "nix_draussen"
+                except Exception:  # noqa: BLE001 - dann erfaehrt es eben niemand genauer
+                    log.debug("Clips: Ergebnis im Voice-Chat ging nicht", exc_info=True)
+            text = self._text_fuer(guild, schluessel)
+        await self._melden(antwort, anfrage, text)
 
     # --- Der Schnitt -----------------------------------------------------------------
     @staticmethod
@@ -2763,7 +2925,7 @@ class Clips(FeatureBasis):
         if ziel_uid is not None and (basis.kuerzlich_notlage(ziel_uid)
                                      or self.ist_raus(ziel_uid)):
             return None, self._text_fuer(guild, "person_raus", wer=wer("Die Person"))
-        stimmen, namen, menschen = [], {}, 0.0
+        stimmen, namen, menschen, leute = [], {}, 0.0, set()
         for uid, (name, bot, pakete) in snap.stimmen.items():
             if self.ist_raus(uid):
                 continue
@@ -2779,6 +2941,7 @@ class Clips(FeatureBasis):
             namen[uid] = name
             if not bot:
                 menschen += sek
+                leute.add(uid)
         flo = [] if ziel_uid is not None else [
             (t, o) for t, o in snap.flo if von_t - 1.0 <= t <= snap.bis + 0.3]
         if ziel_uid is not None and menschen < STIMME_MIN_SEK:
@@ -2794,7 +2957,8 @@ class Clips(FeatureBasis):
             bis=snap.bis, dauer=float(dauer), stimmen=stimmen, flo=flo,
             budget=self._budget(guild), titel=titel, whisper=whisper,
             frist=float(RENDER_FRIST - 10), abbruch=abbruch)
-        return auftrag, {"kuerzer": kuerzer, "namen": namen, "dauer": dauer, "voice": voice}
+        return auftrag, {"kuerzer": kuerzer, "namen": namen, "dauer": dauer, "voice": voice,
+                         "menschen": leute}
 
     async def _job(self, guild, snap, dauer, ziel_uid, von, *, antwort=None, anfrage=None,
                    ziel_name=None, angerechnet=None):
@@ -2814,7 +2978,7 @@ class Clips(FeatureBasis):
             await self._melden(antwort, anfrage, text)
 
         if verworfen():
-            await ohne_schnitt(self._text_fuer(guild, "verworfen_aus"))
+            await ohne_schnitt(self._verworfen_aus_text(guild, s))
             return
         if self.ist_raus(von.id):
             await ohne_schnitt(self._text_fuer(guild, "verworfen_raus"))
@@ -2824,6 +2988,23 @@ class Clips(FeatureBasis):
         if auftrag is None:
             await ohne_schnitt(info)
             return
+        # Gibt es ueberhaupt ein Ziel? Sonst liefen Schnitt, Whisper und
+        # KI-Spruch fuer einen Clip, der nie gepostet werden kann - und das
+        # Abkuehlen kostete es obendrein. Nachher wird nochmal geprueft
+        # (Rechte koennen sich in der Zeit aendern).
+        _ziel, _hier, art, _werte = self._ziel_pruefen(guild, info.get("voice"))
+        if art:
+            self._ziel_fehlt_melden(gid, art)
+            await ohne_schnitt(self._zielkanal(guild, info.get("voice"))[2])
+            return
+        sprecher = [sp.uid for sp in auftrag.stimmen]
+
+        def abbruch():
+            # Der Schnitt fragt das aus seinem Thread: steigt jemand aus dem Clip
+            # aus, wird sein Ton nicht erst noch zu Ende dekodiert.
+            return (verworfen() or self.ist_raus(von.id)
+                    or any(self.ist_raus(uid) for uid in sprecher))
+        auftrag.abbruch = abbruch
         if self._in_arbeit >= WARTESCHLANGE_MAX:
             await ohne_schnitt(self._text_fuer(guild, "belegt"))
             return
@@ -2833,15 +3014,17 @@ class Clips(FeatureBasis):
         try:
             async with self._render_semaphore():
                 if verworfen():
-                    await self._melden(antwort, anfrage, self._text_fuer(guild, "verworfen_aus"))
+                    await self._melden(antwort, anfrage, self._verworfen_aus_text(guild, s))
                     return
                 try:
                     erg = await asyncio.wait_for(asyncio.to_thread(clipschnitt.rendern, auftrag),
                                                  RENDER_FRIST)
                 except clipschnitt.RenderFehler as exc:
-                    if verworfen():
-                        await self._melden(antwort, anfrage,
-                                           self._text_fuer(guild, "verworfen_aus"))
+                    if abbruch():
+                        await self._heikel_melden(guild, info.get("voice"), antwort, anfrage,
+                                                  self._verworfen_text(guild, s, gen, von,
+                                                                       sprecher)
+                                                  or self._verworfen_aus_text(guild, s))
                     elif exc.grund == "leer":
                         await self._melden(antwort, anfrage, self._text_fuer(guild, "leer"))
                     else:
@@ -2873,6 +3056,14 @@ class Clips(FeatureBasis):
         if stunde is not None and wann in stunde:
             stunde.remove(wann)
 
+    def _verworfen_aus_text(self, guild, s):
+        """Der Clip ist verworfen, weil sich der Stand geaendert hat (sperre_gen) -
+        mit dem echten Grund: Herunterfahren, Clips oder die Einwilligung des
+        Servers aus, Sendepause, die Ansage weg - oder eben das Mikro."""
+        if self._abbruch:
+            return self._text_fuer(guild, "grund_ende")
+        return self._text_fuer(guild, _VERWORFEN_TEXT.get(s.sperre_grund, "verworfen_aus"))
+
     def _verworfen_text(self, guild, s, gen, von, dabei):
         """Gilt der Clip noch? -> Text, wenn nicht: Mikro aus (oder
         Herunterfahren, Funktion bzw. Einwilligung des Servers aus) seit dem
@@ -2883,9 +3074,14 @@ class Clips(FeatureBasis):
         KI-Spruch allein darf bis zu clipstext.KI_FRIST dauern, und genau dann
         druecken die Leute auf 🙅."""
         gid = guild.id
-        if (self._abbruch or s.sperre_gen != gen or not features.is_on_in(gid, "clips")
-                or not guildcfg.an(gid, "clip_aufnahme")):
-            return self._text_fuer(guild, "verworfen_aus")
+        if self._abbruch:
+            return self._text_fuer(guild, "grund_ende")
+        if not features.is_on_in(gid, "clips"):
+            return self._text_fuer(guild, "aus_hier")
+        if not guildcfg.an(gid, "clip_aufnahme"):
+            return self._text_fuer(guild, "nicht_erlaubt_server")
+        if s.sperre_gen != gen:
+            return self._verworfen_aus_text(guild, s)
         if _sendepause():
             return self._text_fuer(guild, "grund_sendepause")
         if self.ist_raus(von.id) or any(self.ist_raus(uid) for uid in dabei):
@@ -2904,12 +3100,19 @@ class Clips(FeatureBasis):
         # Ton auch nicht mehr zu Whisper - nicht erst der Post faellt weg.
         verworfen = self._verworfen_text(guild, s, gen, von, dabei)
         if verworfen:
-            await self._melden(antwort, anfrage, verworfen)
+            await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
-        zeilen, befund = [], None
+        zeilen, befund, gehoert = [], None, None
         if erg.whisper:
-            segmente = await clipstext.transkriber.je_sprecher(erg.whisper, frist=WHISPER_FRIST)
+            # Vor JEDEM Upload nochmal: wer 🙅 oder 🔇 drueckt, waehrend die
+            # ersten Sprecher bei Whisper sind, dessen Ton (und der aller
+            # danach) geht nicht mehr raus.
+            segmente = await clipstext.transkriber.je_sprecher(
+                erg.whisper, frist=WHISPER_FRIST,
+                weiter=lambda: self._verworfen_text(guild, s, gen, von, dabei) is None)
             self._kontingent_merken()
+            if segmente is not None:
+                gehoert = set(erg.whisper)        # die hat die Pruefung gesehen
             if segmente:
                 zeilen = clipstext.zeilen_bauen(segmente, erg.whisper, info["namen"])
                 befund = clipstext.pruefen(zeilen)
@@ -2918,35 +3121,50 @@ class Clips(FeatureBasis):
                         _notlage_melden(gid, uid)
                     log.info("Clips: Server %s – Clip zurückgehalten (Notsignal im Transkript).",
                              gid)
-                    await self._melden(antwort, anfrage,
-                                       self._text_fuer(guild, "zurueckgehalten"))
+                    await self._heikel_melden(guild, info.get("voice"), antwort, anfrage,
+                                              self._text_fuer(guild, "zurueckgehalten"))
                     return
                 if befund.hetze:
                     log.info("Clips: Server %s – Clip zurückgehalten (Hetze im Transkript).", gid)
-                    await self._melden(antwort, anfrage, self._text_fuer(guild, "hetze"))
+                    await self._heikel_melden(guild, info.get("voice"), antwort, anfrage,
+                                              self._text_fuer(guild, "hetze"))
                     return
         # Nach dem Transkript (bis WHISPER_FRIST) nochmal - erst dann der Post.
         verworfen = self._verworfen_text(guild, s, gen, von, dabei)
         if verworfen:
-            await self._melden(antwort, anfrage, verworfen)
+            await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
+        # Gibt es ein Transkript, aber einen Menschen im Clip, den es nicht
+        # enthaelt (zu kurz fuer Whisper, mehr als WHISPER_MAX_SPRECHER), hat
+        # die Pruefung auf Notsignal und Hetze ihn nie gesehen - und das
+        # Teil-Transkript sieht trotzdem vollstaendig aus. Dann kein Spruch:
+        # Flo macht keinen Witz ueber jemanden, dessen Worte er nicht kennt.
+        # Ebenso, wenn Whisper gefragt war und nichts zurueckkam (Fehler,
+        # Kontingent, Frist): dann hat die Pruefung niemanden gesehen. Ohne
+        # Whisper (aus, Kontingent schon vorher voll) wie immer der Ersatz.
+        ungeprueft = bool(erg.whisper) and (gehoert is None or any(
+            uid not in gehoert for uid in dabei if uid in info.get("menschen", dabei)))
         kommentar = None
-        if not (basis.kuerzlich_notlage(von.id)
+        if not (ungeprueft or basis.kuerzlich_notlage(von.id)
                 or any(basis.kuerzlich_notlage(uid) for uid in dabei)):
             if zeilen and features.is_on_in(gid, "ki"):
                 kommentar = await clipstext.kommentar(gid, zeilen, dauer)
             kommentar = kommentar or clipstext.ersatz_kommentar()
         voice = info.get("voice")
-        ziel, hier, fehler = self._zielkanal(guild, voice)
-        if fehler:
-            await self._melden(antwort, anfrage, fehler)
+        ziel, hier, art, werte = self._ziel_pruefen(guild, voice)
+        if art:
+            # Seit dem Schnitt weggefallen (Rechte, Kanal geloescht): kein Clip -
+            # und das Abkuehlen zahlt dafuer niemand.
+            self._ziel_fehlt_melden(gid, art)
+            self._erstatten(gid, von.id, info.get("angerechnet"))
+            await self._melden(antwort, anfrage, self._text_fuer(guild, art, **werte))
             return
         # Der Spruch kann bis zu clipstext.KI_FRIST gedauert haben - wer in der
         # Zeit 🙅 oder 🔇 gedrueckt hat, kommt nicht in den Post. Die letzte
         # Pruefung steht deshalb HIER, unmittelbar vor dem Hochladen.
         verworfen = self._verworfen_text(guild, s, gen, von, dabei)
         if verworfen:
-            await self._melden(antwort, anfrage, verworfen)
+            await self._heikel_melden(guild, info.get("voice"), antwort, anfrage, verworfen)
             return
         if kommentar and basis.kuerzlich_notlage(von.id):
             kommentar = None                # inzwischen am Boden: kein Spott
@@ -2976,6 +3194,8 @@ class Clips(FeatureBasis):
                                   view=ClipView(id8, 0),
                                   allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
+            log.warning("Clips: Server %s – Upload verboten (403).", gid)
+            self._erstatten(gid, von.id, info.get("angerechnet"))
             await self._melden(antwort, anfrage, self._text_fuer(guild, "keine_dateien"))
             return
         except discord.HTTPException as exc:
@@ -2995,7 +3215,8 @@ class Clips(FeatureBasis):
                             gid)
             else:
                 log.info("Clips: Server %s – Clip gleich nach dem Hochladen verworfen.", gid)
-                await self._melden(antwort, anfrage, nachher)
+                await self._heikel_melden(guild, info.get("voice"), antwort, anfrage,
+                                          nachher)
                 return
         sprecher = sorted(set(dabei) | ({_ganz(ziel_uid)} if ziel_uid else set()))
         self._clips_von(gid, anlegen=True)[id8] = {
@@ -3021,31 +3242,62 @@ class Clips(FeatureBasis):
         await self._melden(antwort, anfrage, text)
 
     def _zielkanal(self, guild, voice):
-        """-> (kanal, privat_hier, fehlertext). Privater Voice: der Clip bleibt
-        in dessen Voice-Chat - oder es gibt keinen. Ohne Clip-Kanal zaehlt
-        @everyone als Publikum."""
+        """-> (kanal, privat_hier, fehlertext) - siehe _ziel_pruefen."""
+        ziel, hier, art, werte = self._ziel_pruefen(guild, voice)
+        return ziel, hier, (self._text_fuer(guild, art, **werte) if art else None)
+
+    def _ziel_pruefen(self, guild, voice):
+        """-> (kanal, privat_hier, fehler_art, werte). Privat heisst: nicht
+        jeder, der den Clip-Kanal liest, konnte in diesem Voice HOEREN
+        (basis.privat mit ton=True - sehen UND betreten). Das ist auch ein
+        abgeschlossener Raum, den alle sehen, aber nur wenige betreten
+        duerfen. Dann bleibt der Clip im Voice-Chat des Raums - aber nur, wenn
+        den auch bloss lesen kann, wer dort hoeren konnte (sonst lesen ihn die
+        mit, die draussen standen), und Flo dort Dateien hochladen darf; sonst
+        gibt es keinen. Ohne Clip-Kanal zaehlt @everyone als Publikum."""
         ziel = self._zielkanal_roh(guild)
-        if voice is not None and basis.privat(voice, ziel, guild):
+        if voice is not None and basis.privat(voice, ziel, guild, ton=True):
+            if basis.privat(voice, voice, guild, ton=True):
+                return None, False, "privat_offen", {}
             try:
                 rechte = voice.permissions_for(guild.me)
                 darf = bool(rechte.send_messages and rechte.attach_files)
             except Exception:  # noqa: BLE001
                 darf = False
             if not darf:
-                return None, False, self._text_fuer(guild, "privat_zu")
-            return voice, True, None
+                return None, False, "privat_zu", {}
+            return voice, True, None, {}
         if ziel is None:
             cid = _ganz(guildcfg.get(guild.id, "clip_channel"))
             eingestellt = guild.get_channel(cid) if cid and hasattr(guild, "get_channel") else None
             if eingestellt is not None:
+                # Eingestellt, aber Flo kommt nicht rein: ihn nochmal einzustellen
+                # hilft dann nicht - das soll der Admin auch so lesen.
                 try:
                     rechte = eingestellt.permissions_for(guild.me)
                     if rechte.send_messages and not rechte.attach_files:
-                        return None, False, self._text_fuer(guild, "keine_dateien")
+                        return None, False, "keine_dateien", {}
                 except Exception:  # noqa: BLE001
                     pass
-            return None, False, self._text_fuer(guild, "kein_kanal")
-        return ziel, False, None
+                return None, False, "kanal_zu", {
+                    "kanal": getattr(eingestellt, "mention", None) or f"<#{cid}>"}
+            return None, False, "kein_kanal", {}
+        return ziel, False, None, {}
+
+    def _ziel_text_fehlt(self, guild, vc):
+        """Warum hier nicht mitgehoert wird, wenn das Ziel fehlt - der Grund von
+        JETZT (Rechte koennen sich geaendert haben)."""
+        voice = getattr(vc, "channel", None)
+        _ziel, _hier, fehler = self._zielkanal(guild, voice)
+        return fehler or self._text("grund_start")
+
+    def _ziel_fehlt_melden(self, gid, art):
+        """Ein Clip hat kein Ziel: ins Log - hoechstens alle ZIEL_LOG_SEK je
+        Server, und nur die Art (keine Namen)."""
+        jetzt = time.monotonic()
+        if jetzt - self._ziel_gemeldet.get(gid, float("-inf")) >= ZIEL_LOG_SEK:
+            self._ziel_gemeldet[gid] = jetzt
+            log.warning("Clips: Server %s – kein Ziel für Clips (%s).", gid, art)
 
     def _neue_id(self, gid):
         vorhanden = self._clips_von(gid)
@@ -3083,9 +3335,15 @@ class Clips(FeatureBasis):
             await _kurz(interaction, TEXTE["zaungast_mikro"])
             return
         s = self._sitzung(guild.id)
-        if not (s.aktiv and s.kanal_id == vc_id):
-            # Flo hoert hier nicht (mehr) mit - was aus dieser Runde noch
-            # unterwegs ist (offener Dialog, laufender Schnitt), stirbt trotzdem.
+        hoerte = s.aktiv and s.kanal_id == vc_id
+        # Sitzt Flo hier schon in einer Runde, hoert aber noch nicht mit, gilt
+        # das 'aus' trotzdem fuer sie (siehe _aus_befehl) - einmal.
+        vorab = (not hoerte and vc_id == self._runden_kanal(guild)
+                 and str(vc_id) not in self._daten("aus"))
+        if not (hoerte or vorab):
+            # Flo hoert hier nicht (mehr) mit und sitzt auch in keiner Runde
+            # hier - was aus dieser Runde noch unterwegs ist (offener Dialog,
+            # laufender Schnitt), stirbt trotzdem.
             if vc_id in self._offen_aus(guild.id):
                 self._offenes_verwerfen(guild)
                 await _kurz(interaction, self._text_fuer(guild, "aus_verworfen"))
@@ -3093,7 +3351,8 @@ class Clips(FeatureBasis):
                 await _kurz(interaction, TEXTE["aus_schon"])
             return
         geht = self._mikro_aus_sofort(guild, vc_id)
-        await _kurz(interaction, self._text_fuer(guild, "aus_raus" if geht else "aus_ok"))
+        await _kurz(interaction, self._text_fuer(
+            guild, "aus_raus" if geht else ("aus_ok" if hoerte else "aus_vorab")))
         await self._mikro_aus_rest(guild, vc_id, wer, geht)
 
     async def feuer_knopf(self, interaction, cid):
@@ -3195,8 +3454,13 @@ class Clips(FeatureBasis):
 
 
 def _einstellung_neu(gid):
-    """guildcfg meldet: 'clip_aufnahme' dieses Servers hat sich geaendert."""
+    """guildcfg meldet: 'clip_aufnahme' oder 'clip_channel' dieses Servers hat
+    sich geaendert. Fehlte das Ziel, wird gleich nochmal nachgesehen - nicht
+    erst nach ANSAGE_FEHLT_PAUSE."""
     if instance._enabled:
+        s = instance._sitzungen.get(gid)
+        if s is not None and s.ansage_fehlt is not None and s.ansage_fehlt[2:] == ("kein_ziel",):
+            s.ansage_fehlt = None
         instance.sitzung_geaendert(gid)
 
 
@@ -3213,5 +3477,6 @@ ist_ansage = instance.ist_ansage
 ansage_behalten = instance.ansage_behalten
 nur_datenschutz = instance.nur_datenschutz
 datenschutz_dm = instance.datenschutz_dm
+ausstieg_in_der_sendepause = instance.ausstieg_in_der_sendepause
 ist_clip = instance.ist_clip
 geloescht = instance.geloescht

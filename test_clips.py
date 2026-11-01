@@ -469,6 +469,10 @@ def test_clips_ist_ueberall_angemeldet():
     # Ein Vertipper mit Argument wird korrigiert, mit Fliesstext nicht.
     assert cmdnorm.normalize("cilp 1m") == "clip 1m"
     assert cmdnorm.normalize("cilp das war gut") is None
+    # Alltagswoerter einen Buchstaben neben 'clips' bleiben, was sie sind.
+    for wort in ("lips", "clipse", "Lips", "lips sind trocken"):
+        assert cmdnorm.normalize(wort) is None, wort
+    assert cmdnorm.normalize("clps monat") == "clips monat"
     assert einstellungen.ZUORDNUNG["clips"] == ("clip_channel", "clip_aufnahme")
     assert "clips" in lauf.WACHE and "test_clips" in lauf.TESTDATEIEN
     assert ("clips", "instance._store") in lauf.WACHE_TIEF
@@ -511,9 +515,14 @@ def test_clips_hilfe_zeilen_haengen_am_modul():
         zeilen = [b for b, _ in bot._hilfe_eintraege("voice")]
         assert zeilen == ["flo clip", "flo clip 1m @wer", "flo clips", "flo clip nein · ja",
                           "flo clip an · aus"], zeilen
+        assert bot._hilfe_hinweis("voice") == "clip"               # Uebersicht und Menue
     with _nur_geladen(bot, "VOICE_GAGS_ENABLED"):
         zeilen = [b for b, _ in bot._hilfe_eintraege("voice")]
         assert zeilen == ["flo soundboard", "flo sound <name>", "flo sprich <text>"], zeilen
+        assert bot._hilfe_hinweis("voice") == "sounds · sprich"
+    with _nur_geladen(bot, "VOICE_GAGS_ENABLED", "CLIPS_ENABLED"):
+        assert bot._hilfe_hinweis("voice") == "sounds · sprich · clip"
+        assert bot._hilfe_hinweis("musik") == bot._HELP_HINTS["musik"]
     with _nur_geladen(bot):
         assert "voice" not in {k for k, _e, _l in bot.client._help_categories()}
     assert "clip" in bot._HELP_HINTS["voice"]
@@ -714,7 +723,14 @@ def test_clips_grammatik_aussteigen_klappt_auch_hoeflich_und_vertippt():
             assert b(raus) == ("raus", []), raus
         assert b("cilp nein", welt.bob) == ("raus", [welt.bob])     # -> 'fremd_raus'
         assert b("clip ja bitte") == ("rein", []) and b("clip bitte wieder rein") == ("rein", [])
+        assert b("clip ja danke") == ("rein", []) and b("clip mal wieder rein") == ("rein", [])
         assert b("clip aus bitte") == ("aus",) and b("clip an bitte") == ("an",)
+        # Zurueck rein ist eine Einwilligung: aus einer Nachfrage ('..., ja?')
+        # wird keine. Ein nacktes 'ja' zaehlt nur vorne.
+        for nachfrage in ("Flo, clip mal, ja?", "flo clip bitte, ja?", "flo clip doch, ja?",
+                          "Flo clip mal bitte, ja?", "flo clip doch ja"):
+            befehl = welt.inst.befehl(_nachricht(welt, nachfrage, welt.anna))
+            assert befehl is None or befehl[0] != "rein", (nachfrage, befehl)
         for nichts in ("cilp ja", "cilp das war gut", "clio nein", "cilp", "clip danke",
                        "clip nein danke bob", "clip bitte nicht"):
             assert b(nichts) is None, nichts
@@ -726,6 +742,10 @@ def test_clips_grammatik_aussteigen_klappt_auch_hoeflich_und_vertippt():
         # Und ueber den ganzen Weg: der Vertipper kommt an handle() vorbei.
         antwort = _frag(_nachricht(welt, "flo cilp nein danke", welt.anna))
         assert "du bist raus" in antwort and welt.inst.ist_raus(ANNA)
+        # ... und wer raus ist, bleibt es, wenn er nur nachfragt.
+        asyncio.run(clips.handle(_nachricht(welt, "Flo, clip mal, ja?", welt.anna)))
+        asyncio.run(clips.datenschutz(_nachricht(welt, "Flo, clip mal, ja?", welt.anna)))
+        assert welt.inst.ist_raus(ANNA)
         assert asyncio.run(clips.handle(_nachricht(welt, "flo cilp ja", welt.anna))) is None
         with mock.patch.object(features, "is_on_in", lambda g, k: k != "clips"):
             welt.inst.rein(ANNA)
@@ -1486,6 +1506,7 @@ def test_clips_speicher_raeumt_auf_und_merkt_das_kontingent():
         kontingent = clipstext.transkriber.kontingent
         alt = kontingent.als_dict()
         try:
+            kontingent.aus_dict({})                   # leer, was frueher auch gebucht wurde
             kontingent.buchen([30])
             inst._kontingent_merken()
             assert inst._store.data["whisper"]["eimer"], inst._store.data["whisper"]
@@ -1623,6 +1644,97 @@ def test_clips_mikro_aus_und_raus_wenn_nur_dafuer_da():
         with mock.patch.object(welt.spieler, "disconnect", disconnect):
             antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip aus", welt.anna)))
         assert "ich bin raus" in antwort and getrennt == [True]
+
+
+def test_clips_mikro_aus_gilt_auch_bevor_flo_mithoert():
+    """'flo spiel ...': Flo sitzt schon im Call, der Song wird noch gesucht -
+    clips hoert noch nicht mit (vorab). Sagt Bob jetzt 'flo clip aus' (oder
+    drueckt 🔇 unter einer Ansage, die noch steht), gilt das fuer diese Runde:
+    frueher hiess es 'Ich hör doch gar nicht mit', nichts wurde gemerkt, und
+    Sekunden spaeter - der Song lief - hoerte Flo trotzdem mit. Ein zweites
+    'aus' fuer dieselbe Runde ist dann wirklich nichts Neues."""
+    for weg in ("befehl", "knopf"):
+        with _welt() as welt:
+            welt.spieler._laufende_anfragen = 1          # Flo ist da, der Song laedt
+            asyncio.run(_starten(welt))
+            s = _sitzung(welt)
+            assert not s.aktiv and s.grund == "vorab"
+            if weg == "knopf":
+                klick = _klick_im_voice(BOB, welt.kanal)
+                klick.guild = welt.guild
+                asyncio.run(welt.inst.aus_knopf(klick, VOICE))
+                antwort = klick.protokoll[0][1]
+            else:
+                antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip aus", welt.bob)))
+            assert "gar nicht erst mit" in antwort, (weg, antwort)
+            assert str(VOICE) in welt.inst._daten("aus")
+            hinweis = [m for m in welt.kanal.gesendet if "Mitschnitt aus" in (m.content or "")]
+            assert len(hinweis) == 1, weg
+            # Der Song laeuft: Flo bleibt taub, keine Ansage, kein Puffer.
+            welt.spieler._laufende_anfragen = 0
+            welt.spieler.current = SimpleNamespace(title="Song", live=False, duration=200)
+            asyncio.run(_starten(welt))
+            assert not s.aktiv and s.grund == "aus" and s.puffer is None, weg
+            assert not any("Ab jetzt hör" in (m.content or "") for m in welt.kanal.gesendet)
+            assert all(z["self_deaf"] for z in welt.guild.zustand), welt.guild.zustand
+            # Nochmal aus: nichts Neues - und kein zweiter Hinweis im Voice-Chat.
+            assert "gar nicht mit" in asyncio.run(clips.handle(
+                _nachricht(welt, "flo clip aus", welt.anna)))
+            assert sum(1 for m in welt.kanal.gesendet if "Mitschnitt aus" in (m.content or "")) == 1
+        # Wer nicht im Call sitzt, darf auch vorab nichts ausmachen.
+        with _welt() as welt:
+            welt.spieler._laufende_anfragen = 1
+            asyncio.run(_starten(welt))
+            draussen = _person(CEM, "Cem")
+            assert "Zaungast" in asyncio.run(clips.handle(_nachricht(welt, "flo clip aus",
+                                                                     draussen)))
+            assert str(VOICE) not in welt.inst._daten("aus")
+    # Ohne Runde (Flo nirgends) bleibt die ehrliche Antwort.
+    with _welt(musik=False, verbunden=False) as welt:
+        welt.guild.voice_client = None
+        assert "gar nicht mit" in asyncio.run(clips.handle(
+            _nachricht(welt, "flo clip aus", welt.bob)))
+        assert welt.inst._daten("aus") == {}
+
+
+def test_clips_mikro_aus_bremst_an_auch_wenn_flo_gleich_mitging():
+    """'flo clip an', nichts laeuft, Anna sagt 'flo clip aus': Flo geht gleich
+    mit (aus_raus) - und mit ihm endete die Runde und damit das gemerkte 'aus'.
+    Die Umschalt-Bremse las genau dieses 'aus': Bobs 'flo clip an' zwei
+    Sekunden spaeter kam durch, und aus/an liess sich ohne Ende im Voice-Chat
+    abspielen. Jetzt bremst sie trotzdem eine Minute - mit dem ECHTEN
+    GuildPlayer.disconnect."""
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        s = _sitzung(welt)
+        welt.spieler.clip_halten = True
+
+        async def vc_trennen(*, force=False):
+            welt.vc._connection.verbunden = False
+            welt.guild.voice_client = None
+        welt.vc.disconnect = vc_trennen
+
+        async def aus():
+            antwort = await clips.handle(_nachricht(welt, "flo clip aus", welt.anna))
+            await _nebenher(welt)
+            return antwort
+        assert "ich bin raus" in asyncio.run(aus())
+        assert welt.spieler.active_channel_id is None and welt.inst._daten("aus") == {}
+        vorher = len(welt.kanal.gesendet)
+
+        async def verbinden(kanal):
+            welt.guild.voice_client = welt.vc
+            welt.vc._connection.verbunden = True
+            welt.spieler.voice = welt.vc
+            welt.spieler.active_channel_id = kanal.id
+            return welt.vc
+        with mock.patch.object(welt.spieler, "connect", verbinden):
+            antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip an", welt.bob)))
+            assert "Entscheidet euch" in antwort and not s.aktiv
+            assert len(welt.kanal.gesendet) == vorher                 # nichts gepostet
+            welt.inst._aus_zuletzt[VOICE] -= clips.AN_PAUSE + 1
+            antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip an", welt.bob)))
+        assert "hör mit" in antwort and s.aktiv
 
 
 def test_clips_mikro_aus_nach_der_runde_verwirft_was_noch_offen_ist():
@@ -2035,6 +2147,7 @@ def test_clips_an_aus_im_sekundentakt_spammt_den_voice_chat_nicht():
             aus = [m for m in welt.kanal.gesendet if "Mitschnitt aus" in (m.content or "")]
             assert len(ansagen) == 1 and len(aus) == 1
             welt.inst._daten("aus")[str(VOICE)] -= clips.AN_PAUSE + 1
+            welt.inst._aus_zuletzt[VOICE] -= clips.AN_PAUSE + 1
             antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip an", welt.anna)))
         assert "hör mit" in antwort and _sitzung(welt).aktiv
         assert sum(1 for m in welt.kanal.gesendet if "Ab jetzt hör" in (m.content or "")) == 2
@@ -2223,7 +2336,7 @@ def test_clips_dialog_ohne_timeout_raeumt_der_takt_ganz_weg():
         welt.inst._zuletzt[CEM] = time.monotonic() - clips.ABKUEHLEN_SEK - 1
         with mock.patch.object(laufzeit, "protect_message", lambda m: geschuetzt.append(m.id)), \
                 mock.patch.object(laufzeit, "release_message",
-                                  lambda m, **_kw: frei.append(m.id)):
+                                  lambda m, **wie: frei.append((m.id, wie.get("delay")))):
             asyncio.run(clips.handle(_nachricht(welt, "flo clip", welt.anna)))
             msg = welt.text.gesendet[-1]
             dialog = msg.view
@@ -2234,7 +2347,8 @@ def test_clips_dialog_ohne_timeout_raeumt_der_takt_ganz_weg():
                 await _nebenher(welt)
 
             asyncio.run(takt())
-        assert msg.id in geschuetzt and msg.id in frei
+        assert msg.id in geschuetzt
+        assert (msg.id, guildcfg.get(GID, "autodelete_sekunden")) in frei, frei
         assert msg.edits[-1] == {"content": clips.TEXTE["zu_langsam"], "view": None}
         assert dialog.snap is None and dialog._fertig and GID not in welt.inst._dialoge
         assert CEM not in welt.inst._zuletzt
@@ -2398,7 +2512,7 @@ def _mit_transkript(welt, segmente, *, kommentar=None):
     """Whisper und KI gefakt: je_sprecher liefert 'segmente', kommentar() den Satz."""
     stapel = contextlib.ExitStack()
 
-    async def je_sprecher(audio, frist=None):
+    async def je_sprecher(audio, frist=None, weiter=None):
         return segmente
 
     async def kommentieren(gid, zeilen, dauer):
@@ -2460,6 +2574,51 @@ def test_clips_notsignal_im_transkript_haelt_den_clip_zurueck():
         finally:
             basis._notlage_seit.clear()
             basis._notlage_seit.update(alt)
+
+
+def test_clips_heikles_aus_einem_privaten_voice_bleibt_im_voice_chat():
+    """Privater Voice, gefragt in #allgemein: bleibt der Clip wegen eines
+    Notsignals (oder Hetze) liegen, erfuhr frueher der ganze Kanal davon -
+    'Manche Sachen gehoeren nicht in einen Clip-Kanal' ueber einen Raum, den er
+    gar nicht sieht. Jetzt steht dort nur 'Wird nix', und der Grund im
+    Voice-Chat des Raums - fuer die, die dabei waren. Im Voice-Chat gefragt:
+    wie immer. Geht der Voice-Chat nicht, verweist 'Wird nix' auch nicht
+    dorthin."""
+    for text, grund in (("ich will nicht mehr leben", "lass ich liegen"),
+                        ("Ausländer raus", "menschenfeindlicher Müll")):
+        for gefragt in ("draussen", "drinnen", "draussen_chat_kaputt"):
+            with _welt() as welt:
+                jeder = SimpleNamespace(id=1, managed=False, _rolle=True)
+                mitglied = SimpleNamespace(id=2, managed=False, _rolle=True)
+                welt.guild.roles = [jeder, mitglied]
+                welt.guild.default_role = jeder
+                welt.kanal._lesen = {2}                      # nur Mitglieder sehen den Voice
+                asyncio.run(_starten(welt))
+                welt.uhr.vor(60)
+                _reden(welt, BOB, 25, 15)
+                seg = {BOB: [clipstext.Segment(0.5, 2.0, text)]}
+                kanal = welt.kanal if gefragt == "drinnen" else welt.text
+                if gefragt == "draussen_chat_kaputt":
+                    welt.kanal.kaputt = discord.Forbidden(
+                        SimpleNamespace(status=403, reason="nein"), "nein")
+                with _mit_transkript(welt, seg, kommentar="nie"):
+                    asyncio.run(clips.handle(_nachricht(welt, "flo clip 30", welt.anna,
+                                                        kanal=kanal)))
+                assert welt.ziel.gesendet == []
+                im_voice = [m.content or "" for m in welt.kanal.gesendet]
+                if gefragt == "draussen":
+                    antwort = welt.text.gesendet[-1].content
+                    assert "Wird nix" in antwort and grund not in antwort, antwort
+                    assert "Voice-Chat" in antwort, antwort
+                    assert any(grund in m for m in im_voice), im_voice
+                elif gefragt == "draussen_chat_kaputt":
+                    antwort = welt.text.gesendet[-1].content
+                    assert "Wird nix" in antwort and grund not in antwort, antwort
+                    assert "Voice-Chat" not in antwort, antwort
+                    assert not any(grund in m for m in im_voice), im_voice
+                else:
+                    assert grund in im_voice[-1], im_voice
+                    assert sum(grund in m for m in im_voice) == 1, im_voice
 
 
 def test_clips_hetze_im_transkript_haelt_den_clip_zurueck():
@@ -2526,7 +2685,7 @@ def test_clips_nach_dem_ausstieg_geht_kein_ton_zu_whisper():
             _reden(welt, BOB, 20, 5, strang=2)
             geschickt = []
 
-            async def je_sprecher(audio, frist=None):
+            async def je_sprecher(audio, frist=None, weiter=None):
                 geschickt.append(sorted(audio))
                 return {}
 
@@ -2547,6 +2706,165 @@ def test_clips_nach_dem_ausstieg_geht_kein_ton_zu_whisper():
             assert geschickt == [] and welt.ziel.gesendet == [], art
             text = welt.text.gesendet[-1].content
             assert ("ausgestiegen" if art == "raus" else "inzwischen ausgemacht") in text, art
+
+
+def test_clips_wer_nicht_im_transkript_ist_bekommt_keinen_spruch():
+    """Ein Transkript, dem ein Mensch aus dem Clip fehlt (zu kurz fuer Whisper,
+    mehr als acht Sprecher), sieht trotzdem vollstaendig aus - die Pruefung auf
+    Notsignal und Hetze hat ihn aber nie gesehen. Dann kein Spruch, weder von
+    der KI noch aus dem Ersatz-Pool: Flo macht keinen Witz ueber jemanden,
+    dessen Worte er nicht kennt. Hat Whisper alle gehoert, gibt es ihn. War
+    Whisper gefragt und es kam nichts (Fehler, Kontingent, Frist), hat die
+    Pruefung niemanden gesehen: auch kein Spruch. Ohne Whisper wie immer der
+    Ersatz-Spruch."""
+    segmente = {ANNA: [clipstext.Segment(0.1, 1.0, "Wer hat die Pizza gegessen?")]}
+    for nur_anna, spruch in ((True, False), (False, True)):
+        with _welt(transkript=True) as welt:
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 13)
+            _reden(welt, BOB, 8, 7, strang=2)
+
+            def ergebnis(auftrag, nur_anna=nur_anna):
+                return _ergebnis(auftrag, whisper={
+                    sp.uid: clipschnitt.WhisperAudio(mp3=b"x", karte=[(0.0, 5.0, 10.0)])
+                    for sp in auftrag.stimmen if sp.uid == ANNA or not nur_anna})
+            antwort = segmente if nur_anna else {**segmente, BOB: []}
+            with _mit_transkript(welt, antwort, kommentar="Spannend wie Steuerrecht."), \
+                    _schnitt(ergebnis):
+                asyncio.run(clips.handle(_nachricht(welt, "flo clip 30", welt.anna)))
+            post = welt.ziel.gesendet[-1].content
+            assert ("\n> " in post) is spruch, (nur_anna, post)
+            assert ("> Spannend wie Steuerrecht." in post) is spruch, (nur_anna, post)
+            assert f"<@{BOB}>" in post and welt.ziel.gesendet[-1].embed is not None
+    with _welt(transkript=True) as welt:          # gefragt, nichts kam: auch keiner
+        asyncio.run(_starten(welt))
+        welt.uhr.vor(60)
+        _reden(welt, ANNA, 25, 13)
+        with _mit_transkript(welt, None, kommentar="Spannend wie Steuerrecht."):
+            asyncio.run(clips.handle(_nachricht(welt, "flo clip 30", welt.anna)))
+        post = welt.ziel.gesendet[-1].content
+        assert "\n> " not in post and f"<@{ANNA}>" in post, post
+    with _welt() as welt:                         # ohne Whisper: Ersatz wie immer
+        asyncio.run(_starten(welt))
+        welt.uhr.vor(60)
+        _reden(welt, ANNA, 25, 13)
+        _reden(welt, BOB, 8, 7, strang=2)
+        with _schnitt():
+            _direkt(welt)
+        assert "\n> " in welt.ziel.gesendet[-1].content
+
+
+def test_clips_verworfen_nennt_den_echten_grund():
+    """Ein Schnitt wird verworfen, weil sich der Stand geaendert hat - frueher
+    hiess es dann IMMER 'Das Mikro wurde inzwischen ausgemacht', auch beim
+    Neustart, bei abgeschalteten Clips oder ohne Einwilligung des Servers.
+    Jetzt der echte Grund."""
+    faelle = {
+        "ende": "fahr gerade runter",
+        "feature": "Clips sind auf diesem Server aus",
+        "server": "Auf diesem Server hör ich nicht mit",
+        "aus": "inzwischen ausgemacht",
+    }
+    for grund, erwartet in faelle.items():
+        with _welt() as welt:
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 15)
+
+            def ergebnis(auftrag, grund=grund, welt=welt):
+                s = _sitzung(welt)
+                if grund == "ende":
+                    welt.inst._abbruch = True
+                    welt.inst._leeren(welt.guild, s, "ende")
+                elif grund == "feature":
+                    welt.inst._leeren(welt.guild, s, "feature")
+                elif grund == "server":
+                    welt.schalter["aufnahme"] = False
+                    welt.inst._leeren(welt.guild, s, "server")
+                else:
+                    welt.inst._mikro_aus_sofort(welt.guild, VOICE)
+                return _ergebnis(auftrag)
+            schalter = (mock.patch.object(features, "is_on_in", lambda g, k: k != "clips")
+                        if grund == "feature" else contextlib.nullcontext())
+            with _schnitt(ergebnis):
+                with schalter:
+                    _direkt(welt)
+            assert welt.ziel.gesendet == [], grund
+            text = welt.text.gesendet[-1].content
+            assert erwartet in text, (grund, text)
+            if grund != "aus":
+                assert "Mikro" not in text, (grund, text)
+
+
+def test_clips_ausstieg_waehrend_whisper_stoppt_die_uebrigen_uploads():
+    """Drei Sprecher, Whisper nimmt zwei auf einmal (WHISPER_PARALLEL). Waehrend
+    Annas Ton gerade bei Groq ist, drueckt Cem 🙅 - oder jemand 🔇. Frueher
+    gingen trotzdem alle drei raus und der Clip fiel erst danach weg; jetzt
+    wird vor JEDEM Upload gefragt: nichts mehr geht zu Whisper, gepostet wird
+    nichts, und Flo sagt warum. Echter Transkriber, gefakter Groq-Client."""
+    erwartet = {"raus": "ausgestiegen", "aus": "inzwischen ausgemacht"}
+    for art, text in erwartet.items():
+        with _welt(transkript=True) as welt:
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 15)
+            _reden(welt, BOB, 20, 10, strang=2)
+            _reden(welt, CEM, 9, 4, strang=3)
+            hochgeladen = []
+
+            class _Transkriptionen:
+                async def create(self, *, model, file, **_kw):
+                    hochgeladen.append(int(file[1].decode()))
+                    if len(hochgeladen) == 1:            # Anna ist gerade unterwegs ...
+                        if art == "raus":
+                            welt.inst.raus(CEM)
+                        else:
+                            welt.inst._mikro_aus_sofort(welt.guild, VOICE)
+                    await asyncio.sleep(0.05)
+                    return {"segments": [{"start": 0.1, "end": 1.0, "text": "hallo",
+                                          "avg_logprob": -0.1, "no_speech_prob": 0.0,
+                                          "compression_ratio": 1.0}]}
+
+            groq = SimpleNamespace(audio=SimpleNamespace(transcriptions=_Transkriptionen()))
+
+            def ergebnis(auftrag):
+                return _ergebnis(auftrag, whisper={sp.uid: clipschnitt.WhisperAudio(
+                    mp3=str(sp.uid).encode(), karte=[(0.0, 5.0, 10.0)])
+                    for sp in auftrag.stimmen})
+            # Ein eigenes Kontingent: der echte Transkriber bucht - ins globale
+            # gebucht, zaehlte das im naechsten Test mit (--misch 616420).
+            with mock.patch.object(clipstext.transkriber, "client", lambda: groq), \
+                    mock.patch.object(clipstext.transkriber, "kontingent",
+                                      clipstext.Kontingent()), \
+                    _schnitt(ergebnis):
+                _direkt(welt)
+            assert hochgeladen == [ANNA], (art, hochgeladen)
+            assert welt.ziel.gesendet == [], art
+            assert text in welt.text.gesendet[-1].content, art
+
+
+def test_clips_ausstieg_waehrend_des_schnitts_bricht_den_schnitt_ab():
+    """Der Schnitt fragt seinen Abbruch-Schalter laufend (clipschnitt._Frist) -
+    und der kennt jetzt auch die Sprecher im Auftrag: steigt Bob mitten im
+    Schnitt aus, wird sein Ton nicht erst noch zu Ende dekodiert. Die Antwort
+    sagt dann 'ausgestiegen' - nicht 'ffmpeg abgeschmiert, nochmal'."""
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        welt.uhr.vor(60)
+        _reden(welt, ANNA, 25, 15)
+        _reden(welt, BOB, 20, 5, strang=2)
+        gefragt = []
+
+        def ergebnis(auftrag):
+            gefragt.append(auftrag.abbruch())
+            welt.inst.raus(BOB)
+            gefragt.append(auftrag.abbruch())
+            raise clipschnitt.RenderFehler("zeit", "abgebrochen")
+        with _schnitt(ergebnis):
+            _direkt(welt)
+        assert gefragt == [False, True]
+        assert welt.ziel.gesendet == [] and "ausgestiegen" in welt.text.gesendet[-1].content
 
 
 def test_clips_ausstieg_waehrend_des_spruchs_kommt_nicht_in_den_post():
@@ -2682,13 +3000,14 @@ def test_clips_zwischenmeldung_bleibt_bis_zum_ergebnis_geschuetzt():
         asyncio.run(_starten(welt))
         welt.uhr.vor(60)
         _reden(welt, ANNA, 40, 20)
-        schutz, frei = set(), {}
+        schutz, frei, fristen = set(), {}, []
 
         def schuetzen(m):
             schutz.add(m.id)
 
-        def freigeben(m, **_kw):
+        def freigeben(m, **wie):
             frei.setdefault(m.id, []).append(m.content)
+            fristen.append(wie.get("delay"))
 
         with mock.patch.object(laufzeit, "protect_message", schuetzen), \
                 mock.patch.object(laufzeit, "release_message", freigeben), \
@@ -2706,6 +3025,9 @@ def test_clips_zwischenmeldung_bleibt_bis_zum_ergebnis_geschuetzt():
             antwort = welt.text.gesendet[-1]
             assert antwort is not msg and antwort.id in schutz and len(frei[antwort.id]) == 1
             assert frei[antwort.id][0].startswith("🎬 Clip ist raus"), frei
+        # Danach steht das Ergebnis so lange wie jede Antwort im Aufraeum-Kanal -
+        # nicht nur die kurze Gnadenfrist (frueher 12 s nach dem Ergebnis).
+        assert fristen == [guildcfg.get(GID, "autodelete_sekunden")] * 2, fristen
 
 
 def test_clips_zielkanal_privat_und_ohne_rechte():
@@ -2759,11 +3081,258 @@ def test_clips_zielkanal_privat_und_ohne_rechte():
             _direkt(welt)
         assert "keine Dateien hochladen" in welt.text.gesendet[-1].content
         welt.ziel.schreiben = False
-        welt.inst._zuletzt.clear()
+        with _schnitt() as auftraege2:
+            _direkt(welt)
+        # Eingestellt, aber Flo kommt nicht rein: den Kanal nochmal einzustellen
+        # hilft nicht - das sagt der Text auch. Geschnitten wird fuer einen
+        # Clip ohne Ziel gar nicht erst.
+        text = welt.text.gesendet[-1].content
+        assert "steht zwar drin" in text and f"<#{guildcfg.CLIP_CHANNEL}>" in text, text
+        assert auftraege == [] and auftraege2 == []
+
+
+def _echter_server():
+    """Ein ECHTER discord.Guild mit echten Kanaelen und Rechten (discord.py
+    rechnet permissions_for selbst): Flo (Bot-Rolle), @everyone, Team.
+    -> (guild, raeume): 'zu' sehen alle, betreten darf nur das Team (Lock);
+    'versteckt' sehen und betreten nur das Team; 'offen' alle; '#clips' und
+    '#allgemein' lesen alle."""
+    from discord.permissions import Permissions as P
+    gid, team, flo_rolle, ich = 1453867645660303527, 900, 901, 555
+    state = mock.MagicMock()
+    state.self_id = ich
+    state.user = SimpleNamespace(id=ich)
+    state.member_cache_flags = discord.MemberCacheFlags.all()
+    state.shard_count = 1
+    state._guild_needs_chunking = lambda g: False
+    state.store_user = lambda daten, **_kw: discord.User(state=state, data=daten)
+
+    def rolle(rid, name, rechte, managed=False, pos=0):
+        d = {"id": str(rid), "name": name, "permissions": str(rechte), "position": pos,
+             "color": 0, "hoist": False, "managed": managed, "mentionable": False}
+        if managed:
+            d["tags"] = {"bot_id": str(ich)}
+        return d
+    jeder_darf = (P.general().value | P.text().value | P.voice().value) & ~P(
+        administrator=True, manage_channels=True, manage_roles=True, manage_guild=True,
+        kick_members=True, ban_members=True).value
+    guild = discord.Guild(state=state, data={
+        "id": str(gid), "name": "Haupt", "owner_id": "1", "roles": [
+            rolle(gid, "@everyone", jeder_darf), rolle(team, "Team", 0, pos=1),
+            rolle(flo_rolle, "Flo", 0, managed=True, pos=2)],
+        "channels": [], "members": [], "emojis": [], "features": [], "stickers": [],
+        "member_count": 0, "verification_level": 0, "default_message_notifications": 0,
+        "explicit_content_filter": 0, "mfa_level": 0, "premium_tier": 0, "nsfw_level": 0,
+        "preferred_locale": "de", "system_channel_flags": 0})
+    guild._add_member(discord.Member(state=state, guild=guild, data={
+        "user": {"id": str(ich), "username": "flo", "discriminator": "0", "avatar": None,
+                 "bot": True}, "roles": [str(flo_rolle)], "joined_at": None,
+        "deaf": False, "mute": False, "flags": 0}))
+    assert guild.me is not None and guild.me.id == ich
+
+    def ueber(oid, erlaubt=0, verboten=0):
+        return {"id": str(oid), "type": 0, "allow": str(erlaubt), "deny": str(verboten)}
+
+    def voice(cid, name, rechte):
+        return discord.VoiceChannel(state=state, guild=guild, data={
+            "id": str(cid), "type": 2, "name": name, "position": 1, "bitrate": 64000,
+            "user_limit": 0, "nsfw": False, "parent_id": None, "rtc_region": None,
+            "permission_overwrites": rechte})
+
+    def text(cid, name):
+        return discord.TextChannel(state=state, guild=guild, data={
+            "id": str(cid), "type": 0, "name": name, "position": 3, "nsfw": False,
+            "parent_id": None, "permission_overwrites": []})
+    raeume = {
+        "zu": voice(777, "Buero", [ueber(gid, P(view_channel=True).value, P(connect=True).value),
+                                   ueber(team, P(connect=True).value)]),
+        "versteckt": voice(778, "Versteckt", [ueber(gid, 0, P(view_channel=True).value),
+                                              ueber(team, P(view_channel=True,
+                                                            connect=True).value),
+                                              ueber(flo_rolle, P(view_channel=True,
+                                                                 connect=True).value)]),
+        "offen": voice(779, "Zocken", []),
+        "clips": text(guildcfg.CLIP_CHANNEL, "clips"),
+        "allgemein": text(4242, "allgemein"),
+    }
+    for kanal in raeume.values():
+        guild._add_channel(kanal)
+    return guild, raeume
+
+
+def test_clips_abgeschlossener_raum_ist_fuer_seinen_ton_privat():
+    """Ein Raum, den alle SEHEN, aber nur das Team BETRETEN darf ('Lock' bei
+    TempVoice, ein Buero): hoeren konnte darin nur das Team. Frueher zaehlte
+    nur, wer ihn sieht - also galt er als oeffentlich, und Clip samt
+    Transkript landeten fuer den ganzen Server in #clips. Jetzt ist er fuer
+    seinen Ton privat - und weil seinen Voice-Chat auch alle lesen, die
+    draussen standen, gibt es dort ebenso keinen Clip: gar keinen. Ein
+    versteckter Raum bleibt bei seinem Voice-Chat, ein offener bei #clips.
+    Echte discord.py-Objekte, discord.py rechnet die Rechte selbst."""
+    guild, r = _echter_server()
+    zu, versteckt, offen, ziel = r["zu"], r["versteckt"], r["offen"], r["clips"]
+    assert basis.leser(zu, guild) == basis.leser(offen, guild)      # sehen: alle
+    assert basis.hoerer(zu, guild) == frozenset({900})              # hoeren: das Team
+    assert basis.privat(zu, ziel, guild) is False                   # Text: wie bisher
+    assert basis.privat(zu, ziel, guild, ton=True) is True
+    assert basis.privat(versteckt, ziel, guild, ton=True) is True
+    assert basis.privat(offen, ziel, guild, ton=True) is False
+    merker = {}
+    assert basis.privat(zu, ziel, guild, merker, ton=True) is True
+    assert basis.privat(zu, ziel, guild, merker) is False           # getrennt gemerkt
+    with mock.patch.object(clips.instance, "_zielkanal_roh", lambda _g: ziel):
+        assert clips.instance._ziel_pruefen(guild, zu)[2] == "privat_offen"
+        kanal, hier, art, _w = clips.instance._ziel_pruefen(guild, versteckt)
+        assert (kanal, hier, art) == (versteckt, True, None)
+        kanal, hier, art, _w = clips.instance._ziel_pruefen(guild, offen)
+        assert (kanal, hier, art) == (ziel, False, None)
+        text = clips.instance._zielkanal(guild, zu)[2]
+        assert "abgeschlossen" in text and "kein Clip" in text
+        assert "Voice-Chat" in clips.instance._ziel_text(guild, zu)
+    # Der Dialog in #allgemein zeigt fuer den abgeschlossenen Raum keine Namen.
+    assert clips.Clips._privat_fuer(guild, zu.id, r["allgemein"]) is True
+    assert clips.Clips._privat_fuer(guild, offen.id, r["allgemein"]) is False
+
+
+def test_clips_heikles_aus_einem_abgeschlossenen_raum_steht_nicht_in_seinem_chat():
+    """Den Voice-Chat eines abgeschlossenen Raums lesen auch die, die draussen
+    standen - dort gehoert der Grund (Notsignal, Hetze) also genauso wenig hin
+    wie nach #allgemein. Draussen steht dann nur 'Wird nix', ohne Verweis. Ein
+    versteckter Raum bekommt den Grund in seinen eigenen Chat. Echte
+    discord.py-Objekte, discord.py rechnet die Rechte selbst."""
+    guild, r = _echter_server()
+    gesendet, gemeldet = [], []
+
+    async def senden(self, content=None, **_kw):
+        gesendet.append((self.id, content))
+
+    async def melden(_antwort, _anfrage, text):
+        gemeldet.append(text)
+    anfrage = SimpleNamespace(channel=r["allgemein"])
+    for schluessel in ("zurueckgehalten", "hetze"):
+        gesendet.clear()
+        gemeldet.clear()
+        grund = clips.TEXTE[schluessel]
+        with mock.patch.object(discord.VoiceChannel, "send", senden), \
+                mock.patch.object(clips.Clips, "_melden", staticmethod(melden)):
+            for raum in ("zu", "versteckt"):
+                asyncio.run(clips.instance._heikel_melden(guild, r[raum], None, anfrage, grund))
+        assert gesendet == [(r["versteckt"].id, grund)], gesendet
+        assert gemeldet == [clips.TEXTE["nix_draussen_kurz"], clips.TEXTE["nix_draussen"]], \
+            gemeldet
+
+
+def test_clips_ein_forum_als_clip_kanal_taugt_nicht():
+    """'flo einstellung clip_channel #forum' nimmt guildcfg an, und Schreiben
+    und Dateien darf Flo dort - aber in ein Forum schickt niemand eine
+    Nachricht: ziel.send platzte erst nach Schnitt, Whisper und Spruch
+    (AttributeError, der Dialog blieb bei 'Schneide ...' stehen). Jetzt zaehlt
+    so ein Kanal wie einer ohne Rechte: weiter zum naechsten (System-Kanal),
+    sonst gibt es kein Ziel - und dann auch kein Mithoeren."""
+
+    class _Forum:
+        def __init__(self, cid):
+            self.id = cid
+            self.name = "clips-forum"
+            self.mention = f"<#{cid}>"
+
+        def permissions_for(self, _wer):
+            return SimpleNamespace(send_messages=True, attach_files=True,
+                                   view_channel=True, read_messages=True)
+
+        def is_nsfw(self):
+            return False
+
+    with _welt() as welt:
+        welt.guild.kanaele[guildcfg.CLIP_CHANNEL] = _Forum(guildcfg.CLIP_CHANNEL)
+        system = _TextKanal(cid=602, name="system")
+        welt.guild.system_channel = system
+        ziel, hier, art, _w = clips.instance._ziel_pruefen(welt.guild, welt.kanal)
+        assert (ziel, hier, art) == (system, False, None), (ziel, hier, art)
+        welt.guild.system_channel = None
+        _ziel, _hier, art, _w = clips.instance._ziel_pruefen(welt.guild, welt.kanal)
+        assert art == "kanal_zu", art
+        asyncio.run(_starten(welt))
+        s = _sitzung(welt)
+        assert not s.aktiv and s.grund == "kein_ziel"
+        assert welt.kanal.gesendet == []                                    # keine Ansage
+
+
+def test_clips_ohne_ziel_hoert_flo_gar_nicht_erst_mit():
+    """Kann aus diesem Voice nie ein Clip werden (abgeschlossener Raum mit
+    offenem Chat, kein Clip-Kanal, keine Dateien), kuendigt Flo nicht an und
+    hoert nicht mit - die Ansage versprache sonst einen Kanal, den es nicht
+    gibt. 'flo clip' sagt warum, der Status zeigt es, das Log einmal. Kommt
+    ein Ziel (Einstellung), wird gleich nochmal nachgesehen."""
+    from test_fundament import _Mitschnitt
+    with _welt() as welt:
+        welt.ziel.schreiben = False
+        with _Mitschnitt("dcbot.clips") as mit:
+            asyncio.run(_starten(welt))
+            asyncio.run(_starten(welt))
+        zeilen = [e.getMessage() for e in mit.eintraege]
+        s = _sitzung(welt)
+        assert not s.aktiv and s.grund == "kein_ziel" and s.puffer is None
+        assert welt.kanal.gesendet == []                                    # keine Ansage
+        assert all(z["self_deaf"] for z in welt.guild.zustand), welt.guild.zustand
+        assert sum("kein Ziel für Clips (kanal_zu)" in z for z in zeilen) == 1, zeilen
+        antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip 30", welt.anna)))
+        assert "steht zwar drin" in antwort, antwort
+        status = asyncio.run(clips.handle(_nachricht(welt, "flo clip status", _person(
+            DORA, "Dora", mod=True))))
+        assert "Ziel: fehlt (`kanal_zu`)" in _embed_text(status), _embed_text(status)
+        welt.ziel.schreiben = True                       # der Admin richtet's
+
+        async def eingestellt():
+            clips._einstellung_neu(GID)
+            await _nebenher(welt)
+        asyncio.run(eingestellt())
+        assert s.aktiv and "Ab jetzt hör" in welt.kanal.gesendet[-1].content
+        status = asyncio.run(clips.handle(_nachricht(welt, "flo clip status", _person(
+            DORA, "Dora", mod=True))))
+        assert f"Ziel: <#{guildcfg.CLIP_CHANNEL}>" in _embed_text(status)
+
+
+def test_clips_ziel_wird_vor_dem_schnitt_geprueft_und_nichts_bezahlt():
+    """Faellt das Ziel weg, waehrend Flo schon mithoert: frueher liefen Schnitt,
+    Whisper und KI-Spruch fuer einen Clip, der nie gepostet werden konnte, und
+    danach galt trotzdem das Abkuehlen. Jetzt wird VOR dem Schnitt geprueft,
+    nichts kostet (gleich nochmal geht), und das Log sagt einmal, was fehlt.
+    Faellt es erst NACH dem Schnitt weg oder lehnt Discord den Upload mit 403
+    ab, zahlt das Abkuehlen auch nicht."""
+    from test_fundament import _Mitschnitt
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        welt.uhr.vor(60)
+        _reden(welt, ANNA, 25, 15)
+        welt.ziel.schreiben = False
+        with _schnitt() as auftraege, _Mitschnitt("dcbot.clips") as mit:
+            _direkt(welt)
+            assert "steht zwar drin" in welt.text.gesendet[-1].content
+            _direkt(welt)                                      # gleich nochmal: kein Abkuehlen
+            assert "steht zwar drin" in welt.text.gesendet[-1].content
+        zeilen = [e.getMessage() for e in mit.eintraege]
+        assert auftraege == []
+        assert sum("kein Ziel für Clips" in z for z in zeilen) == 1, zeilen
+        assert welt.inst._stunde.get(GID) in (None, deque()) and ANNA not in welt.inst._zuletzt
+        # Erst waehrend des Schnitts weg: zurueckerstattet.
+        welt.ziel.schreiben = True
+
+        def ergebnis(auftrag):
+            welt.ziel.schreiben = False
+            return _ergebnis(auftrag)
+        with _schnitt(ergebnis) as auftraege:
+            _direkt(welt)
+        assert len(auftraege) == 1 and welt.ziel.gesendet == []
+        assert "steht zwar drin" in welt.text.gesendet[-1].content
+        assert ANNA not in welt.inst._zuletzt
+        # 403 beim Hochladen: auch nicht bezahlt.
+        welt.ziel.schreiben = True
+        welt.ziel.kaputt = discord.Forbidden(SimpleNamespace(status=403, reason="nein"), "nein")
         with _schnitt():
             _direkt(welt)
-        assert "einstellung clip_channel" in welt.text.gesendet[-1].content
-        assert len(auftraege) == 1
+        assert "keine Dateien" in welt.text.gesendet[-1].content
+        assert ANNA not in welt.inst._zuletzt
 
 
 def test_clips_dialog_fuer_einen_privaten_voice_zeigt_draussen_keine_namen():
@@ -2816,7 +3385,7 @@ def test_clips_nie_in_einen_aufraeum_kanal():
         with mock.patch.object(guildcfg, "get", get), _schnitt():
             _direkt(welt)
         assert welt.ziel.gesendet == []
-        assert "einstellung clip_channel" in welt.text.gesendet[-1].content
+        assert "dort wird aufgeräumt" in welt.text.gesendet[-1].content
 
 
 def test_clips_upload_abgelehnt():
@@ -3311,6 +3880,198 @@ def test_clips_watchdog_adoptiert_keinen_sound_besuch_woanders():
         assert spieler._fremder_besuch(anderswo) is False
 
 
+def _sound_besuch_kanal(welt, cid=881):
+    """Ein zweiter Voice B, in den voicegags fuer einen Discord-Sound verbindet.
+    -> (kanal, getrennt): 'getrennt' sammelt jedes disconnect des Besuchs."""
+    b = _voice_kanal_mit_chat(cid=cid, name="Lounge")
+    b.guild = welt.guild
+    welt.guild.kanaele[cid] = b
+    getrennt = []
+
+    async def connect(**_kw):
+        c = _client(b)
+
+        async def weg(force=False):
+            getrennt.append(force)
+            c._connection.verbunden = False
+            if welt.guild.voice_client is c:
+                welt.guild.voice_client = None
+        c.disconnect = weg
+        welt.guild.voice_client = c
+        return c
+
+    async def send_sound(_snd):
+        return None
+    b.connect = connect
+    b.send_sound = send_sound
+    return b, getrennt
+
+
+def test_clips_sound_besuch_geht_auch_wenn_die_musik_woanders_beschaeftigt_ist():
+    """Hauptserver: ein Song steht in A, Flos Verbindung ist weg (discord.py
+    hat den Client weggeraeumt), und genau dann klickt jemand in B einen
+    Discord-Sound - voicegags verbindet dort. Frueher blieb der Besuch fuer
+    immer ('die Musik ist beschaeftigt'), und der Watchdog holte die Musik nie
+    zurueck, solange ein fremder Besuch woanders sass: Stille, keine Warnung,
+    bis jemand 'flo komm' tippte. Jetzt geht der Besuch nach dem Sound - ohne
+    als Rauswurf zu zaehlen -, und der naechste Takt baut in A neu auf und
+    setzt den Song fort. Steht die Sitzung dagegen genau in B, bleibt er (der
+    Watchdog uebernimmt ihn)."""
+    import voicegags
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        sp = welt.spieler
+        sp.current = music.Track(query="x", title="Song", stream_url="u", duration=200)
+        welt.vc._connection.verbunden = False
+        welt.guild.voice_client = None
+        sp.voice = None
+        b, getrennt = _sound_besuch_kanal(welt)
+        vg = voicegags.VoiceGags()
+
+        async def klick():
+            with mock.patch.object(vg, "_darf_discord_sounds", lambda *a, **k: True), \
+                    mock.patch.object(voicegags, "_NACH_SOUND_SEK", 0):
+                ok, _text = await vg._discord_sound_spielen(
+                    welt.guild, b, SimpleNamespace(name="airhorn", id=1))
+                for _ in range(3):
+                    offen = [t for t in list(vg._bg) if not t.done()]
+                    if offen:
+                        await asyncio.wait(offen, timeout=5)
+                return ok
+        assert music.is_voice_busy(GID)
+        assert asyncio.run(klick()) is True
+        assert getrennt == [True] and welt.guild.voice_client is None   # der Besuch ging
+        # ... und das war kein Rauswurf: Schlange und Song bleiben.
+        with mock.patch.object(music, "VOICE_RAUSWURF_FRIST", 0):
+            assert asyncio.run(music.flo_getrennt(GID, b.id)) is False
+        assert sp.active_channel_id == VOICE and sp.current is not None
+        versuche, gestartet = [], []
+
+        async def verbinden(channel, *, timeout=None):
+            versuche.append(channel.id)
+            neu = _client(channel)
+            welt.guild.voice_client = neu
+            return neu
+
+        def start(track, *, seek=0.0, keep_speed=False):
+            gestartet.append((track.title, sp.voice.channel.id))
+        with mock.patch.object(sp, "_verbinden", verbinden), \
+                mock.patch.object(sp, "start", start), \
+                mock.patch.object(music.laufzeit, "gateway_stabil", lambda *a, **k: True):
+            asyncio.run(sp.heal(welt.guild))
+        assert versuche == [VOICE] and gestartet == [("Song", VOICE)]
+
+    # Steht die Sitzung genau im Kanal des Sounds, bleibt der Besuch - der
+    # Watchdog macht ihn gleich zur Musik-Verbindung.
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        sp = welt.spieler
+        sp.current = music.Track(query="x", title="Song", stream_url="u", duration=200)
+        welt.vc._connection.verbunden = False
+        welt.guild.voice_client = None
+        sp.voice = None
+        b, getrennt = _sound_besuch_kanal(welt)
+        sp.active_channel_id = b.id
+        vg = voicegags.VoiceGags()
+
+        async def klick_hier():
+            with mock.patch.object(vg, "_darf_discord_sounds", lambda *a, **k: True), \
+                    mock.patch.object(voicegags, "_NACH_SOUND_SEK", 0):
+                await vg._discord_sound_spielen(welt.guild, b, SimpleNamespace(name="x", id=1))
+                offen = [t for t in list(vg._bg) if not t.done()]
+                if offen:
+                    await asyncio.wait(offen, timeout=5)
+        asyncio.run(klick_hier())
+        assert getrennt == [] and welt.guild.voice_client.is_connected()
+
+
+def test_clips_watchdog_raeumt_einen_festsitzenden_besuch_weg():
+    """Das Netz unter voicegags: sitzt ein fremder Besuch trotzdem still in
+    einem anderen Kanal fest (sein Aufraeumen ging verloren), raeumt der
+    Watchdog ihn nach VOICE_BESUCH_TICKS selbst weg - angekuendigt, also kein
+    Rauswurf - und baut beim naechsten Takt die Musik in A neu auf. Solange
+    der Besuch noch spielt, wartet er."""
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        sp = welt.spieler
+        sp.current = music.Track(query="x", title="Song", stream_url="u", duration=200)
+        welt.vc._connection.verbunden = False
+        sp.voice = None
+        b, getrennt = _sound_besuch_kanal(welt)
+        besuch = asyncio.run(b.connect())
+        versuche = []
+
+        async def verbinden(channel, *, timeout=None):
+            versuche.append(channel.id)
+            neu = _client(channel)
+            welt.guild.voice_client = neu
+            return neu
+        with mock.patch.object(sp, "_verbinden", verbinden), \
+                mock.patch.object(sp, "start", lambda *a, **k: None), \
+                mock.patch.object(music.laufzeit, "gateway_stabil", lambda *a, **k: True):
+            besuch.spielt_ = True
+            for _ in range(music.VOICE_BESUCH_TICKS + 2):
+                asyncio.run(sp.heal(welt.guild))
+            assert getrennt == [] and versuche == []        # spielt noch: Finger weg
+            besuch.spielt_ = False
+            for _ in range(music.VOICE_BESUCH_TICKS - 1):
+                asyncio.run(sp.heal(welt.guild))
+            assert getrennt == [] and versuche == []
+            asyncio.run(sp.heal(welt.guild))
+            assert getrennt == [True] and time.monotonic() < sp._selbst_getrennt_bis
+            sp._last_reconnect = float("-inf")
+            asyncio.run(sp.heal(welt.guild))
+        assert versuche == [VOICE] and sp.voice.channel.id == VOICE
+
+
+def test_clips_an_nicht_wenn_die_musik_hier_aus_ist():
+    """Flo sitzt ueber die Musik im Voice. Hat ein Admin die Musik hier (oder
+    der Chef sie ganz) abgeschaltet, holt 'flo clip an' ihn trotzdem nicht in
+    den Voice - und eine Sitzung, die 'clip an' hielt, haelt nicht mehr."""
+    with _welt(musik=False, verbunden=False) as welt:
+        welt.guild.voice_client = None
+        verbunden = []
+
+        async def verbinden(kanal):
+            verbunden.append(kanal.id)
+            return welt.vc
+        aus = mock.patch.object(features, "is_on_in", lambda g, k: k != "music")
+        with aus, mock.patch.object(welt.spieler, "connect", verbinden):
+            antwort = asyncio.run(clips.handle(_nachricht(welt, "flo clip an", welt.anna)))
+        assert "Musik ist hier aus" in antwort and verbunden == []
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        welt.spieler.clip_halten = True
+        assert welt.inst.haelt(GID, VOICE) is True
+        with mock.patch.object(features, "is_on_in", lambda g, k: k != "music"):
+            assert welt.inst.haelt(GID, VOICE) is False
+
+
+def test_clips_an_gilt_nicht_mehr_wenn_flo_woanders_hingeholt_wird():
+    """'flo clip an' in A, spaeter holt jemand Flo mit 'flo komm' nach B: B erbt
+    das Halten nicht - sonst ginge Flo dort nach dem letzten Song nie, solange
+    jemand drin sitzt. Im selben Kanal ('flo spiel' in A) bleibt es."""
+    with _welt() as welt:
+        asyncio.run(_starten(welt))
+        sp = welt.spieler
+        sp.clip_halten = True
+        asyncio.run(sp.connect(welt.kanal))                 # selber Kanal: bleibt
+        assert sp.clip_halten is True
+        b = _voice_kanal_mit_chat(cid=881, name="Lounge", leute=[SimpleNamespace(
+            id=CEM, bot=False, voice=SimpleNamespace(self_mute=False, mute=False))])
+        b.guild = welt.guild
+        welt.guild.kanaele[881] = b
+
+        async def move_to(kanal, **_kw):
+            welt.vc.channel = kanal
+        welt.vc.move_to = move_to
+        asyncio.run(sp.connect(b))                          # 'flo komm' aus B
+        assert sp.active_channel_id == 881 and sp.clip_halten is False
+        with mock.patch.object(music, "MUSIC_IDLE_SEKUNDEN", 300):
+            assert asyncio.run(sp._leerlauf(b)) is True      # nichts zu tun: Uhr laeuft
+        assert sp._leer_seit is not None
+
+
 def test_clips_musik_meldet_verbinden_und_trennen():
     """connect() und disconnect() der Musik melden clips - beim Aufruf ueber
     sys.modules, nie per Anmeldung. Ohne clips: nichts."""
@@ -3480,6 +4241,40 @@ def test_clips_ausstieg_per_privatnachricht():
         assert gemeldet.call_args[0][0] == "Clips: Ausstieg per Privatnachricht ging nicht"
 
 
+def test_clips_ausstieg_geht_auch_in_der_sendepause():
+    """In der Sendepause schweigt Flo fuer alle ausser dem Chef - bis auf den
+    Ausstieg: 'flo clip nein' gilt immer (wie der Knopf 🙅). Frueher blieb er
+    still und merkte sich nichts, und nach der Sendepause war die Person
+    wieder im Puffer. Alles andere bleibt still - auch 'clip ja'."""
+    import bot
+    from test_fundament import _nur_geladen
+    with _welt() as welt:
+        cem = _person(CEM, "Cem", welt.kanal)
+
+        async def lauf(text):
+            nachricht = _nachricht(welt, text, cem)
+            await bot.client.on_message(nachricht)
+            await asyncio.sleep(0)
+
+        with _nur_geladen(bot, "CLIPS_ENABLED", "ADMIN_ENABLED"), \
+                mock.patch.object(bot.admin, "is_locked", lambda: True), \
+                mock.patch.object(bot, "OWNER_ID", 1):
+            asyncio.run(lauf("flo clip nein"))
+            assert welt.inst.ist_raus(CEM)
+            assert "du bist raus" in welt.text.gesendet[-1].content
+            vorher = len(welt.text.gesendet)
+            for text in ("flo clip ja", "flo clip 30", "flo wie gehts"):
+                asyncio.run(lauf(text))
+            assert welt.inst.ist_raus(CEM) and len(welt.text.gesendet) == vorher
+
+            async def kaputt(_nachricht):
+                raise RuntimeError("kaputt")
+            with mock.patch.object(clips, "ausstieg_in_der_sendepause", kaputt), \
+                    mock.patch.object(bot.log, "exception") as gemeldet:
+                asyncio.run(lauf("flo clip nein"))
+        assert gemeldet.call_args[0][0] == "Clips: Ausstieg in der Sendepause ging nicht"
+
+
 def test_clips_ansage_nennt_groq_nur_wenn_alles_bei_groq_landet():
     """Das Transkript geht zu Groq, der Spruch an die KI von ai.py - und die
     kann ein ganz anderer Anbieter sein. 'ueber Groq' steht nur da, wenn beides
@@ -3539,6 +4334,23 @@ def test_clips_k_zeigt_jede_clip_meldung():
             if not suche.search(treffer.group(1)):
                 durchgefallen.append(f"{datei}: {treffer.group(1)[:60]}")
     assert not durchgefallen, durchgefallen
+    # Und die Abstuerze: ein Clip-Befehl wirft (bot.py), ein Knopf oder der
+    # Dialog wirft (discord.py nennt die Klasse) - genau die suchte man sonst
+    # in 'k c' vergeblich.
+    for absturz in ("Befehl fehlgeschlagen (clips)",
+                    "Ignoring exception in view <ClipDialog timeout=60.0 children=5> for item "
+                    "<Button style=<ButtonStyle.secondary: 2> label='30 s'>",
+                    "Ignoring exception in dynamic item callback for <ClipFeuer custom_id="
+                    "'flo:clip:feuer:abcdefgh'>",
+                    "Ignoring exception in dynamic item callback for <ClipAus ...>"):
+        assert suche.search(absturz), absturz
+    assert not suche.search("Befehl fehlgeschlagen (music)")
+    # ... und so, wie 'k' es benutzt: grep -E mit genau diesem Muster.
+    import subprocess
+    lauf = subprocess.run(["grep", "-E", muster.group(1)],
+                          input="Befehl fehlgeschlagen (clips)\nBefehl fehlgeschlagen (music)\n",
+                          capture_output=True, text=True, timeout=30)
+    assert lauf.stdout == "Befehl fehlgeschlagen (clips)\n", lauf
 
 
 def test_clips_davey_ist_gedeckelt():
@@ -3593,6 +4405,43 @@ def _ffprobe_dauer(mp3):
         return float(lauf.stdout.strip())
     finally:
         shutil.rmtree(ordner, ignore_errors=True)
+
+
+def test_clips_kurzer_satz_geht_durch_die_pruefung():
+    """Bob sagt 1,2 s lang einen Satz, der ein Notsignal ist ('Ich bring mich
+    um.'), Anna redet 12 s. Mit dem ECHTEN Schnitt: Bobs Ton geht zu Whisper
+    (frueher erst ab 1,5 s - dann sah die Pruefung ihn nie, und der Clip kam
+    mit Flos Spruch raus), der Clip bleibt liegen, und Flo merkt sich das
+    Notsignal. Als Gruppe und als 'nur Bob'. Whisper ist gefakt: es 'hoert'
+    fuer Bob genau diesen Satz."""
+    if not (_opus_da() and clipschnitt.ffmpeg_pruefen() == ""):
+        return                                     # ohne libopus/ffmpeg nichts zu pruefen
+    ton = _sinus_rahmen(220, 1)[0]
+    for nur_bob in (False, True):
+        an_whisper = []
+
+        async def je_sprecher(audio, frist=None, weiter=None):
+            an_whisper.append(sorted(audio))
+            return {uid: [clipstext.Segment(0.1, 1.0, "Ich bring mich um." if uid == BOB
+                                            else "Wer hat die Pizza gegessen?")]
+                    for uid in audio}
+
+        with _welt() as welt:
+            asyncio.run(_starten(welt))
+            welt.uhr.vor(60)
+            _reden(welt, ANNA, 25, 13, opus=ton)
+            _reden(welt, BOB, 8, 6.8, strang=2, opus=ton)
+            with mock.patch.object(clipstext.transkriber, "an", lambda: True), \
+                    mock.patch.object(clipstext.transkriber.kontingent, "gesperrt",
+                                      lambda: False), \
+                    mock.patch.object(clipstext.transkriber, "je_sprecher", je_sprecher), \
+                    mock.patch.object(clipstext, "kommentar", _kein_kommentar):
+                asyncio.run(clips.handle(_nachricht(
+                    welt, "flo clip 30", welt.anna, erwaehnt=[welt.bob] if nur_bob else [])))
+            assert an_whisper and BOB in an_whisper[0], (nur_bob, an_whisper)
+            assert welt.ziel.gesendet == [], nur_bob
+            assert basis.kuerzlich_notlage(BOB), nur_bob
+            assert "liegen" in welt.text.gesendet[-1].content, nur_bob
 
 
 def test_clips_ende_zu_ende_vom_rtp_paket_zur_mp3():

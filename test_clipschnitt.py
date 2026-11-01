@@ -304,21 +304,28 @@ def test_clipschnitt_platzieren_ueberlappung_rueckt_nach():
 
 
 def test_clipschnitt_platzieren_beschneidet_aufs_fenster():
-    """Was vor dem Fenster liegt, faellt weg; ein Rahmen, der halb hineinragt,
-    bleibt (das Schreiben schneidet ihn zu); ein Schub ganz ausserhalb kommt
-    gar nicht erst vor."""
+    """Was vor dem Fenster liegt, faellt weg - bis auf den kurzen VORLAUF, der
+    nur den Decoder anwaermt (geschrieben und gezaehlt wird er nicht); ein
+    Rahmen, der halb hineinragt, bleibt (das Schreiben schneidet ihn zu); ein
+    Schub ganz ausserhalb kommt gar nicht erst vor - auch keiner, der nur
+    knapp davor endet."""
     gesamt = 10 * _RATE
     vorne = _schub(989.5, 50, strang=1)
     hinten = _schub(999.5, 50, strang=2, seq0=500)
     draussen = _schub(985.0, 50, strang=3, seq0=900)
     schuebe = clipschnitt.platzieren(vorne + hinten + draussen, _BIS, 10.0)
     assert sorted(s.strang for s in schuebe) == [1, 2]
+    knapp = _schub(989.0, 48, strang=4, seq0=1500)          # endet 10 ms vor dem Fenster
+    assert clipschnitt.platzieren(knapp, _BIS, 10.0) == []
     for schub in schuebe:
         for pos, _plc in _positionen(schub):
-            assert -960 < pos < gesamt, (schub.strang, pos)
+            assert -clipschnitt.VORLAUF - 960 < pos < gesamt, (schub.strang, pos)
     v = next(s for s in schuebe if s.strang == 1)
-    erster = _positionen(v)[0][0]
-    assert -960 < erster < 0                     # ragt halb hinein
+    vor = [pos for pos, _plc in _positionen(v) if pos + 960 <= 0]
+    assert len(vor) == clipschnitt.VORLAUF // 960, vor          # nur zum Anwaermen
+    erster_drin = [pos for pos, _plc in _positionen(v) if pos + 960 > 0][0]
+    assert -960 < erster_drin < 0                               # ragt halb hinein
+    assert clipschnitt.stimm_samples([v], gesamt) == v.ende
     h = next(s for s in schuebe if s.strang == 2)
     assert h.ende > gesamt and len(h.rahmen) < 50
 
@@ -595,20 +602,24 @@ def test_clipschnitt_echter_schnitt_mit_altem_ffmpeg():
 def test_clipschnitt_whisper_karte_passt_zu_den_schueben():
     """whisper=True: je Sprecher eine 16-kHz-Mono-MP3 nur aus seinen Stellen.
     Die Karte fuehrt jedes Stueck auf seine Clip-Zeit zurueck; Stille-Rahmen am
-    Satzende gehoeren nicht dazu. Wer unter 1,5 s redet und Bots bekommen
-    keinen Ton fuer Whisper."""
+    Satzende gehoeren nicht dazu. Wer unter WHISPER_MIN_SEK (0,5 s) redet und
+    Bots bekommen keinen Ton fuer Whisper - ein kurzer Satz von 1 s aber schon:
+    auch der muss durch die Pruefung auf Notsignal und Hetze."""
     if not _echt_da():
         return
+    assert clipschnitt.WHISPER_MIN_SEK <= 0.5
     a = Spurdaten(1, "Anna", False, _echt(330, 0.5, 2.5, strang=7, stille_danach=5)
                   + _echt(330, 4.0, 6.0, strang=7, seq0=400, ts0=900_000))
-    kurz = Spurdaten(2, "Kurz", False, _echt(550, 6.5, 7.5, strang=9))
+    satz = Spurdaten(2, "Satz", False, _echt(550, 6.5, 7.5, strang=9))
+    kurz = Spurdaten(4, "Kurz", False, _echt(440, 7.6, 7.9, strang=13))
     bot = Spurdaten(3, "Musikbot", True, _echt(660, 1.0, 5.0, strang=11))
     with _ordner() as basis:
-        erg = clipschnitt.rendern(Auftrag(bis=_BIS, dauer=8.0, stimmen=[a, kurz, bot], flo=[],
-                                          budget=int(9.5 * 1048576), titel="w",
+        erg = clipschnitt.rendern(Auftrag(bis=_BIS, dauer=8.0, stimmen=[a, satz, kurz, bot],
+                                          flo=[], budget=int(9.5 * 1048576), titel="w",
                                           whisper=True, tmp_basis=basis))
         assert os.listdir(basis) == []
-        assert set(erg.whisper) == {1}, set(erg.whisper)
+        assert set(erg.whisper) == {1, 2}, set(erg.whisper)
+        assert erg.stimm_sek[4] > 0                       # im Clip zu hoeren, ohne Whisper
         wa = erg.whisper[1]
         assert len(wa.karte) == 2, wa.karte
         (a0, e0, c0), (a1, e1, c1) = wa.karte
@@ -747,6 +758,43 @@ def test_clipschnitt_abbruch_mitten_im_dekodieren():
         except RenderFehler as fehler:
             assert fehler.grund == "zeit" and fehler.meldung == "abgebrochen"
         assert len(gefragt) == 3 and os.listdir(basis) == []
+
+
+def test_clipschnitt_der_erste_rahmen_im_fenster_ist_warm_dekodiert():
+    """Laeuft der Ton schon vor dem Fenster (Flos Song, ein Satz ueber die
+    Schnittkante), wird er davor ein paar Rahmen lang dekodiert, aber nicht
+    geschrieben: frueher begann der Decoder kalt am ersten Rahmen im Fenster,
+    und der lag um 70 bis 120 % daneben - ein Knackser am Anfang jedes Clips.
+    Jetzt ist er (fast) genau der, den ein Decoder liefert, der von Anfang an
+    mitlief. Gemessen mit einem Dauerton, wie Musik kodiert (CELT) - der
+    braucht am laengsten, bis der Decoder sitzt."""
+    if not _opus_da():
+        return
+    pakete = _echt(330, 0.0, 6.0, strang=1, dauer=10.0)       # ab 4 s VOR dem Fenster
+    schuebe = clipschnitt.platzieren(pakete, _BIS, 6.0)
+    with _ordner() as basis:
+        pfad = os.path.join(basis, "v.raw")
+        clipschnitt.spur_schreiben(pfad, schuebe, 1, 6 * _RATE, clipschnitt._Frist(30))
+        with open(pfad, "rb") as datei:
+            roh = datei.read()
+    warm = clipschnitt._Mono()
+    ganz = b"".join(clipschnitt._dekodieren(warm, p[4]) for p in sorted(pakete,
+                                                                    key=lambda p: p[2]))
+    schub = schuebe[0]
+    erster = next(a for a, _o, n in schub.rahmen if schub.start + a + n > 0)
+    idx = [a for a, _o, _n in schub.rahmen].index(erster)
+    vor = sum(1 for a, _o, _n in schub.rahmen[:idx])
+    nr = len(pakete) - len(schub.rahmen) + vor                 # sein Platz im ganzen Strom
+    pos = schub.start + erster
+    ref = array.array("h")
+    ref.frombytes(ganz[nr * 1920:(nr + 1) * 1920])
+    ist = array.array("h")
+    anfang = max(0, pos)
+    ist.frombytes(roh[anfang * 2:(pos + 960) * 2])
+    ref = ref[len(ref) - len(ist):]
+    fehler = math.sqrt(sum((x - y) ** 2 for x, y in zip(ist, ref)) / max(1, len(ist)))
+    pegel = math.sqrt(sum(x * x for x in ref) / max(1, len(ref)))
+    assert pegel > 1000 and fehler / pegel < 0.05, (fehler, pegel)
 
 
 def test_clipschnitt_spur_ist_luecken_datei_und_plc_rettet_kaputtes():

@@ -1063,28 +1063,31 @@ das (Status-Grund `ansage_weg`), nicht „darf nicht schreiben".
 **Raus.** 🙅 oder `flo clip nein` (auch `nein danke`, `bitte ohne mich`, `ich will
 nicht` — und vertippt wie `flo cilp nein`; auch als Privatnachricht an Flo, die
 dann nicht beim Chef landet): sofort und auf **jedem** Server — auch wo Clips
-aus sind (sogar im ganzen Bot), der Knopf auch in der Sendepause. Pakete dieser Person werden
+aus sind (sogar im ganzen Bot), der Knopf und `flo clip nein` auch in der Sendepause. Pakete dieser Person werden
 schon vor der DAVE-Entschlüsselung verworfen, was im Puffer lag, ist weg, offene
 Dialoge vergessen sie, und nach dem Schnitt wird nochmal geprüft — bevor der Ton
 zu Groq geht, unmittelbar vor dem Hochladen und gleich danach (dann kommt der
 Post wieder weg). Wer raus ist, kann auch andere nicht clippen. Niemand kann
-jemand anderen rausnehmen. Zurück mit `flo clip ja` (das nur richtig geschrieben).
+jemand anderen rausnehmen. Zurück mit `flo clip ja` (das nur richtig geschrieben —
+und nicht als Nachfrage: „Flo, clip mal, ja?" holt niemanden zurück).
 
 **Für alle aus.** 🔇 oder `flo clip aus` (wer im Call sitzt, und Mods): Puffer
 weg, Flo stellt sich wieder taub, laufende Schnitte und offene Dialoge werden
 verworfen, und im Voice-Chat steht, wer es war. Das gilt, bis die Runde in
 diesem Kanal vorbei ist (Flo ist raus und die Musik will nicht mehr hin) —
-höchstens 12 Stunden, auch über einen Neustart. `flo clip an` hebt es auf und
-kündigt neu an — frühestens eine Minute nach dem „aus" (sonst wird aus Hin- und
-Herschalten Spam im Voice-Chat). Kam Flo nur zum Mithören und läuft nichts,
-geht er gleich mit.
+höchstens 12 Stunden, auch über einen Neustart. Sitzt Flo schon mit der Musik
+im Call, hört aber noch nicht mit (der Song lädt noch, die Ansage ist
+unterwegs, Sendepause), gilt das „aus" schon für diese Runde. `flo clip an` hebt
+es auf und kündigt neu an — frühestens eine Minute nach dem „aus", auch wenn
+Flo dabei gleich mitging (sonst wird aus Hin- und Herschalten Spam im
+Voice-Chat). Kam Flo nur zum Mithören und läuft nichts, geht er gleich mit.
 Ist Flo schon weg (oder sitzt woanders), verwerfen 🔇 und `flo clip aus` trotzdem,
 was aus der Runde noch unterwegs ist — einen offenen Dialog, einen laufenden
 Schnitt.
 
 **Wer clippen darf.** Wer im Call sitzt oder im Puffer zu hören ist, und Mods.
 Je Person alle 45 Sekunden, je Server 12 in der Stunde (ein Clip, der technisch
-scheitert — ffmpeg, Upload abgelehnt —, zählt nicht mit); geschnitten wird
+scheitert — ffmpeg, Upload abgelehnt, kein Ziel —, zählt nicht mit); geschnitten wird
 einer nach dem anderen (höchstens drei warten, dann „Eins nach dem anderen").
 
 **Was im Clip ist.** Alle, die geredet haben — außer wer raus ist und wer gerade
@@ -1102,13 +1105,27 @@ Chat, Sprecher als A/B/C; ohne KI oder Transkript ein Spruch aus dem
 Ersatz-Pool). Steht im Transkript ein Notsignal oder Hetze, **bleibt der Clip
 liegen** (das Notsignal merkt sich Flo wie im Chat 72 Stunden, nur im
 Speicher); private Daten werden im Transkript geschwärzt, der Ton bleibt.
+Kam `flo clip` aus einem Kanal, den auch Leute lesen, die in diesem (privaten)
+Voice nicht hören konnten, steht dort nur „Wird nix"; warum, steht im Voice-Chat
+des Raums — und nur, wenn den bloß liest, wer dort hören konnte.
+Whisper bekommt jeden Menschen ab einer halben Sekunde Stimme (höchstens acht je
+Clip) — auch ein kurzer Satz geht so durch die Prüfung. Fehlt trotzdem jemand
+aus dem Clip im Transkript — oder kam von Whisper gar nichts zurück (Fehler,
+Kontingent) —, gibt es **keinen Spruch**: über Worte, die Flo nicht kennt, macht
+er keine Witze.
 
 **Wohin.** In den Kanal `clip_channel` (ab Werk der Clip-Kanal des
 Hauptservers), sonst in die Ansagen, sonst in den System-Kanal — nur, wo Flo
-schreiben **und Dateien hochladen** darf, **nie** in einen Aufräum-Kanal. Ist der
-Voice privat (nicht jeder, der den Clip-Kanal liest, sieht den Voice), bleibt
-der Clip im Voice-Chat dieses Kanals — oder es gibt keinen; dort bleibt er auch
-stehen, wenn dieser Voice-Chat ein Aufräum-Kanal ist. Höchstens
+schreiben **und Dateien hochladen** darf, **nie** in einen Aufräum-Kanal (und nie
+in ein Forum oder eine Kategorie — da schickt niemand etwas hinein). Ist der
+Voice privat (nicht jeder, der den Clip-Kanal liest, konnte dort **hören** — den
+Voice sehen *und* betreten; auch ein abgeschlossener Raum, den alle sehen, aber nur
+wenige betreten dürfen), bleibt der Clip im Voice-Chat dieses Kanals — oder es
+gibt keinen; dort bleibt er auch stehen, wenn dieser Voice-Chat ein Aufräum-Kanal
+ist. Lesen den Voice-Chat auch Leute, die draußen bleiben mussten, gibt es dort
+ebenfalls keinen Clip. Gibt es gar kein Ziel (kein Clip-Kanal, keine Dateien,
+so ein Raum), kündigt Flo dort nicht an und hört nicht mit; `flo clip` sagt
+warum, und die Prüfung kommt vor dem Schnitt, nicht nach Whisper. Höchstens
 `min(9,5 MiB, Upload-Grenze − 512 KiB)`; 5 Minuten passen mit 192 kbps hinein.
 Kein Post pingt jemanden.
 
@@ -1133,8 +1150,8 @@ sonst „einen externen KI-Dienst"; `flo clip nein` deckt beides ab.
 KI-Spruch, nur einen aus dem Ersatz-Pool).
 
 **Nachsehen.** `flo clip status` (Mods und der Chef) zeigt nur Zahlen: Sitzung
-und Grund, Verbindung (Modus, DAVE, taub, geweckt), Pakete der letzten 60 s,
-Puffer, Schnitt, Whisper heute. Im Journal: `bash k c` — alle fünf Minuten eine
+und Grund, das Ziel (oder was fehlt), Verbindung (Modus, DAVE, taub, geweckt),
+Pakete der letzten 60 s, Puffer, Schnitt, Whisper heute. Im Journal: `bash k c` — alle fünf Minuten eine
 Zeile je laufender Sitzung („… Pakete (… gespeichert, … DAVE-retry …)"), dazu
 Warnungen, wenn Pakete ankommen und nichts im Puffer landet oder minutenlang
 gar nichts kommt.

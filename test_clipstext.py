@@ -471,6 +471,33 @@ def test_clipstext_transkriber_hoechstens_zwei_gleichzeitig():
     assert len(fake.aufrufe) == 10
 
 
+def test_clipstext_transkriber_fragt_vor_jedem_upload_ob_der_clip_noch_gilt():
+    """weiter() wird VOR JEDEM Upload gefragt - nachdem er seinen Platz hat.
+    Sagt es nein (jemand ist raus, Mikro aus ...), geht nichts mehr zu
+    Whisper, und es gibt kein Transkript. Wirft es, gilt das als nein."""
+    gilt = {"ja": True}
+
+    async def langsam(kw):
+        gilt["ja"] = False                    # waehrend der erste unterwegs ist
+        await asyncio.sleep(0.03)
+        return {"segments": [{"start": 0.0, "end": 1.0, "text": "Moin"}]}
+
+    tr, fake = _transkriber(langsam)
+    audio = {uid: WhisperAudio(bytes([uid]), [(0.0, 2.0, 0.0)]) for uid in range(1, 5)}
+    with _log() as zeilen:
+        assert asyncio.run(tr.je_sprecher(audio, frist=5, weiter=lambda: gilt["ja"])) is None
+    assert [kw["file"][1] for kw in fake.aufrufe] == [b"\x01"]
+    assert any("gilt nicht mehr" in z for z in zeilen), zeilen
+
+    def kaputt():
+        raise RuntimeError("weiss nicht")
+    tr, fake = _transkriber(langsam)
+    assert asyncio.run(tr.je_sprecher(audio, frist=5, weiter=kaputt)) is None
+    assert fake.aufrufe == []
+    tr, fake = _transkriber(langsam)                 # ohne weiter: wie immer
+    assert set(asyncio.run(tr.je_sprecher(audio, frist=5))) == set(audio)
+
+
 def test_clipstext_transkriber_frist_fehler_und_429():
     """Frist um, ein einziger Fehler, 429: immer None - nie ein halbes
     Transkript. Nach einem 429 ist das Kontingent fuer Retry-After gesperrt;

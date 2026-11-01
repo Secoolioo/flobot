@@ -82,6 +82,12 @@ VOICE_ZOMBIE_TICKS = 3        # so viele stille Ticks (=Sek*Ticks) bis "Zombie" 
 # TON, nicht Betrieb auf dem Socket, und kann eine gesunde Wiedergabe deshalb
 # nicht abwuergen.
 VOICE_STALL_TICKS = 2
+# So viele Ticks darf ein fremder Sound-Besuch (voicegags) in einem ANDEREN
+# Kanal sitzen bleiben, waehrend die Musik ohne eigenen Client dasteht und
+# clips mithoeren koennte (GuildPlayer._fremder_besuch) - dann raeumt der
+# Watchdog ihn selbst weg (4 x 15 s = 1 min; ein Discord-Sound geht nach 8 s,
+# ein Vorlese-Gag nach hoechstens 60 s).
+VOICE_BESUCH_TICKS = 4
 # So viele Songs duerfen beim Weiterschalten HINTEREINANDER scheitern, bevor
 # der Player aufgibt und die Warteschlange stehen laesst. Vorher gab es keine
 # Grenze - ein kurzer Netz-Aussetzer hat so eine ganze Playlist in einem
@@ -1298,6 +1304,9 @@ class GuildPlayer:
     # haelt sich der Watchdog raus - sonst holt er Flo in genau dieser Luecke
     # zurueck in den Kanal, aus dem ihn gerade jemand geworfen hat.
     _rauswurf_bis: float = float("-inf")
+    # So viele Ticks sitzt schon ein fremder Sound-Besuch woanders herum
+    # (siehe heal und VOICE_BESUCH_TICKS).
+    _besuch_ticks: int = 0
     # Serialisiert ALLE voice-veraendernden Ops (connect/_reconnect/apply_speed),
     # damit nie zwei channel.connect() gleichzeitig laufen.
     _voice_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -1429,6 +1438,11 @@ class GuildPlayer:
     async def connect(self, channel):
         # Lock: nie gleichzeitig mit einem Watchdog-_reconnect verbinden.
         async with self._voice_lock:
+            if self.active_channel_id is not None and self.active_channel_id != channel.id:
+                # 'flo clip an' galt fuer den ALTEN Kanal. Wer Flo woanders
+                # hinholt ('flo komm', 'flo spiel'), erbt es nicht - sonst ginge
+                # Flo dort nach dem letzten Song nie (siehe _leerlauf).
+                self.clip_halten = False
             vc = self.voice if (self.voice and self.voice.is_connected()) else channel.guild.voice_client
             if vc is not None and vc.is_connected():
                 self.voice = vc
@@ -1519,11 +1533,12 @@ class GuildPlayer:
 
         Den adoptiert die Musik nicht, solange clips auf diesem Server mithoeren
         koennte: sonst wuerde der kurze Besuch zur Musik-Sitzung - clips
-        kuendigte dort an und hoerte mit, voicegags liesse ihn nicht mehr
-        gehen, und eine 'flo clip an'-Sitzung hinge fuer immer dort. Der Besuch
-        geht von selbst wieder, danach holt der naechste Takt Flo in SEINEN
-        Kanal zurueck. Ohne clips (aus, hier aus oder nicht geladen) adoptiert
-        die Musik wie eh und je."""
+        kuendigte dort an und hoerte mit, und eine 'flo clip an'-Sitzung hinge
+        fuer immer dort. Der Besuch geht von selbst wieder (voicegags: nach dem
+        Sound, auch wenn die Musik beschaeftigt ist), danach holt der naechste
+        Takt Flo in SEINEN Kanal zurueck - und bleibt er doch, raeumt heal ihn
+        nach VOICE_BESUCH_TICKS weg. Ohne clips (aus, hier aus oder nicht
+        geladen) adoptiert die Musik wie eh und je."""
         if vc is None or vc is self.voice:
             return False
         if getattr(getattr(vc, "channel", None), "id", None) == self.active_channel_id:
@@ -2515,7 +2530,27 @@ class GuildPlayer:
             await self._reconnect(channel)
             return
         if self._fremder_besuch(vc):
-            return      # ein Sound-Besuch woanders - der geht gleich, dann holt der Takt Flo
+            # Ein Sound-Besuch woanders - der geht gleich (voicegags), dann holt
+            # der Takt Flo. Bleibt er trotzdem still sitzen, raeumt der Watchdog
+            # ihn nach VOICE_BESUCH_TICKS selbst weg: sonst stuende die Musik,
+            # bis jemand 'flo komm' tippt - ohne Warnung, ohne Neuaufbau.
+            # Gezaehlt wird nur, solange er still ist (ein Gag darf ausspielen).
+            if vc.is_playing() or vc.is_paused():
+                self._besuch_ticks = 0
+                return
+            self._besuch_ticks += 1
+            if self._besuch_ticks >= VOICE_BESUCH_TICKS:
+                self._besuch_ticks = 0
+                log.warning("Voice: ein Sound-Besuch sitzt seit %d s in einem anderen "
+                            "Kanal fest - trenne ihn, die Musik will nach '%s'.",
+                            VOICE_BESUCH_TICKS * VOICE_HEAL_SECONDS, channel.name)
+                self._selbst_trennen_ankuendigen()   # kein Rauswurf - wir waren das
+                try:
+                    await asyncio.wait_for(vc.disconnect(force=True), timeout=10)
+                except Exception:  # noqa: BLE001 - der naechste Takt sieht nach
+                    log.debug("Sound-Besuch nicht wegbekommen", exc_info=True)
+            return
+        self._besuch_ticks = 0
         self.voice = vc   # echten Client adoptieren (Discord kennt ihn, wir bisher nicht)
 
         # Pausiert? Dann ist Stillstand genau richtig - Finger weg von allem.
@@ -3856,6 +3891,25 @@ class Music(FeatureBasis):
         player = self._players.get(guild_id)
         return (player is not None and voice is not None and player.voice is voice
                 and player.active_channel_id is not None)
+
+    def sitzung_im_kanal(self, guild_id, kanal_id):
+        """Steht die Musik-Sitzung dieses Servers in GENAU diesem Kanal - auch
+        ohne eigenen Client (nach einem Abriss)? Dann uebernimmt der Watchdog
+        einen Besuch dort (siehe GuildPlayer._fremder_besuch): voicegags laesst
+        ihn sitzen, statt ihn wegzuraeumen."""
+        player = self._players.get(guild_id)
+        return (player is not None and kanal_id is not None
+                and player.active_channel_id == kanal_id)
+
+    def besuch_geht(self, guild_id):
+        """voicegags trennt gleich einen EIGENEN Besuch (Sound, Vorlesen,
+        Join-Sound). Steht hier eine Musik-Sitzung, soll flo_getrennt das nicht
+        fuer einen Rauswurf halten und die Warteschlange wegwerfen. Den Client
+        der Musik trifft das nie: je Server gibt es nur einen Voice-Client -
+        gibt es einen Besuch, hat die Musik gerade keinen."""
+        player = self._players.get(guild_id)
+        if player is not None and player.active_channel_id is not None:
+            player._selbst_trennen_ankuendigen()
 
     def is_voice_busy(self, guild_id):
         """True, wenn die Musik den Voice-Channel dieses Servers WIRKLICH belegt:
@@ -6622,6 +6676,8 @@ _player_for = instance._player_for
 heal_voice = instance.heal_voice
 is_voice_busy = instance.is_voice_busy
 gehoert_der_musik = instance.gehoert_der_musik
+sitzung_im_kanal = instance.sitzung_im_kanal
+besuch_geht = instance.besuch_geht
 flo_getrennt = instance.flo_getrennt
 _extract = instance._extract
 _resolve_input = instance._resolve_input
